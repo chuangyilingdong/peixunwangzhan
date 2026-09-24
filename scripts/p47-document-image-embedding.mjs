@@ -32,6 +32,10 @@ const run = (args) => new Promise((resolve, reject) => {
 });
 await run(['packages/database/src/db.js', '--init']);
 
+// ⚠️ 夹具原来只跑 --init（没有真实用户与机构），而它插的行**引用** org / user：
+//    老夹具直连句柄时外键校验关着，现在走数据层就开着 → 补上 seed（拿到真实 id）。
+await run(['packages/database/src/seed.js']);
+
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
 const PDF = Buffer.from('%PDF-1.4\n%%EOF\n', 'utf8');
 
@@ -50,11 +54,13 @@ const { DatabaseSync } = await import('node:sqlite');
 
 const now = new Date().toISOString();
 const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
+const fkOwner = await arow("SELECT id, org_id FROM users WHERE login='student-2'");
 const asset = async (item) => await aq(`INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
-   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [item.id, 'USER', 'o1', 'u1', 'INTERNAL_PROXY', null, item.key, null, null, item.name, item.mime, 8, 'x', 'MEDIA_ASSET', 'PUBLIC_PLATFORM', 'ACTIVE', 'NOT_REQUIRED', null, '{}', 'u1', now, now]);
+   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [item.id, 'USER', fkOwner.org_id, fkOwner.id, 'INTERNAL_PROXY', null, item.key, null, null, item.name, item.mime, 8, 'x', 'MEDIA_ASSET', 'PUBLIC_PLATFORM', 'ACTIVE', 'NOT_REQUIRED', null, '{}', fkOwner.id, now, now]);
 await asset(photo); await asset(doc);
 
-await aq("INSERT INTO vibecoding_conversations(id,org_id,student_id,title,files,entry_file,status,created_at,updated_at) VALUES('c1','o1','u1','t','{}','index.html','DRAFT',?,?)", [now, now]);
+await aq("INSERT INTO vibecoding_conversations(id,org_id,student_id,title,files,entry_file,status,created_at,updated_at) VALUES('c1',?,?,'t','{}','index.html','DRAFT',?,?)", [fkOwner.org_id, fkOwner.id, now, now]);
 const attachments = JSON.stringify([
   { id: 'file_photo', name: '照片.png', url: 'https://x/api/public/file-assets/file_photo/download', mime: 'image/png', inline: '' },
   { id: 'file_doc', name: '笔记.pdf', url: 'https://x/api/public/file-assets/file_doc/download', mime: 'application/pdf', inline: '' },

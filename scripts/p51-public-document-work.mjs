@@ -93,6 +93,9 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
 // 学生上传的图（PRIVATE：普通公开素材口取不到，只能靠作品快照的代理口）
+// ⚠️ 夹具原来写的是假 id（'org-1' / 'student-2'）：老夹具直连句柄时**外键校验是关着的**，
+//    现在走数据层（schema.js 的连接）→ 外键开着 → 必须用真实 id（这个脚本已经跑过 seed）。
+const fkStudent = await arow("SELECT id, org_id FROM users WHERE login='student-2'");
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x0a]);
 const PHOTO_KEY = '2026/09/p51-photo.png';
 const PHOTO_ID = 'file_p51_photo';
@@ -133,9 +136,9 @@ try {
   
   const now = new Date().toISOString();
   await aq(`INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
-     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [PHOTO_ID, 'USER', 'org-1', 'student-2', 'INTERNAL_PROXY', null, PHOTO_KEY, null, null, '天山.png', 'image/png', PNG.length, 'x', 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null, '{}', 'student-2', now, now]);
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [PHOTO_ID, 'USER', fkStudent.org_id, fkStudent.id, 'INTERNAL_PROXY', null, PHOTO_KEY, null, null, '天山.png', 'image/png', PNG.length, 'x', 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null, '{}', fkStudent.id, now, now]);
   await aq(`INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
-     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [UNUSED_PHOTO_ID, 'USER', 'org-1', 'student-2', 'INTERNAL_PROXY', null, UNUSED_PHOTO_KEY, null, null, '未引用照片.png', 'image/png', PNG.length, 'x2', 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null, '{}', 'student-2', now, now]);
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [UNUSED_PHOTO_ID, 'USER', fkStudent.org_id, fkStudent.id, 'INTERNAL_PROXY', null, UNUSED_PHOTO_KEY, null, null, '未引用照片.png', 'image/png', PNG.length, 'x2', 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null, '{}', fkStudent.id, now, now]);
   await aq(`INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [COVER_ID, 'PLATFORM', null, null, 'INTERNAL_PROXY', null, COVER_KEY, null, null, '封面插画.png', 'image/png', PNG.length, 'x', 'MEDIA_ASSET', 'PUBLIC_PLATFORM', 'ACTIVE', 'NOT_REQUIRED', null, '{"generated":true}', null, now, now]);
   

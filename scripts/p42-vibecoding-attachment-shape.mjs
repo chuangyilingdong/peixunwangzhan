@@ -22,11 +22,17 @@ const run = (args) => new Promise((resolve, reject) => {
 });
 await run(['packages/database/src/db.js', '--init']);
 
+// ⚠️ 夹具原来只跑 --init（没有真实用户与机构），而它插的行**引用** org / user：
+//    老夹具直连句柄时外键校验关着，现在走数据层就开着 → 补上 seed（拿到真实 id）。
+await run(['packages/database/src/seed.js']);
+
 const { DatabaseSync } = await import('node:sqlite');
  
 
 const { aq, arow, arows } = await import('../packages/database/src/store.js');
-await aq("INSERT INTO vibecoding_conversations(id,org_id,student_id,title,files,entry_file,status,created_at,updated_at) VALUES('c1','o1','u1','t','{}','index.html','DRAFT',?,?)", [new Date().toISOString(), new Date().toISOString()]);
+
+const fkOwner = await arow("SELECT id, org_id FROM users WHERE login='student-2'");
+await aq("INSERT INTO vibecoding_conversations(id,org_id,student_id,title,files,entry_file,status,created_at,updated_at) VALUES('c1',?,?,'t','{}','index.html','DRAFT',?,?)", [fkOwner.org_id, fkOwner.id, new Date().toISOString(), new Date().toISOString()]);
 const now = new Date().toISOString();
 const inline = 'data:image/png;base64,iVBORw0KGgo=';
 await aq("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES('m1','c1','user','看看这张图','SUCCEEDED',?,?)", [JSON.stringify([{ id: 'a1', name: 'x.png', url: 'https://iicili.cyou/api/public/file-assets/a1/download', inline }]), now]);
