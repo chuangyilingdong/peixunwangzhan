@@ -75,8 +75,20 @@ for (const file of files) {
   if (!byPort.has(key)) byPort.set(key, []);
   byPort.get(key).push(file);
 }
+// ⚠️ 别的脚本撞同一个端口的（p118/p37、p28/p56、p26/p54）**必须分到同一片**：
+//    分到不同片就是"两个进程同时抢同一个端口"→ 一方起不来 / 客户端连到别人家的服务器，
+//    表现是 `TypeError: fetch failed` 这种看着像回归、其实是并发的假红（2026-09-24 实测踩过：
+//    p118 与 p56 在 after 那轮被标成"回归"，对照组却没有 —— 就是因为那一轮它们刚好同时起）。
+//    同一片内是**串行**的，所以同端口的脚本放一起是安全的。
 for (const [key, list] of [...byPort.entries()].sort((a, b) => b[1].length - a[1].length)) {
   const port = key.startsWith('__none_') ? null : key;
+  if (port !== null && list.length > 1) {
+    // 整组一起挑一个空位最多的片（组内串行，端口不会撞）
+    const index = groups.reduce((best, group, i) => (group.length < groups[best].length ? i : best), 0);
+    groups[index].push(...list);
+    used[index].add(port);
+    continue;
+  }
   for (const file of list) {
     const candidates = groups.map((group, i) => i).filter((i) => port === null || !used[i].has(port));
     const index = candidates.reduce((best, i) => (groups[i].length < groups[best].length ? i : best), candidates[0]);
