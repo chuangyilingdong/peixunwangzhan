@@ -93,6 +93,37 @@ const EXCLUDE = new Set([
 //   · 调用方 `const db = openDb(p); db.prepare(…)` 一个都不转换、声明也不删；
 //   · 夹具那边 openDb 自己的 `const db = new DatabaseSync(…)` 被删掉 → 留下 `return db` → ReferenceError。
 // 做法：先扫全量算出"返回句柄的函数名"，主循环里凡是**导入了这些名字**的文件都把它们当句柄来源。
+/** 模块**顶层**已经绑定的名字（导入 / 解构 / 函数声明）—— 用来避免重复声明 aq/arow/arows。 */
+/** 后面还接着 `.xxx` / `[i]` / `(...)` 时要把 `await …` 括起来：
+ *  `await arow(sql).id` 的 `.id` 是取在 **Promise** 上的（实测 2026-09-24：123 处同类，
+ *  p119 的 `db.prepare('…').get(x).id` 就是这样被指到 Promise 上去的）。 */
+const wrapIfUsedAsMember = (parentsMap, node, text) => {
+  const p = parentsMap.get(node);
+  if (!p) return text;
+  if (p.type === 'MemberExpression' && p.object === node) return `(${text})`;
+  if (p.type === 'CallExpression' && p.callee === node) return `(${text})`;
+  return text;
+};
+
+const topLevelBoundNames = (mod) => {
+  const names = new Set();
+  const collect = (pat) => {
+    if (!pat) return;
+    if (pat.type === 'Identifier') names.add(pat.name);
+    else if (pat.type === 'ObjectPattern') for (const p of pat.properties) collect(p.value || p.argument);
+    else if (pat.type === 'ArrayPattern') for (const p of pat.elements) collect(p);
+    else if (pat.type === 'AssignmentPattern') collect(pat.left);
+    else if (pat.type === 'RestElement') collect(pat.argument);
+  };
+  for (const stmt of mod.ast.body) {
+    if (stmt.type === 'ImportDeclaration') for (const s of stmt.specifiers) names.add(s.local.name);
+    else if (stmt.type === 'VariableDeclaration') for (const d of stmt.declarations) collect(d.id);
+    else if (stmt.type === 'FunctionDeclaration' && stmt.id) names.add(stmt.id.name);
+    else if (stmt.type === 'ClassDeclaration' && stmt.id) names.add(stmt.id.name);
+  }
+  return names;
+};
+
 const dbVarsOf = (mod) => {
   const vars = new Set();
   (function walk(node) {
@@ -142,7 +173,11 @@ for (const [file, mod] of mods) {
   if (!file.startsWith('scripts/')) continue;
   if (EXCLUDE.has(file)) continue;
   const code = mod.code;
-  if (!/new DatabaseSync|node:sqlite/.test(code)) continue;
+  // ⚠️ 也处理**只 import 夹具、自己没有 SQLite 句柄**的脚本（p52 就是这一类）：它们同样需要把
+  //    `PLATFORM_DB_PATH` 指向自己的临时库 —— 夹具现在走数据层，读的就是进程 env。
+  const usesHandle = /new DatabaseSync|node:sqlite/.test(code);
+  const usesFixture = /classroomFixture.mjs/.test(code);
+  if (!usesHandle && !usesFixture) continue;
 
   // ① 找出"就是 SQLite 句柄"的那些变量名（`const db = new DatabaseSync(…)`）
   const dbVars = new Set();
@@ -221,6 +256,19 @@ for (const [file, mod] of mods) {
   }
   if (handleProducers.size) flags.push(`${file} 有"返回句柄"的助手（${[...handleProducers].join(',')}）—— 请人工确认它的调用方是否都已改成数据层 API`);
 
+    // 把脚本自己那份 dbPath 回填进 env（standalone 跑时不会误动仓库里的库；harness 已设则不动它）
+    const dbPathAssign = code.match(/(?:const|let|var)\s+(\w*[Pp]ath\w*)\s*=\s*[^;]*platform\.db[^;]*;/);
+    if (dbPathAssign && !/PLATFORM_DB_PATH\s*\|\|=/.test(code)) {
+      const stmt = mod.ast.body.find((x) => code.slice(x.start, x.end).includes(dbPathAssign[0]));
+      if (stmt) add(file, stmt.end, stmt.end, `
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = ${dbPathAssign[1]};`, 0);
+    }
+
   if (!dbVars.size) continue;
   stats.files += 1;
 
@@ -268,7 +316,8 @@ for (const [file, mod] of mods) {
             const fn = { run: 'aq', get: 'arow', all: 'arows' }[p.property.name];
             const params = paramsText(code, outer.arguments);
             const replacement = `await ${fn}(${sqlText(code, node.arguments[0])}${params ? `, ${params}` : ''})`;
-            replacements.push({ start: node.start, end: outer.end, text: replacement });
+            const safe = wrapIfUsedAsMember(parents, outer, replacement);
+            replacements.push({ start: node.start, end: outer.end, text: safe });
             if (p.property.name === 'run') stats.prepareRun += 1;
             else if (p.property.name === 'get') stats.prepareGet += 1;
             else stats.prepareAll += 1;
@@ -310,7 +359,8 @@ for (const [file, mod] of mods) {
         const { sqlNode } = stmtVars.get(node.callee.object.name);
         const fn = { run: 'aq', get: 'arow', all: 'arows' }[method];
         const params = paramsText(code, node.arguments);
-        replacements.push({ start: node.start, end: node.end, text: `await ${fn}(${sqlText(code, sqlNode)}${params ? `, ${params}` : ''})` });
+        const safeStmt = wrapIfUsedAsMember(parents, node, `await ${fn}(${sqlText(code, sqlNode)}${params ? `, ${params}` : ``})`);
+        replacements.push({ start: node.start, end: node.end, text: safeStmt });
         if (method === 'run') stats.prepareRun += 1; else if (method === 'get') stats.prepareGet += 1; else stats.prepareAll += 1;
         return;
       }
@@ -333,31 +383,42 @@ for (const [file, mod] of mods) {
   // ②b 补数据层 import（**必须是"设好 env 之后"的顶层 await import**，不能是静态 import：
   //     ESM 的静态 import 会被提升到最前面 → 数据层会在 PLATFORM_DB_PATH 还没设好时加载
   //     → 走到仓库的 data/platform.db 上去，那是事故）。
-  const needsStore = /aq\(|arow\(|arows\(/.test(replacements.map((r) => r.text).join(' '));
+  // ⚠️ 2026-09-24 修：这里原来写的是三个「词边界转义」（反斜杠 + b），但文件里落进去的其实是
+  //    **字面退格符（0x08）** → 那条规则**永远匹配不到** → 数据层 import 一个都没插上 →
+  //    转换后的脚本全体 `ReferenceError: aq is not defined`。
+  //    与阶段 2 那条「翻译层规则静默不生效」是同一族错误：**不报错，只是不生效**。
+  //    别在这里用词边界转义（编辑器/工具链会把它变成真退格符）；直接匹配函数名 + 左括号就够。
+  const needsStore = /(aq|arow|arows)\(/.test(replacements.map((r) => r.text).join(' '));
   if (needsStore) {
     const hasStoreImport = /import\([^)]*store\.js/.test(code);
     if (!hasStoreImport) {
-      // 插入点：最后一个顶层 `process.env.PLATFORM_*` 赋值之后；没有就放在最后一个 import 之后
+      // 插入点：**脚本自己那句 `const dbPath = …platform.db` 之后**（下面会把
+      // `process.env.PLATFORM_DB_PATH ||= dbPath;` 插在同一位置），再退回到最后一个顶层
+      // `process.env.PLATFORM_*` 赋值 / 最后一个 import。
+      // ⚠️ 为什么必须带上那句 dbPath 声明（2026-09-24 实测）：数据层的 `await import` 是
+      //    **按顺序执行**的顶层语句 —— 插在 env 赋值**之前**，数据层就会以"没有 env"的状态加载
+      //    → 走到仓库里的 data/platform.db（事故；症状是"夹具没把任何学生放进课堂"）。
       let insertAt = 0;
       for (const stmt of mod.ast.body) {
         const text = code.slice(stmt.start, stmt.end);
         if (/^(import|const .*await import)/.test(text.trim())) insertAt = Math.max(insertAt, stmt.end);
         if (/^process\.env\.PLATFORM_(DB_PATH|DATA_DIR)\s*=/.test(text.trim())) insertAt = Math.max(insertAt, stmt.end);
+        if (/^const\s+\w*[Pp]ath\w*\s*=/.test(text.trim()) && /platform\.db/.test(text)) insertAt = Math.max(insertAt, stmt.end);
       }
-      add(file, insertAt, insertAt, [
-        '',
-        '// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import',
-        "const { aq, arow, arows } = await import('../packages/database/src/store.js');",
-        '',
-      ].join('\n'), 1);
-      stats.importsFixed += 1;
-    }
-    // 把脚本自己那份 dbPath 回填进 env（standalone 跑时不会误动仓库里的库；harness 已设则不动它）
-    const dbPathAssign = code.match(/(?:const|let|var)\s+(\w*[Pp]ath\w*)\s*=\s*[^;]*platform\.db[^;]*;/);
-    if (dbPathAssign && !/PLATFORM_DB_PATH\s*\|\|=/.test(code)) {
-      const stmt = mod.ast.body.find((x) => code.slice(x.start, x.end).includes(dbPathAssign[0]));
-      if (stmt) add(file, stmt.end, stmt.end, `
-process.env.PLATFORM_DB_PATH ||= ${dbPathAssign[1]};`, 1);
+      // ⚠️ 只声明**还没绑定**的名字：有的脚本已经从 lib.js 拿过 arow
+      //    （p127 就是 `const { row, arow } = await import('../apps/server/src/lib.js')`），
+      //    再声明一次就是 `Identifier 'arow' has already been declared` —— ESM 加载期直接失败。
+      const bound = topLevelBoundNames(mod);
+      const missing = ['aq', 'arow', 'arows'].filter((n) => !bound.has(n));
+      if (missing.length) {
+        add(file, insertAt, insertAt, [
+          '',
+          '// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import',
+          `const { ${missing.join(', ')} } = await import('../packages/database/src/store.js');`,
+          '',
+        ].join('\n'), 1);
+        stats.importsFixed += 1;
+      }
     }
   }
 
