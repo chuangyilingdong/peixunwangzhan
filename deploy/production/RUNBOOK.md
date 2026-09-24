@@ -569,3 +569,21 @@ AI 不再使用平台预算或机构预算。机构充值后获得共享积分�
 node -e "const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync('/srv/ai-kids-platform/production/data/platform.db');console.log(db.prepare('SELECT visibility, COUNT(*) n FROM course_series GROUP BY visibility').all())"
 # 期望只有 PUBLIC / PRIVATE
 ```
+
+### ⚠️ 新机（广州）的发布通道：**用 15 脚本，别用 git pull**（2026-09-24 实测）
+
+RUNBOOK 上面那句"上服务器 `git pull --ff-only`"在新机上是**坏的**：服务器取不到 GitHub
+（`git@github.com-peixunwangzhan` 这个别名只在本机 `~/.ssh/config` 里；服务器上 `git fetch` 报
+`Could not resolve hostname`）。改成本机推：
+
+```bash
+bash deploy/production/migrate/15-push-from-dev-machine.sh          # 推 + 服务器快进合并
+bash deploy/production/migrate/15-push-from-dev-machine.sh --build  # 再跑 04：构建 + 切 release + 重启 + 验收
+```
+
+要恢复"服务器自己拉"的老路，得在服务器上生成一把 deploy key 并把公钥加到 GitHub 仓库
+（**这一步需要仓库管理员**：2026-09-24 本机 `gh` 未登录，做不了）。在那之前，15 脚本是唯一通道。
+
+另有一条硬要求：**服务器源码树必须保持干净**（`git status --porcelain` 为空）。2026-09-24 之前它
+长期带着未跟踪/被改过的文件，直接 pull/merge 会被挡住或静默盖过仓库版本；那次是把它们
+`git stash -u` 之后才对齐的（备份见服务器 `/tmp/src-dirty-*.tar.gz`）。
