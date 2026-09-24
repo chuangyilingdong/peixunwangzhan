@@ -78,6 +78,27 @@ function fakeFetch({ failUpload = false, uploadUrls = [UPSTREAM_HOSTED, UPSTREAM
 }
 
 resetUpstreamMediaMirrorCache();
+
+/* ── ①b ⭐ 相对地址（画布快照里的形状）也必须镜像（2026-09-24 用户报的图生图 bug） ──────
+ *  客户端 getIncomingAssetRefs 把节点的 assetUrl **原样**发上来，而快照里存的就是 /api/… 。
+ *  以前这里只认绝对 http(s) → 相对地址被原样发给上游 → 上游回
+ *  「images must contain public HTTP(S) URLs」（用户截图里那句）。 */
+const RELATIVE_REF = '/api/student/file-assets/file_rel_1/download';
+check('①b 相对 /api/… 也算「我们自己的素材」', isSelfHostedMediaUrl(RELATIVE_REF, [SELF]) === true);
+{
+  resetUpstreamMediaMirrorCache();
+  const fRel = fakeFetch();
+  const rel = await mirrorSelfHostedMedia(
+    { referenceAssets: [{ type: 'IMAGE', url: RELATIVE_REF }] },
+    { selfOrigins: [SELF], uploadUrl: UPLOAD_URL, apiKey: 'sk-test', fetchImpl: fRel },
+  );
+  check('①c 相对地址的参考图换成了**上游** URL（不再原样发出去）',
+    String(rel.referenceAssets[0].url).startsWith('https://api.seedance.nz/') && rel.referenceAssets[0].url !== RELATIVE_REF,
+    String(rel.referenceAssets[0].url));
+  check('①d 相对地址确实走了一次上传', fRel.uploadCount() === 1, 'uploads=' + fRel.uploadCount());
+  resetUpstreamMediaMirrorCache();   // 复位：后面的用例按自己的记账数（② 期望 2 条）
+}
+
 const f1 = fakeFetch();
 // 先单独镜像一张、钉住它的映射：这样后面并行那几条的期望值是确定的（不会因为谁先跑完而变）
 const firstFrameHosted = await mirrorMediaUrl(OUR_IMAGE, { uploadUrl: UPLOAD_URL, apiKey: 'sk-test', fetchImpl: f1 });

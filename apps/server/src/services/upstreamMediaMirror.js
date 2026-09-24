@@ -23,8 +23,10 @@ import { AI_PROVIDER_TIMEOUT_MS } from '../config.js';
 import { PROVIDER_ERROR_CODES } from './providerContract.js';
 import { fitMediaToRatio, parseRatio } from './mediaFit.js';
 import { readFileSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { uploadRoot } from './fileUploadSecurity.js';
+import { materializeObject, rowStorageBackend } from './fileStorage.js';
 import { row, arow } from '../lib.js';
 
 // 上游给的 URL 活 24h，留 4h 余量；到点重新上传。
@@ -39,9 +41,19 @@ const inflight = new Map(); // 源 URL → 正在进行中的上传（同一张�
 export function resetUpstreamMediaMirrorCache() { cache.clear(); inflight.clear(); }
 export function upstreamMediaMirrorCacheSize() { return cache.size; }
 
-/** 这个 URL 是不是「我们自己站点上的素材」。只有 http(s) 公网地址才谈得上镜像（data: / mock: 不动）。 */
+/**
+ * 这个 URL 是不是「我们自己站点上的素材」。data: / mock: 这类内联地址不算（上游自己收 data URI）。
+ *
+ * ⚠️ **相对地址（`/api/…`）也要算"我们自己的"**（2026-09-24 补，用户报的图生图 bug）：
+ *    画布快照里存的素材地址本来就是相对路径（客户端 `getIncomingAssetRefs` 直接把节点的
+ *    assetUrl 原样发上来），而**图生图的参考图必须先镜像到上游**（私有素材上游根本取不到）。
+ *    以前这里只认绝对 http(s)，相对地址被判"不是自站素材"→ 原样发出去 →
+ *    上游回 `images must contain public HTTP(S) URLs`。
+ *    相对地址没有 origin，但在**我们的请求体**里它只可能是我们自己的地址。
+ */
 export function isSelfHostedMediaUrl(url, selfOrigins = []) {
   const value = String(url || '').trim();
+  if (/^\/api\//i.test(value)) return true;
   if (!/^https?:\/\//i.test(value)) return false;
   let origin = '';
   try { origin = new URL(value).origin; } catch { return false; }
@@ -72,21 +84,38 @@ function describeSize(bytes) {
 }
 
 /**
- * 我们自己的文件资产 URL → 磁盘内容（读不到就返回 null，交给 HTTP 那条路试）。
- * 只在"文件确实在库里且 storage_kind=INTERNAL_PROXY"时才读盘。
+ * 我们自己的文件资产 URL → 字节（读不到就返回 null，交给 HTTP 那条路试）。
+ * 只在"文件确实在库里且 storage_kind=INTERNAL_PROXY"时才走这条路。
+ *
+ * 两条来源：
+ *   a) 本地磁盘（storageBackend=local 的老数据）；
+ *   b) ⭐ **对象存储**（生产就是 OSS）：本地根本没有那份字节（storagePath=null），
+ *      取回来落到一个临时文件再读。这一条以前缺了 —— 于是"自站素材在 OSS 上"时这里返回 null，
+ *      掉到 HTTP 兜底（私有素材要会话，401）→ 上游拿到我们的 /api 地址 →
+ *      回 `images must contain public HTTP(S) URLs`（用户 2026-09-24 报的图生图 bug）。
  */
 async function readOwnFileFromDisk(source) {
   const match = String(source || '').match(/\/api\/(?:public|student|admin|org)\/file-assets\/([^/]+)\/download(?:$|[?#])/);
   if (!match) return null;
   try {
-    const file = await arow('SELECT storage_kind,storage_key,mime_type FROM file_assets WHERE id=?', [match[1]]);
+    const file = await arow('SELECT storage_kind,storage_key,mime_type,metadata FROM file_assets WHERE id=?', [match[1]]);
     if (!file || file.storage_kind !== 'INTERNAL_PROXY') return null;
     const key = String(file.storage_key || '').replaceAll('\\', '/');
     if (!key || key.startsWith('/') || /^[A-Za-z]:/.test(key) || key.split('/').includes('..')) return null;
     const root = uploadRoot();
+    const contentType = String(file.mime_type || '').split(';')[0].trim() || 'application/octet-stream';
     const absolute = path.resolve(root, key);
     if (absolute !== root && !absolute.startsWith(root + path.sep)) return null;
-    return { bytes: readFileSync(absolute), contentType: String(file.mime_type || '').split(';')[0].trim() || 'application/octet-stream' };
+    try {
+      return { bytes: readFileSync(absolute), contentType };
+    } catch {
+      // 本地没有这份字节 → OSS 后端就把它取回来（其它后端直接放弃）
+      if (rowStorageBackend(file) !== 'oss') return null;
+      const scratch = path.join(root, '.mirror-cache', `${match[1]}${path.extname(key) || '.bin'}`);
+      await mkdir(path.dirname(scratch), { recursive: true });
+      await materializeObject(file, scratch);
+      return { bytes: readFileSync(scratch), contentType };
+    }
   } catch { return null; }
 }
 
@@ -113,7 +142,7 @@ function mediaFileName(contentType, sourceUrl) {
 }
 
 /** 把一张素材传到上游，返回上游自己的 URL（带缓存）。 */
-export async function mirrorMediaUrl(url, { uploadUrl, apiKey = '', timeoutMs = MIRROR_TIMEOUT_MS, fetchImpl = null, fitRatioValue = '' } = {}) {
+export async function mirrorMediaUrl(url, { uploadUrl, apiKey = '', timeoutMs = MIRROR_TIMEOUT_MS, fetchImpl = null, fitRatioValue = '', selfOrigin = '' } = {}) {
   const source = String(url || '').trim();
   const doFetch = fetchImpl || globalThis.fetch;
   if (!source || !uploadUrl || typeof doFetch !== 'function') return source;
@@ -126,12 +155,12 @@ export async function mirrorMediaUrl(url, { uploadUrl, apiKey = '', timeoutMs = 
   // （上游限流是每令牌每分钟 10 次，一次生成里重复传同一张很浪费）。
   const pending = inflight.get(cacheKey);
   if (pending) return pending;
-  const task = uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue });
+  const task = uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue, selfOrigin });
   inflight.set(cacheKey, task);
   try { return await task; } finally { inflight.delete(cacheKey); }
 }
 
-async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue = '' }) {
+async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue = '', selfOrigin = '' }) {
   // ① 取源文件（我们自己的站点，取的是同机房的一次回环请求）
   let bytes;
   let contentType = '';
@@ -150,7 +179,10 @@ async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl:
     bytes = new Uint8Array(disk.bytes);
   } else {
     try {
-      const response = await doFetch(source, { signal: controller.signal });
+      // 相对地址（/media/… 这类公开素材）要拼上自站 origin 才 fetch 得了；
+      // 私有素材在上一段已经从磁盘/OSS 拿到字节了，走不到这里。
+      const httpSource = source.startsWith('/') && selfOrigin ? new URL(source, selfOrigin).toString() : source;
+      const response = await doFetch(httpSource, { signal: controller.signal });
       if (!response?.ok) throw new Error(`HTTP ${response?.status || 0}`);
       contentType = String(response.headers?.get?.('content-type') || '').split(';')[0].trim();
       // 大小闸：在**读 body 之前**按 content-length 判（上游上限只有 30/50MB，我们单文件上限是 200MB）
@@ -223,14 +255,15 @@ export async function mirrorSelfHostedMedia(options, { selfOrigins = [], uploadU
   const source = options && typeof options === 'object' ? options : {};
   if (!uploadUrl || !Array.isArray(selfOrigins) || !selfOrigins.length) return source;
   const ratio = parseRatio(frameFitRatio) ? frameFitRatio : '';
+  const selfOrigin = String(selfOrigins[0] || '').trim();   // 相对地址要靠它补成绝对（见 uploadMirrored）
   // 首帧/尾帧：要裁（ratio 有值）时**不管素材在哪家**都得先取回来（上游托管的那张也一样会被拉扁）
   const prepareFrame = (value, fitRatioValue) => {
     if (!value) return Promise.resolve(value);
     if (!fitRatioValue && !isSelfHostedMediaUrl(value, selfOrigins)) return Promise.resolve(value);
-    return mirrorMediaUrl(value, { uploadUrl, apiKey, timeoutMs, fetchImpl, fitRatioValue });
+    return mirrorMediaUrl(value, { uploadUrl, apiKey, timeoutMs, fetchImpl, fitRatioValue, selfOrigin });
   };
   const mirror = (value) => (isSelfHostedMediaUrl(value, selfOrigins)
-    ? mirrorMediaUrl(value, { uploadUrl, apiKey, timeoutMs, fetchImpl })
+    ? mirrorMediaUrl(value, { uploadUrl, apiKey, timeoutMs, fetchImpl, selfOrigin })
     : Promise.resolve(value));
   const next = { ...source };
   const tasks = [];
