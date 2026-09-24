@@ -5,6 +5,8 @@ import {
   transaction, arow, atransaction,
 } from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
+// 画布「增量提交」：提交之后画布不锁（SUBMITTED 也能继续生成），课堂结束由 canUseNow 拦
+import { isCanvasEditableProjectStatus } from '../../../../packages/shared/src/canvasOutput.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 // 2026-09-18（用户口径）：「学生算力额度只观测、不真拦」—— 这条端点**不再**做额度判断
 // （一度加过的额度断言已删）。额度是内部观测指标，不进任何准入链路。
@@ -83,7 +85,7 @@ export async function handleAi(ctx) {
       error: errors.notFound('项目不存在', 'PROJECT_NOT_FOUND'),
     });
   }
-  if (project.status !== 'DRAFT') {
+  if (!isCanvasEditableProjectStatus(project.status)) {
     return await rejectWithUsage({
       orgId, userId, projectId, modality,
       error: errors.conflict('项目当前不可继续创作', 'PROJECT_NOT_EDITABLE'),
@@ -107,7 +109,7 @@ export async function handleAi(ctx) {
       const currentUser = await arow('SELECT * FROM users WHERE id = ? AND org_id = ? AND status = ?', [userId, orgId, 'ACTIVE']);
       const currentProject = await arow('SELECT * FROM student_projects WHERE id=? AND student_id=? AND org_id=?', [projectId, userId, orgId]);
       if (!currentUser || !currentProject) throw errors.notFound('项目或学生不存在', 'PROJECT_NOT_FOUND');
-      if (currentProject.status !== 'DRAFT') throw errors.conflict('项目当前不可继续创作', 'PROJECT_NOT_EDITABLE');
+      if (!isCanvasEditableProjectStatus(currentProject.status)) throw errors.conflict('项目当前不可继续创作', 'PROJECT_NOT_EDITABLE');
 
       const currentContext = await resolveProjectUsageContext(currentUser, currentProject);
       if (!currentContext.canUseNow) throw errors.forbidden(currentContext.blockReason, currentContext.blockCode);

@@ -15,6 +15,8 @@ import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSet
 import { normalizeSubmission } from '../vibecoding.js';
 import { appendLicenseReversal, createLicensePurchaseBatch, licensePurchaseHistory, normalizeLicensePurchaseInput, voidLicensePurchaseBatches } from '../../services/licenseLedger.js';
 import { COURSE_QUOTA_SOURCES, recordQuotaChange } from '../../services/courseQuotaLedger.js';
+// 体验课包（2026-09-24 用户口径）：类型 + 次数账（普通包行为一字不改）
+import { EXPERIENCE_SERIES_TYPE, grantUnitsOf, isExperienceSeries, normalizeSeriesType } from '../../services/courseGrants.js';
 import {
   capturePublishedContent,
   ENROLLMENT_STATUSES,
@@ -175,8 +177,14 @@ export async function handleCourses(ctx, part, method) {
      if (coverAssetId && !coverAssetId.startsWith('file_')) throw errors.badRequest('封面资源 ID 格式无效', 'INVALID_COVER_ASSET_ID');
     if (!visibility) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
     if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(status)) throw errors.badRequest('课包状态无效', 'INVALID_COURSE_STATUS');
+    // 课包类型（2026-09-24 用户口径）：独立字段，NORMAL 普通 / EXPERIENCE 体验课包
+    const seriesType = normalizeSeriesType(body.seriesType);
     const lessons = body.lessons === undefined ? [] : body.lessons;
     if (!Array.isArray(lessons) || lessons.length > 200) throw errors.badRequest('课时列表无效', 'INVALID_LESSONS');
+    // 体验课包只包含 1 节课：建的时候就要拦（发布校验里还有一道，见 admin/helpers.js）
+    if (seriesType === EXPERIENCE_SERIES_TYPE && lessons.length !== 1) {
+      throw errors.badRequest(`体验课包只能包含 1 节课（本次提交了 ${lessons.length} 节）`, 'EXPERIENCE_SERIES_LESSON_LIMIT');
+    }
     // P5-W05: 课程资料核验字段校验
     const difficultyLevel = body.difficultyLevel;
     if (difficultyLevel !== undefined && difficultyLevel !== null) {
@@ -198,7 +206,7 @@ export async function handleCourses(ctx, part, method) {
     const seriesDeliveryMode = normalizeDeliveryMode(body.deliveryMode);
     const createdLessonIds = [];
     await atransaction(async () => {
-      await aq('INSERT INTO course_series(id,title,description,cover_image_url,cover_asset_id,price_fen,estimated_credits_per_person,grade_range,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,delivery_mode,stock_total,per_student_budget_fen,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, 'PLATFORM', null, visibility, initialVersion, integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), seriesDeliveryMode, stockTotal, perStudentBudgetFen, now, now]);
+      await aq('INSERT INTO course_series(id,title,description,cover_image_url,cover_asset_id,price_fen,estimated_credits_per_person,grade_range,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,delivery_mode,stock_total,per_student_budget_fen,series_type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, 'PLATFORM', null, visibility, initialVersion, integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), seriesDeliveryMode, stockTotal, perStudentBudgetFen, seriesType, now, now]);
       for (const [index, lesson] of lessons.entries()) {
         if (lesson.deliveryModes !== undefined && (!Array.isArray(lesson.deliveryModes) || !lesson.deliveryModes.length || lesson.deliveryModes.some((mode) => !['CANVAS', 'VIBECODING'].includes(mode)))) throw errors.badRequest('请至少选择一种有效课堂类型', 'INVALID_DELIVERY_MODES');
         const lessonTitle = String(lesson?.title || '').trim();
@@ -333,9 +341,18 @@ export async function handleCourses(ctx, part, method) {
     }
     const before = await platformSeries(series);
     const deliveryMode = body.deliveryMode === undefined ? undefined : normalizeDeliveryMode(body.deliveryMode);
-     await aq('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,estimated_credits_per_person=?,grade_range=?,stock_total=?,per_student_budget_fen=?,visibility=?,sort=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,delivery_mode=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, stockTotal, seriesPerStudentBudgetFen, visibility, sort, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, deliveryMode ?? series.delivery_mode, nowIso(), series.id]);
+    // 课包类型可以改（2026-09-24）：改成体验课包时，**未归档课时必须正好 1 节** ——
+    // 否则"一次体验只上一节课"的口径就不成立（发布时还会再校验一次，见 admin/helpers.js）。
+    const seriesType = body.seriesType === undefined ? series.series_type : normalizeSeriesType(body.seriesType);
+    if (seriesType === EXPERIENCE_SERIES_TYPE) {
+      const liveLessons = await acount("SELECT COUNT(*) n FROM course_lessons WHERE series_id=? AND status<>'ARCHIVED'", [series.id]);
+      if (Number(liveLessons) !== 1) {
+        throw errors.badRequest(`体验课包只能包含 1 节课（现在有 ${Number(liveLessons)} 节未归档课时）：请先把多余的课时归档`, 'EXPERIENCE_SERIES_LESSON_LIMIT');
+      }
+    }
+    await aq('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,estimated_credits_per_person=?,grade_range=?,stock_total=?,per_student_budget_fen=?,visibility=?,sort=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,delivery_mode=?,series_type=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, stockTotal, seriesPerStudentBudgetFen, visibility, sort, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, deliveryMode ?? series.delivery_mode, seriesType, nowIso(), series.id]);
     const after = await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [series.id]));
-    await audit(ctx, 'COURSE_SERIES_UPDATE', 'COURSE_SERIES', series.id, { difficultyLevel: before.difficultyLevel, ageRangeMin: before.ageRangeMin, ageRangeMax: before.ageRangeMax, tags: before.tags }, { difficultyLevel: difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, tags });
+    await audit(ctx, 'COURSE_SERIES_UPDATE', 'COURSE_SERIES', series.id, { difficultyLevel: before.difficultyLevel, ageRangeMin: before.ageRangeMin, ageRangeMax: before.ageRangeMax, tags: before.tags, seriesType: before.seriesType }, { difficultyLevel: difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, tags, seriesType });
     return await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
@@ -403,6 +420,15 @@ export async function handleCourses(ctx, part, method) {
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const lessons = ctx.body?.lessons;
     if (!Array.isArray(lessons) || lessons.length === 0 || lessons.length > 100) throw errors.badRequest('请提交 1-100 个课时', 'INVALID_LESSONS');
+    // 体验课包只能有 1 节未归档课时（2026-09-24）：课时编排这条入口也要拦，
+    // 否则"再补一节"就直接把口径破了（发布校验兜底，但那时已经建出来、要人工归档）。
+    if (isExperienceSeries(series)) {
+      const liveLessons = Number((await arow("SELECT COUNT(*) n FROM course_lessons WHERE series_id=? AND status<>'ARCHIVED'", [series.id]))?.n || 0);
+      const incomingLive = lessons.filter((lesson) => (lesson?.status || 'DRAFT') !== 'ARCHIVED').length;
+      if (liveLessons + incomingLive > 1) {
+        throw errors.badRequest(`体验课包只能包含 1 节课（现有 ${liveLessons} 节，本次要加 ${incomingLive} 节）`, 'EXPERIENCE_SERIES_LESSON_LIMIT');
+      }
+    }
     const maxSort = Number((await arow('SELECT MAX(sort) m FROM course_lessons WHERE series_id=?', [series.id]))?.m || 0);
     const now = nowIso(); const replaceQueue = [];
     await atransaction(async () => {
@@ -656,7 +682,10 @@ export async function handleCourses(ctx, part, method) {
   }
 
   // 平台兜底撤销：机构侧不可撤销（次数已消耗不可逆），出问题时由平台处理并写审计。
-  // 次数退回规则：该学生还没提交过该课包任何一节课的作品 → 退回 1 次；已经上过 → 不退。
+  // 次数退回规则：
+  //   · 普通课包（原口径，一字不改）：该学生还没提交过该课包任何一节课的作品 → 退回 1 次；已经上过 → 不退。
+  //   · 体验课包（2026-09-24 用户口径）：按**未消费余额**退 —— 退回 = 已授权 − 已核销，
+  //     已经核销掉的历史**一个字不动**（它们确实发生过，见 services/courseGrants.js 的核销明细）。
   const grantRevokeMatch = part.match(/^\/course-grants\/([^/]+)\/revoke$/);
   if (grantRevokeMatch && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
@@ -664,6 +693,38 @@ export async function handleCourses(ctx, part, method) {
     if (!grant) throw errors.notFound('授权记录不存在', 'COURSE_GRANT_NOT_FOUND');
     if (grant.revoked_at) throw errors.conflict('这次授权已经撤销过了', 'COURSE_GRANT_ALREADY_REVOKED');
     const reason = nonEmptyString(ctx.body?.reason, '撤销原因', { max: 500 });
+    const seriesOfGrant = await arow('SELECT id, series_type FROM course_series WHERE id=?', [grant.series_id]);
+    if (isExperienceSeries(seriesOfGrant)) {
+      const units = grantUnitsOf(grant);
+      const refundUnits = units.remaining;
+      const revokedAt = nowIso();
+      await atransaction(async () => {
+        // 只把"还能用"的次数收回：granted_units 归到已核销数上（consumed_units 保持不动 → 历史留痕）
+        await aq('UPDATE student_course_grants SET revoked_at=?,revoked_by=?,revoke_reason=?,granted_units=? WHERE id=?',
+          [revokedAt, auth.user.id, reason, units.consumed, grant.id]);
+        if (refundUnits > 0 && grant.source_assignment_id) {
+          const assignmentBefore = await arow('SELECT quota_total, quota_used FROM course_assignments WHERE id=?', [grant.source_assignment_id]);
+          await aq(`UPDATE course_assignments SET quota_used=${SQL_MAX}(quota_used-?,0) WHERE id=?`, [refundUnits, grant.source_assignment_id]);
+          if (assignmentBefore && Number(assignmentBefore.quota_used || 0) > 0) {
+            await recordQuotaChange({
+              orgId: grant.org_id, seriesId: grant.series_id, assignmentId: grant.source_assignment_id,
+              changeType: 'GRANT_REFUND',
+              quotaTotalBefore: Number(assignmentBefore.quota_total || 0),
+              quotaUsedBefore: Number(assignmentBefore.quota_used || 0),
+              actorId: auth.user.id, actorRole: auth.user.role,
+              reason, source: COURSE_QUOTA_SOURCES.ADMIN_GRANT_REVOKE,
+            });
+          }
+          // 每退 1 人次冲销 1 笔许可收入（FIFO 分摊与收到的那几笔一一对应）
+          for (let index = 0; index < refundUnits; index += 1) {
+            await appendLicenseReversal({ grantId: grant.id, actorId: auth.user.id, occurredAt: revokedAt, idempotencyKey: `license-reversal:${grant.id}:${revokedAt}:u${index}` });
+          }
+        }
+      });
+      await audit(ctx, 'COURSE_GRANT_REVOKE', 'STUDENT_COURSE_GRANT', grant.id, { revokedAt: null, grantedUnits: units.granted, consumedUnits: units.consumed },
+        { revokedAt, reason, refundedUnits: refundUnits, consumedUnits: units.consumed, seriesType: 'EXPERIENCE' }, { orgId: grant.org_id });
+      return { id: grant.id, revokedAt, quotaRefunded: refundUnits > 0, refundedUnits: refundUnits, consumedUnits: units.consumed, seriesType: 'EXPERIENCE' };
+    }
     const submitted = Number((await arow(
       `SELECT
          (SELECT COUNT(*) FROM works work JOIN course_lessons lesson ON lesson.id=work.course_lesson_id

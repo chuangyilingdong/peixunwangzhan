@@ -9,6 +9,8 @@ export * from './worksState.js';
 export * from './worksState.jsx';
 export * from './classroom.jsx';
 export * from './canvasWorkspace.jsx';
+// 画布「可提交产出」判定（前端与服务端共用同一套算法，服务端直接 import 这个文件而不是本入口）
+export * from './canvasOutput.js';
 export { Icon } from './icons.jsx';
 export { materialVisual, materialToneClass } from './materialTypes.js';
 export * from './markdown.jsx';

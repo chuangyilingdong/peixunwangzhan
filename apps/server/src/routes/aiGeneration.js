@@ -1,5 +1,7 @@
 import { ApiError, audit, count, errors, id, json, normalizeUser, nowIso, parseJson, q, requireRole, row, rows, transaction, arow, acount, arows, aq, atransaction } from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
+// 画布「增量提交」：提交之后画布不锁（SUBMITTED 也能继续生成），课堂结束由 canUseNow 拦
+import { isCanvasEditableProjectStatus } from '../../../../packages/shared/src/canvasOutput.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
@@ -576,7 +578,7 @@ async function settleSuccessfulJob({ auth, project, modality, provider, info, jo
     const user = await arow("SELECT * FROM users WHERE id = ? AND org_id = ? AND status = 'ACTIVE'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
     const freshProject = await ownProject(auth, project.id);
     if (!user) throw errors.forbidden('学生账号不可用', 'ACCOUNT_DISABLED');
-    if (freshProject.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
+    if (!isCanvasEditableProjectStatus(freshProject.status)) throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
     const freshContext = await resolveProjectUsageContext(user, freshProject);
     if (!freshContext.canUseNow) throw errors.forbidden(freshContext.blockReason, freshContext.blockCode);
     assertCapability(modality, freshContext.activeSession);
@@ -862,7 +864,7 @@ function auditContext(auth, ctx = null) {
 }
 
 export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null, sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssets = [], boxId = '', studentOptions = null }) {
-  if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
+  if (!isCanvasEditableProjectStatus(project.status)) throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
   const policy = await getAiProviderPolicy();
   const context = await resolveProjectUsageContext(auth.rawUser, project);
   if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
@@ -1227,7 +1229,7 @@ export async function handleAiGeneration(ctx) {
   if (pathname === '/api/ai/generations/async' && method === 'POST') {
     const body = ctx.body || {}; const projectId = String(body.projectId || '').trim(); const prompt = String(body.prompt || '').trim(); const title = String(body.title || '').trim().slice(0, 100); const modality = modalityOf(body.modality); const boxId = String(body.boxId || '').trim().slice(0, 64);
     if (!projectId || !prompt) throw errors.badRequest('projectId 和素材描述必填', 'GENERATION_FIELDS_REQUIRED');
-    const project = await ownProject(auth, projectId); if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
+    const project = await ownProject(auth, projectId); if (!isCanvasEditableProjectStatus(project.status)) throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
     const policy = await getAiProviderPolicy();
     const context = await resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
     const box = resolveLessonGenerationBox(context, modality, boxId);
@@ -1296,6 +1298,6 @@ export async function handleAiGeneration(ctx) {
   if (!prompt) throw errors.badRequest('请先写下素材描述', 'GENERATION_PROMPT_REQUIRED');
   if (prompt.length > 2000) throw errors.badRequest('素材描述不能超过 2000 个字符', 'GENERATION_PROMPT_TOO_LONG');
   const project = await ownProject(auth, projectId);
-  if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
+  if (!isCanvasEditableProjectStatus(project.status)) throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
   return runGenerationJob({ auth, project, modality, prompt, title, action: 'AI_GENERATION_CREATE', requestContext: ctx, boxId, studentOptions: studentParamOptionsFrom(body) });
 }

@@ -265,6 +265,12 @@ CREATE TABLE IF NOT EXISTS course_series (
   age_range_max INTEGER,
   tags TEXT NOT NULL DEFAULT '[]',
   delivery_mode TEXT NOT NULL DEFAULT 'CANVAS' CHECK (delivery_mode IN ('CANVAS','VIBECODING')),
+  -- 课包类型（2026-09-24 用户口径）：NORMAL 普通课包 / EXPERIENCE 体验课包。
+  -- ⚠️ 这是**独立字段**：不要拿机构试用（organizations.is_trial）、也不要靠标题/标签猜。
+  -- 体验课包的差异只有三条（其余机制与普通课包完全相同，见 services/courseGrants.js）：
+  --   ① 只能包含 1 节未归档课时；② 可以重复分给同一个学生、未使用的次数**可以预先累积**；
+  --   ③ 每场课堂**正常结束且该学生有有效 AI 产出**时核销 1 次（无产出不扣、解散不扣）。
+  series_type TEXT NOT NULL DEFAULT 'NORMAL' CHECK (series_type IN ('NORMAL','EXPERIENCE')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
@@ -475,6 +481,11 @@ CREATE TABLE IF NOT EXISTS student_projects (
   updated_at TEXT NOT NULL,
   archived_at TEXT,
   deleted_at TEXT,
+  -- 上一次提交成功时的**产出指纹**（见 packages/shared/src/canvasOutput.js）。
+  -- 增量提交的判据：相对它还有"新的产出"才能再提交一次；提交后画布**不锁**（继续做剩下的任务）。
+  -- ⚠️ 故意**可空、不带 DEFAULT**：MySQL 的 TEXT/BLOB 不允许字面默认值，而两侧结构必须长得一样
+  --    （本机测试库的 DDL 由这份 SQLite DDL 生成、生产 RDS 是照着它建的）。读取处一律按空串处理。
+  last_submitted_output_signature TEXT,
   FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_projects_student_updated ON student_projects(student_id, updated_at DESC);
@@ -1208,9 +1219,33 @@ db.exec(`CREATE TABLE IF NOT EXISTS student_course_grants (
   revoked_at TEXT,
   revoked_by TEXT,
   revoke_reason TEXT,
+  -- 体验课包（series_type='EXPERIENCE'）的**次数账**：同一个学生可以重复分配、未用的次数预先累积。
+  -- 普通课包不看这两列（授权即扣 1 次配额，重复授权跳过），默认值让老行与普通包语义保持不变。
+  granted_units INTEGER NOT NULL DEFAULT 1,
+  consumed_units INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (series_id) REFERENCES course_series(id) ON DELETE CASCADE
 )`);
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_student_course_grants_unique ON student_course_grants(org_id, student_id, series_id)');
+
+// 体验次数核销明细：**幂等表** —— 同一场课堂 + 同一个学生只允许扣一次。
+// 课堂结束的结算会被重复触发（重复点「结束」、重试、并发），这张表是"只扣一次"的唯一依据；
+// 余额与账实一致性也靠它复核（granted_units − consumed_units 应等于未消费次数）。
+db.exec(`CREATE TABLE IF NOT EXISTS student_course_grant_consumptions (
+  id TEXT PRIMARY KEY,
+  grant_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  series_id TEXT NOT NULL,
+  lesson_id TEXT,
+  session_id TEXT NOT NULL,
+  units INTEGER NOT NULL DEFAULT 1,
+  consumed_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (grant_id) REFERENCES student_course_grants(id) ON DELETE CASCADE
+)`);
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_grant_consumptions_unique ON student_course_grant_consumptions(grant_id, session_id, student_id)');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_grant_consumptions_session ON student_course_grant_consumptions(session_id, student_id)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_grant_consumptions_grant ON student_course_grant_consumptions(grant_id, consumed_at DESC)');
 
 // 课包许可三账：购买批次、收入事件、收入到购买批次的 FIFO 分摊。
 // 财务账只保留业务对象 ID 快照，不做级联外键，避免上游对象删除时抹掉历史。
@@ -1523,6 +1558,18 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 try { db.exec("ALTER TABLE class_sessions ADD COLUMN ai_paused INTEGER NOT NULL DEFAULT 0"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec("ALTER TABLE class_sessions ADD COLUMN student_call_cap INTEGER"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 画布「增量提交」（2026-09-24 用户口径）：提交后画布不锁、出现新产出才能再提交一次。
+// 老行留空 = 还没提交过产出，所以第一次提交照样放行（见 apps/server/src/routes/student.js 的 submit）。
+try { db.exec("ALTER TABLE student_projects ADD COLUMN last_submitted_output_signature TEXT"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 体验课包（2026-09-24 用户口径）：课包类型独立成一列；许可行加「次数账」两列。
+// ⚠️ 老库这两条 ALTER 不能省：只改上面的 CREATE TABLE 的话，**已经在跑的库**永远拿不到这些列。
+try { db.exec("ALTER TABLE course_series ADD COLUMN series_type TEXT NOT NULL DEFAULT 'NORMAL'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec("ALTER TABLE student_course_grants ADD COLUMN granted_units INTEGER NOT NULL DEFAULT 1"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec("ALTER TABLE student_course_grants ADD COLUMN consumed_units INTEGER NOT NULL DEFAULT 0"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 for (const statement of [
   "ALTER TABLE works ADD COLUMN copyright_confirmed_at TEXT",

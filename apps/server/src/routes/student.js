@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
 import { assertTransition } from '../services/domainState.js';
+// 画布「可提交产出」的唯一判定口径（与前端同一份文件，见 packages/shared/src/canvasOutput.js）
+import { canvasOutputSignature, hasUnsubmittedOutput, isCanvasEditableProjectStatus, newCanvasOutputKeys } from '../../../../packages/shared/src/canvasOutput.js';
 import { computePoolSummary } from '../services/computePool.js';
 // 「我的作品」点开一件要读 VibeCoding 产物的快照（产物清单 / 图片 fileId / 正文），
 // 与 org 端「课堂作品」同一套解析函数 —— 两处口径必须一致，别再抄一份。
@@ -180,12 +182,24 @@ async function decorateWork(work, ctx, { includeSubmissions = false } = {}) {
   };
 }
 
+/** 只认草稿的那类写路径（改版本名等与「画布还能不能编辑」无关的动作）。 */
 function assertDraft(project) {
   if (project.status !== 'DRAFT') throw errors.conflict('已提交或已评分项目不能继续编辑', 'PROJECT_NOT_EDITABLE');
 }
 
+/**
+ * 画布还开着 = 学生还能编辑 / 还能继续生成。
+ *
+ * ⚠️ 2026-09-24 口径变化（画布「增量提交」）：**提交之后画布不锁** —— 学生要能接着做完剩下的任务，
+ * 有新产出时还能再提交一次。所以 SUBMITTED 也放行；真正决定"还能不能用"的是**课堂还在不在上**
+ * （下面 resolveProjectUsageContext 的 canUseNow）。评分后 / 归档后一律还是拒绝。
+ */
+function assertCanvasOpen(project) {
+  if (!isCanvasEditableProjectStatus(project.status)) throw errors.conflict('已评分或已归档项目不能继续编辑', 'PROJECT_NOT_EDITABLE');
+}
+
 async function assertProjectUsable(ctx, project) {
-  assertDraft(project);
+  assertCanvasOpen(project);
   const usageContext = await resolveProjectUsageContext(ctx.auth.rawUser, project);
   if (!usageContext.canUseNow) throw errors.forbidden(usageContext.blockReason, usageContext.blockCode);
   return usageContext;
@@ -598,14 +612,14 @@ export async function handleStudent(ctx) {
       if (snapshot && autoSave) {
         await aq(
           `UPDATE student_projects SET title=?,canvas_snapshot=?,last_saved_at=?,updated_at=?
-           WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'`,
+           WHERE id=? AND student_id=? AND org_id=? AND status IN ('DRAFT','SUBMITTED')`,
           [title, json(snapshot), now, now, fresh.id, auth.user.id, auth.user.orgId],
         );
       } else if (snapshot) {
         nextVersion = Number(fresh.latest_version || 1) + 1;
         await aq(
           `UPDATE student_projects SET title=?,canvas_snapshot=?,latest_version=?,last_saved_at=?,updated_at=?
-           WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'`,
+           WHERE id=? AND student_id=? AND org_id=? AND status IN ('DRAFT','SUBMITTED')`,
           [title, json(snapshot), nextVersion, now, now, fresh.id, auth.user.id, auth.user.orgId],
         );
         await aq(
@@ -615,7 +629,7 @@ export async function handleStudent(ctx) {
         );
       } else {
         await aq(
-          "UPDATE student_projects SET title=?,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'",
+          "UPDATE student_projects SET title=?,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status IN ('DRAFT','SUBMITTED')",
           [title, now, fresh.id, auth.user.id, auth.user.orgId],
         );
       }
@@ -803,9 +817,13 @@ export async function handleStudent(ctx) {
   match = part.match(/^\/projects\/([^/]+)\/submit$/);
   if (match && method === 'POST') {
     const project = await getOwnProject(ctx, match[1]);
+    // ⚠️ 这里从"只准 DRAFT→SUBMITTED"改成**允许同一课堂内重复提交**（2026-09-24 画布增量提交口径）：
+    //    学生提交完还要接着做没做完的任务，做出新产出后再提交一次（每条 `works` 记录 + 递增 round 快照）。
+    //    所以 SUBMITTED→SUBMITTED 现在合法（allowSameState）；GRADED/ARCHIVED 依然进不来。
     await assertTransition(ctx, 'studentProject', project.status, 'SUBMITTED', {
       targetType: 'STUDENT_PROJECT', targetId: project.id, before: { status: project.status },
-      code: 'INVALID_PROJECT_TRANSITION', message: '项目已提交，不能重复提交', details: { action: 'submit' },
+      code: 'INVALID_PROJECT_TRANSITION', message: '已评分或已归档的项目不能提交', details: { action: 'submit' },
+      allowSameState: true,
     });
     await assertProjectUsable(ctx, project);
     if (ctx.body?.copyrightConfirmed !== true) {
@@ -823,19 +841,34 @@ export async function handleStudent(ctx) {
     if (priorWork) await assertTransition(ctx, 'work', priorWork.status, 'PENDING', {
       targetType: 'WORK', targetId: priorWork.id, before: await normalizeWork(priorWork), code: 'INVALID_WORK_TRANSITION',
       message: '当前作品状态不允许重新提交', details: { action: 'resubmit' },
+      // ⭐ 增量提交：作品还挂在 PENDING（老师没审过）时也可以再提交一轮 ——
+      //    没有这条，学生提交过一次就再也提交不了（PENDING→PENDING 原本不是合法转换），
+      //    而这正是"提交后再做出新产出还要能提交"的主路径。
+      allowSameState: true,
     });
+    // ⭐ 增量提交的判据（用户 2026-09-24 口径）：**只提交"还没提交过的那部分产出"**。
+    //    · 已经有作品 = 提交过至少一次 → 产出指纹与上次相同（或干脆没有任何产出）就拒绝；
+    //      「提交作品」按钮置灰用的就是同一套算法（packages/shared/src/canvasOutput.js）。
+    //    · 还没有作品 = 第一次提交 → 放行：老客户端（以及 p78 那条守卫）会提交空画布，
+    //      空提交由前端按钮拦住；服务端只在"重复提交"这一档上兜底，避免把老流程一次改死。
+    const submittedSnapshot = requestedSnapshot || canvasSnapshot;
+    const outputSignature = canvasOutputSignature(submittedSnapshot);
+    const freshOutputKeys = newCanvasOutputKeys(submittedSnapshot, project.last_submitted_output_signature);
+    if (priorWork && !freshOutputKeys.length) {
+      throw errors.conflict('画布上还没有新的作品产出：先完成一张图/一段文字，或上传成品，再提交给老师', 'NO_NEW_OUTPUT');
+    }
     await atransaction(async () => {
       const fresh = await getOwnProject(ctx, project.id);
-      if (fresh.status !== 'DRAFT') throw errors.conflict('项目已提交，不能重复提交', 'ALREADY_SUBMITTED');
+      if (!isCanvasEditableProjectStatus(fresh.status)) throw errors.conflict('已评分或已归档的项目不能提交', 'ALREADY_SUBMITTED');
       await assertProjectUsable(ctx, fresh);
       const existingWork = await arow('SELECT * FROM works WHERE project_id=? AND student_id=? AND org_id=?', [fresh.id, auth.user.id, auth.user.orgId]);
       if (requestedSnapshot) {
         canvasSnapshot = requestedSnapshot;
         latestVersion = Number(fresh.latest_version || 1) + 1;
         await aq(
-          `UPDATE student_projects SET status='SUBMITTED',canvas_snapshot=?,latest_version=?,last_saved_at=?,updated_at=?
-           WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'`,
-          [json(canvasSnapshot), latestVersion, now, now, fresh.id, auth.user.id, auth.user.orgId],
+          `UPDATE student_projects SET status='SUBMITTED',canvas_snapshot=?,latest_version=?,last_saved_at=?,updated_at=?,last_submitted_output_signature=?
+           WHERE id=? AND student_id=? AND org_id=? AND status IN ('DRAFT','SUBMITTED')`,
+          [json(canvasSnapshot), latestVersion, now, now, outputSignature, fresh.id, auth.user.id, auth.user.orgId],
         );
         await aq(
           `INSERT INTO project_snapshots(id,project_id,version,label,canvas_snapshot,actor_id,created_at)
@@ -844,8 +877,8 @@ export async function handleStudent(ctx) {
         );
       } else {
         await aq(
-          "UPDATE student_projects SET status='SUBMITTED',updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'",
-          [now, fresh.id, auth.user.id, auth.user.orgId],
+          "UPDATE student_projects SET status='SUBMITTED',updated_at=?,last_submitted_output_signature=? WHERE id=? AND student_id=? AND org_id=? AND status IN ('DRAFT','SUBMITTED')",
+          [now, outputSignature, fresh.id, auth.user.id, auth.user.orgId],
         );
       }
       if (existingWork) {
@@ -882,7 +915,8 @@ export async function handleStudent(ctx) {
         [id('submission'), workId, fresh.id, auth.user.id, fresh.org_id, round, fresh.title, description, json(canvasSnapshot), latestVersion, now, now, now],
       );
     });
-    await audit(ctx, 'PROJECT_SUBMIT', 'WORK', workId, { projectId: project.id, round, resubmission }, { description, round, resubmission });
+    await audit(ctx, 'PROJECT_SUBMIT', 'WORK', workId, { projectId: project.id, round, resubmission },
+      { description, round, resubmission, newOutputCount: freshOutputKeys.length, outputSignature });
     return {
       project: await normalizeProject(await fetchProject(ctx, project.id), { includeSnapshot: true }),
       work: await decorateWork(await normalizeWork(await fetchWork(ctx, workId), { includeSnapshot: true }), ctx, { includeSubmissions: true }),

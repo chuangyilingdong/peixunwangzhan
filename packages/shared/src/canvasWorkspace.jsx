@@ -11,6 +11,9 @@ import brandLogo from './assets/lingdong-ai-logo.png';
 import { ErrorState, Loading, Notice, Empty, Panel, PageHeader, Status } from './ui.jsx';
 import { useData } from './classroom.jsx';
 import { errorText } from '@platform/shared';
+// 画布「可提交产出」的判定与提交/保存互斥的闸门 —— 与服务端**同一份算法**
+// （服务端直接 import packages/shared/src/canvasOutput.js，见 apps/server/src/routes/student.js）。
+import { canvasOutputSignature, createSaveGate, hasUnsubmittedOutput, isCanvasEditableProjectStatus } from './canvasOutput.js';
 
 // Signatures and helpers (原独立学生端逻辑，已并入官网学习页)
 // 快照的「内容」用于判断有没有未保存改动。**必须包含节点位置**：
@@ -172,8 +175,22 @@ export function CanvasWorkspace({ api, ...props }) {
 
   // ⚠️ 提前 return 之前不能再出现 hook：加载态与就绪态渲染的 hook 数量必须一致，
   // 否则 React 抛 #310 整页白屏（本轮自动保存 hook 曾放在 return 之后，画布课堂直接打不开）。
-  const editable = Boolean(project.data) && project.data.status === 'DRAFT';
+  //
+  // ⚠️ 2026-09-24 用户口径（画布「增量提交」）：**提交之后画布不锁** ——
+  //    「点击后作品提交到后台，学生仍可继续编辑尚未操作的任务」。
+  //    所以这里从"只认 DRAFT"改成 DRAFT/SUBMITTED 都算能编辑（见 canvasOutput.js 的
+  //    isCanvasEditableProjectStatus）；课堂一结束服务端就会拒保存/拒生成，客户端另有
+  //    session-state 轮询把学生带回课程中心。
+  const editable = Boolean(project.data) && isCanvasEditableProjectStatus(project.data.status);
   const changed = draft && canvasContentSignature(draft) !== savedSignature;
+  // 上一次**提交成功**时的产出指纹（来自服务端；提交成功后本地也会立即更新一次）。
+  const [submittedSignature, setSubmittedSignature] = useState('');
+  useEffect(() => {
+    setSubmittedSignature(String(project.data?.lastSubmittedOutputSignature || ''));
+  }, [project.data?.id, project.data?.lastSubmittedOutputSignature]);
+  // 「可提交产出」：相对上一次提交，画布上还有没有**新的产出**（提交按钮的激活判据）。
+  // 只有改提示词 / 挪框体 / 连线变化 / 空占位框体都不算（口径见 canvasOutput.js）。
+  const hasSubmittableOutput = hasUnsubmittedOutput(draft || canvasSnapshot || project.data?.canvasSnapshot || null, submittedSignature);
 
   // 服务端任务（刷新后仍在）：每个框体最多保留最新一条。恢复逻辑与素材面板都要用，所以一并放在 hook 之前。
   const generationJobs = Array.isArray(generations.data?.items) ? generations.data.items : [];
@@ -192,20 +209,30 @@ export function CanvasWorkspace({ api, ...props }) {
   // 作品所属课包被归档 → 保存接口一直 404 → 界面还显示「已保存」→ 刷新全丢。
   const [saveError, setSaveError] = useState('');
   const autoSaveRef = useRef({ signature: '', busy: false });
+  // 提交与自动保存的互斥闸门：提交期间冻结新保存，并让**在途的旧保存响应**失效
+  // （口径与三条规则见 canvasOutput.js 的 createSaveGate）。
+  const saveGateRef = useRef(createSaveGate());
   useEffect(() => {
     if (!editable || !draft || !changed) return undefined;
     const signature = canvasContentSignature(draft);
     const timer = setTimeout(async () => {
       if (autoSaveRef.current.busy || autoSaveRef.current.signature === signature) return;
+      // 提交请求在途时不开始新的保存：这次保存会赶在提交之后落库、把刚提交的快照覆盖回旧值。
+      if (saveGateRef.current.frozen) return;
+      const token = saveGateRef.current.currentToken();
       autoSaveRef.current.busy = true;
       setAutoSaving(true);
       try {
         const saved = await api.put(`student/projects/${project.data.id}`, { canvasSnapshot: draft, autoSave: true });
+        // 提交已经发生（token 变了）→ 这次响应是**在途的旧结果**，整个丢掉：
+        // 既不能把旧快照写回界面，更不能把「已保存指纹」覆盖成提交前的那一个。
+        if (!saveGateRef.current.isCurrent(token)) return;
         autoSaveRef.current.signature = canvasContentSignature(saved.canvasSnapshot);
         setCanvasSnapshot(saved.canvasSnapshot);
         setSavedSignature(canvasContentSignature(saved.canvasSnapshot));
         setSaveError('');
       } catch (error) {
+        if (!saveGateRef.current.isCurrent(token)) return;
         setSaveError(error?.message || '保存失败，请稍后重试');
       }
       finally { autoSaveRef.current.busy = false; setAutoSaving(false); }
@@ -364,20 +391,26 @@ export function CanvasWorkspace({ api, ...props }) {
 
   async function submitWork() {
     if (!editable || !draft) return;
+    // 按钮已经按它置灰了，这里再挡一次：键盘/脚本触发也走同一条判据。
+    if (!hasSubmittableOutput) { setMessage('画布上还没有新的作品产出：先完成一张图/一段文字，或上传成品，再提交给老师。'); return; }
     if (!window.confirm('提交给老师前请确认：这是你自己的作品，并同意平台在作品广场展示。')) return;
     setBusy(true);
+    // ① 冻结自动保存、② 让在途的旧保存响应全部失效（见 createSaveGate）；提交结束再放行。
+    saveGateRef.current.beginSubmit();
     try {
       const result = await api.post(`student/projects/${project.data.id}/submit`, { canvasSnapshot: draft, description: `完成${project.data.courseLessonTitle || '本节课堂'}作品`, copyrightConfirmed: true });
       setCanvasSnapshot(result.project.canvasSnapshot);
       setDraft(result.project.canvasSnapshot);
       setSavedSignature(canvasContentSignature(result.project.canvasSnapshot));
-      setMessage('作品已提交，老师可以看到你的课堂作品了。老师结束后回课程中心就行。');
+      // 本地立刻记下这次提交的产出指纹（按钮马上回到置灰态），随后 project.refresh() 以服务端为准。
+      setSubmittedSignature(String(result.project.lastSubmittedOutputSignature || canvasOutputSignature(result.project.canvasSnapshot)));
+      setMessage('作品已提交，老师可以看到你的课堂作品了。还能继续做没做完的任务，做出新产出后再点一次「提交作品」。');
       project.refresh();
       // ⚠️ 2026-09-21 用户口径：**提交后不要自动跳走** —— 「老师如果没点结束课堂，应该留在原页面」。
-      //    画布这时已经变成只读（作品已提交），学生可以继续看自己的作品、或点右上角「课程中心」离开；
+      //    2026-09-24 追加：画布**也不再变成只读**（学生要能接着做剩下的任务）；
       //    老师一结束课堂，下面那个轮询会把全班带回课程中心。
     } catch (err) { setMessage(errorText(err)); }
-    finally { setBusy(false); }
+    finally { saveGateRef.current.endSubmit(); setBusy(false); }
   }
 
 
@@ -392,7 +425,7 @@ export function CanvasWorkspace({ api, ...props }) {
     nodes: (snapshot.nodes || []).map((node) => (node.id === nodeId ? { ...node, data: { ...node.data, ...data } } : node)),
   });
   async function uploadFiles(files, position) {
-    if (!editable) { setMessage('作品已提交，画布不能再修改。'); return; }
+    if (!editable) { setMessage('课堂已结束，不能再修改画布。'); return; }
     const seed = Date.now().toString(36);
     const items = [...(files || [])].map((file, index) => ({ file, id: `upload-${seed}-${index}` }));
     const base = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
@@ -591,7 +624,7 @@ export function CanvasWorkspace({ api, ...props }) {
   }
 
   function addBoxToCanvas(box) {
-    if (!editable) { setMessage('作品已提交，画布不能再修改。'); return; }
+    if (!editable) { setMessage('课堂已结束，不能再修改画布。'); return; }
     const slotType = String(box.modality || '').toLowerCase();
     const current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
     const existing = (current.nodes || []).find((node) => node.id === `box-${box.id}` || node.data?.boxId === box.id);
@@ -658,7 +691,6 @@ export function CanvasWorkspace({ api, ...props }) {
       fileAssetId: node.data?.fileAssetId || null,
     }));
   const capabilities = Array.isArray(project.data.capabilities) && project.data.capabilities.length ? project.data.capabilities : ['text'];
-  const hasNodes = Boolean((draft || canvasSnapshot)?.nodes?.length);
   // 当前展开的大分组：导航项的 key 就是 `group:<id 或下标>`
   const activeGroupIndex = typeof toolPanel === 'string' && toolPanel.startsWith('group:')
     ? materialGroups.findIndex((group, index) => `group:${group.id || index}` === toolPanel)
@@ -695,7 +727,7 @@ export function CanvasWorkspace({ api, ...props }) {
             现在跳**课程中心**（`/learn`，学生端保留的那一版），并跟着改叫「课程中心」，
             和"老师结束课堂后回到课程中心"是同一个落点。 */}
         <button type="button" className="cv-btn" onClick={() => navigate('/learn')}>课程中心</button>
-        <button type="button" className="cv-btn cv-btn--primary" disabled={!editable || busy || !draft || !hasNodes} onClick={submitWork}>{busy ? '提交中…' : '提交作品'}</button>
+        <button type="button" className="cv-btn cv-btn--primary" disabled={!editable || busy || !draft || !hasSubmittableOutput} title={hasSubmittableOutput ? '把这次做出来的作品提交给老师' : '画布上还没有作品产出：先生成图片/文字或上传成品，做好后按钮会亮起来'} onClick={submitWork}>{busy ? '提交中…' : '提交作品'}</button>
       </div>
     </header>
     <section className="cv-layout">
@@ -719,7 +751,7 @@ export function CanvasWorkspace({ api, ...props }) {
         </div>
         {toolPanel && !sidebarCollapsed ? <div className="cv-panel">
           {activeGroup ? <>
-            <div className="cv-panel__head"><div><strong>{activeGroup.title || `素材组 ${activeGroupIndex + 1}`}</strong><small>{editable ? '点框体或素材加入画布' : '作品已提交，画布不能再修改'}</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
+            <div className="cv-panel__head"><div><strong>{activeGroup.title || `素材组 ${activeGroupIndex + 1}`}</strong><small>{editable ? '点框体或素材加入画布' : '课堂已结束，不能再修改画布'}</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
             <div className="cv-group">
               {(activeGroup.materials || []).map((material) => {
                 const box = material.materialType === 'GENERATION_BOX' ? boxForMaterial(material) : null;
@@ -731,7 +763,7 @@ export function CanvasWorkspace({ api, ...props }) {
                   const enabled = capabilities.includes(slotType);
                   const running = boxRunning(box.id);
                   const onCanvas = boxOnCanvas(box.id);
-                  const blocked = !editable ? '作品已提交，画布不能再修改' : (!enabled ? '本课未开放该 AI 能力' : '');
+                  const blocked = !editable ? '课堂已结束，不能再修改画布' : (!enabled ? '本课未开放该 AI 能力' : '');
                   const state = onCanvas ? '已在画布上' : (running ? '生成中…' : (boxSucceeded(box.id) ? '已生成，点击接回画布' : '未生成'));
                   // ⭐ 生成框体带一圈金色（.is-gen-box，样式在 shared/styles.css）：
                   //    用户 2026-09-21 口径「生成框体都要有四周边环绕的金色，一眼就知道这是生成框体、
@@ -751,10 +783,10 @@ export function CanvasWorkspace({ api, ...props }) {
                   : (material.description || '点击后加入画布');
                 const hover = material.materialType === 'PROMPT' && promptText
                   ? `${material.title || '提示词'}｜${promptText.length > 300 ? `${promptText.slice(0, 300)}…` : promptText}`
-                  : (editable ? undefined : '作品已提交，画布不能再修改');
+                  : (editable ? undefined : '课堂已结束，不能再修改画布');
                 return <button className="cv-item" key={material.id || material.title} type="button" disabled={!editable} title={hover} onClick={() => material.materialType === 'PROMPT' ? openPromptInsert(material) : addLessonMaterialToCanvas(material)}>
                   <span className={`cv-item__icon is-${visual.tone}`}><Icon name={visual.icon} size={15} /></span>
-                  <span className="cv-item__text"><strong>{material.title}</strong><small>{editable ? subtitle : '作品已提交，画布不能再修改'}</small></span>
+                  <span className="cv-item__text"><strong>{material.title}</strong><small>{editable ? subtitle : '课堂已结束，不能再修改画布'}</small></span>
                   <b className="cv-item__plus">＋</b>
                 </button>;
               })}
@@ -763,14 +795,14 @@ export function CanvasWorkspace({ api, ...props }) {
           </> : null}
           {toolPanel === 'local' ? <>
             <div className="cv-panel__head"><div><strong>本地素材</strong><small>你从电脑拖进画布的图片 / 视频 / 音频</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
-            <div className="cv-group">{localMaterials.map((item) => <button className="cv-item" key={item.id} type="button" disabled={!editable} title={editable ? '定位到画布上的这个框体' : '作品已提交，画布不能再修改'} onClick={() => setFocusRequest({ id: item.id, token: Date.now() })}>
+            <div className="cv-group">{localMaterials.map((item) => <button className="cv-item" key={item.id} type="button" disabled={!editable} title={editable ? '定位到画布上的这个框体' : '课堂已结束，不能再修改画布'} onClick={() => setFocusRequest({ id: item.id, token: Date.now() })}>
               <span className={`cv-item__icon is-${item.kind === '视频' ? 'video' : item.kind === '音频' ? 'audio' : 'image'}`}><Icon name={item.kind === '视频' ? 'video' : item.kind === '音频' ? 'music' : 'image'} size={15} /></span>
               <span className="cv-item__text"><strong>{item.title}</strong><small>{item.kind} · {item.uploading ? '上传中…' : '本地素材 · 已在画布上'}</small></span>
               <b className="cv-item__plus">◎</b>
             </button>)}</div>
           </> : null}
           {toolPanel === 'materials' ? <>
-            <div className="cv-panel__head"><div><strong>课堂素材</strong><small>{editable ? '点框体或素材加入画布' : '作品已提交，画布不能再修改'}</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
+            <div className="cv-panel__head"><div><strong>课堂素材</strong><small>{editable ? '点框体或素材加入画布' : '课堂已结束，不能再修改画布'}</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
             <p className="cv-empty">老师还没有为本节课配置素材；把电脑里的图片/视频/音频直接拖进画布，也会出现在这里。</p>
           </> : null}
           {toolPanel === 'capabilities' ? <>

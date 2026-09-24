@@ -199,7 +199,8 @@ check('② 画布右下角那条提示（.cv-toast）不再一直挂着：非错
              「图6 从画布课堂点击课程中心会进入到这个旧页面」。 */
 check('① 提交作品后**不再自动跳走**（老师没结束课堂就留在画布上；跳走那行已经删掉）',
   !/setTimeout\(\(\) => navigate\('\/learn\/canvas'\)/.test(workspace)
-  && /老师可以看到你的课堂作品了。老师结束后回课程中心就行。/.test(workspace));
+  // 2026-09-24 口径：提交完不再"结束"，而是提示可以接着做没做完的任务（画布也不锁，见 p139）
+  && /老师可以看到你的课堂作品了/.test(workspace));
 check('④ 画布会盯「老师还在不在上课」：轮询 session-state，一旦结束就提示并回课程中心',
   /student\/projects\/\$\{projectId\}\/session-state/.test(workspace)
   && /老师已结束课堂/.test(workspace)
@@ -207,10 +208,13 @@ check('④ 画布会盯「老师还在不在上课」：轮询 session-state，�
 check('③ 顶栏按钮改叫「课程中心」且去 `/learn`（不再跳那个旧页面 `/learn/canvas`）',
   /onClick=\{\(\) => navigate\('\/learn'\)\}>课程中心</.test(workspace)
   && !/navigate\('\/learn\/canvas'\)/.test(workspace));
-check('① 课时按钮按「本场课堂的项目」分三种文案：草稿→继续创作 / 已提交→**查看作品** / 没有→进入课堂',
+check('① 课时按钮按「本场课堂的项目」分三种文案：草稿→继续创作 / 已提交→查看作品（本场还在上则是继续创作） / 没有→进入课堂',
   /function canvasEntryLabel\(lesson\)/.test(classroom)
   && classroom.includes("if (lesson.continueProject) return '继续创作';")
-  && classroom.includes("if (lesson.sessionProject) return '查看作品';")
+  // ⚠️ 2026-09-24 增量提交口径：提交之后画布**不锁**（学生接着做没做完的任务），
+  //    所以"作品已提交 + 本场课堂还在上"这一步也该是「继续创作」；只有课堂结束、
+  //    学生已经进不去画布了，「查看作品」才是准的说法。见 canvasWorkspace.jsx 的 submitWork。
+  && classroom.includes("return lesson.participationStatus === 'ACTIVE' ? '继续创作' : '查看作品';")
   && classroom.includes("return '进入课堂';")
   // 两处入口（画布上课页 + 学生课程中心）都要用它，别只改一处
   // ⚠️ 数**调用点**（都写成 `… ? canvasEntryLabel(lesson)`），别把函数定义那一行也算进来

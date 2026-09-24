@@ -1057,6 +1057,12 @@ export async function normalizeSeries(value, { includeLessons = false, orgId = n
     stockTotal: Number(snapPick('stockTotal', value.stock_total) || 0),
     sort: Number(value.sort || 0),
     status: value.status,
+    // 课包类型（2026-09-24）：NORMAL 普通 / EXPERIENCE 体验课包。
+    // 与其它字段一样走快照取值（机构端/学生端/官网读的是"更新发布"那一版）；
+    // 认不出来的值一律按 NORMAL —— 老数据没有这一列时不会突然变成体验课包。
+    seriesType: ['NORMAL', 'EXPERIENCE'].includes(String(snapPick('seriesType', value.series_type) || '').toUpperCase())
+      ? String(snapPick('seriesType', value.series_type)).toUpperCase()
+      : 'NORMAL',
     marketplaceStatus: value.marketplace_status,
     // 算力池：**每个学生在这个课包上的总预算**（分，5000 = 50 元）；留空 = 不限制、只记账。
     // ⚠️ 2026-09-18：这条注释原来说"闸门在应用侧（services/computePool.js）"——**那个池子闸门已退役**
@@ -1157,6 +1163,8 @@ export async function normalizeProject(value, { includeSnapshot = false } = {}) 
     status: value.status,
     latestVersion: Number(value.latest_version || 0),
     lastSavedAt: value.last_saved_at,
+    // 「上一次提交成功时的产出指纹」（画布增量提交的判据；没有产出/从没提交过是 ''）
+    lastSubmittedOutputSignature: String(value.last_submitted_output_signature || ''),
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     archivedAt: value.archived_at || null,

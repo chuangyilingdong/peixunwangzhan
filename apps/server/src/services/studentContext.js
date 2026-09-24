@@ -11,6 +11,8 @@ import {
   orgSeriesAccessSql,
   publishedLessonVisibilitySql, arows, arow, amap,
 } from '../lib.js';
+// 画布还能不能编辑（DRAFT / SUBMITTED 都算开着）—— 与前端同一份口径，见 packages/shared/src/canvasOutput.js
+import { isCanvasEditableProjectStatus } from '../../../../packages/shared/src/canvasOutput.js';
 
 function rawValue(user, snake, camel) {
   return user?.[snake] ?? user?.[camel] ?? null;
@@ -930,7 +932,10 @@ export async function resolveProjectUsageContext(user, project) {
   if (!project || project.student_id !== userId || project.org_id !== orgId) {
     throw errors.notFound('项目不存在', 'PROJECT_NOT_FOUND');
   }
-  if (project.status !== 'DRAFT') {
+  // ⚠️ 2026-09-24 画布「增量提交」口径：提交之后画布**不锁**（学生要能接着做完剩下的任务），
+  // 所以 SUBMITTED 也放行；真正决定"还能不能用"的是下面 resolveStudentLessonContext 的 canUseNow
+  // （课堂一结束就是 false）。评分后 / 归档后一律仍然拒绝。
+  if (!isCanvasEditableProjectStatus(project.status)) {
     throw errors.conflict('项目当前不可继续创作', 'PROJECT_NOT_EDITABLE');
   }
   if (!project.class_session_id) throw errors.forbidden('项目没有有效课堂归属，请从当前课堂进入', 'PROJECT_SESSION_REQUIRED');

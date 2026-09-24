@@ -8,6 +8,8 @@ import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
+// 体验课包（2026-09-24 用户口径）：课包类型判定（发布校验里的「只能 1 节课」用它）
+import { isExperienceSeries } from '../../services/courseGrants.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
 import { salePriceFenSuccessSql } from '../../services/computePool.js';
 import { normalizeSubmission } from '../vibecoding.js';
@@ -142,6 +144,8 @@ async function capturePublishedContent(seriesId, at = nowIso(), { inTransaction 
       difficultyLevel: series.difficulty_level == null ? null : Number(series.difficulty_level),
       visibility: series.visibility, gradeRange: series.grade_range || '', tags: parseJson(series.tags, []),
       estimatedCreditsPerPerson: Number(series.estimated_credits_per_person || 0),
+      // 课包类型（2026-09-24）：机构端/官网靠它区分「体验课包」——漏了它，类型一发布就退回默认 NORMAL。
+      seriesType: String(series.series_type || 'NORMAL').toUpperCase() === 'EXPERIENCE' ? 'EXPERIENCE' : 'NORMAL',
     }), seriesId]);
     for (const lessonRow of lessons) {
       const live = await normalizeLesson(lessonRow, { includeTeaching: true });
@@ -287,6 +291,11 @@ async function validateSeriesForPublishing(seriesId) {
   if (!normalizeSeriesVisibility(series.visibility)) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
   const lessons = (await arows('SELECT * FROM course_lessons WHERE series_id=? ORDER BY sort, created_at', [seriesId])).filter((lesson) => lesson.status !== 'ARCHIVED');
   if (!lessons.length) throw errors.badRequest('课包至少需要一个未归档课时才能发布', 'COURSE_LESSONS_REQUIRED');
+  // ⭐ 体验课包**只能包含 1 节课**（2026-09-24 用户口径）。两条发布路径（新建即发布 / 状态发布）
+  //    都会走到这里，所以规则只写一处；「体验课包只含一节课」也是"每场课堂核销 1 次"的前提。
+  if (isExperienceSeries(series) && lessons.length !== 1) {
+    throw errors.badRequest(`体验课包只能包含 1 节课（现在有 ${lessons.length} 节未归档课时）：请先把多余的课时归档`, 'EXPERIENCE_SERIES_LESSON_LIMIT');
+  }
   if (lessons.some((lesson) => lesson.status !== 'PUBLISHED')) throw errors.badRequest('请先完成课时配置并发布课时', 'COURSE_LESSONS_UNPUBLISHED');
   for (const _item of lessons) await validateLessonForPublishing(_item);;
 }

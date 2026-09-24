@@ -159,6 +159,9 @@
       "type": "mediumtext",
       "notNull": true
     },
+    "student_projects.last_submitted_output_signature": {
+      "type": "mediumtext"
+    },
     "usage_records.pricing_snapshot": {
       "type": "varchar(1344)",
       "notNull": true,

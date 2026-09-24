@@ -69,8 +69,18 @@ export function StudentGrants({ api }) {
   const remaining = noQuota || !quota ? null : Math.max(0, quotaTotal - Number(quota.quotaUsed || 0));
   const overLimit = remaining !== null && picked.length > remaining;
   const activeStudentIds = new Set((grants.data?.items || []).filter((row) => !row.revokedAt).map((row) => row.studentId));
+  // 体验课包（2026-09-24 用户口径）：**可以重复分给同一个学生**、未使用的次数**预先累积** ——
+  // 所以「已授权」不再等于"不能再选"，改看这名学生手上还剩几次。
+  const selectedSeries = items.find((series) => series.id === seriesId) || null;
+  const isExperience = selectedSeries?.seriesType === 'EXPERIENCE';
+  const remainingByStudent = new Map((grants.data?.items || [])
+    .filter((row) => !row.revokedAt)
+    .map((row) => [row.studentId, Number(row.remainingUnits ?? 1)]));
 
-  const addableOnPage = studentItems.filter((student) => !activeStudentIds.has(student.id));
+  // 普通课包：已授权的学生不能重复选；体验课包：人人都能再分一次（次数会累加）
+  const addableOnPage = isExperience
+    ? studentItems
+    : studentItems.filter((student) => !activeStudentIds.has(student.id));
   const alreadyOnPage = studentItems.length - addableOnPage.length;
 
   function toggle(student, checked) {
@@ -112,7 +122,9 @@ export function StudentGrants({ api }) {
     <PageHeader
       eyebrow="学习成果"
       title="学员许可"
-      description="把课包的可用次数分给学员：每分给一名学员用掉 1 次；同一学员同一课包只能授权一次。"
+      description={isExperience
+        ? '体验课包：每分给一名学员用掉 1 次；同一个学员可以重复分配、次数会累积；每场课堂正常结束且有有效 AI 产出才核销 1 次。'
+        : '把课包的可用次数分给学员：每分给一名学员用掉 1 次；同一学员同一课包只能授权一次。'}
       actions={<button className="secondary-button" onClick={() => { courses.refresh(); grants.refresh(); students.refresh(); }}>刷新</button>}
     />
     {message && <Notice tone="success">{message}</Notice>}
@@ -162,14 +174,21 @@ export function StudentGrants({ api }) {
               <tbody>{studentItems.map((student) => {
                 const already = activeStudentIds.has(student.id);
                 const pickedNow = pickedIds.has(student.id);
-                return <tr key={student.id} className={'student-pick-row' + (!already && pickedNow ? ' is-picked' : '')}>
-                  <td>{already
+                const heldUnits = remainingByStudent.get(student.id) || 0;
+                // 体验课包：已授权的也**能再选**（重复分配 = 次数累加），所以勾选框不禁用
+                const blocked = already && !isExperience;
+                return <tr key={student.id} className={'student-pick-row' + (!blocked && pickedNow ? ' is-picked' : '')}>
+                  <td>{blocked
                     ? <input type="checkbox" checked disabled aria-label="已授权，不能重复选择" />
                     : <input type="checkbox" checked={pickedNow} aria-label={`选择 ${student.displayName || student.login}`} onChange={(event) => toggle(student, event.target.checked)} />}</td>
                   <td><strong>{student.displayName || student.login}</strong></td>
                   <td className="muted">{student.login}</td>
                   <td className="muted">{student.phone || '—'}</td>
-                  <td>{already ? <span className="status success">已授权</span> : <span className="muted">可授权</span>}</td>
+                  <td>{already
+                    ? (isExperience
+                      ? <span className="status success">可用 {heldUnits} 次</span>
+                      : <span className="status success">已授权</span>)
+                    : <span className="muted">{isExperience ? '还没有体验次数' : '可授权'}</span>}</td>
                 </tr>;
               })}</tbody>
             </table></div> : <Empty title="没有学员" body={studentSearch.trim() ? `没有匹配「${studentSearch.trim()}」的学员。` : '当前机构还没有学员账号，请先在「成员管理」里创建。'} />}
@@ -189,12 +208,12 @@ export function StudentGrants({ api }) {
       {picked.length ? <div className="row-actions top-gap">
         <span className="muted">将要授权：</span>
         {picked.map((item) => <span className="pick-tag" key={item.id}>{item.name}</span>)}
-      </div> : <p className="muted top-gap">还没有选择学员。上面的名单里勾选即可（已授权的学员不能重复选）。</p>}
+      </div> : <p className="muted top-gap">还没有选择学员。上面的名单里勾选即可{isExperience ? '（体验课包可以重复分给同一个学员，次数会累加）' : '（已授权的学员不能重复选）'}。</p>}
       <div className="row-actions top-gap">
         <button className="primary-button" disabled={busy || !picked.length || overLimit} onClick={submit}>{busy ? '授权中…' : `授权给 ${picked.length} 名学员`}</button>
         {overLimit ? <span className="muted">先去掉几个人，或让平台增购次数。</span> : null}
       </div>
-      <p className="muted">用掉一次后不可撤销（机构侧没有撤销入口）；如果是误授权，请联系平台兜底撤销。</p>
+      <p className="muted">用掉一次后不可撤销（机构侧没有撤销入口）；如果是误授权，请联系平台兜底撤销。{isExperience ? ' 体验课包的次数没被核销掉的（课堂没有有效产出、或课堂被解散），平台撤销时按未消费余额退回。' : ''}</p>
     </Panel> : null}
 
     <Panel title={`已授权记录（${grants.data?.items?.length || 0} 条）`}>

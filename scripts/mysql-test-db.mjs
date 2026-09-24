@@ -161,7 +161,13 @@ export async function resetMysqlDatabase({ silent = false, database = null, drop
     //    实测省略该列插入后取值仍是 `{}`。
     {
       const sqlQuote = (v) => `'${String(v).replaceAll("'", "''")}'`;
-      const WIDEN_NAME = /(policy|snapshot|content|metadata|attachments|settings|presets|references|payload|description|message|prompt|note|json|body|lines|params|options|before_data|after_data|_data$)/i;
+      // ⚠️ 2026-09-24 追加 `url`：本地 mock 出图给的是**data URL**（`data:image/svg+xml;charset=utf-8,…`
+      //    整段 SVG 转义后的字符串，一两千字符），而 `media_assets.preview_url` 按"名字"没被加宽过
+      //    → 本机 MySQL 上**任何走 mock 的图片生成都会 `ER_DATA_TOO_LONG`** 失败，
+      //    表现是 p33 / p139 这类脚本红在"生成应成功，实际 FAILED"，跟代码没关系。
+      //    生产不受影响：真供应商那条路写进 preview_url 的是 OSS 地址（短的），
+      //    所以这条加宽**只影响本机测试库**（要不要加宽以"本机能跑通"为准，见下面 ALTER 的注释）。
+      const WIDEN_NAME = /(policy|snapshot|content|metadata|attachments|settings|presets|references|payload|description|message|prompt|note|json|body|lines|params|options|before_data|after_data|_data$|url$)/i;
       const [cols] = await conn.query(
         'SELECT TABLE_NAME AS t, COLUMN_NAME AS c, IS_NULLABLE, COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND DATA_TYPE IN ("varchar","char","tinytext","text")',
         [env.MYSQL_DATABASE],

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Notice, errorText } from '@platform/shared';
 
 export function CreateCourseModal({ api, onClose, onCreated }) {
-  const [form, setForm] = useState({ title: '', description: '', coverImageUrl: '', coverAssetId: '', version: '1.0', priceYuan: '', visibility: 'PUBLIC', difficultyLevel: '' });
+  const [form, setForm] = useState({ title: '', description: '', coverImageUrl: '', coverAssetId: '', version: '1.0', priceYuan: '', visibility: 'PUBLIC', difficultyLevel: '', seriesType: 'NORMAL' });
   const dialogRef = useRef(null);
   useEffect(() => {
     const opener = document.activeElement;
@@ -18,7 +18,7 @@ export function CreateCourseModal({ api, onClose, onCreated }) {
     event.preventDefault(); setBusy(true); setMessage('');
     try {
       if (!/^\d+(?:\.\d{1,2})?$/.test(form.priceYuan || '0')) throw new Error('价格最多支持两位小数');
-      const course = await api.post('admin/course-series', { title: form.title, description: form.description, coverImageUrl: form.coverImageUrl || null, coverAssetId: form.coverAssetId || null, version: form.version, priceFen: Math.round(Number(form.priceYuan || 0) * 100), visibility: form.visibility, difficultyLevel: form.difficultyLevel === '' ? null : Number(form.difficultyLevel) });
+      const course = await api.post('admin/course-series', { title: form.title, description: form.description, coverImageUrl: form.coverImageUrl || null, coverAssetId: form.coverAssetId || null, version: form.version, priceFen: Math.round(Number(form.priceYuan || 0) * 100), visibility: form.visibility, difficultyLevel: form.difficultyLevel === '' ? null : Number(form.difficultyLevel), seriesType: form.seriesType });
       onCreated(course);
     } catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
@@ -44,8 +44,12 @@ export function CreateCourseModal({ api, onClose, onCreated }) {
         <label>初始版本<input required maxLength={100} value={form.version} onChange={(event) => update({ version: event.target.value })} /></label>
         <label>价格（元）<input inputMode="decimal" value={form.priceYuan} onChange={(event) => update({ priceYuan: event.target.value })} /></label>
         <label>可见范围<select value={form.visibility} onChange={(event) => update({ visibility: event.target.value })}><option value="PUBLIC">公开（课程广场 + 授权机构）</option><option value="PRIVATE">私有</option></select></label>
+        {/* 课包类型（2026-09-24 用户口径）：独立字段，不靠标题/标签猜。
+            ⚠️ 体验课包只能包含 1 节课（服务端在建课时与发布时都会校验）。 */}
+        <label>课包类型<select value={form.seriesType} onChange={(event) => update({ seriesType: event.target.value })}><option value="NORMAL">普通课包</option><option value="EXPERIENCE">体验课包（可重复分给同一学生，每场有产出的课堂核销 1 次）</option></select></label>
         <label>难度（1–5）<input type="number" min="1" max="5" value={form.difficultyLevel} onChange={(event) => update({ difficultyLevel: event.target.value })} /></label>
       <label style={{ gridColumn: '1 / -1' }}>简介<textarea rows={3} maxLength={10000} value={form.description} onChange={(event) => update({ description: event.target.value })} /></label>
+      {form.seriesType === 'EXPERIENCE' ? <p className="muted" style={{ gridColumn: '1 / -1' }}>体验课包：只包含 1 节课；同一个学生可以重复分配、未使用的次数会累积；每场课堂正常结束且有有效 AI 产出才核销 1 次（没产出不扣）。</p> : null}
       </div>
     </div>
     <div className="modal-footer"><button type="button" className="secondary-button" disabled={busy || uploading} onClick={onClose}>取消</button><button className="primary-button" disabled={busy || uploading}>{busy ? '创建中…' : '创建并进入编排'}</button></div>

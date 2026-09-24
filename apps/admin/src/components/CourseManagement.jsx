@@ -87,6 +87,8 @@ const emptyCourseForm = {
   title: '', description: '', coverImageUrl: '', coverAssetId: '', priceYuan: '', version: '1.0',
   estimatedCreditsPerPerson: '', gradeRange: '', visibility: 'PUBLIC', deliveryMode: 'CANVAS',
   difficultyLevel: '', ageRangeMin: '', ageRangeMax: '', tags: '', stockTotal: '', perStudentBudgetYuan: '',
+  // 课包类型（2026-09-24）：NORMAL 普通 / EXPERIENCE 体验课包（只能 1 节课、可重复分、按有效产出核销）
+  seriesType: 'NORMAL',
 };
 
 // 生成框体是素材表里的一种素材（material_type=GENERATION_BOX），顺序跟着素材走；
@@ -779,6 +781,7 @@ function CourseDetail({ api, courseId, onBack }) {
       ageRangeMax: series.ageRangeMax ?? '', tags: (series.tags || []).join(','), deliveryMode: series.deliveryMode || 'CANVAS',
       stockTotal: String(series.stockTotal ?? ''),
       perStudentBudgetYuan: series.perStudentBudgetFen == null ? '' : String(series.perStudentBudgetFen / 100),
+      seriesType: series.seriesType === 'EXPERIENCE' ? 'EXPERIENCE' : 'NORMAL',
     });
   }, [series?.id]);
 
@@ -823,6 +826,8 @@ function CourseDetail({ api, courseId, onBack }) {
       body.ageRangeMin = editForm.ageRangeMin !== '' && editForm.ageRangeMin != null ? Number(editForm.ageRangeMin) : null;
       body.ageRangeMax = editForm.ageRangeMax !== '' && editForm.ageRangeMax != null ? Number(editForm.ageRangeMax) : null;
       body.tags = String(editForm.tags || '').split(',').map((t) => t.trim()).filter(Boolean);
+      // 课包类型（2026-09-24）：改成体验课包时服务端会校验「未归档课时正好 1 节」
+      if (editForm.seriesType) body.seriesType = editForm.seriesType;
       await api.request(`admin/course-series/${courseId}`, { method: 'PUT', body });
       setMessage('课包资料已保存，需在版本发布中显式更新。');
       setSaveState({ tone: 'success', text: '已保存，尚未更新发布。' });
@@ -961,6 +966,15 @@ function CourseDetail({ api, courseId, onBack }) {
           <h3 className="form-section-title">可见范围</h3>
           <div className="form-grid">
             <label>可见范围<select value={editForm.visibility} onChange={(event) => setEditForm({ ...editForm, visibility: event.target.value })}>{VISIBILITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            {/* 课包类型（2026-09-24 用户口径）：独立字段。改成体验课包时服务端会校验
+                「未归档课时正好 1 节」——不满足会被拒，先把多余的课时归档。 */}
+            <label>课包类型
+              <select value={editForm.seriesType || 'NORMAL'} onChange={(event) => setEditForm({ ...editForm, seriesType: event.target.value })}>
+                <option value="NORMAL">普通课包</option>
+                <option value="EXPERIENCE">体验课包</option>
+              </select>
+              <small className="muted">{editForm.seriesType === 'EXPERIENCE' ? '只包含 1 节课；可重复分给同一学生、未用次数累积；每场有有效产出的课堂核销 1 次' : '授权即消耗一次次数，同一学生同一课包只授权一次'}</small>
+            </label>
           </div>
           <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存课包资料'}</button>
           {saveState ? <Notice tone={saveState.tone}>{saveState.text}</Notice> : null}

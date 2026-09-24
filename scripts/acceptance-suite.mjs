@@ -43,6 +43,9 @@ const HARNESS = new Set([
   // 漏在名单外时它会被当成一个测试跑（2026-09-24 那次全量里就跑了，虽然通过但计数被撑大一项，
   // 而且哪天默认行为变了、真去改验收脚本，就是"套件在改套件自己"）。
   'scripts/rds-p2-fixture-codemod.mjs',
+  // 并行跑法（MySQL 侧专用）：它是**调度器**，会自己再起套件进程 —— 漏在名单外会被当成一个测试跑
+  // （表现是"套件里再套一层套件"、超时）。
+  'scripts/acceptance-suite-parallel.mjs',
 ]);
 
 // CI 用精选：四条主流程（教师开课 / 学生进课堂 / 上传素材 / 广场浏览）+ 几个核心守卫
@@ -67,6 +70,10 @@ const FAST = [
   // 2026-09-24 加：OSS 对象键的幂等（写进去的是带前缀的完整键，读的时候不能再叠一层）。
   // 这条错了**不会报错**：下载接口照常 302，404 发生在 OSS 那边 —— 生产上烧了一天多。
   'scripts/p136-oss-signature.mjs',
+  // 2026-09-24 加：画布「增量提交」（提交后画布不锁、有新产出才能再提交一次）。
+  // 这条走真 HTTP：空画布能不能提交、提交后还能不能存/能不能生成、重复提交幂等、
+  // 课堂结束立刻收口 —— 只看源码或只调处理函数都验不出来。
+  'scripts/p139-canvas-incremental-submit.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));
@@ -89,6 +96,12 @@ const timeout = Number(flag('timeout', 120000));
 const nodeBin = process.env.SUITE_NODE || process.execPath;
 const started = Date.now();
 const results = [];
+// 库名前缀：**并行跑多份套件**时用它错开（见 scripts/acceptance-suite-parallel.mjs）。
+// 🚨 包括下面那个"能不能建库"的探针库名 —— 探针也用固定名的话，两份套件同时探测会互相 DROP
+//    掉对方的探针库 → `DROP` 报 Unknown database → 两份都判成"没建库权限" →
+//    退回**共享库** MYSQL_DATABASE → 互相清库 → 满屏假失败（2026-09-24 实测踩过这一脚）。
+// 默认值 `aild_test` 保持不变，串行跑的库名与以前完全一致。
+const dbPrefix = String(process.env.SUITE_DB_PREFIX || 'aild_test').replace(/[^0-9a-zA-Z_]/g, '');
 
 // 探测一次"能不能建库"（决定用每脚本一库、还是就地清表）
 let canCreateDatabases = false;
@@ -100,8 +113,8 @@ if (useMysql) {
     const mysql = (await import(pathToFileURL(path.join(ROOT, 'packages/database/node_modules/mysql2/promise.js')).href)).default;
     const conn = await mysql.createConnection({ host: env.MYSQL_HOST, port: Number(env.MYSQL_PORT), user: env.MYSQL_USER, password: env.MYSQL_PASSWORD });
     try {
-      await conn.query('CREATE DATABASE IF NOT EXISTS aild_perm_probe');
-      await conn.query('DROP DATABASE aild_perm_probe');
+      await conn.query(`CREATE DATABASE IF NOT EXISTS \`${dbPrefix}_perm_probe\``);
+      await conn.query(`DROP DATABASE \`${dbPrefix}_perm_probe\``);
       canCreateDatabases = true;
     } catch { canCreateDatabases = false; }
     await conn.end();
@@ -118,10 +131,10 @@ for (let i = 0; i < files.length; i += 1) {
   // 每个脚本一个**全新的库名**：脚本 spawn 出来的服务器如果没被杀干净，它连的是**上一个库**，
   // 不会污染这一轮（否则会看到"同一个脚本单独跑能过、在套件里时好时坏"这种最浪费时间的假失败）。
   // ⚠️ 但**只有真的能建库时**才能这么做：RDS 上那个账号只被授予了 `aild_admin`.*，
-  //    建不了新库 —— 这种情况下退回"固定库 + 就地清表"。
-  const dbName = useMysql && canCreateDatabases ? `aild_test_${i + 1}` : null;
+  //    建不了新库 —— 这种情况下退回"固定库 + 就地清表"（库名 = MYSQL_DATABASE 环境变量）。
+  const dbName = useMysql && canCreateDatabases ? `${dbPrefix}_${i + 1}` : null;
   if (useMysql) {
-    try { await resetMysqlDatabase({ silent: true, database: dbName, dropToo: i > 0 ? [`aild_test_${i}`] : [] }); }
+    try { await resetMysqlDatabase({ silent: true, database: dbName, dropToo: i > 0 ? [`${dbPrefix}_${i}`] : [] }); }
     catch (error) { console.log(`  [mysql] 重置失败，跳过 ${rel}：${error.message}`); results.push({ script: rel, ok: false, status: -1, timedOut: false, ms: 0, tail: `mysql 重置失败：${error.message}` }); continue; }
   }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'acceptance-'));
@@ -148,7 +161,13 @@ for (let i = 0; i < files.length; i += 1) {
   fs.closeSync(fd);
   let out = '';
   try { out = fs.readFileSync(logPath, 'utf8'); } catch { /* 没输出就算了 */ }
-  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 交给系统清理 */ }
+  // 想看"红在哪一条"就带上 SUITE_KEEP_LOGS=1：这时保留临时目录（里面有每个脚本的完整输出），
+  // 并在结果行里带上路径。默认仍然清理（不然跑一晚全量会攒下几百个目录）。
+  if (process.env.SUITE_KEEP_LOGS) {
+    try { fs.writeFileSync(path.join(tmp, `${path.basename(rel, '.mjs')}.status`), String(res.status)); } catch { /* 无所谓 */ }
+  } else {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 交给系统清理 */ }
+  }
 
   const ms = Date.now() - t0;
   const tail = out.trim().split('\n').filter(Boolean).slice(-1)[0] || '';
@@ -161,7 +180,7 @@ for (let i = 0; i < files.length; i += 1) {
     tail: tail.slice(0, 300),
   };
   results.push(rec);
-  console.log(`[${String(i + 1).padStart(3)}/${files.length}] ${rec.ok ? 'PASS' : 'FAIL'}${rec.timedOut ? '(超时)' : ''} ${String(Math.round(ms / 1000)).padStart(3)}s ${rel}${rec.ok ? '' : `  ← ${tail.slice(0, 110)}`}`);
+  console.log(`[${String(i + 1).padStart(3)}/${files.length}] ${rec.ok ? 'PASS' : 'FAIL'}${rec.timedOut ? '(超时)' : ''} ${String(Math.round(ms / 1000)).padStart(3)}s ${rel}${rec.ok ? '' : `  ← ${tail.slice(0, 110)}`}${!rec.ok && process.env.SUITE_KEEP_LOGS ? `  [完整输出: ${logPath}]` : ''}`);
 }
 
 const secs = Math.round((Date.now() - started) / 1000);

@@ -51,15 +51,18 @@ function lessonStateBadge(lesson) {
 /**
  * 画布入口按钮的文案：按**本场课堂的项目**到哪一步了分三种。
  *   · 有草稿 → 「继续创作」；
- *   · 本场课堂已提交过（`sessionProject.status = SUBMITTED/GRADED`）→ **「查看作品」**
- *     （打开的是同一个项目、画布只读；服务端 POST /projects 会幂等返回它）；
+ *   · 本场课堂已提交过（`sessionProject.status = SUBMITTED/GRADED`）→ **「查看作品」**；
  *   · 本场还没建过项目 → 「进入课堂」。
  * ⚠️ 只判草稿的旧写法有个坑（用户 2026-09-21 报的）：提交之后「找不到项目」→ 显示「进入课堂」→
  *    点下去**新开一个空画布**。所以这里必须看 sessionProject（服务端下发的本场项目）。
+ * ⚠️ 2026-09-24 增量提交口径：**提交之后画布不锁**（学生还要接着做没做完的任务），
+ *    所以「作品已提交 + 课堂还在上」这一步也该是**「继续创作」** —— 只有当课堂结束、
+ *    学生已经进不去画布了（按钮本身会置灰），「查看作品」才是准的说法。
+ *    判据用 `participationStatus`（ACTIVE = 本场课堂我还在上）—— 服务端下发的既有字段。
  */
 function canvasEntryLabel(lesson) {
   if (lesson.continueProject) return '继续创作';
-  if (lesson.sessionProject) return '查看作品';
+  if (lesson.sessionProject) return lesson.participationStatus === 'ACTIVE' ? '继续创作' : '查看作品';
   return '进入课堂';
 }
 
