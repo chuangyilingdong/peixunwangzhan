@@ -64,6 +64,7 @@ export async function resetMysqlDatabase({ silent = false, database = null, drop
   const env = { ...mysqlEnvFromProcess(), ...(database ? { MYSQL_DATABASE: database } : {}) };
   const { sql, tmp } = generateMysqlDdl();
   const mysql = await loadMysql2();
+  // ⚠️ 这里**不能**指定 `database`：要建的库可能还不存在，指定了连都连不上（Unknown database）。
   const conn = await mysql.createConnection({
     host: env.MYSQL_HOST,
     port: Number(env.MYSQL_PORT),
@@ -76,7 +77,6 @@ export async function resetMysqlDatabase({ silent = false, database = null, drop
   });
   try {
     for (const name of dropToo) await conn.query(`DROP DATABASE IF EXISTS \`${name}\``).catch(() => {});
-    await conn.query(`USE \`${env.MYSQL_DATABASE}\``);
     // 先试"DROP + CREATE DATABASE"（本机 Docker 的 root 可以）；
     // **没有建库权限时**（例如 RDS 上那个账号只被授予 `aild_admin`.*）→ 退回"就地清表"。
     let recreated = false;
@@ -89,6 +89,7 @@ export async function resetMysqlDatabase({ silent = false, database = null, drop
     } catch { recreated = false; }
     if (!recreated) {
       // 就地重置：把库里的表全删掉，再灌一遍结构（结构同样由代码现生成）
+      await conn.query(`USE \`${env.MYSQL_DATABASE}\``);   // 就地分支必须自己 USE（information_schema 的 DATABASE() 要用）
       await conn.query('SET FOREIGN_KEY_CHECKS=0');
       const [tables] = await conn.query(
         "SELECT TABLE_NAME AS t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE='BASE TABLE'",
