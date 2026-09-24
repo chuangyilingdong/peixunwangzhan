@@ -119,8 +119,26 @@ function translateSqlite(sql) {
   if (out.includes('COLLATE NOCASE')) out = out.replace(/\s+COLLATE\s+NOCASE/gi, '');
   if (/INSERT\s+OR\s+IGNORE\s+INTO/i.test(out)) out = out.replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, 'INSERT IGNORE INTO');
   if (/INSERT\s+OR\s+REPLACE\s+INTO/i.test(out)) out = out.replace(/INSERT\s+OR\s+REPLACE\s+INTO/gi, 'REPLACE INTO');
+  // ⑥ `datetime('now')` / `date('now')` → `UTC_TIMESTAMP()` / `UTC_DATE()`（2026-09-24 加）
+  //    为什么能翻译（**可证明等价**，与 ④ 的 json_extract 不同）：两边都是 **UTC**、
+  //    产出的字符串形式也都是 `YYYY-MM-DD HH:MM:SS`。
+  //    ⚠️ 一定要用 `UTC_*` 而不是 `NOW()` / `CURDATE()`：后者是**会话时区**（这台机 +08:00），
+  //       与 SQLite 的 UTC 差 8 小时 —— 那正是这个仓库最怕的"不报错只算错"。
+  //    为什么必须在翻译层做：验收脚本（scripts/）里有 21 个夹具用它写时间戳，
+  //    逐个改调用点既多又容易漏；而这是一个**固定字面量**，正则替换是安全的。
+  if (/datetime\s*\(\s*'now'\s*\)/i.test(out)) out = out.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'UTC_TIMESTAMP()');
+  if (/date\s*\(\s*'now'\s*\)/i.test(out)) out = out.replace(/date\s*\(\s*'now'\s*\)/gi, 'UTC_DATE()');
+  // ⑦ `IS ?`（拿**参数**做 NULL 安全比较）→ `<=> ?`（2026-09-24 加）
+  //    SQLite 的 `x IS ?` 与 MySQL 的 `x <=> ?` 都是"NULL 安全相等"（NULL 与 NULL 算相等）——
+  //    可证明等价。实测：账号查重（admin/helpers）与动态筛选（lib.js）都是这个写法，
+  //    不翻译在 MySQL 上直接 ER_PARSE_ERROR。
+  //    只吃 `IS ?`（`IS NULL` / `IS NOT NULL` / `IS NOT ?` 都不碰 —— 后者的语义不同）。
+  if (/\bIS\s+\?/i.test(out)) out = out.replace(/\bIS\s+\?/gi, '<=> ?');
   return out;
 }
+
+/** 守卫用：把一条 SQLite 写法的 SQL 翻成 MySQL 会发出去的形状（不连库、纯函数）。 */
+export { translateSqlite };
 
 async function exec(sql, params = []) {
   const conn = target();

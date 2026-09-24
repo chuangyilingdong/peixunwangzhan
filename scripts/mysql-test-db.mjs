@@ -98,6 +98,30 @@ export async function resetMysqlDatabase({ silent = false, database = null, drop
       await conn.query('SET FOREIGN_KEY_CHECKS=1');
     }
     await conn.query(sql);
+    // ── 夹具列加宽（2026-09-24）──────────────────────────────────────────────
+    // 为什么要这一步：列宽是 script 12 **按源库真实数据长度**定的，而本机的源库是种子数据
+    // （很小）→ 那些"生产上其实是 mediumtext"的 JSON 列在这里被定成 varchar(255)，
+    // 验收夹具一写大对象就 `Data too long for column`
+    // （实测：platform_settings.ai_provider_policy 本机 varchar(255) / 生产 RDS mediumtext）。
+    // 规则：**按列名特征**加宽（payload 类的列），而且**只加宽非索引列** —— 索引列会被 MySQL
+    // 直接拒（3072 字节上限），拒绝就跳过（`.catch(()=>{})`），绝不因此让"重置"失败。
+    {
+      const WIDEN_NAME = /(policy|snapshot|content|metadata|attachments|settings|presets|references|payload|description|message|prompt|note|json|body|lines|params|options|before_data|after_data|_data$)/i;
+      const [cols] = await conn.query(
+        'SELECT TABLE_NAME AS t, COLUMN_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND DATA_TYPE IN ("varchar","char","tinytext","text")',
+        [env.MYSQL_DATABASE],
+      );
+      let widened = 0;
+      for (const row of cols) {
+        if (!WIDEN_NAME.test(String(row.c))) continue;
+        try {
+          await conn.query('ALTER TABLE `' + row.t + '` MODIFY `' + row.c + '` MEDIUMTEXT');
+          widened += 1;
+        } catch { /* 索引列/超行长：跳过（那说明它本来就该窄） */ }
+      }
+      if (!silent && widened) process.stdout.write('  [mysql] 已加宽 ' + widened + ' 个 payload 列（与生产 RDS 同口径）\n');
+    }
+
   } finally {
     await conn.end();
   }

@@ -40,10 +40,10 @@ export async function ensureClassroom(dbPath) {
   if (!ready) return created;
 
   const grants = await arows(
-    `SELECT grant.student_id, grant.org_id, grant.series_id
-       FROM student_course_grants grant
-       JOIN users student ON student.id = grant.student_id AND student.deleted_at IS NULL
-      WHERE grant.revoked_at IS NULL`,
+    `SELECT g.student_id, g.org_id, g.series_id
+       FROM student_course_grants g
+       JOIN users student ON student.id = g.student_id AND student.deleted_at IS NULL
+      WHERE g.revoked_at IS NULL`,
     [],
   );
   if (!grants.length) return created;
@@ -97,10 +97,10 @@ export async function switchClassroom(dbPath, { deliveryMode = 'VIBECODING', req
   const switched = [];
   // ⚠️ 要覆盖**所有**有许可的课包：只取第一个的话，守卫遍历到的其它课包课时仍然进不去
   const grants = await arows(
-    `SELECT grant.student_id, grant.org_id, grant.series_id
-       FROM student_course_grants grant
-       JOIN users student ON student.id = grant.student_id AND student.deleted_at IS NULL
-      WHERE grant.revoked_at IS NULL`,
+    `SELECT g.student_id, g.org_id, g.series_id
+       FROM student_course_grants g
+       JOIN users student ON student.id = g.student_id AND student.deleted_at IS NULL
+      WHERE g.revoked_at IS NULL`,
     [],
   );
   if (!grants.length) return switched;

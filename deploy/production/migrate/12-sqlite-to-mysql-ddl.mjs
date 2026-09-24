@@ -35,6 +35,14 @@ const arg = (name, fallback) => {
 };
 const dbPath = arg('--db', '/srv/ai-kids-platform/production/data/platform.db');
 const outPath = arg('--out', '');
+// 非索引文本列的**最窄** VARCHAR 宽度（默认 255 = 老行为）。
+// ⚠️ 为什么需要它：尺寸是**按源库真实数据长度**定的，所以"种子数据小"的库会得到很窄的列 ——
+//    验收夹具（scripts/）写进去的 JSON 比种子大得多，就会 Data too long for column
+//    （实测：本机 Docker 里 platform_settings.ai_provider_policy 是 varchar(255)，
+//     而**生产 RDS 同一列是 mediumtext** —— 因为生产是按真数据量的）。
+//    测试环境用 --min-varchar=4000 就能与生产一样宽松；生产侧也建议给个下限（见交接 §九）。
+const minVarchar = Math.max(255, Number(arg('--min-varchar', '255')) || 255);
+
 
 const db = new DatabaseSync(dbPath, { readOnly: true });
 const q = (sql) => db.prepare(sql).all();
@@ -172,7 +180,7 @@ for (const m of meta) {
       fixedWidth = size * 4;
       if (len > 255) notes.push(`⚠️ ${m.table}.${c.name} 是索引列但真实数据最长 ${len} 字符 > 255 —— **必须人工决定**（前缀索引？换做法？）`);
     } else {
-      const size = len === 0 ? 255 : Math.max(255, Math.ceil((len * 1.2) / 64) * 64);
+      const size = len === 0 ? minVarchar : Math.max(minVarchar, Math.ceil((len * 1.2) / 64) * 64);
       mysqlType = size <= 16383 ? `VARCHAR(${size})` : 'MEDIUMTEXT';
       fixedWidth = mysqlType === 'MEDIUMTEXT' ? MEDIUMTEXT_COST : size * 4;
     }
