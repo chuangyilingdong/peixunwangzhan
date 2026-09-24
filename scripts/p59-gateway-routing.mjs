@@ -29,7 +29,7 @@ const { aq, arow, arows } = await import('../packages/database/src/store.js');
 const secretFile = path.join(temp, 'provider-secrets.json');
 const baseEnv = {
   ...process.env,
-  PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: secretFile,
+  PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, AI_PROVIDER_SECRET_FILE: secretFile,
   DEPLOYMENT_MODE: 'development', AI_PROVIDER: 'local-mock', AI_PROVIDER_API_KEY: 'direct-secret-key',
 };
 const run = (args) => new Promise((resolve, reject) => {
@@ -272,7 +272,7 @@ try {
   check('⑦ 异步任务用的是该学生的令牌 key', Boolean(asyncKey) && gateway.relays.at(-1)?.auth === `Bearer ${asyncKey}`, String(gateway.relays.at(-1)?.auth));
 
   /* ⑧ 模态闸：视频/音乐是异步任务，走的是我们自己的出口（网关不管这两类） */
-  Object.assign(process.env, { PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: secretFile, DEPLOYMENT_MODE: 'development', AI_PROVIDER: 'local-mock', AI_PROVIDER_API_KEY: 'direct-secret-key' });
+  Object.assign(process.env, { PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, AI_PROVIDER_SECRET_FILE: secretFile, DEPLOYMENT_MODE: 'development', AI_PROVIDER: 'local-mock', AI_PROVIDER_API_KEY: 'direct-secret-key' });
   const routing = await import('../apps/server/src/services/computeGateway.js');
   const videoRoute = await routing.resolveGenerationRoute({ orgId: identity.org_id, studentId: identity.id, lessonId, modality: 'VIDEO' });
   const textRoute = await routing.resolveGenerationRoute({ orgId: identity.org_id, studentId: identity.id, lessonId, modality: 'TEXT' });

@@ -12,10 +12,12 @@ import { pathToFileURL } from 'node:url';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p26-vibecoding-chat-ops-'));
 const dbPath = path.join(temp, 'platform.db');
+process.env.PLATFORM_DB_PATH = dbPath;
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
 const baseEnv = {
   ...process.env,
-  PLATFORM_DATA_DIR: temp,
-  PLATFORM_DB_PATH: dbPath,
+  PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp,
+  PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath,
   DEPLOYMENT_MODE: 'local-mock',
   AI_PROVIDER: 'local-mock',
 };
@@ -34,7 +36,6 @@ await run(['packages/database/src/seed.js']);
 // 让课时带上正文，验证会注入到 system 上下文
 const { DatabaseSync } = await import('node:sqlite');
  
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
 const lesson = await arow('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 1');
 await aq("UPDATE course_lessons SET delivery_mode='VIBECODING', lesson_content='本课目标：用 AI 做出一个会动的小网页。' WHERE id=?", [lesson.id]);
 await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))", [lesson.id]);
@@ -56,7 +57,6 @@ assert.equal((await arow("SELECT COUNT(*) n FROM class_sessions WHERE teacher_id
 
 // 用与服务器相同的环境变量导入服务端模块，直接验证 system 上下文拼装
 process.env.PLATFORM_DATA_DIR = temp;
-process.env.PLATFORM_DB_PATH = dbPath;
 const { lessonSystemMessage } = await import(pathToFileURL(path.join(root, 'apps/server/src/routes/vibecoding.js')).href);
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
 

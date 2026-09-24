@@ -10,7 +10,7 @@
  * 数据库表保留（learning_tasks / account_requests / recharge_orders 等只留历史数据，代码不读写）。
  */
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'; import { spawn } from 'node:child_process';
-const root = path.resolve(process.cwd()); const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-kids-task-removed-')); const env = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: path.join(temp, 'platform.db'), DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
+const root = path.resolve(process.cwd()); const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-kids-task-removed-')); const env = { ...process.env, PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: path.join(temp, 'platform.db'), DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => { const c = spawn(process.execPath, args, { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] }); let o = '', e = ''; c.stdout.on('data', (x) => o += x); c.stderr.on('data', (x) => e += x); c.on('close', (n) => n ? reject(new Error(e || o)) : resolve(o)); });
 await run(['packages/database/src/db.js', '--init']); await run(['packages/database/src/seed.js']);
 const port = 18812;

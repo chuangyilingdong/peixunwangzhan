@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const dataDir = process.env.PLATFORM_DATA_DIR || path.resolve(__dirname, '../../data');
+export const dataDir = process.env.PLATFORM_DATA_DIR || path.resolve(__dirname, '../../../data');
 export const databasePath = process.env.PLATFORM_DB_PATH || path.join(dataDir, 'platform.db');
 fs.mkdirSync(path.dirname(databasePath), { recursive: true });
 export const db = new DatabaseSync(databasePath);

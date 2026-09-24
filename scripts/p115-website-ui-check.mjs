@@ -50,8 +50,8 @@ const { aq, arow, arows } = await import('../packages/database/src/store.js');
 
 const env = {
   ...process.env,
-  PLATFORM_DATA_DIR: temp,
-  PLATFORM_DB_PATH: dbPath,
+  PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp,
+  PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath,
   FILE_UPLOAD_ROOT: path.join(temp, 'uploads'),
   AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),
   DEPLOYMENT_MODE: 'local-mock',
@@ -205,7 +205,7 @@ try {
     
     
     await aq('BEGIN IMMEDIATE');
-    try { const result = fn(db); await aq('COMMIT'); return result; } catch (error) { await aq('ROLLBACK'); throw error; } finally {  }
+    try { const result = fn(); await aq('COMMIT'); return result; } catch (error) { await aq('ROLLBACK'); throw error; } finally {  }
   };
   const bodyText = () => page.locator('body').innerText();
   const expectText = async (label, texts) => { const body = await bodyText(); for (const t of texts) if (!body.includes(t)) problems.push(`${label}：页面上找不到「${t}」`); };

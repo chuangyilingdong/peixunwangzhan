@@ -30,7 +30,7 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-kids-p138-'));
 const PORT = 18938;
 const baseEnv = {
   ...process.env,
-  PLATFORM_DATA_DIR: temp,
+  PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp,
   PLATFORM_DB_PATH: path.join(temp, 'platform.db'),
   DEPLOYMENT_MODE: 'development',
   AI_PROVIDER: 'local-mock',

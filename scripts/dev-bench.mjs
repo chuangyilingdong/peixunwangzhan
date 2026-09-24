@@ -51,8 +51,8 @@ const freshDb = !fs.existsSync(dbPath);
 
 const baseEnv = {
   ...process.env,
-  PLATFORM_DATA_DIR: temp,
-  PLATFORM_DB_PATH: dbPath,
+  PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp,
+  PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath,
   DEPLOYMENT_MODE: 'development',
   AI_PROVIDER: 'local-mock',
   AI_PROVIDER_API_KEY: '',

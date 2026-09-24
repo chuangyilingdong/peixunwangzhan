@@ -28,7 +28,7 @@ const dbPath = path.join(temp, 'platform.db');
     // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
     // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
 process.env.PLATFORM_DB_PATH = dbPath;
-const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
+const baseEnv = { ...process.env, PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = ''; let err = '';
@@ -45,7 +45,7 @@ await run(['packages/database/src/seed.js']);
 
 // 归集口径的一部分直接断言被测函数。⚠️ 必须先设好库路径再动态导入 ——
 // computeGateway 会连带加载 lib.js 并把库打开，静态 import 会碰到本地开发库。
-Object.assign(process.env, { PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' });
+Object.assign(process.env, { PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' });
 const { aggregateUsage, lessonBudgetOverview } = await import('../apps/server/src/services/computeGateway.js');
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
 const { aq, arow, arows } = await import('../packages/database/src/store.js');

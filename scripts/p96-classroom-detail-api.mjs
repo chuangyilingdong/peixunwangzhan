@@ -20,7 +20,7 @@ process.env.PLATFORM_DB_PATH = dbPath;
 const { aq, arow, arows } = await import('../packages/database/src/store.js');
 const { closeDb } = await import("../packages/database/src/store.js");
 
-const env = { ...process.env, FILE_UPLOAD_ROOT: path.join(temp, 'uploads'), PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secret.json'), DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
+const env = { ...process.env, FILE_UPLOAD_ROOT: path.join(temp, 'uploads'), PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secret.json'), DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 async function run(args) {
   const child = spawn(process.execPath, args, { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';

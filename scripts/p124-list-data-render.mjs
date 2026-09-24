@@ -48,8 +48,6 @@ const freePort = () => new Promise((resolve, reject) => {
   probe.listen(0, '127.0.0.1', () => { const { port } = probe.address(); probe.close(() => resolve(port)); });
 });
 
-// ── 用例：账号都是种子账号；夹具只写进临时库 ─────────────────────────────────
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
 
 const now = () => new Date().toISOString();
 const CASES = [
@@ -79,13 +77,15 @@ const dbPath = path.join(temp, 'platform.db');
     // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
     // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
 process.env.PLATFORM_DB_PATH = dbPath;
+// ── 用例：账号都是种子账号；夹具只写进临时库 ─────────────────────────────────
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
 const { closeDb } = await import("../packages/database/src/store.js");
 
 const env = {
   ...process.env,
-  PLATFORM_DATA_DIR: temp,
-  PLATFORM_DB_PATH: dbPath,
+  PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp,
+  PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath,
   FILE_UPLOAD_ROOT: path.join(temp, 'uploads'),
   AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),
   DEPLOYMENT_MODE: 'local-mock',

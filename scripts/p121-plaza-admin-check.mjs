@@ -43,8 +43,8 @@ const mediaRoot = path.join(temp, 'public-media');
 const PORT = Number(process.env.P121_PORT || 8796);
 const env = {
   ...process.env,
-  PLATFORM_DATA_DIR: temp,
-  PLATFORM_DB_PATH: dbPath,
+  PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp,
+  PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath,
   // 「彻底删除」要挪导入件的媒体目录 —— 指到临时目录里，绝不许碰生产的 public-media
   PLAZA_MEDIA_ROOT: mediaRoot,
   AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),

@@ -164,7 +164,7 @@ else console.log('上传根 = 临时空目录（页面里若该有素材原文�
 if (opts.fresh) {
   console.log('库 = --fresh 的种子空库（不碰生产库）');
   const run = (args) => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, { cwd: root, env: { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, FILE_UPLOAD_ROOT: uploadRoot }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, args, { cwd: root, env: { ...process.env, PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, FILE_UPLOAD_ROOT: uploadRoot }, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     child.stdout.on('data', (chunk) => { output += chunk; });
     child.stderr.on('data', (chunk) => { output += chunk; });
@@ -225,8 +225,8 @@ if (opts.seed || opts.sql) {
 const apiPort = await freePort();
 const env = {
   ...process.env,
-  PLATFORM_DATA_DIR: temp,
-  PLATFORM_DB_PATH: dbPath,
+  PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp,
+  PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath,
   FILE_UPLOAD_ROOT: uploadRoot,
   AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),
   DEPLOYMENT_MODE: 'local-mock',

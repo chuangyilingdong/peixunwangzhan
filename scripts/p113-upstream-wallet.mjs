@@ -59,7 +59,7 @@ process.env.DEPLOYMENT_MODE = 'development';
 // 设了的话「没配 key 的渠道」就会拿到这把全局 key 而不被跳过（⑤ 就测不成了）。
 delete process.env.AI_PROVIDER_API_KEY;
 // baseEnv 同理（只传给被拉起的服务进程）。
-const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: secretFile, DEPLOYMENT_MODE: 'development' };
+const baseEnv = { ...process.env, PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, AI_PROVIDER_SECRET_FILE: secretFile, DEPLOYMENT_MODE: 'development' };
 delete baseEnv.AI_PROVIDER_API_KEY;
 
 const run = (args) => new Promise((resolve, reject) => {

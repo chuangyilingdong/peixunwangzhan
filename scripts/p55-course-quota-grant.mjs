@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p55-course-quota-'));
 const dbPath = path.join(temp, 'platform.db');
-const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
+const baseEnv = { ...process.env, PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = ''; let err = '';

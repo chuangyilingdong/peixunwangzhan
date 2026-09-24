@@ -34,7 +34,7 @@ const { aq, arow, arows } = await import('../packages/database/src/store.js');
 
 const baseEnv = {
   ...process.env,
-  PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),
+  PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),
   DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock',
 };
 const run = (args) => new Promise((resolve, reject) => {

@@ -20,8 +20,8 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p28-boxes-'));
 const dbPath = path.join(temp, 'platform.db');
 const baseEnv = {
   ...process.env,
-  PLATFORM_DATA_DIR: temp,
-  PLATFORM_DB_PATH: dbPath,
+  PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp,
+  PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath,
   DEPLOYMENT_MODE: 'local-mock',
   AI_PROVIDER: 'local-mock',
 };
@@ -111,10 +111,6 @@ try {
   assert.ok(rootToken, 'root 登录失败');
   const student = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data.token;
   assert.ok(student, '学生登录失败');
-
-  const { DatabaseSync } = await import('node:sqlite');
-   
-  const seedDb2 = seedDb;
   await aq('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1', [JSON.stringify({ provider: 'local-mock', channels: [{ id: 'p28-video', provider: 'local-mock', model: 'hailuo-h3-i2v', models: ['hailuo-h3-i2v'] }], modalityChannels: { VIDEO: 'p28-video' } })]);
   const lesson = await arow("SELECT lesson.id, lesson.series_id FROM course_lessons lesson JOIN student_course_grants grant ON grant.series_id=lesson.series_id JOIN users student ON student.id=grant.student_id WHERE student.login='student-2' AND grant.revoked_at IS NULL AND lesson.status='PUBLISHED' ORDER BY lesson.sort LIMIT 1");
   assert.ok(lesson?.id, '学生应持有目标课包许可');
@@ -122,7 +118,7 @@ try {
   // 本用例只发布一个目标课时；其余种子课时未配置发布能力，不参与本次快照。
   await aq("UPDATE course_lessons SET status='ARCHIVED' WHERE series_id=? AND id<>?", [lesson.series_id, lesson.id]);
   // 预置素材需要真实的公开文件记录，才能解析为上游可抓取地址。
-  seedDb2.prepare("INSERT INTO file_assets(id,owner_type,storage_kind,file_name,mime_type,category,visibility,status,created_at,updated_at) VALUES ('asset-seed','PLATFORM','INTERNAL_PROXY','seed.png','image/png','MEDIA_ASSET','PUBLIC_PLATFORM','ACTIVE',?,?)").run(new Date().toISOString(), new Date().toISOString());
+  await aq("INSERT INTO file_assets(id,owner_type,storage_kind,file_name,mime_type,category,visibility,status,created_at,updated_at) VALUES ('asset-seed','PLATFORM','INTERNAL_PROXY','seed.png','image/png','MEDIA_ASSET','PUBLIC_PLATFORM','ACTIVE',?,?)", [new Date().toISOString(), new Date().toISOString()]);
 
   // 1) 管理端保存：框体作为素材一起提交，顺序原样保留
   const saved = await api(`/api/admin/course-lessons/${lesson.id}`, {

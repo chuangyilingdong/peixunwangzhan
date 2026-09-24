@@ -17,7 +17,7 @@ import { ensureClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p31-music-box-'));
 const dbPath = path.join(temp, 'platform.db');
-const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
+const baseEnv = { ...process.env, PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 process.env.PLATFORM_DATA_DIR = temp;
 process.env.PLATFORM_DB_PATH = dbPath;
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import

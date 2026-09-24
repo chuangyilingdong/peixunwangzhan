@@ -230,8 +230,8 @@ exec "${slash(process.execPath)}" "${slash(collectScript)}" "\${COMMAND}"
 
 const baseEnv = {
   ...process.env,
-  PLATFORM_DATA_DIR: temp,
-  PLATFORM_DB_PATH: dbPath,
+  PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp,
+  PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath,
   DEPLOYMENT_MODE: 'local-mock',
   AI_PROVIDER: 'local-mock',
   DSH_RUNTIME_MODE: 'user',

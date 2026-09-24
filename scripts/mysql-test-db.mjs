@@ -33,7 +33,7 @@ export function mysqlEnvFromProcess() {
 function buildSqliteFixture(tag = 'mysql-fixture') {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `${tag}-`));
   const dbPath = path.join(tmp, 'platform.db');
-  const env = { ...process.env, PLATFORM_DATA_DIR: tmp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'internal-test' };
+  const env = { ...process.env, PLATFORM_DATA_DIR: tmp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, DEPLOYMENT_MODE: 'internal-test' };
   for (const args of [['packages/database/src/db.js', '--init'], ['packages/database/src/seed.js']]) {
     const res = spawnSync(NODE, args, { cwd: ROOT, env, encoding: 'utf8', timeout: 120000 });
     if (res.status !== 0) throw new Error(`造 SQLite 夹具失败：${args[0]} → ${res.stderr?.slice(-400)}`);

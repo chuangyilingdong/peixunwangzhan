@@ -62,7 +62,7 @@ process.env.DSH_RUNTIME_EDGE_BASE = ''; // 本机验证：入口直接给宿主�
 
 const baseEnv = {
   ...process.env,
-  PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),
+  PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),
   DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock', RUNTIME_GATEWAY_SECRET: SECRET,
 };
 const run = (args) => new Promise((resolve, reject) => {
