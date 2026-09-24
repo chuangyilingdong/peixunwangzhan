@@ -67,11 +67,28 @@ function internalEndpoint() {
   return c.internalEndpoint || (c.region ? `oss-${c.region}-internal.aliyuncs.com` : '');
 }
 
-/** 带前缀的对象键（对外的 storage_key 一律是带前缀的完整键，便于换 bucket 时不受影响） */
+/**
+ * 带前缀的对象键。**幂等**：已经带前缀的键原样返回，不再叠一层。
+ *
+ * 为什么必须幂等（2026-09-24 实测，生产上真出过）：
+ *   OSS 模式下**写进去的就是带前缀的完整键**（`putObject` 的返回值 key = 前缀 + 相对键，
+ *   见 fileStorage 的 persistUploadBytes —— 那里注释也写明了"storageKey 在 OSS 模式下是带前缀的
+ *   完整键"，为的是换 bucket/前缀时不会认错）。而读路径（signedUrl / headObject / getObjectToFile /
+ *   deleteObject）**每一个都会再过一次这里** —— 于是键变成了 `lingdong/lingdong/2026/09/xxx.png`，
+ *   OSS 一律 404。
+ *   症状是"每一张图都不显示"，而且**不报错**：下载接口照样 302，404 发生在 OSS 那边
+ *   （nginx 日志里只看得到那个 302，非常容易被当成"客户端的问题"）。
+ *   实测：生产 281 个 OSS 行里 275 个是回填脚本写进去的**相对键**（正常），
+ *   6 个是 OSS 打开之后**新上传**的完整键（全部读不到 —— 学生刚生成的图就是这批，
+ *   而此后每一次新上传都会坏）。
+ *   判据：`=== 前缀` 或 `以 前缀/ 开头`。两种键都走这条路，所以修完两边都对。
+ */
 export function withPrefix(key) {
   const c = cfg();
   const clean = String(key || '').replaceAll('\\', '/').replace(/^\/+/, '');
-  return c.prefix ? `${c.prefix}/${clean}` : clean;
+  if (!c.prefix) return clean;
+  if (clean === c.prefix || clean.startsWith(`${c.prefix}/`)) return clean;
+  return `${c.prefix}/${clean}`;
 }
 
 /** 路径编码：按段编码、保留 `/`（OSS 的键里 `/` 是普通字符，不能被转义成 %2F） */

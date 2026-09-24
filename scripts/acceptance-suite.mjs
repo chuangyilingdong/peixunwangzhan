@@ -62,6 +62,9 @@ const FAST = [
   // 2026-09-24 加：超限拒绝之后那条连接不能再被复用（实测挂 304 秒）。它就是 p119 长期
   // "偶发超时失败"的真凶 —— 断言全过、却被那条毒连接拖过 120s 超时线。
   'scripts/p138-oversized-body-keepalive.mjs',
+  // 2026-09-24 加：OSS 对象键的幂等（写进去的是带前缀的完整键，读的时候不能再叠一层）。
+  // 这条错了**不会报错**：下载接口照常 302，404 发生在 OSS 那边 —— 生产上烧了一天多。
+  'scripts/p136-oss-signature.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));

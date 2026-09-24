@@ -92,6 +92,28 @@ check('withPrefix 去掉两头的斜杠再拼', () => {
   setEnv(FULL);
   assert.equal(withPrefix('2026/09/a.png'), '2026/09/a.png');
 });
+// ⭐ 2026-09-24 加：**幂等**。写进库的是"带前缀的完整键"，而读路径（签名 / HEAD / 取回 / 删除）
+//    还会再走一次 withPrefix —— 不判一下就叠成 lingdong/lingdong/…，OSS 一律 404。
+//    生产上真的这样烧了一天多：下载接口照常回 302，404 发生在 OSS 那边，
+//    nginx 日志里只看得见那个 302，所以很容易被当成"客户端不显示"的问题。
+check('带前缀的完整键不再叠一层（幂等）', () => {
+  setEnv({ ...FULL, OSS_PREFIX: 'lingdong' });
+  assert.equal(withPrefix('lingdong/2026/09/a.png'), 'lingdong/2026/09/a.png', '库里存的完整键必须原样用');
+  assert.equal(withPrefix('/lingdong/2026/09/a.png'), 'lingdong/2026/09/a.png');
+  assert.equal(withPrefix('lingdong'), 'lingdong');
+  // 前缀只是首段的一部分时不能误判（lingdong2 不是 lingdong）
+  assert.equal(withPrefix('lingdong2/2026/a.png'), 'lingdong/lingdong2/2026/a.png');
+  // 相对键（回填脚本写的那种）照旧补前缀
+  assert.equal(withPrefix('2026/09/a.png'), 'lingdong/2026/09/a.png');
+  setEnv(FULL);   // 还给下面几条（这个文件里每条 check 自己负责还原环境）
+});
+check('同一条键连过两次 withPrefix 结果不变（"写—读往返"的核心）', () => {
+  setEnv({ ...FULL, OSS_PREFIX: 'lingdong' });
+  const stored = withPrefix('2026/09/a.png');   // putObject 落库的那一份
+  assert.equal(withPrefix(stored), stored, '签名/HEAD 再走一次不能改键');
+  assert.equal(new URL(signedUrl(stored, { expires: 60 })).pathname, '/lingdong/2026/09/a.png');
+  setEnv(FULL);
+});
 
 console.log('④ 签名 URL 的形状（给浏览器的那一份）');
 check('带正确的参数、且键按段编码（/ 不转义）', () => {
