@@ -12,6 +12,16 @@ export const dataDir = process.env.PLATFORM_DATA_DIR || path.resolve(__dirname, 
 export const databasePath = process.env.PLATFORM_DB_PATH || path.join(dataDir, 'platform.db');
 fs.mkdirSync(path.dirname(databasePath), { recursive: true });
 export const db = new DatabaseSync(databasePath);
+
+/**
+ * 关掉这个 SQLite 句柄（**只给「进程快结束、要删临时库」的场景**）。
+ * 为什么需要：Windows 上**打开着的文件删不掉** —— 夹具改成走数据层之后，临时库被这个句柄
+ * 一直握着，脚本末尾 rm(temp) 会报 EBUSY: resource busy or locked（2026-09-24 实测，17 个脚本）。
+ * ⚠️ 关掉之后这个进程**不能再查库**（会抛 database is closed）—— 只在清理前调，别在中间调。
+ */
+export function closeDb() {
+  try { db.close(); } catch { /* 已经关了就算了 */ }
+}
 // ⚠️ busy_timeout 必须**排在第一条会抢锁的语句之前**：SQLite 默认是 0（不等待）。
 // 而下面第一句 `PRAGMA journal_mode = WAL` 就要取写锁 —— 两个进程同时起来（重启时旧进程还没退、
 // 新进程已经在跑迁移；或守卫「本进程写库 + 同时 spawn 服务」）时，那一句就会抛

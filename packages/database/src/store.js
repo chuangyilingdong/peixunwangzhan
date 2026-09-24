@@ -46,6 +46,8 @@ export const rawExec = impl.rawExec || null;
 export const dbConfig = impl.dbConfig || null;
 export const ping = impl.ping || null;
 export const closePool = impl.closePool || (async () => {});
+/** 关掉当前驱动的连接（sqlite：closeDb；mysql：closePool）。**只给「要删临时库」的清理前用**。 */
+export const closeDb = impl.closeDb || impl.closePool || (async () => {});
 
 function syncUnavailable(name) {
   return (..._args) => {
