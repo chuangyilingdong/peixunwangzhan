@@ -85,6 +85,11 @@ const EXCLUDE = new Set([
   'scripts/acceptance-suite.mjs',
   'scripts/acceptance-script-wrapper.mjs',
   'scripts/rds-p2-fixture-codemod.mjs',
+  // ⚠️ p71 是「造旧库」做迁移的守卫：它要 DROP + 重建 works / work_reports / student_projects
+  //    来模拟老库。而夹具改造之后数据层连的就是**应用那个库**（表已由 schema.js 建好），
+  //    两边前提根本冲突（实测：DROP 之后立刻 `no such table: main.works`）。
+  //    它保留直连句柄的写法 —— 与 p80 同一类：验的不是「数据从哪来」，而是「老数据会被怎么迁移」。
+  'scripts/p71-works-status-migration.mjs',
 ]);
 
 // ─────────────────── 跨文件预扫：谁会把 SQLite 句柄 **return** 出去（2026-09-24 补）───────────────────

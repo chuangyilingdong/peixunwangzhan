@@ -24,6 +24,7 @@ const scheduler = await import('../apps/server/src/services/reminderScheduler.js
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
 const { aq, arow, arows } = await import("../packages/database/src/store.js");
+const { closeDb } = await import("../packages/database/src/store.js");
 
 const { db } = schema;
 const seeded = await seed.seedDatabase();
@@ -92,5 +93,7 @@ try {
   // communication.js 注册了 exit 清理钩子；先停止 worker，保持数据库打开直到进程退出，避免 exit 钩子访问已关闭连接。
   await communication.shutdownCommunicationWorkers();
   try { // 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+// 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+await closeDb();
 rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch { /* Windows may release SQLite handles after process exit; directory remains isolated temp data. */ }
 }
