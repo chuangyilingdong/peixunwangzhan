@@ -274,7 +274,18 @@ function useDisplayUrl(raw) {
   useEffect(() => {
     if (!needsResolve) { setShown(url); return undefined; }
     let active = true;
-    Promise.resolve(resolve(url)).then((next) => { if (active) setShown(next || ''); }).catch(() => { if (active) setShown(''); });
+    // ⭐ 解析不出东西时**退回原始 /api/ 地址**，让 <img>/<video> 自己去取。
+    //    为什么必须留这条兜底（2026-09-24 生产实测，学生的生成图一直不显示就是这个）：
+    //    素材在 OSS 上时，/api/.../download 会 302 到**跨域**的签名地址，而那个 bucket
+    //    没有配 CORS → `fetch` 读不到响应体 → 拿不到 blob → 框体一直空着（全链路不报错，
+    //    只有浏览器控制台里有一条 CORS 提示）。视频/图片/音频这些**子资源**加载不吃 CORS，
+    //    所以直接交给标签反而能显示。
+    //    认证靠登录时种下的 `platform_token` cookie（HttpOnly/SameSite=Lax，同源子资源请求会带上；
+    //    服务端 readToken 认它）—— 这也是"带不了 token"那句话的例外。
+    //    解析成功（能拿到 blob:）时照旧用 blob，两条路都通。
+    Promise.resolve(resolve(url))
+      .then((next) => { if (active) setShown(next || url); })
+      .catch(() => { if (active) setShown(url); });
     return () => { active = false; };
   }, [url, needsResolve, resolve]);
   return shown;

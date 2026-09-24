@@ -138,8 +138,14 @@ check('生图框体在**有连线时**渲染参考缩略图行（没连线就不
   /slotType === 'image' && getIncomingAssetRefs\(id\)\.length \? <FrameRefRows/.test(canvas));
 check('缩略图那行复用的是视频那套（同一组件：序号角标 + 悬停大图 + × 断线）',
   /omni\s*\n\s*referenceAssets=\{getIncomingAssetRefs\(id\)\}/.test(canvas));
-check('缩略图仍然是「受鉴权地址先解析再显示」（不能直接塞 /api 地址，会 401）',
+check('缩略图仍然是「受鉴权地址先解析再显示」',
   /const shown = useDisplayUrl\(url\);/.test(canvas));
+// ⭐ 2026-09-24 加：解析不到时的**兜底**。素材在 OSS 上时 /api/.../download 会 302 到跨域签名地址，
+//    而那个 bucket 没配 CORS → fetch 拿不到 blob → 图一直是空的（学生"生成成功但不显示"）。
+//    子资源加载（img/video/audio）不吃 CORS，所以退回原始 /api 地址交给标签去取就能显示；
+//    认证走登录时种下的 platform_token cookie（服务端 readToken 认它）。
+check('解析不出可显示地址时**退回原始 /api 地址**（OSS 无 CORS 时的唯一活路）',
+  /setShown\(next \|\| url\)/.test(canvas) && /\.catch\(\(\) => \{ if \(active\) setShown\(url\); \}\)/.test(canvas));
 
 /* ── 反向自检：别把「引用」做成了「凡生成必带参考」 ────────────────────────── */
 check('【反向自检】没有任何一处把参考图塞给不带参考的模态（TEXT/MUSIC）',
