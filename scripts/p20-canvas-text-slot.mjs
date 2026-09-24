@@ -15,6 +15,18 @@ import { ensureClassroom, openDb } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p20-text-slot-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -35,27 +47,29 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
 const { DatabaseSync } = await import('node:sqlite');
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 // ⚠️ 读同一个库必须走 openDb（带 PRAGMA busy_timeout）：本守卫同时 spawn 了一个服务也开着这个库，
 // 默认 busy_timeout=0 一撞就 `database is locked` —— 表现为「偶发 1 秒内失败、单跑又全过」，
 // 2026-09-18 反复踩到（同一类问题也修了 scripts/lib/classroomFixture.mjs）。
-const seedDb = openDb(dbPath);
-const lessons = seedDb.prepare('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 2').all();
+
+const lessons = await arows('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 2');
 assert.equal(lessons.length, 2, '种子数据应至少有两个课时');
 const [textLesson, noCapLesson] = lessons;
 // 生成框体是素材表里 type=GENERATION_BOX 的素材（id 直接当 boxId 用）
-const seedTextBox = (lessonId, model, boxId) => {
-  seedDb.prepare("UPDATE course_lessons SET delivery_mode='CANVAS', classroom_config=? WHERE id=?").run(JSON.stringify({ version: 3 }), lessonId);
-  seedDb.prepare("INSERT INTO course_lesson_material_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES (?,?,?,1,datetime('now'),datetime('now'))").run(`mg-${lessonId}`, lessonId, '生成框体');
-  seedDb.prepare("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?,?,?,?,'GENERATION_BOX',NULL,?,1,datetime('now'),datetime('now'))")
-    .run(boxId, `mg-${lessonId}`, '素材1', '', JSON.stringify({ box: { modality: 'TEXT', model }, content: '用一句话描写春天' }));
+const seedTextBox = async (lessonId, model, boxId) => {
+  await aq("UPDATE course_lessons SET delivery_mode='CANVAS', classroom_config=? WHERE id=?", [JSON.stringify({ version: 3 }), lessonId]);
+  await aq("INSERT INTO course_lesson_material_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES (?,?,?,1,datetime('now'),datetime('now'))", [`mg-${lessonId}`, lessonId, '生成框体']);
+  await aq("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?,?,?,?,'GENERATION_BOX',NULL,?,1,datetime('now'),datetime('now'))", [boxId, `mg-${lessonId}`, '素材1', '', JSON.stringify({ box: { modality: 'TEXT', model }, content: '用一句话描写春天' })]);
 };
-seedTextBox(textLesson.id, 'mock-text-model', 'box-text-1');
-seedDb.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES (?,'text',datetime('now'))").run(textLesson.id);
-seedTextBox(noCapLesson.id, '', 'box-text-2');
-seedDb.prepare('DELETE FROM course_lesson_capabilities WHERE lesson_id=?').run(noCapLesson.id);
+await seedTextBox(textLesson.id, 'mock-text-model', 'box-text-1');
+await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES (?,'text',datetime('now'))", [textLesson.id]);
+await seedTextBox(noCapLesson.id, '', 'box-text-2');
+await aq('DELETE FROM course_lesson_capabilities WHERE lesson_id=?', [noCapLesson.id]);
 // 只开生图、不开文字：验证能力位仍然拦住 TEXT 生成（空能力位会回落成 ['text']，不能作为反例）
-seedDb.prepare("INSERT INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES (?,'image',datetime('now'))").run(noCapLesson.id);
-seedDb.close();
+await aq("INSERT INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES (?,'image',datetime('now'))", [noCapLesson.id]);
+
 
 const port = 18852;
 const server = spawn(process.execPath, ['apps/server/src/index.js'], {
@@ -90,7 +104,7 @@ try {
   for (let i = 0; i < 80; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* not up yet */ }
   // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
     await sleep(100);
   }
 
@@ -118,14 +132,14 @@ try {
   assert.match(text, /本地模拟回复/, `文字内容应可读，实际 ${JSON.stringify(text.slice(0, 60))}`);
   // 2026-09-13（P4 删积分）：任务详情不再带积分字段；扣费看算力池账本（cost_fen）
   assert.equal(job.creditsCharged, undefined, '任务详情不该再有积分字段');
-  const costDb = openDb(dbPath);
-  const costFen = Number(costDb.prepare("SELECT COALESCE(SUM(cost_fen),0) fen FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'").get()?.fen || 0);
-  costDb.close();
+  
+  const costFen = Number((await arow("SELECT COALESCE(SUM(cost_fen),0) fen FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'"))?.fen || 0);
+  
   assert.equal(costFen, 0, `平台承担成本，成功生成不得记录学生售价，实际 ${costFen}`);
   // C3 前置（2026-09-13）：上游给的 token 用量要落进账本（计费口径不变，但账本从此有据可查）
-  const tokenDb = openDb(dbPath);
-  const tokens = tokenDb.prepare("SELECT input_tokens, output_tokens FROM usage_records WHERE modality='TEXT' AND status='SUCCESS' ORDER BY created_at DESC LIMIT 1").get();
-  tokenDb.close();
+  
+  const tokens = await arow("SELECT input_tokens, output_tokens FROM usage_records WHERE modality='TEXT' AND status='SUCCESS' ORDER BY created_at DESC LIMIT 1");
+  
   assert.ok(Number(tokens?.input_tokens) > 0 && Number(tokens?.output_tokens) > 0, `用量记录应带上游 token 数，实际 ${JSON.stringify(tokens)}`);
 
   // 3) 同一个框体只能生成一次（入队前就拦，不跑上游、不扣费）

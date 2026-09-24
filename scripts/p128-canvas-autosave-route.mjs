@@ -23,6 +23,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p128-autosave-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),
@@ -48,16 +63,16 @@ await run(['packages/database/src/seed.js']);
 // 给种子里那个学生一份课包许可（没有许可进不了画布）
 const seeded = {};
 {
-  const db = new DatabaseSync(dbPath);
-  db.exec('PRAGMA busy_timeout = 5000');
-  const student = db.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get();
-  const grant = db.prepare('SELECT series_id FROM student_course_grants WHERE student_id=?').get(student.id);
-  const lesson = db.prepare('SELECT id FROM course_lessons WHERE series_id=? ORDER BY sort LIMIT 1').get(grant.series_id);
+  
+  
+  const student = await arow("SELECT id, org_id FROM users WHERE login='student-2'");
+  const grant = await arow('SELECT series_id FROM student_course_grants WHERE student_id=?', [student.id]);
+  const lesson = await arow('SELECT id FROM course_lessons WHERE series_id=? ORDER BY sort LIMIT 1', [grant.series_id]);
   // 画布只在**课正在上**的时候可用（口径：进操作环境看的是"有没有许可 + 有没有排进这节课的课堂"），
   // 而种子里没有课堂 —— 这里把课时开放成画布课，后面由机构管理员真开一间。
-  db.prepare("UPDATE course_lessons SET status='PUBLISHED', delivery_modes='[\"CANVAS\"]' WHERE id=?").run(lesson.id);
+  await aq("UPDATE course_lessons SET status='PUBLISHED', delivery_modes='[\"CANVAS\"]' WHERE id=?", [lesson.id]);
   Object.assign(seeded, { studentId: student.id, orgId: student.org_id, seriesId: grant.series_id, lessonId: lesson.id });
-  db.close();
+  
 }
 
 const port = 19082;

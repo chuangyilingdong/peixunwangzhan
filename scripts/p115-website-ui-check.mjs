@@ -39,6 +39,21 @@ fs.mkdirSync(shotDir, { recursive: true });
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'website-ui-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const env = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -76,31 +91,27 @@ await run(['packages/database/src/seed.js']);
 await run(['node_modules/vite/bin/vite.js', 'build', 'apps/website', '--config', 'apps/website/vite.config.mjs']);
 
 // 从库里读出「CMS 当前内容」，用来验「接口回来前不渲染」不是空转（得先知道应该出现什么）
-const seedDb = new DatabaseSync(dbPath);
-seedDb.exec('PRAGMA busy_timeout = 5000');
-const homeRow = seedDb.prepare("SELECT published_content FROM website_contents WHERE content_key='HOME'").get();
+
+
+const homeRow = await arow("SELECT published_content FROM website_contents WHERE content_key='HOME'");
 assert.ok(homeRow, 'fixture: seed 之后 HOME 应该已在 website_contents 里');
 // 词条：一条**导入件**（形状与服务端 scripts/import-plaza-works.mjs 写进 works.canvas_snapshot 的一致）。
 // 为什么守卫要自己造：种子里只有画布作品，而「导入件怎么显示、点开是什么样」是本轮新加的展示路径 ——
 // 不造一条，这条路径在守卫里永远验不到（线上有 476 件，但守卫跑的是临时库）。
 {
   const nowIso = new Date().toISOString();
-  const owner = seedDb.prepare("SELECT id, org_id FROM users WHERE login='student-1'").get();
+  const owner = await arow("SELECT id, org_id FROM users WHERE login='student-1'");
   assert.ok(owner, 'fixture: 需要 student-1 来挂导入件');
   // 封面用 1×1 的 data URI：守卫不该依赖外网图床
   const pixel = 'data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==';
-  seedDb.prepare("INSERT OR IGNORE INTO student_projects (id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at) VALUES ('project_guard_import',?,?,'导入件样例','SUBMITTED','{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}',1,?,?,?)")
-    .run(owner.id, owner.org_id, nowIso, nowIso, nowIso);
+  await aq("INSERT OR IGNORE INTO student_projects (id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at) VALUES ('project_guard_import',?,?,'导入件样例','SUBMITTED','{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}',1,?,?,?)", [owner.id, owner.org_id, nowIso, nowIso, nowIso]);
   const snapshot = JSON.stringify({ nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 },
     imported: { source: 'ltai', sourceId: 1, workType: 'image', workTypeLabel: '图片', coverUrl: pixel,
       contentUrls: [pixel], externalUrl: null, authorName: '样例作者', createdAt: '2026-09-01 10:00:00' } });
-  seedDb.prepare("INSERT OR IGNORE INTO works (id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at) VALUES ('work_guard_import','project_guard_import',?,?,'导入件样例','',?,'PUBLISHED',?,1,'guardimport1',?)")
-    .run(owner.id, owner.org_id, snapshot, nowIso, nowIso);
+  await aq("INSERT OR IGNORE INTO works (id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at) VALUES ('work_guard_import','project_guard_import',?,?,'导入件样例','',?,'PUBLISHED',?,1,'guardimport1',?)", [owner.id, owner.org_id, snapshot, nowIso, nowIso]);
   // 另加一条**我们自己的公开画布作品**：广场要同时显示两类，且筛选（类型胶囊）得有两种类型才测得出来
-  seedDb.prepare("INSERT OR IGNORE INTO student_projects (id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at) VALUES ('project_guard_canvas',?,?,'站内画布样例','SUBMITTED','{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}',1,?,?,?)")
-    .run(owner.id, owner.org_id, nowIso, nowIso, nowIso);
-  seedDb.prepare("INSERT OR IGNORE INTO works (id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at) VALUES ('work_guard_canvas','project_guard_canvas',?,?,'站内画布样例','','{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}','PUBLISHED',?,1,'guardcanvas1',?)")
-    .run(owner.id, owner.org_id, nowIso, nowIso);
+  await aq("INSERT OR IGNORE INTO student_projects (id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at) VALUES ('project_guard_canvas',?,?,'站内画布样例','SUBMITTED','{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}',1,?,?,?)", [owner.id, owner.org_id, nowIso, nowIso, nowIso]);
+  await aq("INSERT OR IGNORE INTO works (id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at) VALUES ('work_guard_canvas','project_guard_canvas',?,?,'站内画布样例','','{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}','PUBLISHED',?,1,'guardcanvas1',?)", [owner.id, owner.org_id, nowIso, nowIso]);
   // 再补 13 件（凑到 15 件 = 12 + 3）——**翻页这条必须超过 12 件才测得出来**。
   // 其中第 13 件是网页类型（按映射表算 VibeCoding 分类），让两个分类都有内容可测。
   for (let index = 1; index <= 13; index += 1) {
@@ -108,14 +119,12 @@ assert.ok(homeRow, 'fixture: seed 之后 HOME 应该已在 website_contents 里'
     const projectId = `project_guard_more_${index}`;
     const workId = `work_guard_more_${index}`;
     const orgName = index % 3 === 0 ? '云雀AI创意学院' : '星芽少儿编程';
-    seedDb.prepare("INSERT OR IGNORE INTO student_projects (id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at) VALUES (?,?,?,?, 'SUBMITTED','{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}',1,?,?,?)")
-      .run(projectId, owner.id, owner.org_id, `样例作品 ${index}`, nowIso, nowIso, nowIso);
+    await aq("INSERT OR IGNORE INTO student_projects (id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at) VALUES (?,?,?,?, 'SUBMITTED','{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}',1,?,?,?)", [projectId, owner.id, owner.org_id, `样例作品 ${index}`, nowIso, nowIso, nowIso]);
     const snap = JSON.stringify({ nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 },
       imported: { source: 'ltai', sourceId: 100 + index, workType: type, workTypeLabel: type === 'webpage' ? '网页' : '图片',
         coverUrl: pixel, contentUrls: type === 'webpage' ? [] : [pixel], externalUrl: type === 'webpage' ? 'https://example.com/demo' : null,
         authorName: '样例作者', orgName, createdAt: '2026-09-02 10:00:00' } });
-    seedDb.prepare("INSERT OR IGNORE INTO works (id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at) VALUES (?,?,?,?,?,'',?,'PUBLISHED',?,1,?,?)")
-      .run(workId, projectId, owner.id, owner.org_id, `样例作品 ${index}`, snap, nowIso, `guardmore${index}`, nowIso);
+    await aq("INSERT OR IGNORE INTO works (id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at) VALUES (?,?,?,?,?,'',?,'PUBLISHED',?,1,?,?)", [workId, projectId, owner.id, owner.org_id, `样例作品 ${index}`, snap, nowIso, `guardmore${index}`, nowIso]);
   }
 }
 // ── 学生「我的作品」的 VibeCoding 网页作品夹具（2026-09-20）────────────────────
@@ -125,7 +134,7 @@ assert.ok(homeRow, 'fixture: seed 之后 HOME 应该已在 website_contents 里'
 // 口径㉕ 的逻辑视口下界是 768 → 装得下、不该出现内层滚动条。
 {
   const nowIso = new Date().toISOString();
-  const owner = seedDb.prepare("SELECT id, org_id FROM users WHERE login='student-1'").get();
+  const owner = await arow("SELECT id, org_id FROM users WHERE login='student-1'");
   assert.ok(owner, 'fixture: 需要 student-1 来挂 VibeCoding 作品');
   const entry = '打地鼠.html';
   const page = [
@@ -135,10 +144,8 @@ assert.ok(homeRow, 'fixture: seed 之后 HOME 应该已在 website_contents 里'
   // ⚠️ 这两条**不用** `INSERT OR IGNORE`：第一版把 conversations.status 写成 'ACTIVE'（有 CHECK 只允许
   //    DRAFT/SUBMITTED/ARCHIVED），OR IGNORE 把这一行**静默吞了**，直到下面的外键才报错 ——
   //    临时库每次都是新的，不需要幂等，让它错就当场炸。
-  seedDb.prepare("INSERT INTO vibecoding_conversations(id,org_id,student_id,title,model,files,entry_file,status,created_at,updated_at) VALUES ('conversation_guard_web',?,?,'守卫用网页作品','local-mock','{}',?,'DRAFT',?,?)")
-    .run(owner.org_id, owner.id, entry, nowIso, nowIso);
-  seedDb.prepare("INSERT INTO vibecoding_submissions(id,conversation_id,student_id,org_id,title,files,round,status,submitted_at,created_at,updated_at,entry_file,artifacts,is_public) VALUES ('vibesub_guard_web','conversation_guard_web',?,?,'守卫用网页作品',?,1,'PENDING',?,?,?,?,?,0)")
-    .run(owner.id, owner.org_id, JSON.stringify({ [entry]: page }), nowIso, nowIso, nowIso, entry, JSON.stringify([{ name: entry, kind: 'html', bytes: page.length }]));
+  await aq("INSERT INTO vibecoding_conversations(id,org_id,student_id,title,model,files,entry_file,status,created_at,updated_at) VALUES ('conversation_guard_web',?,?,'守卫用网页作品','local-mock','{}',?,'DRAFT',?,?)", [owner.org_id, owner.id, entry, nowIso, nowIso]);
+  await aq("INSERT INTO vibecoding_submissions(id,conversation_id,student_id,org_id,title,files,round,status,submitted_at,created_at,updated_at,entry_file,artifacts,is_public) VALUES ('vibesub_guard_web','conversation_guard_web',?,?,'守卫用网页作品',?,1,'PENDING',?,?,?,?,?,0)", [owner.id, owner.org_id, JSON.stringify({ [entry]: page }), nowIso, nowIso, nowIso, entry, JSON.stringify([{ name: entry, kind: 'html', bytes: page.length }])]);
   console.log('VibeCoding 网页作品夹具：student-1 一件（页面 700px 高，入口 打地鼠.html）');
 }
 
@@ -200,11 +207,11 @@ try {
   const settle = async () => { await page.waitForLoadState('networkidle').catch(() => {}); await page.waitForTimeout(400); };
   // 写临时库的小工具。口径与 packages/database/src/schema.js 一致：连接必须有 busy_timeout，
   // 写事务用 BEGIN IMMEDIATE（否则「延迟事务升级」会死锁 —— 这是第十六轮挖出来的真根因）。
-  const withDb = (fn) => {
-    const db = new DatabaseSync(dbPath);
-    db.exec('PRAGMA busy_timeout = 5000');
-    db.exec('BEGIN IMMEDIATE');
-    try { const result = fn(db); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; } finally { db.close(); }
+  const withDb = async (fn) => {
+    
+    
+    await aq('BEGIN IMMEDIATE');
+    try { const result = fn(db); await aq('COMMIT'); return result; } catch (error) { await aq('ROLLBACK'); throw error; } finally {  }
   };
   const bodyText = () => page.locator('body').innerText();
   const expectText = async (label, texts) => { const body = await bodyText(); for (const t of texts) if (!body.includes(t)) problems.push(`${label}：页面上找不到「${t}」`); };
@@ -506,10 +513,10 @@ try {
   // ② 灵动课程页头走 CMS 的 MARKETPLACE 键。先把它改成一句**只可能来自 CMS** 的文案：
   //    只有这样才能证明 CMS 通路真的活着 —— 键写错 / 白名单漏了 / 新库没补种，接口都会 404，
   //    然后静默走兜底；而兜底文案与种子文案一模一样，肉眼根本看不出来。
-  const mpSeed = seedDb.prepare("SELECT published_content FROM website_contents WHERE content_key='MARKETPLACE'").get();
+  const mpSeed = await arow("SELECT published_content FROM website_contents WHERE content_key='MARKETPLACE'");
   assert.ok(mpSeed, 'fixture: seed 之后 MARKETPLACE 应该已在库里（新增 CMS 键要同时改白名单 / 标签 / 种子 / 表单四处）');
   const cmsPatch = JSON.stringify({ title: '课包展示（CMS 联调）', lead: '副标题来自 CMS 的联调文案。' });
-  withDb((db) => db.prepare("UPDATE website_contents SET draft_content=?, published_content=?, updated_at=? WHERE content_key='MARKETPLACE'").run(cmsPatch, cmsPatch, new Date().toISOString()));
+  await withDb(async (db) => await aq("UPDATE website_contents SET draft_content=?, published_content=?, updated_at=? WHERE content_key='MARKETPLACE'", [cmsPatch, cmsPatch, new Date().toISOString()]));
 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${base}/marketplace`, { waitUntil: 'domcontentloaded' });
@@ -591,9 +598,9 @@ try {
   // ③ 价格与封面：公开接口**以前根本不下发 priceFen / coverAssetId**，官网那两个引用一直是死的
   //    （缩略图只剩首字、价格那段 UI 永不出现）。这里真给课包写上价格与封面，再看列表渲染没有 ——
   //    这条断言能直接抓到「接口漏字段」这一类回归。
-  const seriesId = withDb((db) => db.prepare("SELECT id FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' AND visibility='PUBLIC' ORDER BY sort LIMIT 1").get()?.id);
+  const seriesId = await withDb(async (db) => (await arow("SELECT id FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' AND visibility='PUBLIC' ORDER BY sort LIMIT 1"))?.id);
   assert.ok(seriesId, 'fixture: 库里应当有一个已发布的平台课包');
-  withDb((db) => db.prepare('UPDATE course_series SET price_fen=?, cover_image_url=?, updated_at=? WHERE id=?').run(19900, '/assets/lingdong-ai-logo.png', new Date().toISOString(), seriesId));
+  await withDb(async (db) => await aq('UPDATE course_series SET price_fen=?, cover_image_url=?, updated_at=? WHERE id=?', [19900, '/assets/lingdong-ai-logo.png', new Date().toISOString(), seriesId]));
   await page.goto(`${base}/marketplace`, { waitUntil: 'domcontentloaded' });
   for (let i = 0; i < 40; i += 1) { if (await page.locator('.mp-row').count()) break; await page.waitForTimeout(250); }
   await settle();
@@ -1004,14 +1011,14 @@ try {
 
   // ── ⑦ 空串 = 运营故意清空（用户报的「我在后台清空了为什么还显示」）─────────────
   // 直接改临时库里 HOME 的已发布内容（服务端每次请求直读库，没有缓存）
-  const mutateHome = (patch) => {
-    const current = withDb((db) => JSON.parse(db.prepare("SELECT published_content FROM website_contents WHERE content_key='HOME'").get().published_content));
+  const mutateHome = async (patch) => {
+    const current = await withDb(async (db) => JSON.parse((await arow("SELECT published_content FROM website_contents WHERE content_key='HOME'")).published_content));
     const next = { ...current, ...patch };
-    withDb((db) => db.prepare("UPDATE website_contents SET draft_content=?, published_content=?, updated_at=? WHERE content_key='HOME'").run(JSON.stringify(next), JSON.stringify(next), new Date().toISOString()));
+    await withDb(async (db) => await aq("UPDATE website_contents SET draft_content=?, published_content=?, updated_at=? WHERE content_key='HOME'", [JSON.stringify(next), JSON.stringify(next), new Date().toISOString()]));
     return next;
   };
 
-  mutateHome({ heroTitle: '' });
+  await mutateHome({ heroTitle: '' });
   await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
   await waitForCopy();
   await settle();
@@ -1023,7 +1030,7 @@ try {
   if (!cleared.accent) problems.push('口径③：只清空了标题，副标题不该跟着消失');
   await shot('07-home-title-cleared');
 
-  mutateHome({ stats: [] });
+  await mutateHome({ stats: [] });
   await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
   await settle();
   const statsSection = await page.locator('.hp-stats').count();
@@ -1052,7 +1059,7 @@ try {
   console.error(serverLog.slice(-2500));
   throw error;
 } finally {
-  seedDb.close();
+  
   if (web) web.kill('SIGTERM');
   server.kill('SIGTERM');
   setTimeout(() => process.exit(process.exitCode || 0), 500).unref();

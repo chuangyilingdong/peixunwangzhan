@@ -22,6 +22,18 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p58-gateway-usage-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -41,25 +53,31 @@ await run(['packages/database/src/seed.js']);
 // computeGateway 会连带加载 lib.js 并把库打开，静态 import 会碰到本地开发库。
 Object.assign(process.env, { PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' });
 const { aggregateUsage, lessonBudgetOverview } = await import('../apps/server/src/services/computeGateway.js');
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 
 // 平台预算按课堂快照归集；学生人数及历史每学生预算不参与计算。
 const seededLessons = { budgeted: '', halfBudgeted: '', noBudget: '' };
 {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  [seededLessons.budgeted, seededLessons.halfBudgeted, seededLessons.noBudget] = db.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 3').all().map(item => item.id);
-  const student = db.prepare("SELECT id,org_id FROM users WHERE role='STUDENT' LIMIT 1").get();
-  const teacher = db.prepare("SELECT id FROM users WHERE role='TEACHER' LIMIT 1").get();
-  db.prepare('UPDATE course_lessons SET per_student_budget_fen=999999,platform_budget_fen=5000 WHERE id=?').run(seededLessons.budgeted);
-  const session = db.prepare(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,platform_budget_fen,created_at,updated_at)
-    SELECT ?,?, ?,series_id,id,?,'ACTIVE',?,datetime('now'),datetime('now') FROM course_lessons WHERE id=?`);
-  session.run('p58_a', 'P58 已知成本', student.org_id, teacher.id, 100, seededLessons.budgeted);
-  session.run('p58_b', 'P58 未知成本', student.org_id, teacher.id, 300, seededLessons.budgeted);
-  session.run('p58_none', 'P58 未配置预算', student.org_id, teacher.id, null, seededLessons.noBudget);
-  const attempt = db.prepare(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,status,cost_source,upstream_cost_fen,sale_snapshot,class_session_id,lesson_id,created_at)
-    VALUES (?,?,1,?,?,'TEXT','SUCCESS',?,?,'{}',?,?,datetime('now'))`);
-  attempt.run('p58_known', 'p58_call_known', student.org_id, student.id, 'REPORTED', 200, 'p58_a', seededLessons.budgeted);
-  attempt.run('p58_unknown', 'p58_call_unknown', student.org_id, student.id, 'UNKNOWN', null, 'p58_b', seededLessons.budgeted);
-  db.close();
+   
+  [seededLessons.budgeted, seededLessons.halfBudgeted, seededLessons.noBudget] = (await arows('SELECT id FROM course_lessons ORDER BY sort LIMIT 3')).map(item => item.id);
+  const student = await arow("SELECT id,org_id FROM users WHERE role='STUDENT' LIMIT 1");
+  const teacher = await arow("SELECT id FROM users WHERE role='TEACHER' LIMIT 1");
+  await aq('UPDATE course_lessons SET per_student_budget_fen=999999,platform_budget_fen=5000 WHERE id=?', [seededLessons.budgeted]);
+  
+  await aq(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,platform_budget_fen,created_at,updated_at)
+    SELECT ?,?, ?,series_id,id,?,'ACTIVE',?,datetime('now'),datetime('now') FROM course_lessons WHERE id=?`, ['p58_a', 'P58 已知成本', student.org_id, teacher.id, 100, seededLessons.budgeted]);
+  await aq(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,platform_budget_fen,created_at,updated_at)
+    SELECT ?,?, ?,series_id,id,?,'ACTIVE',?,datetime('now'),datetime('now') FROM course_lessons WHERE id=?`, ['p58_b', 'P58 未知成本', student.org_id, teacher.id, 300, seededLessons.budgeted]);
+  await aq(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,platform_budget_fen,created_at,updated_at)
+    SELECT ?,?, ?,series_id,id,?,'ACTIVE',?,datetime('now'),datetime('now') FROM course_lessons WHERE id=?`, ['p58_none', 'P58 未配置预算', student.org_id, teacher.id, null, seededLessons.noBudget]);
+  
+  await aq(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,status,cost_source,upstream_cost_fen,sale_snapshot,class_session_id,lesson_id,created_at)
+    VALUES (?,?,1,?,?,'TEXT','SUCCESS',?,?,'{}',?,?,datetime('now'))`, ['p58_known', 'p58_call_known', student.org_id, student.id, 'REPORTED', 200, 'p58_a', seededLessons.budgeted]);
+  await aq(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,status,cost_source,upstream_cost_fen,sale_snapshot,class_session_id,lesson_id,created_at)
+    VALUES (?,?,1,?,?,'TEXT','SUCCESS',?,?,'{}',?,?,datetime('now'))`, ['p58_unknown', 'p58_call_unknown', student.org_id, student.id, 'UNKNOWN', null, 'p58_b', seededLessons.budgeted]);
+  
 }
 
 // 假网关：登录 + 用量日志。第一页刻意凑成**满页 100 条**（真实网关一页 100 条），

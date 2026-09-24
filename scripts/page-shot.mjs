@@ -151,6 +151,18 @@ const freePort = () => new Promise((resolve, reject) => {
 // ── 库：生产库副本（或 --fresh 的种子空库）──────────────────────────────────
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'page-shot-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const uploadRoot = opts.uploads || (opts.prodUploads ? DEFAULT_PROD_UPLOADS : path.join(temp, 'uploads'));
 if (opts.prodUploads) console.log(`上传根 = 生产目录 ${DEFAULT_PROD_UPLOADS}（只读使用；不传就看不到已上传的素材原文件）`);
 else console.log('上传根 = 临时空目录（页面里若该有素材原文件而没显示，加 --prod-uploads 再看一次）');
@@ -177,9 +189,9 @@ if (opts.fresh) {
   console.log(`库 = 生产库副本（源 ${source}）`);
   try {
     // VACUUM INTO 是 SQLite 的一致性快照：对**正在被写**的库也安全，不会拷到撕裂的页。
-    const snapshot = new DatabaseSync(source, { readOnly: true });
-    snapshot.exec(`VACUUM INTO '${dbPath.replace(/'/g, "''")}'`);
-    snapshot.close();
+    
+    await aq(`VACUUM INTO '${dbPath.replace(/'/g, "''")}'`);
+    
   } catch (error) {
     // 回落：连 wal/shm 一起复制（缺 wal 会丢掉最近已提交的事务）
     warn('VACUUM INTO 失败，回落成复制 db+wal+shm', String(error?.message || error));
@@ -191,14 +203,17 @@ if (opts.fresh) {
 // 副本里重设种子账号口令：用**默认 pepper** 算 hash，临时实例也在默认 pepper 下跑 —— 两边必须同一套。
 delete process.env.AUTH_PEPPER;
 const { hashPassword } = await import('@platform/database');
-const conn = new DatabaseSync(dbPath);
-conn.exec('PRAGMA busy_timeout = 5000');
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
+
+
 const accounts = new Map();
 for (const name of [...new Set(routes.map((route) => route.account))]) {
   const account = ACCOUNTS[name];
-  const row = conn.prepare('SELECT id, login, role, status FROM users WHERE login=?').get(account.login);
+  const row = await arow('SELECT id, login, role, status FROM users WHERE login=?', [account.login]);
   if (!row) { fail(`副本里没有账号 ${account.login}`, '生产库里这个账号可能被改名/删掉了，换 --as 别的账号'); continue; }
-  conn.prepare('UPDATE users SET password_hash=? WHERE login=?').run(hashPassword(account.password), account.login);
+  await aq('UPDATE users SET password_hash=? WHERE login=?', [hashPassword(account.password), account.login]);
   accounts.set(name, { ...account, id: row.id, role: row.role, status: row.status });
   if (row.status !== 'ACTIVE') warn(`账号 ${account.login} 在生产库里状态是 ${row.status}`, '登录可能被拒');
 }
@@ -206,10 +221,10 @@ for (const name of [...new Set(routes.map((route) => route.account))]) {
 // 生产库里常常是空的（例如 promo_materials 一条都没有），所以留一个往**副本**里灌数据的口子。
 if (opts.seed || opts.sql) {
   const script = opts.seed ? fs.readFileSync(opts.seed, 'utf8') : opts.sql;
-  conn.exec(script);
+  await aq(script);
   console.log(`已往副本里灌 SQL（${opts.seed || '--sql 内联'}），只影响副本`);
 }
-conn.close();
+
 
 // ── 临时实例（只跑 API）────────────────────────────────────────────────────
 const apiPort = await freePort();
@@ -342,12 +357,12 @@ try {
   if (opts.fixture) {
     const module = await import(pathToFileURL(path.resolve(root, opts.fixture)).href);
     if (typeof module.prepare !== 'function') { console.error(`--fixture 的文件要导出 prepare({ api, db, hashPassword, log })：${opts.fixture}`); process.exit(2); }
-    const fixtureDb = new DatabaseSync(dbPath);
-    fixtureDb.exec('PRAGMA busy_timeout = 5000');
+    
+    
     const api = apiCall;
     console.log(`跑夹具 ${opts.fixture} …`);
     const vars = await module.prepare({ api, db: fixtureDb, hashPassword, log: (message) => console.log(`   ${message}`) });
-    fixtureDb.close();
+    
     Object.assign(opts.vars, vars || {});
     assignRouteTargets();
     console.log(`夹具返回变量：${JSON.stringify(opts.vars)}`);
@@ -450,14 +465,14 @@ try {
     let thenResult = null;
     if (thenRun) {
       const shot = async (suffix = '-then') => { const file = shotName(suffix); await page.screenshot({ path: file, fullPage: true }); shots.push(path.relative(root, file)); return path.relative(root, file); };
-      const thenDb = new DatabaseSync(dbPath);
-      thenDb.exec('PRAGMA busy_timeout = 5000');
+      
+      
       console.log(`   跑 --then ${opts.then} …`);
       try {
         thenResult = await thenRun({ page, context, api: apiCall, db: thenDb, log: (message) => console.log(`      ${message}`), shot, vars: opts.vars, route: route.path });
       } catch (error) {
         fail(`${route.path} 的 --then 自己抛了`, String(error?.message || error).slice(0, 400));
-      } finally { thenDb.close(); }
+      } finally {  }
       if (thenResult && Array.isArray(thenResult.problems)) for (const item of thenResult.problems) fail(`${route.path} --then：${item}`, '');
       if (thenResult && Array.isArray(thenResult.notes)) for (const note of thenResult.notes) console.log(`      · ${note}`);
     }

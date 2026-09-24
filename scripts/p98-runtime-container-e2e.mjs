@@ -22,6 +22,21 @@ import { issueRuntimeKey } from '../apps/server/src/routes/runtimeGateway.js';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p98-runtime-container-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const SECRET = 'p98-runtime-secret';
 const PORT = 19718;
 const IMAGE = String(process.env.DSH_STUDENT_IMAGE || '').trim() || 'dsh-student:local';
@@ -70,29 +85,28 @@ if (imageReady.status !== 0) {
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
-const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-const teacher = db.prepare("SELECT * FROM users WHERE login='teacher-1'").get();
-const student = db.prepare("SELECT * FROM users WHERE login='student-1'").get();
-const lesson = db.prepare("SELECT * FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get();
+ 
+const teacher = await arow("SELECT * FROM users WHERE login='teacher-1'");
+const student = await arow("SELECT * FROM users WHERE login='student-1'");
+const lesson = await arow("SELECT * FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1");
 const now = new Date().toISOString();
-db.prepare('INSERT OR IGNORE INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES (?,?,?,?,?)')
-  .run('p98_grant', student.org_id, student.id, lesson.series_id, now);
+await aq('INSERT OR IGNORE INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES (?,?,?,?,?)', ['p98_grant', student.org_id, student.id, lesson.series_id, now]);
 const sessionId = 'csession_p98';
-db.prepare(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,created_at,updated_at,started_at)
-  VALUES (?,?,?,?,?,?,'ACTIVE','VIBECODING',?,?,?)`).run(sessionId, 'P98 容器端到端', student.org_id, lesson.series_id, lesson.id, teacher.id, now, now, now);
-db.prepare(`INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at)
-  VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)`).run('p98_part', sessionId, student.id, student.org_id, lesson.id, lesson.series_id, teacher.id, now, now);
+await aq(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,created_at,updated_at,started_at)
+  VALUES (?,?,?,?,?,?,'ACTIVE','VIBECODING',?,?,?)`, [sessionId, 'P98 容器端到端', student.org_id, lesson.series_id, lesson.id, teacher.id, now, now, now]);
+await aq(`INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at)
+  VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)`, ['p98_part', sessionId, student.id, student.org_id, lesson.id, lesson.series_id, teacher.id, now, now]);
 // 平台渠道：一条文本、一条读图。读图渠道名字与容器里 PLATFORM_VISION_MODEL 报的一致，
 // 这样「容器报的名字落在哪条渠道的哪个模型」整条链都能被断言。
-db.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({
+await aq('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1', [JSON.stringify({
   provider: 'local-mock', model: '', endpoint: '', allowStudentExternalContent: true,
   channels: [
     { id: TEXT_CHANNEL, name: '文本渠道', provider: 'local-mock', model: TEXT_MODEL, models: [TEXT_MODEL], endpoint: '' },
     { id: VISION_CHANNEL, name: '读图渠道', provider: 'local-mock', model: VISION_MODEL, models: [VISION_MODEL], endpoint: '' },
   ],
   modalityChannels: { TEXT: TEXT_CHANNEL }, modalityBackupChannels: {}, modelRoutes: [], visionChannelId: VISION_CHANNEL,
-}));
-db.close();
+})]);
+
 
 const server = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env: { ...baseEnv, PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
 let logs = '';
@@ -159,23 +173,23 @@ try {
     `${textCall.status} ${textBody.slice(0, 300)}`);
 
   {
-    const audit = new DatabaseSync(dbPath); audit.exec('PRAGMA busy_timeout = 5000');
-    const rows = audit.prepare('SELECT model,modality,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC').all(sessionId);
+     
+    const rows = await arows('SELECT model,modality,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC', [sessionId]);
     check('③ 两通调用都落进了 usage_records（读图与文本都进我们的账）', rows.length >= 2, JSON.stringify(rows.length));
     const visionRow = rows.find((item) => item.model === VISION_MODEL);
     check('③ 读图那一笔记在读图渠道的模型上', Boolean(visionRow), JSON.stringify(rows.map((r) => r.model)));
     check('③ 读图那一笔留了「带图」的证据', /"withImages":true/.test(String(visionRow?.pricing_snapshot || '')), String(visionRow?.pricing_snapshot).slice(0, 240));
     check('③ 文本那一笔记在文本渠道的模型上', rows.some((item) => item.model === TEXT_MODEL), JSON.stringify(rows.map((r) => r.model)));
-    audit.close();
+    
   }
 
   // ⑤ 默认那条路：**不配读图渠道**时，带图的请求跟着模型走（同一条 TEXT 渠道）。
   //    这是平台现在的真实配置（模型自己就能看图），所以这条是主路径，上面那条是可选覆盖。
   {
-    const setter = new DatabaseSync(dbPath); setter.exec('PRAGMA busy_timeout = 5000');
-    const policy = JSON.parse(setter.prepare('SELECT ai_provider_policy FROM platform_settings WHERE id=1').get().ai_provider_policy);
-    setter.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({ ...policy, visionChannelId: '' }));
-    setter.close();
+     
+    const policy = JSON.parse((await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1')).ai_provider_policy);
+    await aq('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1', [JSON.stringify({ ...policy, visionChannelId: '' })]);
+    
 
     const followCall = docker(['exec', '-i', CONTAINER, 'sh', '-lc',
       'cat > /tmp/p98-follow.json && curl -s -X POST -H "content-type: application/json" -H "authorization: Bearer $PLATFORM_GATEWAY_KEY" --data @/tmp/p98-follow.json "$GATEWAY_BASE_URL/chat/completions"'],
@@ -185,11 +199,11 @@ try {
       followCall.status === 0 && new RegExp(`"model"\\s*:\\s*"${TEXT_MODEL}"`).test(followBody),
       `${followCall.status} ${followBody.slice(0, 300)}`);
 
-    const audit = new DatabaseSync(dbPath); audit.exec('PRAGMA busy_timeout = 5000');
-    const row = audit.prepare('SELECT model,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(sessionId);
+     
+    const row = await arow('SELECT model,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1', [sessionId]);
     check('⑤ 这一通也记在文本渠道的模型上（钱一样进我们的账）', row?.model === TEXT_MODEL, String(row?.model));
     check('⑤ 记账里仍然带着「这轮有图」的证据', /"withImages":true/.test(String(row?.pricing_snapshot || '')), String(row?.pricing_snapshot).slice(0, 240));
-    audit.close();
+    
   }
 
   const gate = docker(['exec', CONTAINER, 'sh', '-lc', 'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/']);

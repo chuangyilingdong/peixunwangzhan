@@ -24,7 +24,7 @@
  *   ② `dbPath` 参数保留但**不再使用**（签名兼容）：真正用哪个库由调用方的 env 决定，
  *      转换工具会给每个脚本补上 `process.env.PLATFORM_DB_PATH ||= <它自己的临时库>`。
  */
-const store = () => import('../../../packages/database/src/store.js');
+const store = () => import('../../packages/database/src/store.js');
 
 /** 每个有许可的学生 × 该课包的每节已发布课时 → 一个 ACTIVE 课堂 + 他在名单里。幂等。 */
 export async function ensureClassroom(dbPath) {

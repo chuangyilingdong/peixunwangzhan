@@ -18,6 +18,18 @@ import { ensureClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p28-boxes-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -29,6 +41,9 @@ const baseEnv = {
 // 所以测试进程自己也要指向同一个临时库。
 process.env.PLATFORM_DATA_DIR = temp;
 process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 process.env.DEPLOYMENT_MODE = 'local-mock';
 
 const run = (args) => new Promise((resolve, reject) => {
@@ -110,14 +125,14 @@ try {
   assert.ok(student, '学生登录失败');
 
   const { DatabaseSync } = await import('node:sqlite');
-  const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
+   
   const seedDb2 = seedDb;
-  seedDb.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({ provider: 'local-mock', channels: [{ id: 'p28-video', provider: 'local-mock', model: 'hailuo-h3-i2v', models: ['hailuo-h3-i2v'] }], modalityChannels: { VIDEO: 'p28-video' } }));
-  const lesson = seedDb.prepare("SELECT lesson.id, lesson.series_id FROM course_lessons lesson JOIN student_course_grants grant ON grant.series_id=lesson.series_id JOIN users student ON student.id=grant.student_id WHERE student.login='student-2' AND grant.revoked_at IS NULL AND lesson.status='PUBLISHED' ORDER BY lesson.sort LIMIT 1").get();
+  await aq('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1', [JSON.stringify({ provider: 'local-mock', channels: [{ id: 'p28-video', provider: 'local-mock', model: 'hailuo-h3-i2v', models: ['hailuo-h3-i2v'] }], modalityChannels: { VIDEO: 'p28-video' } })]);
+  const lesson = await arow("SELECT lesson.id, lesson.series_id FROM course_lessons lesson JOIN student_course_grants grant ON grant.series_id=lesson.series_id JOIN users student ON student.id=grant.student_id WHERE student.login='student-2' AND grant.revoked_at IS NULL AND lesson.status='PUBLISHED' ORDER BY lesson.sort LIMIT 1");
   assert.ok(lesson?.id, '学生应持有目标课包许可');
 
   // 本用例只发布一个目标课时；其余种子课时未配置发布能力，不参与本次快照。
-  seedDb.prepare("UPDATE course_lessons SET status='ARCHIVED' WHERE series_id=? AND id<>?").run(lesson.series_id, lesson.id);
+  await aq("UPDATE course_lessons SET status='ARCHIVED' WHERE series_id=? AND id<>?", [lesson.series_id, lesson.id]);
   // 预置素材需要真实的公开文件记录，才能解析为上游可抓取地址。
   seedDb2.prepare("INSERT INTO file_assets(id,owner_type,storage_kind,file_name,mime_type,category,visibility,status,created_at,updated_at) VALUES ('asset-seed','PLATFORM','INTERNAL_PROXY','seed.png','image/png','MEDIA_ASSET','PUBLIC_PLATFORM','ACTIVE',?,?)").run(new Date().toISOString(), new Date().toISOString());
 
@@ -158,10 +173,10 @@ try {
   assert.deepEqual(againLesson.materialGroups[0].materials.map((material) => material.id), savedMaterialIds, '二次保存后素材 id 不应变化');
   assert.deepEqual(againLesson.generationBoxes.map((box) => box.id), savedBoxIds, '二次保存后框体 id 不应变化');
 
-  seedDb.prepare("UPDATE course_series SET cover_image_url='https://example.com/p28.png' WHERE id=?").run(lesson.series_id);
+  await aq("UPDATE course_series SET cover_image_url='https://example.com/p28.png' WHERE id=?", [lesson.series_id]);
   const published = await api(`/api/admin/course-series/${lesson.series_id}/versions`, { method: 'POST', token: rootToken, body: { version: 'p28.1' } });
   assert.equal(published.status, 200, JSON.stringify(published.data));
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
 
   // 4) 学生项目按素材顺序下发框体（含预填提示词与预置素材）
   const project = await api('/api/student/projects', { method: 'POST', token: student, body: { courseLessonId: lesson.id, title: 'P28 框体即素材' } });

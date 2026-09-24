@@ -22,6 +22,18 @@ import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p52-lesson-model-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -66,7 +78,7 @@ const login = async (loginName, password) => (await api('/api/auth/login', { met
 try {
   for (let i = 0; i < 80; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* wait */ } await sleep(100); }
   // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
   const rootAdmin = (await login('root', 'admin123')).token;
   const orgAdmin = await login('org-admin', 'org123');
   const student = await login('student-2', 'study123');
@@ -130,7 +142,7 @@ try {
   // 批次 B：许可只是第①②步，进课还要「老师在某个**进行中的课堂**里把他加进名单」。
   // ⚠️ 必须在**发许可之后**再跑夹具 —— 它只对已有许可的课包建课堂，早跑等于没跑
   //    （启动时那次是给种子课包建的，覆盖不到这里刚建的课包）。
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
 
   // 批次 D（班级退场）：原来这里「把三个课时排进班级课单」——课单已退场，
   // 「学生能进哪节课」现在只由**课堂名单**决定，所以这一步换成「确认夹具已经把他排进了课堂」。
@@ -143,7 +155,7 @@ try {
   check('双类型课时：画布入口可用', canvasEntry.status === 200, `${canvasEntry.status} ${canvasEntry.error?.code || ''}`);
   // 批次 B：一个课堂只带**一种**入口类型（既定设计），所以「双类型课时两个入口并列」现在的含义是
   // 「两个入口各自在对应类型的课堂下放行」。验第二半之前先把入口类型切成 VIBECODING。
-  switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
+  await switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
   const vibeEntry = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student.token, body: { lessonId: dual.id, title: 'P52 Vibe 入口' } });
   check('双类型课时：VibeCoding 入口也可用（并列）', vibeEntry.status === 200, `${vibeEntry.status} ${vibeEntry.error?.code || ''}`);
   const vibeOnlyCanvas = await api('/api/student/projects', { method: 'POST', token: student.token, body: { courseLessonId: vibeOnly.id, title: '不该成功' } });

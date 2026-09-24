@@ -38,6 +38,21 @@ const PORT = Number(process.env.BENCH_PORT || 18910);
 const temp = process.env.BENCH_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'lingdong-bench-'));
 fs.mkdirSync(temp, { recursive: true });
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const freshDb = !fs.existsSync(dbPath);
 
 const baseEnv = {
@@ -72,18 +87,18 @@ if (freshDb) {
 }
 
 // 给每节已发布课时开一个 ACTIVE 课堂（夹具**不造许可**：许可来自种子里的演示授权）
-const created = ensureClassroom(dbPath);
+const created = await ensureClassroom(dbPath);
 console.log(`[bench] 课堂夹具建了 ${created.length} 个 ACTIVE 课堂`);
 
 // 入口类型改成 VIBECODING —— 「客户端上课」这条路只认 VibeCoding 课（登录门拿 client-context）
-const db = new DatabaseSync(dbPath);
-db.exec('PRAGMA busy_timeout = 5000');
-const sessions = db.prepare("SELECT session.id, session.lesson_id, lesson.title AS lesson_title FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id WHERE session.status='ACTIVE'").all();
+
+
+const sessions = await arows("SELECT session.id, session.lesson_id, lesson.title AS lesson_title FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id WHERE session.status='ACTIVE'");
 for (const session of sessions) {
-  db.prepare("UPDATE class_sessions SET delivery_mode='VIBECODING', updated_at=? WHERE id=?").run(new Date().toISOString(), session.id);
+  await aq("UPDATE class_sessions SET delivery_mode='VIBECODING', updated_at=? WHERE id=?", [new Date().toISOString(), session.id]);
 }
-const roster = db.prepare("SELECT part.student_id, user.login, session.id AS session_id, session.lesson_id FROM session_students part JOIN users user ON user.id = part.student_id JOIN class_sessions session ON session.id = part.session_id WHERE session.status='ACTIVE' AND part.status='ACTIVE'").all();
-db.close();
+const roster = await arows("SELECT part.student_id, user.login, session.id AS session_id, session.lesson_id FROM session_students part JOIN users user ON user.id = part.student_id JOIN class_sessions session ON session.id = part.session_id WHERE session.status='ACTIVE' AND part.status='ACTIVE'");
+
 console.log(`[bench] 把 ${sessions.length} 个课堂改成了 VIBECODING`);
 for (const item of roster) console.log(`[bench]   名单：${item.login} → 课堂 ${item.session_id} / 课时 ${item.lesson_id}`);
 

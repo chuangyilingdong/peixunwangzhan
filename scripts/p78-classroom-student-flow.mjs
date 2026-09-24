@@ -18,6 +18,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p78-grant-gate-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),
@@ -41,17 +56,17 @@ await run(['packages/database/src/seed.js']);
 // 起点：把种子给 student-2 的那条许可**删掉**（模拟「机构还没分给他」）
 const seeded = {};
 {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const student = db.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get();
-  const grant = db.prepare('SELECT id, series_id FROM student_course_grants WHERE student_id=?').get(student.id);
-  const lesson = db.prepare('SELECT id FROM course_lessons WHERE series_id=? ORDER BY sort LIMIT 1').get(grant.series_id);
-  db.prepare('DELETE FROM student_course_grants WHERE id=?').run(grant.id);
+   
+  const student = await arow("SELECT id, org_id FROM users WHERE login='student-2'");
+  const grant = await arow('SELECT id, series_id FROM student_course_grants WHERE student_id=?', [student.id]);
+  const lesson = await arow('SELECT id FROM course_lessons WHERE series_id=? ORDER BY sort LIMIT 1', [grant.series_id]);
+  await aq('DELETE FROM student_course_grants WHERE id=?', [grant.id]);
   // ⚠️ 两条入口都要能测：种子课时默认只开画布，这里开成双入口并开放 text 能力
   //    （否则 VibeCoding 那条会被「当前课时不是 VibeCoding 课堂」正确拒掉，测不到许可门禁）
-  db.prepare("UPDATE course_lessons SET delivery_modes='[\"CANVAS\",\"VIBECODING\"]' WHERE id=?").run(lesson.id);
-  db.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
+  await aq("UPDATE course_lessons SET delivery_modes='[\"CANVAS\",\"VIBECODING\"]' WHERE id=?", [lesson.id]);
+  await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))", [lesson.id]);
   Object.assign(seeded, { studentId: student.id, orgId: student.org_id, seriesId: grant.series_id, lessonId: lesson.id });
-  db.close();
+  
 }
 
 const port = 19078;
@@ -64,17 +79,17 @@ async function api(pathname, { method = 'GET', token, body } = {}) {
   const j = await r.json().catch(() => ({}));
   return { status: r.status, data: j?.data ?? j, error: j?.error || null };
 }
-const grantNow = () => {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const existing = db.prepare('SELECT id FROM student_course_grants WHERE student_id=? AND series_id=?').get(seeded.studentId, seeded.seriesId);
-  if (existing) db.prepare('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL WHERE id=?').run(existing.id);
-  else db.prepare(`INSERT INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES (?,?,?,?,datetime('now'))`).run('p78_grant', seeded.orgId, seeded.studentId, seeded.seriesId);
-  db.close();
+const grantNow = async () => {
+   
+  const existing = await arow('SELECT id FROM student_course_grants WHERE student_id=? AND series_id=?', [seeded.studentId, seeded.seriesId]);
+  if (existing) await aq('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL WHERE id=?', [existing.id]);
+  else await aq(`INSERT INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES (?,?,?,?,datetime('now'))`, ['p78_grant', seeded.orgId, seeded.studentId, seeded.seriesId]);
+  
 };
-const revokeNow = () => {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  db.prepare("UPDATE student_course_grants SET revoked_at=datetime('now'),revoke_reason='P78 守卫：平台兜底撤销' WHERE student_id=? AND series_id=?").run(seeded.studentId, seeded.seriesId);
-  db.close();
+const revokeNow = async () => {
+   
+  await aq("UPDATE student_course_grants SET revoked_at=datetime('now'),revoke_reason='P78 守卫：平台兜底撤销' WHERE student_id=? AND series_id=?", [seeded.studentId, seeded.seriesId]);
+  
 };
 
 try {
@@ -104,7 +119,7 @@ try {
 
   /* ② 有许可还不够：**必须被老师加进这节课的课堂**（2026-09-13 批次 B 取消免课堂通道）
      → 三层门禁：机构授权 → 学员许可 → 课堂名单；这里验后两层 */
-  grantNow();
+  await grantNow();
   const blockedNoClassroom = await createProject();
   check('② 分了课包但没进课堂：仍然进不去（NOT_IN_CLASSROOM）',
     blockedNoClassroom.error?.code === 'NOT_IN_CLASSROOM', JSON.stringify(blockedNoClassroom).slice(0, 220));
@@ -189,16 +204,16 @@ try {
   check('旧课堂创作不能借新课堂修改', legacyUpdate.status >= 400);
   await api(`/api/org/sessions/${next.data.id}/end`, { method: 'POST', token: teacher });
   {
-    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-    db.prepare("INSERT INTO usage_records(id,org_id,user_id,class_session_id,modality,model,credits_charged,status,pricing_snapshot,created_at,cost_fen) VALUES ('p78_success',?,?,?,'TEXT','real-model',0,'SUCCESS','{\"provider\":\"real\"}',datetime('now'),0)").run(seeded.orgId, seeded.studentId, next.data.id);
-    db.close();
+     
+    await aq("INSERT INTO usage_records(id,org_id,user_id,class_session_id,modality,model,credits_charged,status,pricing_snapshot,created_at,cost_fen) VALUES ('p78_success',?,?,?,'TEXT','real-model',0,'SUCCESS','{\"provider\":\"real\"}',datetime('now'),0)", [seeded.orgId, seeded.studentId, next.data.id]);
+    
     await run(['--input-type=module', '-e', `const {settleSessionStudents}=await import('./apps/server/src/services/classroomSessions.js'); settleSessionStudents({sessionId:${JSON.stringify(next.data.id)}}); settleSessionStudents({sessionId:${JSON.stringify(next.data.id)}});`]);
     const detail = await api(`/api/org/sessions/${next.data.id}`, { token: teacher });
     check('结束后真实成功不修改已结课结果，重复结算保持冻结', detail.data.students.find(x=>x.studentId===seeded.studentId)?.status === 'INCOMPLETE');
   }
 
   /* ④ 平台兜底撤销 → 立刻又进不去（不给缓存留缝） */
-  revokeNow();
+  await revokeNow();
   const revokedProject = await createProject();
   check('④ 撤销后：立刻进不去（COURSE_GRANT_REQUIRED）', revokedProject.error?.code === 'COURSE_GRANT_REQUIRED', JSON.stringify(revokedProject).slice(0, 220));
 
@@ -213,25 +228,23 @@ try {
      一点「开始上课」就会造出「同一个学生两场 ACTIVE 课堂」→ 所以开课必须复查。
      ⚠️ 这一段**故意放在最后**：它往名单里塞"异常占用"，会挡住后面任何"再把这个学生加进别处"的动作。
      直写库来模拟历史数据是**有意**的 —— 用 API 根本造不出这种名单，那正是这条断言要守的东西。 */
-  const writeLegacyRoster = (targetSessionId) => {
-    const db = new DatabaseSync(dbPath);
-    db.exec('PRAGMA busy_timeout = 5000');
-    const row = db.prepare('SELECT id, org_id, lesson_id, series_id FROM class_sessions WHERE id=?').get(targetSessionId);
+  const writeLegacyRoster = async (targetSessionId) => {
+    
+    
+    const row = await arow('SELECT id, org_id, lesson_id, series_id FROM class_sessions WHERE id=?', [targetSessionId]);
     const now = new Date().toISOString();
-    db.prepare(
-      "INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) " +
-      "VALUES (?,?,?,?,?,?, 'PENDING', NULL, ?, ?)",
-    ).run(`sess_stu_legacy_${Math.random().toString(36).slice(2, 8)}`, row.id, seeded.studentId, row.org_id, row.lesson_id, row.series_id, now, now);
-    db.close();
+    await aq("INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) " +
+      "VALUES (?,?,?,?,?,?, 'PENDING', NULL, ?, ?)", [`sess_stu_legacy_${Math.random().toString(36).slice(2, 8)}`, row.id, seeded.studentId, row.org_id, row.lesson_id, row.series_id, now, now]);
+    
   };
   // ⑥a 学生此刻是自由的 → 照常能开课（这条复查只拦异常占用，**不能误伤正常开课**）
   const busySession = await api('/api/org/sessions', { method: 'POST', token: admin, body: { lessonId: seeded.lessonId, title: 'P78 占用中的课堂' } });
-  writeLegacyRoster(busySession.data.id);
+  await writeLegacyRoster(busySession.data.id);
   const busyStart = await api(`/api/org/sessions/${busySession.data.id}/start`, { method: 'POST', token: admin });
   check('⑥a 学生自由时照常能开课（复查不误伤正常开课）', busyStart.status === 200, JSON.stringify(busyStart).slice(0, 200));
   // ⑥b 现在他被上一条占着（ACTIVE），另一场同样"有历史名单"的课就**不许再开**
   const legacySession = await api('/api/org/sessions', { method: 'POST', token: admin, body: { lessonId: seeded.lessonId, title: 'P78 历史名单课堂' } });
-  writeLegacyRoster(legacySession.data.id);
+  await writeLegacyRoster(legacySession.data.id);
   const legacyStart = await api(`/api/org/sessions/${legacySession.data.id}/start`, { method: 'POST', token: admin });
   check('⑥b 名单里有异常占用（历史数据）时，开课必须被拒并说清占用的课堂',
     legacyStart.status === 409 && legacyStart.error?.code === 'STUDENT_IN_OTHER_SESSION' && /另一场课堂/.test(legacyStart.error?.message || ''),
@@ -249,12 +262,12 @@ try {
     // 直接清库（临时库，跟 ⑥ 的 writeLegacyRoster 一个路数）：把学生从那几节留下的
     // PENDING/ACTIVE 参与记录里摘出来 —— 占用判据就是 `part.status IN ('PENDING','ACTIVE')
     // AND session.status IN ('PENDING','ACTIVE')`（activeParticipationFor）。
-    const staleDb = new DatabaseSync(dbPath); staleDb.exec('PRAGMA busy_timeout = 5000');
-    staleDb.prepare("UPDATE session_students SET status='INCOMPLETE' WHERE student_id=? AND status IN ('PENDING','ACTIVE')").run(seeded.studentId);
-    staleDb.exec("UPDATE class_sessions SET status='ENDED', ended_at=datetime('now') WHERE status IN ('PENDING','ACTIVE')");
-    staleDb.close();
+     
+    await aq("UPDATE session_students SET status='INCOMPLETE' WHERE student_id=? AND status IN ('PENDING','ACTIVE')", [seeded.studentId]);
+    await aq("UPDATE class_sessions SET status='ENDED', ended_at=datetime('now') WHERE status IN ('PENDING','ACTIVE')");
+    
     // 前面第 ④ 节故意把许可撤了（那是它要验的），这一节要能进课 → 先把许可补回来。
-    grantNow();
+    await grantNow();
     const session = await api('/api/org/sessions', { method: 'POST', token: teacher, body: { lessonId: seeded.lessonId, deliveryMode: 'CANVAS', title: 'P78 提交后重进' } });
     const added2 = await api(`/api/org/sessions/${session.data.id}/students`, { method: 'POST', token: teacher, body: { studentIds: [seeded.studentId] } });
     const started2 = await api(`/api/org/sessions/${session.data.id}/start`, { method: 'POST', token: teacher });

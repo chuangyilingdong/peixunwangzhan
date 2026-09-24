@@ -18,6 +18,18 @@ import { pathToFileURL } from 'node:url';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p47-docimage-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const uploadRoot = path.join(temp, 'uploads');
 process.env.PLATFORM_DATA_DIR = temp;
 process.env.PLATFORM_DB_PATH = dbPath;
@@ -46,30 +58,31 @@ const photo = putAsset('file_photo', '2026/09/photo.png', PNG, 'image/png', '照
 const doc = putAsset('file_doc', '2026/09/notes.pdf', PDF, 'application/pdf', '笔记.pdf');
 
 const { DatabaseSync } = await import('node:sqlite');
-const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-db.exec('PRAGMA foreign_keys = OFF');
-const now = new Date().toISOString();
-const asset = (item) => db.prepare(
-  `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
-   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-).run(item.id, 'USER', 'o1', 'u1', 'INTERNAL_PROXY', null, item.key, null, null, item.name, item.mime, 8, 'x', 'MEDIA_ASSET', 'PUBLIC_PLATFORM', 'ACTIVE', 'NOT_REQUIRED', null, '{}', 'u1', now, now);
-asset(photo); asset(doc);
+ 
 
-db.prepare("INSERT INTO vibecoding_conversations(id,org_id,student_id,title,files,entry_file,status,created_at,updated_at) VALUES('c1','o1','u1','t','{}','index.html','DRAFT',?,?)").run(now, now);
+const now = new Date().toISOString();
+const asset = async (item) => await aq(`INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
+   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [item.id, 'USER', 'o1', 'u1', 'INTERNAL_PROXY', null, item.key, null, null, item.name, item.mime, 8, 'x', 'MEDIA_ASSET', 'PUBLIC_PLATFORM', 'ACTIVE', 'NOT_REQUIRED', null, '{}', 'u1', now, now]);
+await asset(photo); await asset(doc);
+
+await aq("INSERT INTO vibecoding_conversations(id,org_id,student_id,title,files,entry_file,status,created_at,updated_at) VALUES('c1','o1','u1','t','{}','index.html','DRAFT',?,?)", [now, now]);
 const attachments = JSON.stringify([
   { id: 'file_photo', name: '照片.png', url: 'https://x/api/public/file-assets/file_photo/download', mime: 'image/png', inline: '' },
   { id: 'file_doc', name: '笔记.pdf', url: 'https://x/api/public/file-assets/file_doc/download', mime: 'application/pdf', inline: '' },
 ]);
-db.prepare("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES('m_user','c1','user','用这张图做 PPT','SUCCEEDED',?,?)").run(attachments, now);
-db.prepare("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES('m_ai','c1','assistant','好的','SUCCEEDED',NULL,?)").run(new Date(Date.now() + 1000).toISOString());
+await aq("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES('m_user','c1','user','用这张图做 PPT','SUCCEEDED',?,?)", [attachments, now]);
+await aq("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES('m_ai','c1','assistant','好的','SUCCEEDED',NULL,?)", [new Date(Date.now() + 1000).toISOString()]);
 const PPT_CONTENT = JSON.stringify({ title: '图片测试', slides: [{ title: '照片页', bullets: ['说明'], image: { attachment: 1 } }] });
-db.prepare("INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES('a1','c1','m_ai','演示.pptx','pptx',?,?,1,?,?)").run(PPT_CONTENT, Buffer.byteLength(PPT_CONTENT), now, now);
+await aq("INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES('a1','c1','m_ai','演示.pptx','pptx',?,?,1,?,?)", [PPT_CONTENT, Buffer.byteLength(PPT_CONTENT), now, now]);
 // 一件老产物：message_id 为空（流式期间落库、还没回填就被读了）
-db.prepare("INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES('a2','c1',NULL,'老的.pptx','pptx','{}',2,1,?,?)").run(now, now);
-db.close();
+await aq("INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES('a2','c1',NULL,'老的.pptx','pptx','{}',2,1,?,?)", [now, now]);
+
 
 const { attachmentImageMap } = await import(pathToFileURL(path.join(root, 'apps/server/src/routes/vibecoding.js')).href);
 const { getArtifact, setArtifactAttachmentImages } = await import(pathToFileURL(path.join(root, 'apps/server/src/services/vibecodingArtifacts.js')).href);
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 
 let failures = 0;
 const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`); else { failures += 1; console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`); } };
@@ -81,9 +94,9 @@ check('非图片附件不占编号（序号 2 不该有东西）', images.get(2)
 // 数据库列名写法也要认（调用方可能直接传行对象）——写错就静默没图，属于同一个坑
 check('直接传数据库行对象（message_id）也能取到', (await attachmentImageMap('c1', { message_id: 'm_ai', kind: 'pptx', content: PPT_CONTENT })).size === 1);
 await setArtifactAttachmentImages('a1', [{ index: 1, fileId: 'file_photo' }]);
-const clearDb = new DatabaseSync(dbPath); clearDb.exec('PRAGMA busy_timeout = 5000');
-clearDb.prepare('DELETE FROM vibecoding_messages WHERE conversation_id=?').run('c1');
-clearDb.close();
+ 
+await aq('DELETE FROM vibecoding_messages WHERE conversation_id=?', ['c1']);
+
 check('清空聊天后产物固化的附件图仍可读取', (await attachmentImageMap('c1', await getArtifact('c1', 'a1'))).get(1)?.equals(PNG) === true);
 check('messageId 缺失时不报错、只是没有图', (await attachmentImageMap('c1', { name: 'x' })).size === 0 && (await attachmentImageMap('c1', null)).size === 0);
 check('不存在的那一轮不会误取别人的图', (await attachmentImageMap('c1', { messageId: 'm_user' })).size === 0);

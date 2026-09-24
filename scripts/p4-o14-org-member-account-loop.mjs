@@ -3,9 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const root=path.resolve(process.cwd()); const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ai-kids-p4-o14-')); const env={...process.env,PLATFORM_DATA_DIR:dir,PLATFORM_DB_PATH:path.join(dir,'platform.db')};
 const run=(args)=>new Promise((resolve,reject)=>{const c=spawn(process.execPath,args,{cwd:root,env,stdio:['ignore','pipe','pipe']});let o='',e='';c.stdout.on('data',x=>o+=x);c.stderr.on('data',x=>e+=x);c.once('close',code=>code?reject(new Error(e||o)):resolve(o));});
-await run(['packages/database/src/db.js','--init']); await run(['packages/database/src/seed.js']); const db = new DatabaseSync(env.PLATFORM_DB_PATH); db.exec('PRAGMA busy_timeout = 5000'); db.prepare("UPDATE organizations SET student_seats=20 WHERE id=(SELECT org_id FROM users WHERE login='org-admin')").run(); db.close(); const port=18814; const server=spawn(process.execPath,['apps/server/src/index.js'],{cwd:root,env:{...env,PORT:String(port)},stdio:'ignore'}); const base=`http://127.0.0.1:${port}/api`;
+await run(['packages/database/src/db.js','--init']); await run(['packages/database/src/seed.js']);   await aq("UPDATE organizations SET student_seats=20 WHERE id=(SELECT org_id FROM users WHERE login='org-admin')");  const port=18814; const server=spawn(process.execPath,['apps/server/src/index.js'],{cwd:root,env:{...env,PORT:String(port)},stdio:'ignore'}); const base=`http://127.0.0.1:${port}/api`;
 async function wait(){for(let i=0;i<50;i++){try{if((await fetch(`http://127.0.0.1:${port}/health`)).ok)return}catch{} await new Promise(r=>setTimeout(r,100));}throw Error('server unavailable')}
 async function login(login,password){const r=await fetch(`${base}/auth/login`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({login,password})});return {status:r.status,cookie:r.headers.get('set-cookie'),body:await r.json()}}
 async function req(cookie,p,method='GET',body){const r=await fetch(base+p,{method,headers:{'content-type':'application/json',cookie},body:body===undefined?undefined:JSON.stringify(body)});return {status:r.status,body:await r.json()}}

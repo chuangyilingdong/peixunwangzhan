@@ -34,6 +34,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 
 const arg = (name, fallback) => {
   const index = process.argv.indexOf(name);
@@ -122,16 +125,15 @@ async function main() {
   const works = await fetchList();
   log(`[导入] 共 ${works.length} 件`);
 
-  const db = new DatabaseSync(DB_PATH);
-  db.exec('PRAGMA busy_timeout = 15000');
+  
+  
   const now = new Date().toISOString();
 
   // 机构（一个）：导入件挂在它下面，广场详情页会显示机构名
   // ⚠️ --dry-run 时连机构/账号也不写：干跑就应该是只读的（否则"试一下"会留下一堆占位账号）
-  if (!DRY_RUN) db.prepare(`INSERT OR IGNORE INTO organizations
+  if (!DRY_RUN) await aq(`INSERT OR IGNORE INTO organizations
       (id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,contact,created_at,updated_at)
-      VALUES (?,?, 'ACTIVE', ?, ?, 1, 3, 0, '{}', ?, ?)`)
-    .run(ORG_ID, ORG_NAME, now, '2030-01-01T00:00:00.000Z', now, now);
+      VALUES (?,?, 'ACTIVE', ?, ?, 1, 3, 0, '{}', ?, ?)`, [ORG_ID, ORG_NAME, now, '2030-01-01T00:00:00.000Z', now, now]);
 
   const authors = new Map();
   for (const work of works) {
@@ -142,10 +144,9 @@ async function main() {
     // password_hash 放一个不可登录的占位：这些是**导入作品的署名账号**，
     // 不是真人学生（没有密码，也进不了任何入口）。
     if (DRY_RUN) break;
-    db.prepare(`INSERT OR IGNORE INTO users
+    await aq(`INSERT OR IGNORE INTO users
         (id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at)
-        VALUES (?,?,?,?, 'STUDENT', '[]', ?, 'ACTIVE', ?, ?)`)
-      .run(id, ORG_ID, loginFor(author), author, `imported-no-login:${slug(author)}`, now, now);
+        VALUES (?,?,?,?, 'STUDENT', '[]', ?, 'ACTIVE', ?, ?)`, [id, ORG_ID, loginFor(author), author, `imported-no-login:${slug(author)}`, now, now]);
   }
   log(`[导入] 机构 1 个、署名账号 ${authors.size} 个`);
 
@@ -179,28 +180,26 @@ async function main() {
 
     if (DRY_RUN) { if (index < 3) log(`  · 样例：${title} / ${author} / ${workType} / 封面 ${coverRelative || '（没下）'}`); continue; }
 
-    db.prepare(`INSERT OR IGNORE INTO student_projects
+    await aq(`INSERT OR IGNORE INTO student_projects
         (id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at)
-        VALUES (?,?,?,?, 'SUBMITTED', '{"nodes":[],"edges":[],"viewport":{"x":0,"y":0,"zoom":1}}', 1, ?, ?, ?)`)
-      .run(projectId, studentId, ORG_ID, title, submittedAt, submittedAt, submittedAt);
+        VALUES (?,?,?,?, 'SUBMITTED', '{"nodes":[],"edges":[],"viewport":{"x":0,"y":0,"zoom":1}}', 1, ?, ?, ?)`, [projectId, studentId, ORG_ID, title, submittedAt, submittedAt, submittedAt]);
 
     const snapshot = JSON.stringify({
       nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 },   // 保持画布形状，别的读方不会炸
       imported: { source: 'ltai', sourceId: Number(work.id), workType, workTypeLabel: TYPE_LABEL[workType] || workType,
         coverUrl: mediaUrlOf(coverRelative), contentUrls, externalUrl, authorName: author, createdAt: work.createTime || null },
     });
-    db.prepare(`INSERT OR IGNORE INTO works
+    await aq(`INSERT OR IGNORE INTO works
         (id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at)
-        VALUES (?,?,?,?,?, '', ?, 'PUBLISHED', ?, 1, ?, ?)`)
-      .run(workId, projectId, studentId, ORG_ID, title, snapshot, submittedAt, `ltai${sourceId}${slug(title).slice(0, 6)}`, now);
+        VALUES (?,?,?,?,?, '', ?, 'PUBLISHED', ?, 1, ?, ?)`, [workId, projectId, studentId, ORG_ID, title, snapshot, submittedAt, `ltai${sourceId}${slug(title).slice(0, 6)}`, now]);
     created += 1;
     if ((index + 1) % 50 === 0) log(`  … 已处理 ${index + 1}/${works.length}（媒体成功 ${mediaOk} / 失败 ${mediaFail}）`);
   }
 
-  const total = db.prepare("SELECT COUNT(*) n FROM works WHERE id LIKE 'work_ltai_%'").get().n;
-  db.close();
+  const total = (await arow("SELECT COUNT(*) n FROM works WHERE id LIKE 'work_ltai_%'")).n;
+  
   log(`[导入] 完成：本轮写入 ${created} 条，库里累计导入件 ${total}`);
   log(`[导入] 媒体：成功 ${mediaOk} 个、失败 ${mediaFail} 个；外链作品 ${external} 件`);
 }
 
-await main().catch((error) => { console.error('[导入] 失败：', error); process.exit(1); });
+await (await main()).catch((error) => { console.error('[导入] 失败：', error); process.exit(1); });

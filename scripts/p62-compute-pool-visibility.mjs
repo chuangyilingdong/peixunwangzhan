@@ -11,6 +11,21 @@ import { createClassroom } from './lib/classroomApi.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p62-pool-visible-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),
@@ -32,19 +47,19 @@ await run(['packages/database/src/seed.js']);
 
 const seeded = { seriesId: '', lessonId: '', lessonSecondId: '', classId: '' };
 {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const lesson = db.prepare('SELECT id, series_id FROM course_lessons ORDER BY sort LIMIT 1').get();
+   
+  const lesson = await arow('SELECT id, series_id FROM course_lessons ORDER BY sort LIMIT 1');
   seeded.lessonId = lesson.id; seeded.seriesId = lesson.series_id;
   // 候选池那条要用**另一节课**：夹具已经把这节课开成课堂了，同一节课上他会被判「已在别的课堂」。
   // 池子是**按课包**算的，所以换一节课不影响口径。
-  seeded.lessonSecondId = db.prepare('SELECT id FROM course_lessons WHERE series_id=? AND id<>? ORDER BY sort LIMIT 1').get(lesson.series_id, lesson.id)?.id || lesson.id;
-  seeded.classId = db.prepare('SELECT id FROM classes LIMIT 1').get()?.id || '';
+  seeded.lessonSecondId = (await arow('SELECT id FROM course_lessons WHERE series_id=? AND id<>? ORDER BY sort LIMIT 1', [lesson.series_id, lesson.id]))?.id || lesson.id;
+  seeded.classId = (await arow('SELECT id FROM classes LIMIT 1'))?.id || '';
   // 课时开 text 能力 + VibeCoding 类型（画布与对话两条路都要能进）
-  db.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
-  db.prepare("UPDATE course_lessons SET delivery_modes=? WHERE id=?").run('["CANVAS","VIBECODING"]', lesson.id);
+  await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))", [lesson.id]);
+  await aq("UPDATE course_lessons SET delivery_modes=? WHERE id=?", ['["CANVAS","VIBECODING"]', lesson.id]);
   // 课包先**不填**预算（验证 unlimited），后面再填 200 元并制造 50 元消耗
-  db.prepare('UPDATE course_series SET per_student_budget_fen=NULL').run();
-  db.close();
+  await aq('UPDATE course_series SET per_student_budget_fen=NULL');
+  
 }
 
 const port = 18990;
@@ -57,24 +72,24 @@ async function api(pathname, { method = 'GET', token, body } = {}) {
   const j = await r.json().catch(() => ({}));
   return { status: r.status, data: j?.data ?? j, error: j?.error || null };
 }
-const setSeriesBudget = (fen) => { const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000'); db.prepare('UPDATE course_series SET per_student_budget_fen=? WHERE id=?').run(fen, seeded.seriesId); db.close(); };
-const addSpend = (userId, orgId, costFen) => {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  db.prepare(`INSERT OR REPLACE INTO usage_records(
+const setSeriesBudget = async (fen) => {   await aq('UPDATE course_series SET per_student_budget_fen=? WHERE id=?', [fen, seeded.seriesId]);  };
+const addSpend = async (userId, orgId, costFen) => {
+   
+  await aq(`INSERT OR REPLACE INTO usage_records(
       id,org_id,user_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,cost_fen,series_id,created_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`).run('p62_spend_' + costFen, orgId, userId, 'TEXT', 'm', 0, 'SUCCESS', null, '{}', costFen, seeded.seriesId);
-  db.close();
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`, ['p62_spend_' + costFen, orgId, userId, 'TEXT', 'm', 0, 'SUCCESS', null, '{}', costFen, seeded.seriesId]);
+  
 };
 
 try {
   for (let i = 0; i < 80; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* wait */ } await sleep(100); }
   // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
   const admin = (await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } })).data.token;
   const student = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data.token;
   const org = (await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } })).data.token;
   assert.ok(admin && student && org, '登录失败');
-  const identity = (() => { const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000'); const r = db.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get(); db.close(); return r; })();
+  const identity = await (async () => {   const r = await arow("SELECT id, org_id FROM users WHERE login='student-2'");  return r; })();
 
   /* ① 课包没填预算 → 学生端看到「不限」（口径：留空 = 不限制，只记账） */
   const courses = await api('/api/student/courses', { token: student });
@@ -89,8 +104,8 @@ try {
     JSON.stringify(projectDetail.data?.computePool));
 
   /* ② 历史预算与售价保留，但不再成为学生的算力余额。 */
-  setSeriesBudget(20000);
-  addSpend(identity.id, identity.org_id, 5000);
+  await setSeriesBudget(20000);
+  await addSpend(identity.id, identity.org_id, 5000);
   const after = await api(`/api/student/projects/${encodeURIComponent(project.data.id)}`, { token: student });
   const pool = after.data?.computePool || {};
   check('② 历史预算和售价不会恢复学生限额或余额',
@@ -102,7 +117,7 @@ try {
   // 批次 B：一个课堂只带一种入口类型，VibeCoding 那条链需要 VIBECODING 课堂。
   // 种子课时是**只画布**的，所以这里要 `requireSupports:false` 强制切过去。
   // （③ 之后只读项目详情/排课候选，都不要求画布入口，所以不必切回来。）
-  switchClassroom(dbPath, { deliveryMode: 'VIBECODING', requireSupports: false });
+  await switchClassroom(dbPath, { deliveryMode: 'VIBECODING', requireSupports: false });
   const conversation = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student, body: { lessonId, title: 'P62 会话' } });
   check('③ 能开会话', conversation.status === 200 && Boolean(conversation.data?.id), JSON.stringify(conversation).slice(0, 200));
   const conversationDetail = await api(`/api/student/vibecoding/conversations/${encodeURIComponent(conversation.data.id)}`, { token: student });
@@ -120,7 +135,7 @@ try {
     me?.poolUnlimited === true && me?.poolRemainYuan === null && me?.poolPercent === null && me?.poolCapYuan === null, JSON.stringify(me));
 
   /* ⑤ 历史售价增加也不能影响不限额兼容摘要。 */
-  addSpend(identity.id, identity.org_id, 13000); // 再花 130 → 合计 180
+  await addSpend(identity.id, identity.org_id, 13000); // 再花 130 → 合计 180
   const studentAgain = await api(`/api/student/projects/${encodeURIComponent(project.data.id)}`, { token: student });
   const candidatesAgain = await api(`/api/org/sessions/${encodeURIComponent(openSession)}/candidates`, { token: org });
   const meAgain = candidatesAgain.data?.selectable?.concat(candidatesAgain.data?.blocked || [], candidatesAgain.data?.alreadyIn || []).find((item) => item.id === identity.id);

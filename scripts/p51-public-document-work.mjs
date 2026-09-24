@@ -25,6 +25,21 @@ import { ensureClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p51-public-doc-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const uploadRoot = path.join(temp, 'uploads');
 const baseEnv = {
   ...process.env,
@@ -117,25 +132,19 @@ let serverLog = '';
 let server = null;
 try {
   const { DatabaseSync } = await import('node:sqlite');
-  const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
-  const lesson = seedDb.prepare('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 1').get();
-  seedDb.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?").run(lesson.id);
-  seedDb.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
-  seedDb.exec('PRAGMA foreign_keys = OFF');
+   
+  const lesson = await arow('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 1');
+  await aq("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?", [lesson.id]);
+  await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))", [lesson.id]);
+  
   const now = new Date().toISOString();
-  seedDb.prepare(
-    `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
-     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-  ).run(PHOTO_ID, 'USER', 'org-1', 'student-2', 'INTERNAL_PROXY', null, PHOTO_KEY, null, null, '天山.png', 'image/png', PNG.length, 'x', 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null, '{}', 'student-2', now, now);
-  seedDb.prepare(
-    `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
-     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-  ).run(UNUSED_PHOTO_ID, 'USER', 'org-1', 'student-2', 'INTERNAL_PROXY', null, UNUSED_PHOTO_KEY, null, null, '未引用照片.png', 'image/png', PNG.length, 'x2', 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null, '{}', 'student-2', now, now);
-  seedDb.prepare(
-    `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
-     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-  ).run(COVER_ID, 'PLATFORM', null, null, 'INTERNAL_PROXY', null, COVER_KEY, null, null, '封面插画.png', 'image/png', PNG.length, 'x', 'MEDIA_ASSET', 'PUBLIC_PLATFORM', 'ACTIVE', 'NOT_REQUIRED', null, '{"generated":true}', null, now, now);
-  seedDb.close();
+  await aq(`INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [PHOTO_ID, 'USER', 'org-1', 'student-2', 'INTERNAL_PROXY', null, PHOTO_KEY, null, null, '天山.png', 'image/png', PNG.length, 'x', 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null, '{}', 'student-2', now, now]);
+  await aq(`INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [UNUSED_PHOTO_ID, 'USER', 'org-1', 'student-2', 'INTERNAL_PROXY', null, UNUSED_PHOTO_KEY, null, null, '未引用照片.png', 'image/png', PNG.length, 'x2', 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null, '{}', 'student-2', now, now]);
+  await aq(`INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [COVER_ID, 'PLATFORM', null, null, 'INTERNAL_PROXY', null, COVER_KEY, null, null, '封面插画.png', 'image/png', PNG.length, 'x', 'MEDIA_ASSET', 'PUBLIC_PLATFORM', 'ACTIVE', 'NOT_REQUIRED', null, '{"generated":true}', null, now, now]);
+  
 
   const port = 18897;
   server = spawn(process.execPath, ['apps/server/src/index.js'], {
@@ -160,7 +169,7 @@ try {
   for (let i = 0; i < 80; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* not up yet */ }
   // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
     await sleep(100);
   }
 
@@ -176,28 +185,23 @@ try {
   // 造出「学生做了一份 PPT」的状态：种子产物 + 学生要的中文名文档 + 一张这一轮传的图。
   // 学生不能手写代码了，所以直接写产物表（与 p25 同一套做法）；本脚本验的是提交之后的链路。
   {
-    const driver = new DatabaseSync(dbPath); driver.exec('PRAGMA busy_timeout = 5000');
+     
     const at = new Date();
     const old = new Date(at.getTime() - 60000).toISOString();
     const recent = at.toISOString();
-    driver.prepare('DELETE FROM vibecoding_artifacts WHERE conversation_id=?').run(conversationId);
-    const insertArtifact = (id, messageId, name, kind, content, updatedAt) => driver.prepare(
-      'INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-    ).run(id, conversationId, messageId, name, kind, content, Buffer.byteLength(content), 1, old, updatedAt);
-    insertArtifact('vibeart_p51_seed', null, 'index.html', 'html', SEED_HTML, old);
-    driver.prepare("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES ('p51_m_user',?,'user','用第一张图做 PPT','SUCCEEDED',?,?)")
-      .run(conversationId, JSON.stringify([
+    await aq('DELETE FROM vibecoding_artifacts WHERE conversation_id=?', [conversationId]);
+    const insertArtifact = async (id, messageId, name, kind, content, updatedAt) => await aq('INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id, conversationId, messageId, name, kind, content, Buffer.byteLength(content), 1, old, updatedAt]);
+    await insertArtifact('vibeart_p51_seed', null, 'index.html', 'html', SEED_HTML, old);
+    await aq("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES ('p51_m_user',?,'user','用第一张图做 PPT','SUCCEEDED',?,?)", [conversationId, JSON.stringify([
         { id: PHOTO_ID, name: '天山.png', url: `/api/student/file-assets/${PHOTO_ID}/download`, mime: 'image/png', inline: '' },
         { id: UNUSED_PHOTO_ID, name: '未引用照片.png', url: `/api/student/file-assets/${UNUSED_PHOTO_ID}/download`, mime: 'image/png', inline: '' },
-      ]), old);
-    driver.prepare("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES ('p51_m_ai',?,'assistant','好的，这是一份新疆研学 PPT','SUCCEEDED',NULL,?)")
-      .run(conversationId, recent);
-    insertArtifact('vibeart_p51_deck', 'p51_m_ai', DECK_NAME, 'pptx', JSON.stringify(DECK), recent);
+      ]), old]);
+    await aq("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES ('p51_m_ai',?,'assistant','好的，这是一份新疆研学 PPT','SUCCEEDED',NULL,?)", [conversationId, recent]);
+    await insertArtifact('vibeart_p51_deck', 'p51_m_ai', DECK_NAME, 'pptx', JSON.stringify(DECK), recent);
     // 平台为封面生成的插画（-1 是封面，与 pptx.js 的 COVER_IMAGE_KEY 一致）
-    driver.prepare('UPDATE vibecoding_artifacts SET generated_images=? WHERE id=?')
-      .run(JSON.stringify([{ slideIndex: -1, prompt: '天山草原全景', fileId: COVER_ID, url: `/api/public/file-assets/${COVER_ID}/download` }]), 'vibeart_p51_deck');
-    driver.prepare('UPDATE vibecoding_conversations SET entry_file=? WHERE id=?').run('index.html', conversationId);
-    driver.close();
+    await aq('UPDATE vibecoding_artifacts SET generated_images=? WHERE id=?', [JSON.stringify([{ slideIndex: -1, prompt: '天山草原全景', fileId: COVER_ID, url: `/api/public/file-assets/${COVER_ID}/download` }]), 'vibeart_p51_deck']);
+    await aq('UPDATE vibecoding_conversations SET entry_file=? WHERE id=?', ['index.html', conversationId]);
+    
   }
 
   // 1) 提交：中文产物名不能让读回抛错（写侧那条 ASCII 路径校验曾在这里误伤，
@@ -250,9 +254,9 @@ try {
   // 5b) 广场给的必须是**交上来的那一版**：提交后学生还能接着改（不再锁创作），
   //     改活会话里的产物不能把广场上的作品一起改掉。
   {
-    const driver = new DatabaseSync(dbPath); driver.exec('PRAGMA busy_timeout = 5000');
-    driver.prepare('UPDATE vibecoding_artifacts SET content=? WHERE id=?').run(JSON.stringify({ ...DECK, title: '改版之后的标题' }), 'vibeart_p51_deck');
-    driver.close();
+     
+    await aq('UPDATE vibecoding_artifacts SET content=? WHERE id=?', [JSON.stringify({ ...DECK, title: '改版之后的标题' }), 'vibeart_p51_deck']);
+    
   }
   const reDownload = Buffer.from(await (await fetch(`http://127.0.0.1:${port}${deck.downloadUrl}`)).arrayBuffer());
   const reSlides = slideText(reDownload);

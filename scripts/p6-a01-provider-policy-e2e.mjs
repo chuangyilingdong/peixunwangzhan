@@ -8,6 +8,18 @@ import { ensureClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-kids-p6-e2e-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -62,7 +74,7 @@ try {
   // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂。
   // ⚠️ 必须在健康检查**之后**、发请求**之前**调用。早于服务启动它读不到表；而塞进上面那个重试
   //    循环里则永远轮不到执行（`break` 先走）—— 这里踩过一次，症状就是 NOT_IN_CLASSROOM。
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
 
   const adminLogin = await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } });
   expect(adminLogin.status === 200 && adminLogin.data?.token, '管理员登录失败', adminLogin);

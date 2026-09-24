@@ -19,6 +19,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p72-series-overview-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -55,21 +70,21 @@ try {
   const teacher = await login('teacher-1', 'teach123');
 
   // 给机构一个「有次数」的课包：直接改库设可授权次数（平台侧接口要绕平台账号，这里只测机构视角）
-  const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
-  const series = seedDb.prepare("SELECT id, title FROM course_series WHERE status='PUBLISHED' LIMIT 1").get();
-  const orgId = seedDb.prepare("SELECT org_id FROM users WHERE login='org-admin'").get().org_id;
-  const students = seedDb.prepare("SELECT id FROM users WHERE role='STUDENT' AND org_id=? LIMIT 3").all(orgId);
+   
+  const series = await arow("SELECT id, title FROM course_series WHERE status='PUBLISHED' LIMIT 1");
+  const orgId = (await arow("SELECT org_id FROM users WHERE login='org-admin'")).org_id;
+  const students = await arows("SELECT id FROM users WHERE role='STUDENT' AND org_id=? LIMIT 3", [orgId]);
   // 种子里已经给 2 名学生发过许可（那是直接插库、没走「分配」计数器）——先清掉，起点才干净，
   // 否则会出现「已分配 0 / 可授权 5，但已分配学员 2」这种看着矛盾的数据（本守卫第一版就是这样）
-  seedDb.prepare('DELETE FROM student_course_grants WHERE series_id=? AND org_id=?').run(series.id, orgId);
-  seedDb.prepare("DELETE FROM course_assignments WHERE series_id=? AND org_id=?").run(series.id, orgId);
-  seedDb.prepare("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,quota_total,quota_used) VALUES ('assign_p72',?,?,'ACTIVE','user_p72',datetime('now'),5,0)").run(series.id, orgId);
-  seedDb.prepare(`INSERT INTO license_purchase_batches(
+  await aq('DELETE FROM student_course_grants WHERE series_id=? AND org_id=?', [series.id, orgId]);
+  await aq("DELETE FROM course_assignments WHERE series_id=? AND org_id=?", [series.id, orgId]);
+  await aq("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,quota_total,quota_used) VALUES ('assign_p72',?,?,'ACTIVE','user_p72',datetime('now'),5,0)", [series.id, orgId]);
+  await aq(`INSERT INTO license_purchase_batches(
     id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,
     order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at)
     VALUES ('purchase_p72','assign_p72',?,?,'PURCHASE',5,500,'CNY','PAID','ACTIVE',
-      'P72-O-assign-p72','P72-C-assign-p72','p72-purchase-assign-p72','user_p72',datetime('now'),datetime('now'))`).run(orgId, series.id);
-  seedDb.close();
+      'P72-O-assign-p72','P72-C-assign-p72','p72-purchase-assign-p72','user_p72',datetime('now'),datetime('now'))`, [orgId, series.id]);
+  
 
   /* ① 概览可用，且课包范围 = 我被授权的课包（同源） */
   const overview = await api('/api/org/series-overview?days=30', { token: admin });
@@ -94,13 +109,13 @@ try {
   check('② 「已分配学员」与明细细表对得上（同一份许可数据）', activeGrants.length === Number(after?.grantedStudents), JSON.stringify({ detailActive: activeGrants.length, students: after?.grantedStudents }));
 
   /* ③ 课堂计数：按「课时属于哪个课包」归集，与直接查库一致 */
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const lessonIds = db.prepare('SELECT id FROM course_lessons WHERE series_id=?').all(series.id).map((item) => item.id);
+   
+  const lessonIds = (await arows('SELECT id FROM course_lessons WHERE series_id=?', [series.id])).map((item) => item.id);
   const placeholders = lessonIds.map(() => '?').join(',') || "''";
-  const liveCount = (status) => Number(db.prepare(`SELECT COUNT(*) n FROM class_sessions WHERE status=? AND lesson_id IN (${placeholders})`).get(status, ...lessonIds)?.n || 0);
-  const pendingInDb = liveCount('PENDING');
-  const activeInDb = liveCount('ACTIVE');
-  db.close();
+  const liveCount = async (status) => Number((await arow(`SELECT COUNT(*) n FROM class_sessions WHERE status=? AND lesson_id IN (${placeholders})`, [status, ...lessonIds]))?.n || 0);
+  const pendingInDb = await liveCount('PENDING');
+  const activeInDb = await liveCount('ACTIVE');
+  
   check('③ 待上课课堂数与库里一致', Number(after?.pendingSessions) === pendingInDb, JSON.stringify({ api: after?.pendingSessions, db: pendingInDb }));
   check('③ 上课中课堂数与库里一致', Number(after?.activeSessions) === activeInDb, JSON.stringify({ api: after?.activeSessions, db: activeInDb }));
 

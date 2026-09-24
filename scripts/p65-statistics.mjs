@@ -17,6 +17,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p65-statistics-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),
@@ -38,34 +53,34 @@ await run(['packages/database/src/seed.js']);
 
 /* 造数：一个学员在一个课包上花掉 4 种模态的钱（对话 1 元 / 图片 2 元 / 视频 5 元 / 音乐 3 元），
    课包预算 200 元；另造一个「用尽」的池子（同一学员第二个课包，花掉超过上限）。 */
-const seeded = (() => {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
+const seeded = await (async () => {
+   
   // ⚠️ 需要**两个不同课包**才测得到「两个池子」：种子库只有一个课包（我还第一次写成
   //    取前两节课 —— 它们同属一个课包，两段造数会落进同一个池子）。所以自己造第二个，确定性更好。
-  db.prepare(`INSERT OR REPLACE INTO course_series(id,title,description,owner_type,visibility,version,sort,status,delivery_mode,stock_total,created_at,updated_at)
-    VALUES('p65_series_b','P65 第二个课包','守卫用','PLATFORM','PRIVATE','1.0',9,'PUBLISHED','CANVAS',0,datetime('now'),datetime('now'))`).run();
-  db.prepare(`INSERT OR REPLACE INTO course_lessons(id,series_id,title,sort,status,delivery_mode,created_at,updated_at)
-    VALUES('p65_lesson_b','p65_series_b','P65 课时 B',1,'PUBLISHED','CANVAS',datetime('now'),datetime('now'))`).run();
-  const lessons = [db.prepare('SELECT id, series_id FROM course_lessons WHERE id<>? ORDER BY sort LIMIT 1').get('p65_lesson_b') || db.prepare('SELECT id, series_id FROM course_lessons ORDER BY sort LIMIT 1').get(), { id: 'p65_lesson_b', series_id: 'p65_series_b' }];
-  const student = db.prepare("SELECT id, org_id FROM users WHERE role='STUDENT' LIMIT 1").get();
-  const teacher = db.prepare("SELECT id FROM users WHERE role='TEACHER' LIMIT 1").get();
+  await aq(`INSERT OR REPLACE INTO course_series(id,title,description,owner_type,visibility,version,sort,status,delivery_mode,stock_total,created_at,updated_at)
+    VALUES('p65_series_b','P65 第二个课包','守卫用','PLATFORM','PRIVATE','1.0',9,'PUBLISHED','CANVAS',0,datetime('now'),datetime('now'))`);
+  await aq(`INSERT OR REPLACE INTO course_lessons(id,series_id,title,sort,status,delivery_mode,created_at,updated_at)
+    VALUES('p65_lesson_b','p65_series_b','P65 课时 B',1,'PUBLISHED','CANVAS',datetime('now'),datetime('now'))`);
+  const lessons = [await arow('SELECT id, series_id FROM course_lessons WHERE id<>? ORDER BY sort LIMIT 1', ['p65_lesson_b']) || await arow('SELECT id, series_id FROM course_lessons ORDER BY sort LIMIT 1'), { id: 'p65_lesson_b', series_id: 'p65_series_b' }];
+  const student = await arow("SELECT id, org_id FROM users WHERE role='STUDENT' LIMIT 1");
+  const teacher = await arow("SELECT id FROM users WHERE role='TEACHER' LIMIT 1");
   for (const [index, lesson] of lessons.entries()) {
-    db.prepare(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,platform_budget_fen,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,'ACTIVE',?,datetime('now'),datetime('now'))`).run('p65_session_' + index, 'P65 平台预算课堂', student.org_id, lesson.series_id, lesson.id, teacher.id, index ? 100 : 20000);
+    await aq(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,platform_budget_fen,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,'ACTIVE',?,datetime('now'),datetime('now'))`, ['p65_session_' + index, 'P65 平台预算课堂', student.org_id, lesson.series_id, lesson.id, teacher.id, index ? 100 : 20000]);
   }
-  db.prepare('UPDATE course_series SET per_student_budget_fen=? WHERE id=?').run(20000, lessons[0].series_id);
-  db.prepare('UPDATE course_series SET per_student_budget_fen=? WHERE id=?').run(100, lessons[1].series_id);
-  const insert = (id, modality, fen, index, source = 'REPORTED') => {
+  await aq('UPDATE course_series SET per_student_budget_fen=? WHERE id=?', [20000, lessons[0].series_id]);
+  await aq('UPDATE course_series SET per_student_budget_fen=? WHERE id=?', [100, lessons[1].series_id]);
+  const insert = async (id, modality, fen, index, source = 'REPORTED') => {
     const lesson = lessons[index];
-    db.prepare(`INSERT INTO usage_records(id,org_id,user_id,modality,model,credits_charged,status,pricing_snapshot,cost_fen,series_id,compute_call_id,class_session_id,created_at)
-      VALUES (?,?,?,?,'m',0,'SUCCESS','{}',999999,?,?,?,?)`).run(id, student.org_id, student.id, modality, lesson.series_id, id + '_call', 'p65_session_' + index, new Date().toISOString());
-    db.prepare(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,status,cost_source,upstream_cost_fen,sale_snapshot,class_session_id,lesson_id,created_at)
-      VALUES (?,?,1,?,?,?,'SUCCESS',?,?,'{}',?,?,?)`).run(id + '_attempt', id + '_call', student.org_id, student.id, modality, source, fen, 'p65_session_' + index, lesson.id, new Date().toISOString());
+    await aq(`INSERT INTO usage_records(id,org_id,user_id,modality,model,credits_charged,status,pricing_snapshot,cost_fen,series_id,compute_call_id,class_session_id,created_at)
+      VALUES (?,?,?,?,'m',0,'SUCCESS','{}',999999,?,?,?,?)`, [id, student.org_id, student.id, modality, lesson.series_id, id + '_call', 'p65_session_' + index, new Date().toISOString()]);
+    await aq(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,status,cost_source,upstream_cost_fen,sale_snapshot,class_session_id,lesson_id,created_at)
+      VALUES (?,?,1,?,?,?,'SUCCESS',?,?,'{}',?,?,?)`, [id + '_attempt', id + '_call', student.org_id, student.id, modality, source, fen, 'p65_session_' + index, lesson.id, new Date().toISOString()]);
   };
-  [['TEXT', 100], ['IMAGE', 200], ['VIDEO', 500], ['MUSIC', 300]].forEach(([modality, fen], index) => insert('p65_a' + index, modality, fen, 0, index === 0 ? 'ESTIMATED' : 'REPORTED'));
-  insert('p65_over_budget', 'IMAGE', 500, 1);
-  insert('p65_unknown', 'TEXT', null, 0, 'UNKNOWN');
-  db.close();
+  [['TEXT', 100], ['IMAGE', 200], ['VIDEO', 500], ['MUSIC', 300]].forEach(async ([modality, fen], index) => await insert('p65_a' + index, modality, fen, 0, index === 0 ? 'ESTIMATED' : 'REPORTED'));
+  await insert('p65_over_budget', 'IMAGE', 500, 1);
+  await insert('p65_unknown', 'TEXT', null, 0, 'UNKNOWN');
+  
   return { seriesId: lessons[0].series_id, lessonId: lessons[0].id, studentId: student.id };
 })();
 

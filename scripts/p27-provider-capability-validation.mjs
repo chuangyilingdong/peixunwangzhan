@@ -15,6 +15,21 @@ import { spawn } from 'node:child_process';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p27-capability-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -103,10 +118,10 @@ try {
 
   // 3) 课时保存时按这个列表校验：不在列表里的取值会被拒
   const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const lesson = db.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 1').get();
-  db.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?").run(lesson.id);
-  db.close();
+   
+  const lesson = await arow('SELECT id FROM course_lessons ORDER BY sort LIMIT 1');
+  await aq("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?", [lesson.id]);
+  
   // 生成框体是素材表里的一种素材（material_type=GENERATION_BOX），参数放在 snapshot.box 里
   const boxLesson = (resolution, durationSeconds) => ({ method: 'PUT', token: rootToken, body: { deliveryMode: 'CANVAS', capabilities: ['video'], materialGroups: [{ title: '素材1', materials: [{ title: '素材1', materialType: 'GENERATION_BOX', snapshot: { box: { modality: 'VIDEO', model: 'minimax-h3-i2v', aspectRatio: '16:9', resolution, durationSeconds } } }] }] } });
   const badLesson = await api(`/api/admin/course-lessons/${lesson.id}`, boxLesson('1080P', 20));

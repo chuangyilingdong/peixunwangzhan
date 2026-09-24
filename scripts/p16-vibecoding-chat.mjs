@@ -15,6 +15,18 @@ import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p16-vibecoding-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -36,15 +48,18 @@ await run(['packages/database/src/seed.js']);
 
 // 准备两种课时：一个 VibeCoding，一个画布（用于验证互斥）
 const { DatabaseSync } = await import('node:sqlite');
-const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
-const lessons = seedDb.prepare('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 2').all();
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
+ 
+const lessons = await arows('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 2');
 assert.equal(lessons.length >= 2, true, '种子数据应至少有两个课时');
 const vibeLessonId = lessons[0].id;
 const canvasLessonId = lessons[1].id;
-seedDb.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?").run(vibeLessonId);
-seedDb.prepare("UPDATE course_lessons SET delivery_mode='CANVAS' WHERE id=?").run(canvasLessonId);
-seedDb.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(vibeLessonId);
-seedDb.close();
+await aq("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?", [vibeLessonId]);
+await aq("UPDATE course_lessons SET delivery_mode='CANVAS' WHERE id=?", [canvasLessonId]);
+await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))", [vibeLessonId]);
+
 
 const port = 18846;
 const server = spawn(process.execPath, ['apps/server/src/index.js'], {
@@ -79,9 +94,9 @@ try {
   for (let i = 0; i < 80; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* not up yet */ }
   // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
   // 这条守卫走 VibeCoding 入口 → 把课堂入口类型切成 VIBECODING
-  switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
+  await switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
     await sleep(100);
   }
 
@@ -133,13 +148,13 @@ try {
   assert.equal(detail.data.messages[1].creditsCharged, undefined, '消息里不该再有积分字段');
   assert.equal(detail.data.title, '帮我写一个会变色的按钮', '首条消息应自动成为会话标题');
 
-  const usage = new DatabaseSync(dbPath); usage.exec('PRAGMA busy_timeout = 5000');
-  const usageRow = usage.prepare("SELECT COUNT(*) n FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'").get();
-  const costRow = usage.prepare("SELECT COALESCE(SUM(cost_fen),0) fen FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'").get();
-  const assistantRow = usage.prepare("SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id=? AND role='assistant'").get(conversationId);
+   
+  const usageRow = await arow("SELECT COUNT(*) n FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'");
+  const costRow = await arow("SELECT COALESCE(SUM(cost_fen),0) fen FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'");
+  const assistantRow = await arow("SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id=? AND role='assistant'", [conversationId]);
   // C3 前置：token 用量也要查（必须放在 close 之前，否则 database is not open）
-  const tokenRow = usage.prepare("SELECT input_tokens, output_tokens FROM usage_records WHERE modality='TEXT' AND status='SUCCESS' ORDER BY created_at DESC LIMIT 1").get();
-  usage.close();
+  const tokenRow = await arow("SELECT input_tokens, output_tokens FROM usage_records WHERE modality='TEXT' AND status='SUCCESS' ORDER BY created_at DESC LIMIT 1");
+  
   assert.equal(usageRow.n, 1, `应写入 1 条 TEXT 用量记录，实际 ${usageRow.n}`);
   assert.equal(Number(costRow.fen), 0, `平台承担成本，成功回复不得记录学生售价，实际 ${costRow.fen}`);
   // C3 前置（2026-09-13）：对话那条也要把上游 token 用量落进账本
@@ -175,9 +190,9 @@ try {
 
   // 迁移来的产物（message_id 为空）也必须挂到最后一条助手消息上
   {
-    const driver = new DatabaseSync(dbPath); driver.exec('PRAGMA busy_timeout = 5000');
-    driver.prepare('UPDATE vibecoding_artifacts SET message_id=NULL WHERE conversation_id=?').run(conversationId);
-    driver.close();
+     
+    await aq('UPDATE vibecoding_artifacts SET message_id=NULL WHERE conversation_id=?', [conversationId]);
+    
     const reread = await api(`/api/student/vibecoding/conversations/${conversationId}`, { token: student });
     assert.equal(reread.status, 200, '重新读取会话失败');
     const orphans = reread.data.artifacts.filter((a) => !a.messageId);

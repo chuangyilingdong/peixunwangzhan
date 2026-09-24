@@ -19,6 +19,18 @@ import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p25-vibecoding-plaza-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -41,11 +53,14 @@ await run(['packages/database/src/seed.js']);
 const { buildPreviewDocument } = await import(pathToFileURL(path.join(root, 'packages/shared/src/vibecodingProject.js')).href);
 
 const { DatabaseSync } = await import('node:sqlite');
-const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
-const lesson = seedDb.prepare('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 1').get();
-seedDb.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?").run(lesson.id);
-seedDb.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
-seedDb.close();
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
+ 
+const lesson = await arow('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 1');
+await aq("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?", [lesson.id]);
+await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))", [lesson.id]);
+
 
 const port = 18891;
 const server = spawn(process.execPath, ['apps/server/src/index.js'], {
@@ -81,9 +96,9 @@ try {
   }
   assert.equal(healthy, true, '服务器启动超时');
   // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
   // 这条守卫走 VibeCoding 入口 → 把课堂入口类型切成 VIBECODING
-  switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
+  await switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
 
   const student = (await login('student-2', 'study123')).data.token;
   const teacher = (await login('teacher-1', 'teach123')).data.token;
@@ -108,15 +123,14 @@ try {
   // 学生不能手写代码了，所以这里直接写产物表来准备作品内容；
   // 本脚本验的是「提交→点评→发布→公开可玩」这条链路，不是产物怎么来的。
   {
-    const driver = new DatabaseSync(dbPath); driver.exec('PRAGMA busy_timeout = 5000');
+     
     const now = new Date().toISOString();
-    driver.prepare('DELETE FROM vibecoding_artifacts WHERE conversation_id=?').run(conversationId);
+    await aq('DELETE FROM vibecoding_artifacts WHERE conversation_id=?', [conversationId]);
     for (const [name, kind, content] of [['index.html', 'html', gameHtml], ['game.js', 'js', gameScript]]) {
-      driver.prepare('INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
-        .run(`vibeart_p25_${kind}`, conversationId, null, name, kind, content, Buffer.byteLength(content), 1, now, now);
+      await aq('INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [`vibeart_p25_${kind}`, conversationId, null, name, kind, content, Buffer.byteLength(content), 1, now, now]);
     }
-    driver.prepare('UPDATE vibecoding_conversations SET entry_file=? WHERE id=?').run('index.html', conversationId);
-    driver.close();
+    await aq('UPDATE vibecoding_conversations SET entry_file=? WHERE id=?', ['index.html', conversationId]);
+    
   }
 
   // 2) 提交必须带版权确认
@@ -174,9 +188,9 @@ try {
   assert.equal(afterDetail.status, 404, `下架后直链应 404，实际 ${afterDetail.status}`);
 
   // 8) 审计落库
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const audits = db.prepare("SELECT action, COUNT(*) n FROM audit_logs WHERE action IN ('VIBECODING_SUBMIT','PLATFORM_VIBECODING_WORK_PUBLISH','PLATFORM_VIBECODING_WORK_UNPUBLISH') GROUP BY action").all();
-  db.close();
+   
+  const audits = await arows("SELECT action, COUNT(*) n FROM audit_logs WHERE action IN ('VIBECODING_SUBMIT','PLATFORM_VIBECODING_WORK_PUBLISH','PLATFORM_VIBECODING_WORK_UNPUBLISH') GROUP BY action");
+  
   const auditMap = Object.fromEntries(audits.map((item) => [item.action, Number(item.n)]));
   assert.equal(auditMap.VIBECODING_SUBMIT, 1, `应有 1 条提交审计，实际 ${JSON.stringify(auditMap)}`);
   assert.equal(auditMap.PLATFORM_VIBECODING_WORK_PUBLISH, 1, '应有 1 条发布审计');

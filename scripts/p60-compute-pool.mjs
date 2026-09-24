@@ -11,6 +11,21 @@ import { ensureClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p60-compute-pool-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const secretFile = path.join(temp, 'provider-secrets.json');
 const baseEnv = {
   ...process.env,
@@ -36,12 +51,12 @@ await run(['packages/database/src/seed.js']);
    · 课包预算先留空（第 ① 段验证「留空不拦」），之后按段设置。 */
 const seeded = { seriesId: '', lessonId: '' };
 {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const lesson = db.prepare('SELECT id, series_id FROM course_lessons ORDER BY sort LIMIT 1').get();
+   
+  const lesson = await arow('SELECT id, series_id FROM course_lessons ORDER BY sort LIMIT 1');
   seeded.lessonId = lesson.id; seeded.seriesId = lesson.series_id;
-  db.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
-  db.prepare('UPDATE course_series SET per_student_budget_fen=NULL').run();
-  db.close();
+  await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))", [lesson.id]);
+  await aq('UPDATE course_series SET per_student_budget_fen=NULL');
+  
 }
 
 /* 假上游（OpenAI 形状）：成功那条路用它；「失败不计费」那段把供应商指向一个死端口 */
@@ -69,16 +84,16 @@ const setProvider = (token, endpoint) => api('/api/admin/billing-config/ai-provi
   method: 'PUT', token,
   body: { provider: 'custom', displayName: 'P60 上游', model: 'p60-model', endpoint, platformPerCallBudget: 0, platformDailyBudget: 0, allowStudentExternalContent: true, reason: 'P60 算力池守卫' },
 });
-const setSeriesBudget = (fen) => {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  db.prepare('UPDATE course_series SET per_student_budget_fen=? WHERE id=?').run(fen, seeded.seriesId);
-  db.close();
+const setSeriesBudget = async (fen) => {
+   
+  await aq('UPDATE course_series SET per_student_budget_fen=? WHERE id=?', [fen, seeded.seriesId]);
+  
 };
 
 try {
   for (let i = 0; i < 80; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* wait */ } await sleep(100); }
   // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
   const admin = (await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } })).data.token;
   const student = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data.token;
   assert.ok(admin && student, '登录失败');
@@ -118,7 +133,7 @@ try {
 
   /* ④ 填上预算（180 分 = 1.8 元）→ 用尽即拦 */
   await setProvider(admin, `http://127.0.0.1:${UP_PORT}/v1`);
-  setSeriesBudget(180);
+  await setSeriesBudget(180);
   const before = await usedOf();
   for (let i = 1; i <= 2; i += 1) {
     const ok = await generate(`第 ${i} 次应当成功`);
@@ -162,9 +177,9 @@ try {
 
   // Corrupt historical failed charges must never inflate the student pool or admin summaries.
   {
-    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-    db.prepare("UPDATE usage_records SET cost_fen=99999 WHERE status='FAILED'").run();
-    db.close();
+     
+    await aq("UPDATE usage_records SET cost_fen=99999 WHERE status='FAILED'");
+    
     // 2026-09-18：原来这里断言 `pool.poolUsedFen(...) === null` —— 那个函数是个恒返回 null 的兼容桩，
     // 已随口径收敛删掉（口径变更，不是测试漂移）。「失败调用不计入」这件事由下面两条**走真实报表口径**
     // 的断言继续保证，比断言一个死函数强。
@@ -177,14 +192,14 @@ try {
   }
 
   {
-    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-    db.prepare("UPDATE compute_attempts SET cost_source='ESTIMATED',upstream_cost_fen=20 WHERE status='SUCCESS'").run();
+     
+    await aq("UPDATE compute_attempts SET cost_source='ESTIMATED',upstream_cost_fen=20 WHERE status='SUCCESS'");
     const summary = (await api('/api/admin/compute-attempts?days=30', { token: admin })).data.summary;
     check('⑧ 已知上游估算与未知尝试分开报告', summary.estimatedFen > 0 && summary.unknownCalls > 0, JSON.stringify(summary));
-    db.prepare("UPDATE compute_attempts SET cost_source='UNKNOWN',upstream_cost_fen=NULL").run();
+    await aq("UPDATE compute_attempts SET cost_source='UNKNOWN',upstream_cost_fen=NULL");
     const unknown = (await api('/api/admin/compute-attempts?days=30', { token: admin })).data.summary;
     check('⑧ 全部未知时价差和率为null而非0', unknown.unknownCalls > 0 && unknown.estimatedFen === 0, JSON.stringify(unknown));
-    db.close();
+    
     const policy = (await api('/api/admin/billing-config/ai-provider', { token: admin })).data.policy;
     const channels = [{id:'route-main',name:'main',provider:'custom',model:'m1',models:['m1','m2'],endpoint:'http://127.0.0.1:18970/v1'},{id:'route-backup',name:'backup',provider:'custom',model:'b1',models:['b1','b2'],endpoint:'http://127.0.0.1:18970/v1'}];
     const modelRoutes = [{modality:'TEXT',channelId:'route-main',model:'m2',backupChannelId:'route-backup',backupModel:'b2'}];

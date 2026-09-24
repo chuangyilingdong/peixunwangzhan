@@ -24,6 +24,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p68-provider-probe-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const secretFile = path.join(temp, 'provider-secrets.json');
 const baseEnv = {
   ...process.env,
@@ -120,10 +135,10 @@ try {
     JSON.stringify(unconfigured.data).slice(0, 200));
 
   /* ④ 探测不写用量：它是「试参数」，不是创作 */
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const usageRows = db.prepare('SELECT COUNT(*) n FROM usage_records').get().n;
-  const auditRows = db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='AI_PROVIDER_PROBE'").get().n;
-  db.close();
+   
+  const usageRows = (await arow('SELECT COUNT(*) n FROM usage_records')).n;
+  const auditRows = (await arow("SELECT COUNT(*) n FROM audit_logs WHERE action='AI_PROVIDER_PROBE'")).n;
+  
   check('④ 探测不写 usage_records（不产生费用）', Number(usageRows) === 0, `usage_records 行数 ${usageRows}`);
   check('④ 探测写审计（谁在什么时候试了哪条渠道）', Number(auditRows) >= 3, `审计行数 ${auditRows}`);
 

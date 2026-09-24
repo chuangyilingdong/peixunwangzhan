@@ -43,6 +43,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const SKIP_MEDIA = process.argv.includes('--skip-media');
@@ -285,24 +288,22 @@ async function main() {
   if (DRY_RUN) { log('[导入] dry-run 结束（没有写库、没有落文件）'); return; }
   if (!results.length) throw new Error('一件都没抓成 —— 别写库');
 
-  const db = new DatabaseSync(DB_PATH);
-  db.exec('PRAGMA busy_timeout = 15000');
+  
+  
   const now = new Date().toISOString();
 
-  db.prepare(`INSERT OR IGNORE INTO organizations
+  await aq(`INSERT OR IGNORE INTO organizations
       (id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,contact,created_at,updated_at)
-      VALUES (?,?, 'ACTIVE', ?, ?, 1, 3, 0, '{}', ?, ?)`)
-    .run(ORG_ID, ORG_NAME, now, '2030-01-01T00:00:00.000Z', now, now);
+      VALUES (?,?, 'ACTIVE', ?, ?, 1, 3, 0, '{}', ?, ?)`, [ORG_ID, ORG_NAME, now, '2030-01-01T00:00:00.000Z', now, now]);
 
   const authors = new Map();
-  results.forEach((item, index) => {
+  results.forEach(async (item, index) => {
     const name = AUTHORS[index % AUTHORS.length];
     const userId = `user_webworks_${short(name)}`;
     // password_hash 是不可登录的占位（与上一轮导入件一致）：这些是**署名账号**，不是真人学生
-    db.prepare(`INSERT OR IGNORE INTO users
+    await aq(`INSERT OR IGNORE INTO users
         (id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at)
-        VALUES (?,?,?,?, 'STUDENT', '[]', ?, 'ACTIVE', ?, ?)`)
-      .run(userId, ORG_ID, `webworks_${short(name)}`, name, `imported-no-login:${short(name)}`, now, now);
+        VALUES (?,?,?,?, 'STUDENT', '[]', ?, 'ACTIVE', ?, ?)`, [userId, ORG_ID, `webworks_${short(name)}`, name, `imported-no-login:${short(name)}`, now, now]);
     authors.set(item.uuid, { id: userId, name });
   });
 
@@ -315,10 +316,9 @@ async function main() {
     // 排在最近两周内、按顺序错开一天 —— 广场按 submitted_at 倒序，顺序才是稳定的
     const submittedAt = `2026-09-${String(index + 1).padStart(2, '0')}T09:00:00.000Z`;
 
-    db.prepare(`INSERT OR IGNORE INTO student_projects
+    await aq(`INSERT OR IGNORE INTO student_projects
         (id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at)
-        VALUES (?,?,?,?, 'SUBMITTED', '{"nodes":[],"edges":[],"viewport":{"x":0,"y":0,"zoom":1}}', 1, ?, ?, ?)`)
-      .run(projectId, author.id, ORG_ID, title, submittedAt, submittedAt, submittedAt);
+        VALUES (?,?,?,?, 'SUBMITTED', '{"nodes":[],"edges":[],"viewport":{"x":0,"y":0,"zoom":1}}', 1, ?, ?, ?)`, [projectId, author.id, ORG_ID, title, submittedAt, submittedAt, submittedAt]);
 
     const snapshot = JSON.stringify({
       nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 },   // 保持画布形状，别的读方不会炸
@@ -330,19 +330,18 @@ async function main() {
         sourceUrl: item.url, authorName: author.name, createdAt: submittedAt,
       },
     });
-    db.prepare(`INSERT OR IGNORE INTO works
+    await aq(`INSERT OR IGNORE INTO works
         (id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at)
-        VALUES (?,?,?,?,?, '', ?, 'PUBLISHED', ?, 1, ?, ?)`)
-      .run(workId, projectId, author.id, ORG_ID, title, snapshot, submittedAt, `ww${item.uuid.replace(/-/g, '').slice(0, 12)}`, now);
+        VALUES (?,?,?,?,?, '', ?, 'PUBLISHED', ?, 1, ?, ?)`, [workId, projectId, author.id, ORG_ID, title, snapshot, submittedAt, `ww${item.uuid.replace(/-/g, '').slice(0, 12)}`, now]);
     written += 1;
   }
 
-  const total = db.prepare("SELECT COUNT(*) n FROM works WHERE id LIKE 'work_webworks_%'").get().n;
-  const live = db.prepare(`SELECT COUNT(*) n FROM works WHERE id LIKE 'work_webworks_%'
-      AND is_public=1 AND status='PUBLISHED' AND share_token IS NOT NULL AND copyright_confirmed_at IS NOT NULL`).get().n;
-  db.close();
+  const total = (await arow("SELECT COUNT(*) n FROM works WHERE id LIKE 'work_webworks_%'")).n;
+  const live = (await arow(`SELECT COUNT(*) n FROM works WHERE id LIKE 'work_webworks_%'
+      AND is_public=1 AND status='PUBLISHED' AND share_token IS NOT NULL AND copyright_confirmed_at IS NOT NULL`)).n;
+  
   log(`[导入] 完成：本轮写入 ${written} 条；库里累计 ${total} 条，其中**四样齐全能上广场的 ${live} 条**`);
   log(`[导入] 作品落盘：${path.join(MEDIA_ROOT, 'web-works')}`);
 }
 
-await main().catch((error) => { console.error('[导入] 失败：', error); process.exit(1); });
+await (await main()).catch((error) => { console.error('[导入] 失败：', error); process.exit(1); });

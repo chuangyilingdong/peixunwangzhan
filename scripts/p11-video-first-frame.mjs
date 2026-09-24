@@ -59,7 +59,7 @@ try {
   // （不起 HTTP 服务），所以直接对同一个库跑夹具补齐这一环；少了它，handleAiGeneration 会在
   // resolveStudentLessonContext 里抛 NOT_IN_CLASSROOM。夹具只认已有许可，不自己造许可。
   const { ensureClassroom } = await import('./lib/classroomFixture.mjs');
-  ensureClassroom(process.env.PLATFORM_DB_PATH);
+  await ensureClassroom(process.env.PLATFORM_DB_PATH);
   await aq("UPDATE student_projects SET class_session_id=(SELECT session_id FROM session_students WHERE student_id='stu1' AND lesson_id='lesson1' AND status='ACTIVE' LIMIT 1) WHERE id='proj1'");
 
   const dbUser = await arow("SELECT * FROM users WHERE id='stu1'");

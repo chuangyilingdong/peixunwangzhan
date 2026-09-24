@@ -25,6 +25,18 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p106-runtime-search-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const secretFile = path.join(temp, 'secrets.json');
 const SECRET = 'p106-runtime-secret';
 const CHANNEL_ID = 'ch-search';
@@ -40,6 +52,9 @@ process.env.RUNTIME_GATEWAY_SECRET = SECRET;
 process.env.AI_PROVIDER_SECRET_FILE = secretFile;
 const { issueRuntimeKey, searchUpstreamEndpoint } = await import('../apps/server/src/routes/runtimeGateway.js');
 const { setProviderApiKey } = await import('../apps/server/src/services/providerSecret.js');
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 
 const baseEnv = {
   ...process.env,
@@ -88,18 +103,17 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 setProviderApiKey(CHANNEL_KEY, CHANNEL_ID);
 
-const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-const teacher = db.prepare("SELECT * FROM users WHERE login='teacher-1'").get();
-const student = db.prepare("SELECT * FROM users WHERE login='student-1'").get();
-const lesson = db.prepare("SELECT * FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get();
+ 
+const teacher = await arow("SELECT * FROM users WHERE login='teacher-1'");
+const student = await arow("SELECT * FROM users WHERE login='student-1'");
+const lesson = await arow("SELECT * FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1");
 const now = new Date().toISOString();
-db.prepare('INSERT OR IGNORE INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES (?,?,?,?,?)')
-  .run('p106_grant', student.org_id, student.id, lesson.series_id, now);
+await aq('INSERT OR IGNORE INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES (?,?,?,?,?)', ['p106_grant', student.org_id, student.id, lesson.series_id, now]);
 const sessionId = 'csession_p106';
-db.prepare(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,created_at,updated_at,started_at)
-  VALUES (?,?,?,?,?,?,'ACTIVE','VIBECODING',?,?,?)`).run(sessionId, 'P106 搜索透传', student.org_id, lesson.series_id, lesson.id, teacher.id, now, now, now);
-db.prepare(`INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at)
-  VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)`).run('p106_part', sessionId, student.id, student.org_id, lesson.id, lesson.series_id, teacher.id, now, now);
+await aq(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,created_at,updated_at,started_at)
+  VALUES (?,?,?,?,?,?,'ACTIVE','VIBECODING',?,?,?)`, [sessionId, 'P106 搜索透传', student.org_id, lesson.series_id, lesson.id, teacher.id, now, now, now]);
+await aq(`INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at)
+  VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)`, ['p106_part', sessionId, student.id, student.org_id, lesson.id, lesson.series_id, teacher.id, now, now]);
 
 // 渠道指向假上游：`protocol` 不写 ANTHROPIC，走的正是「DeepSeek 官方那类 OpenAI 兼容口」那条推导，
 // 与生产上文本主渠道（endpoint=https://api.deepseek.com/）同一形态。
@@ -113,13 +127,13 @@ const policy = {
   modalityChannels: { TEXT: CHANNEL_ID }, modalityBackupChannels: {}, modelRoutes: [],
   allowStudentExternalContent: true,
 };
-const writePolicy = (patch = {}) => {
-  const writer = new DatabaseSync(dbPath); writer.exec('PRAGMA busy_timeout = 5000');
-  writer.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({ ...policy, ...patch }));
-  writer.close();
+const writePolicy = async (patch = {}) => {
+   
+  await aq('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1', [JSON.stringify({ ...policy, ...patch })]);
+  
 };
-writePolicy();
-db.close();
+await writePolicy();
+
 
 const server = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env: { ...baseEnv, PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
 let logs = '';
@@ -220,8 +234,8 @@ try {
 
   /* ⑤ 记账：上游 tokens 与按合同单价折算的成本都落账 */
   {
-    const audit = new DatabaseSync(dbPath); audit.exec('PRAGMA busy_timeout = 5000');
-    const usage = audit.prepare("SELECT * FROM usage_records WHERE class_session_id=? AND modality='TEXT' ORDER BY created_at DESC, rowid DESC LIMIT 1").get(sessionId);
+     
+    const usage = await arow("SELECT * FROM usage_records WHERE class_session_id=? AND modality='TEXT' ORDER BY created_at DESC, rowid DESC LIMIT 1", [sessionId]);
     check('⑤ 落了 usage_records，tokens 来自上游回执', usage?.input_tokens === 1000000 && usage?.output_tokens === 500000,
       JSON.stringify({ in: usage?.input_tokens, out: usage?.output_tokens }));
     check('⑤ 还留在密钥里的归属（学生/机构）上，不是请求里塞的',
@@ -229,12 +243,12 @@ try {
     check('⑤ 留档写明了「插件报的名字 → 实际渠道/模型」与检索次数',
       /modelResolution/.test(String(usage?.pricing_snapshot || '')) && /web_search_requests|"requests":2/.test(String(usage?.pricing_snapshot || '')),
       String(usage?.pricing_snapshot).slice(0, 300));
-    const attempt = audit.prepare("SELECT * FROM compute_attempts WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(sessionId);
+    const attempt = await arow("SELECT * FROM compute_attempts WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1", [sessionId]);
     check('⑤ compute_attempts 落了 SUCCESS + 用量证据', attempt?.status === 'SUCCESS' && attempt?.input_tokens === undefined && /UPSTREAM_USAGE/.test(String(attempt?.usage_snapshot || '')),
       JSON.stringify({ status: attempt?.status, evidence: String(attempt?.usage_snapshot).slice(0, 120) }));
     check('⑤ 成本按合同单价折算成非零的分（1000000×200/1M + 500000×800/1M = 600）',
       attempt?.cost_source === 'COMPUTED' && attempt?.upstream_cost_fen === 600, JSON.stringify({ source: attempt?.cost_source, fen: attempt?.upstream_cost_fen }));
-    audit.close();
+    
   }
 
   /* ⑥ 上游报错：状态码与正文原样回吐，账本记 FAILED（不能失败得无声无息） */
@@ -242,38 +256,38 @@ try {
     reply = { status: 429, body: { type: 'error', error: { type: 'rate_limit_error', message: '上游限流了' } } };
     const limited = await search(pluginBody(), key);
     check('⑥ 上游 429 → 原样回吐 429 与上游原话', limited.status === 429 && /上游限流了/.test(limited.text), `${limited.status} ${limited.text.slice(0, 160)}`);
-    const audit = new DatabaseSync(dbPath); audit.exec('PRAGMA busy_timeout = 5000');
-    const failed = audit.prepare("SELECT * FROM usage_records WHERE class_session_id=? AND status='FAILED' ORDER BY created_at DESC, rowid DESC LIMIT 1").get(sessionId);
+     
+    const failed = await arow("SELECT * FROM usage_records WHERE class_session_id=? AND status='FAILED' ORDER BY created_at DESC, rowid DESC LIMIT 1", [sessionId]);
     check('⑥ 失败也落账（带 fail_code）', Boolean(failed?.fail_code), JSON.stringify({ code: failed?.fail_code }));
-    audit.close();
+    
     reply = null;
   }
 
   /* ⑦ 外发闸门：不许把学生内容发到平台外时，搜索一并挡住 */
   {
-    writePolicy({ allowStudentExternalContent: false });
+    await writePolicy({ allowStudentExternalContent: false });
     const blocked = await search(pluginBody(), key);
     check('⑦ 机构禁掉「学生内容外发」→ 搜索也 403（搜索框里的话同样是学生内容）',
       blocked.status === 403 && /外部 AI/.test(blocked.text), `${blocked.status} ${blocked.text.slice(0, 160)}`);
-    writePolicy();
+    await writePolicy();
   }
 
   /* ⑧ 门禁：课堂结束 / 学生被移出（与聊天同一个判据，不用等环境回收） */
   {
-    const probe = new DatabaseSync(dbPath); probe.exec('PRAGMA busy_timeout = 5000');
-    probe.prepare("UPDATE class_sessions SET status='ENDED', ended_at=? WHERE id=?").run(now, sessionId);
-    probe.close();
+     
+    await aq("UPDATE class_sessions SET status='ENDED', ended_at=? WHERE id=?", [now, sessionId]);
+    
     const ended = await search(pluginBody(), key);
     check('⑧ 课堂已结束 → 403', ended.status === 403 && /课堂已经结束/.test(ended.text), `${ended.status} ${ended.text.slice(0, 160)}`);
-    const probe2 = new DatabaseSync(dbPath); probe2.exec('PRAGMA busy_timeout = 5000');
-    probe2.prepare("UPDATE class_sessions SET status='ACTIVE' WHERE id=?").run(sessionId);
-    probe2.prepare("UPDATE session_students SET status='REMOVED', removed_reason='P106' WHERE id='p106_part'").run();
-    probe2.close();
+     
+    await aq("UPDATE class_sessions SET status='ACTIVE' WHERE id=?", [sessionId]);
+    await aq("UPDATE session_students SET status='REMOVED', removed_reason='P106' WHERE id='p106_part'");
+    
     const removed = await search(pluginBody(), key);
     check('⑧ 学生被移出名单 → 403', removed.status === 403 && /不在课堂名单/.test(removed.text), `${removed.status} ${removed.text.slice(0, 160)}`);
-    const probe3 = new DatabaseSync(dbPath); probe3.exec('PRAGMA busy_timeout = 5000');
-    probe3.prepare("UPDATE session_students SET status='ACTIVE', removed_reason=NULL WHERE id='p106_part'").run();
-    probe3.close();
+     
+    await aq("UPDATE session_students SET status='ACTIVE', removed_reason=NULL WHERE id='p106_part'");
+    
   }
 
   /* ⑨ 端点推导（纯函数）：另外两种渠道形态 */

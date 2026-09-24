@@ -27,6 +27,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p134-password-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -60,10 +75,10 @@ async function api(pathname, { method = 'GET', token, body } = {}) {
 const login = (login_, password) => api('/api/auth/login', { method: 'POST', body: { login: login_, password } });
 /** 直接读库里的 password_hash —— "密码到底换没换"只有库说得准（接口只回"成功"，那可能骗人）。
  *  ⚠️ 别去打 /api/me：它返回的是规范化过的用户对象，**不包含**密码哈希（也不该包含）。 */
-function hashOf(loginName) {
-  const db = new DatabaseSync(dbPath);
-  try { return db.prepare('SELECT password_hash FROM users WHERE login=?').get(loginName)?.password_hash || ''; }
-  finally { db.close(); }
+async function hashOf(loginName) {
+  
+  try { return (await arow('SELECT password_hash FROM users WHERE login=?', [loginName]))?.password_hash || ''; }
+  finally {  }
 }
 
 try {
@@ -82,7 +97,7 @@ try {
     assert.equal(before.status, 200, `${target.name}：原密码登录失败`);
     const token = before.data?.token;
     check(`${target.name}：老口令能登录（前置条件）`, Boolean(token));
-    const hashBefore = hashOf(target.login);
+    const hashBefore = await hashOf(target.login);
 
     const wrong = await api(target.endpoint, { method: 'PUT', token, body: { currentPassword: 'definitely-wrong', newPassword: target.next } });
     check(`${target.name}：当前密码不对 → 被拒（${wrong.status}）`, wrong.status >= 400 && wrong.error?.code === 'CURRENT_PASSWORD_INVALID', JSON.stringify(wrong.error));
@@ -104,7 +119,7 @@ try {
     check(`${target.name}：新口令能登录`, (await login(target.login, target.next)).status === 200);
     check(`${target.name}：旧口令不能登录`, (await login(target.login, target.old)).status >= 400);
     // 密码真的换了：直接比库里的哈希（接口说"成功"不算数，库说了才算）
-    const hashAfter = hashOf(target.login);
+    const hashAfter = await hashOf(target.login);
     check(`${target.name}：库里的密码哈希确实变了`, Boolean(hashAfter) && hashAfter !== hashBefore, `before=${String(hashBefore).slice(0, 12)} after=${String(hashAfter).slice(0, 12)}`);
   }
 

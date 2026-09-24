@@ -7,6 +7,21 @@ import { spawnSync } from 'node:child_process';
 const root = path.resolve(process.cwd());
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-kids-p4-02-inventory-'));
 const dbPath = path.join(tempDir, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const env = { ...process.env, PLATFORM_DATA_DIR: tempDir, PLATFORM_DB_PATH: dbPath };
 
 const init = spawnSync(process.execPath, ['packages/database/src/db.js', '--init'], { cwd: root, env, encoding: 'utf8' });
@@ -14,18 +29,18 @@ if (init.status !== 0) throw new Error(`db init failed: ${init.stderr}`);
 const seed = spawnSync(process.execPath, ['packages/database/src/seed.js'], { cwd: root, env, encoding: 'utf8' });
 if (seed.status !== 0) throw new Error(`db seed failed: ${seed.stderr}`);
 
-const db = new DatabaseSync(dbPath, { readOnly: true }); db.exec('PRAGMA busy_timeout = 5000');
+ 
 const seedLogins = ['root', 'org-admin', 'teacher-1', 'teacher-2', 'student-1', 'student-2'];
 const seedOrgNames = ['示例创新学校'];
 
-const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all().map((x) => x.name);
+const tables = (await arows(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)).map((x) => x.name);
 const counts = {};
 for (const table of tables) {
-  counts[table] = Number(db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get().n);
+  counts[table] = Number((await arow(`SELECT COUNT(*) AS n FROM "${table}"`)).n);
 }
 
-const users = db.prepare(`SELECT id, login, display_name, role, org_id, status, deleted_at FROM users ORDER BY login`).all();
-const orgs = db.prepare(`SELECT id, name, status FROM organizations ORDER BY name`).all();
+const users = await arows(`SELECT id, login, display_name, role, org_id, status, deleted_at FROM users ORDER BY login`);
+const orgs = await arows(`SELECT id, name, status FROM organizations ORDER BY name`);
 const seedUsers = users.filter((u) => seedLogins.includes(u.login));
 const realUsers = users.filter((u) => !seedLogins.includes(u.login));
 const seedOrgIds = orgs.filter((o) => seedOrgNames.includes(o.name)).map((o) => o.id);
@@ -52,14 +67,14 @@ const scopedQueries = [
   ['org_scoped_works', `SELECT COUNT(*) n FROM works WHERE org_id IN ${inList(seedOrgIds)}`],
 ];
 const scoped = {};
-for (const [key, sql] of scopedQueries) scoped[key] = Number(db.prepare(sql).get().n);
+for (const [key, sql] of scopedQueries) scoped[key] = Number((await arow(sql)).n);
 
 const foreignKeys = {};
 for (const table of tables) {
-  const cols = db.prepare(`PRAGMA table_info("${table}")`).all();
+  const cols = await arows(`PRAGMA table_info("${table}")`);
   const userRefs = cols.filter((c) => /^(user_id|student_id|teacher_id|actor_id|assigned_by|requested_by|processed_by|owner_user_id|created_by|updated_by|published_by|changed_by)$/.test(c.name)).map((c) => c.name);
   const orgRefs = cols.filter((c) => /^org_id$/.test(c.name)).map((c) => c.name);
-  const rules = [...userRefs.map((name) => ({ column: name, seedMatches: Number(db.prepare(`SELECT COUNT(*) n FROM "${table}" WHERE "${name}" IN ${inList(seedUserIds)}`).get().n) })), ...orgRefs.map((name) => ({ column: name, seedMatches: Number(db.prepare(`SELECT COUNT(*) n FROM "${table}" WHERE "${name}" IN ${inList(seedOrgIds)}`).get().n) }))];
+  const rules = [...userRefs.map(async (name) => ({ column: name, seedMatches: Number((await arow(`SELECT COUNT(*) n FROM "${table}" WHERE "${name}" IN ${inList(seedUserIds)}`)).n) })), ...orgRefs.map(async (name) => ({ column: name, seedMatches: Number((await arow(`SELECT COUNT(*) n FROM "${table}" WHERE "${name}" IN ${inList(seedOrgIds)}`)).n) }))];
   if (rules.length) foreignKeys[table] = rules;
 }
 
@@ -84,7 +99,7 @@ const report = {
   seedScopedCounts: scoped,
   seedReferenceMatches: foreignKeys,
 };
-db.close();
+
 console.log(JSON.stringify(report, null, 2));
 // 生产执行前的状态核对由 --verify-production 模式完成；本地脚本仅验证临时 seed 结构。
 if (report.users.seed.length !== 6) throw new Error('expected 6 seed users');

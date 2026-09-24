@@ -18,6 +18,21 @@ import { ensureClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p35-student-params-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -51,7 +66,7 @@ try {
   for (let i = 0; i < 80; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* not up yet */ }
   // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
     await sleep(100);
   }
   const rootToken = (await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } })).data.token;
@@ -59,9 +74,9 @@ try {
   assert.ok(rootToken && student, '登录失败');
 
   const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const lesson = db.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 1').get();
-  db.close();
+   
+  const lesson = await arow('SELECT id FROM course_lessons ORDER BY sort LIMIT 1');
+  
 
   // 素材1：生图框体，平台留空（比例/清晰度都不选）；素材2：生图框体，平台把比例定成 4:3
   const saved = await api(`/api/admin/course-lessons/${lesson.id}`, {
@@ -93,8 +108,8 @@ try {
   assert.equal(openFromProject.aspectRatio, '', '项目接口也应下发空参数');
   assert.ok(openFromProject.paramOptions?.aspectRatios?.length, '项目接口应下发 paramOptions');
 
-  const db2 = new DatabaseSync(dbPath, { readOnly: true }); db2.exec('PRAGMA busy_timeout = 5000');
-  const jobOptions = (jobId) => db2.prepare('SELECT request_options FROM generation_jobs WHERE id=?').get(jobId)?.request_options || null;
+   
+  const jobOptions = async (jobId) => (await arow('SELECT request_options FROM generation_jobs WHERE id=?', [jobId]))?.request_options || null;
 
   // 2) 学生选的参数被采纳并落库
   const chosen = openBox.paramOptions.aspectRatios[openBox.paramOptions.aspectRatios.length - 1];
@@ -104,7 +119,7 @@ try {
     body: { projectId: project.id, boxId: openBox.id, modality: 'IMAGE', prompt: '一只小猫', aspectRatio: chosen, resolution: chosenQuality },
   });
   assert.equal(queued.status, 200, `生成入队失败: ${JSON.stringify(queued.data)}`);
-  const stored = JSON.parse(jobOptions(queued.data.job.id) || '{}');
+  const stored = JSON.parse(await jobOptions(queued.data.job.id) || '{}');
   assert.equal(stored.aspectRatio, chosen, `学生选的比例应落库（实际 ${JSON.stringify(stored)}）`);
   assert.equal(stored.resolution, chosenQuality, '学生选的清晰度应落库');
 
@@ -122,8 +137,8 @@ try {
     body: { projectId: project.id, boxId: lockedBox.id, modality: 'IMAGE', prompt: '一只小狗', aspectRatio: '9:16', resolution: '99k' },
   });
   assert.equal(lockedQueued.status, 200, `平台定过参数时学生传非法值也不该被拒: ${JSON.stringify(lockedQueued.data)}`);
-  assert.equal(jobOptions(lockedQueued.data.job.id), null, '平台定过参数时不应记录学生的选择');
-  db2.close();
+  assert.equal(await jobOptions(lockedQueued.data.job.id), null, '平台定过参数时不应记录学生的选择');
+  
 
   console.log(JSON.stringify({
     name: 'student-chosen-params', pass: true,

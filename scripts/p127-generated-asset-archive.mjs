@@ -21,6 +21,18 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p127-archive-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const uploadRoot = path.join(temp, 'uploads');
 process.env.PLATFORM_DATA_DIR = temp;
 process.env.PLATFORM_DB_PATH = dbPath;
@@ -47,21 +59,23 @@ await run(['packages/database/src/seed.js']);
 
 const { archiveOneGeneratedAsset, archiveGeneratedAssets, archivableMimeFor, studentAssetUrl, ARCHIVABLE_MIME_EXTENSION } = await import('../apps/server/src/services/generatedAssetArchive.js');
 const { row, arow } = await import('../apps/server/src/lib.js');
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arows } = await import('../packages/database/src/store.js');
+
 
 /* ── 夹具：拿种子里的学生，给他一个项目（media_assets/快照的外键要立得住）─────── */
 let STUDENT = '';
 let ORG = '';
 {
-  const db = new DatabaseSync(dbPath);
-  db.exec('PRAGMA busy_timeout = 5000');
-  const student = db.prepare("SELECT id, org_id FROM users WHERE login='student-1'").get();
+  
+  
+  const student = await arow("SELECT id, org_id FROM users WHERE login='student-1'");
   if (!student) throw new Error('种子库里没有 student-1 —— 先确认 packages/database/src/seed.js 还能跑');
   STUDENT = student.id;
   ORG = student.org_id;
   const now = new Date().toISOString();
-  db.prepare('INSERT INTO student_projects(id,student_id,org_id,title,status,last_saved_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
-    .run('project_p127', STUDENT, ORG, 'P127 项目', 'DRAFT', now, now, now);
-  db.close();
+  await aq('INSERT INTO student_projects(id,student_id,org_id,title,status,last_saved_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', ['project_p127', STUDENT, ORG, 'P127 项目', 'DRAFT', now, now, now]);
+  
 }
 
 const PNG_1PX = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');

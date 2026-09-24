@@ -28,6 +28,21 @@ import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p100-runtime-deliverables-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const workspace = path.join(temp, 'workspace');
 const collectScript = path.join(root, 'deploy', 'dsh-student', 'host-user', 'collect-student.mjs');
 const PORT = 19841;
@@ -245,11 +260,11 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 {
-  const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
-  const lesson = seedDb.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 1').get();
-  seedDb.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?").run(lesson.id);
-  seedDb.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
-  seedDb.close();
+   
+  const lesson = await arow('SELECT id FROM course_lessons ORDER BY sort LIMIT 1');
+  await aq("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?", [lesson.id]);
+  await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))", [lesson.id]);
+  
 }
 
 const server = spawn(process.execPath, ['apps/server/src/index.js'], {
@@ -278,26 +293,24 @@ try {
 
   const login = async (l, p) => (await api('/api/auth/login', { method: 'POST', body: { login: l, password: p } })).data.token;
   // 先**没有**课堂：门禁应当拦住一切（这是「没被老师排进课就进不去」那条口径）
-  const cold = new DatabaseSync(dbPath); cold.exec('PRAGMA busy_timeout = 5000');
-  const anyStudent = cold.prepare("SELECT login FROM users WHERE role='STUDENT' AND deleted_at IS NULL ORDER BY created_at LIMIT 1").get();
-  cold.close();
+   
+  const anyStudent = await arow("SELECT login FROM users WHERE role='STUDENT' AND deleted_at IS NULL ORDER BY created_at LIMIT 1");
+  
   const coldToken = await login(anyStudent.login, 'study123');
   const coldList = await api('/api/student/runtime/deliverables', { token: coldToken });
   check('没在课堂上时列产物被拒（RUNTIME_NO_ACTIVE_CLASSROOM）',
     coldList.status === 403 && coldList.data?.error?.code === 'RUNTIME_NO_ACTIVE_CLASSROOM', JSON.stringify(coldList.data));
 
   // 放进课堂（夹具覆盖所有有许可的学生）
-  ensureClassroom(dbPath);
-  switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
-  const scopeDb = new DatabaseSync(dbPath); scopeDb.exec('PRAGMA busy_timeout = 5000');
-  const enrolled = scopeDb.prepare(
-    `SELECT student.login, lesson.id AS lesson_id FROM session_students part
+  await ensureClassroom(dbPath);
+  await switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
+   
+  const enrolled = await arow(`SELECT student.login, lesson.id AS lesson_id FROM session_students part
        JOIN class_sessions session ON session.id = part.session_id AND session.status='ACTIVE'
        JOIN users student ON student.id = part.student_id
        JOIN course_lessons lesson ON lesson.id = session.lesson_id
-      WHERE part.status='ACTIVE' ORDER BY student.created_at LIMIT 1`,
-  ).get();
-  scopeDb.close();
+      WHERE part.status='ACTIVE' ORDER BY student.created_at LIMIT 1`);
+  
   assert.ok(enrolled?.login, '夹具没把任何学生放进课堂 —— 后面的用例没有意义');
   const token = await login(enrolled.login, 'study123');
 

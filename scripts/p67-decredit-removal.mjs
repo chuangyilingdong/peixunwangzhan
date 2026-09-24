@@ -25,6 +25,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p67-decredit-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const env = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -66,10 +81,10 @@ try {
   const orgToken = await login('org-admin', 'org123');
   const studentToken = await login('student-1', 'study123');
 
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const orgId = db.prepare("SELECT org_id FROM users WHERE login='org-admin'").get().org_id;
-  const studentId = db.prepare("SELECT id FROM users WHERE login='student-1'").get().id;
-  db.close();
+   
+  const orgId = (await arow("SELECT org_id FROM users WHERE login='org-admin'")).org_id;
+  const studentId = (await arow("SELECT id FROM users WHERE login='student-1'")).id;
+  
 
   /* ① 被删的积分接口：全部 404 */
   console.log('\n① 被删的积分接口');
@@ -114,14 +129,14 @@ try {
 
   /* ④ 列还在（删代码不删表），但新写入的积分列恒为 0 */
   console.log('\n④ 积分列保留但不再写入');
-  const db2 = new DatabaseSync(dbPath); db2.exec('PRAGMA busy_timeout = 5000');
-  const cols = db2.prepare("SELECT name FROM pragma_table_info('users') WHERE name IN ('personal_credits','magic_stones','monthly_credit_allowance','ai_credit_limit')").all().map((r) => r.name);
+   
+  const cols = (await arows("SELECT name FROM pragma_table_info('users') WHERE name IN ('personal_credits','magic_stones','monthly_credit_allowance','ai_credit_limit')")).map((r) => r.name);
   check('users 的积分列仍在库里（历史数据可回查）', cols.length === 4, cols.join(','));
-  const tables = db2.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('credit_entries','personal_credit_ledger','user_credit_adjustments','org_billing_accounts')").all().map((r) => r.name);
+  const tables = (await arows("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('credit_entries','personal_credit_ledger','user_credit_adjustments','org_billing_accounts')")).map((r) => r.name);
   check('积分相关表仍在库里', tables.length === 4, tables.join(','));
-  const written = db2.prepare('SELECT COUNT(*) n FROM usage_records WHERE credits_charged != 0').get().n;
+  const written = (await arow('SELECT COUNT(*) n FROM usage_records WHERE credits_charged != 0')).n;
   check('新写入的 usage_records.credits_charged 恒为 0', Number(written) === 0, `非 0 行数 ${written}`);
-  db2.close();
+  
 
   console.log(JSON.stringify({ name: 'decredit-removal', pass: failures === 0, failures }, null, 2));
 } catch (error) {

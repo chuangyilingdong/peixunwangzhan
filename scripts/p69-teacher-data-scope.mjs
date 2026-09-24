@@ -27,6 +27,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p69-teacher-scope-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const env = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -43,30 +58,28 @@ await run(['packages/database/src/seed.js']);
 // 否则「看得见/看不见」测不出区别（空集合会让断言变成假绿）。
 const seeded = {};
 {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const orgId = db.prepare("SELECT org_id FROM users WHERE login='org-admin'").get().org_id;
-  const t1 = db.prepare("SELECT id FROM users WHERE login='teacher-1'").get().id;
-  const t2 = db.prepare("SELECT id FROM users WHERE login='teacher-2'").get().id;
-  const s1 = db.prepare("SELECT id FROM users WHERE login='student-1'").get().id;
-  const lesson = db.prepare("SELECT id FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get().id;
-  const series = db.prepare('SELECT series_id FROM course_lessons WHERE id=?').get(lesson).series_id;
+   
+  const orgId = (await arow("SELECT org_id FROM users WHERE login='org-admin'")).org_id;
+  const t1 = (await arow("SELECT id FROM users WHERE login='teacher-1'")).id;
+  const t2 = (await arow("SELECT id FROM users WHERE login='teacher-2'")).id;
+  const s1 = (await arow("SELECT id FROM users WHERE login='student-1'")).id;
+  const lesson = (await arow("SELECT id FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1")).id;
+  const series = (await arow('SELECT series_id FROM course_lessons WHERE id=?', [lesson])).series_id;
   const now = new Date().toISOString();
-  const makeSession = (tag, teacherId) => {
+  const makeSession = async (tag, teacherId) => {
     const sessionId = `csession_p69_${tag}`;
-    db.prepare("INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,started_by,started_at,created_at,updated_at) VALUES (?,?,?,?,?,?,'ACTIVE','CANVAS',?,?,?,?)")
-      .run(sessionId, `P69 ${tag} 课堂`, orgId, series, lesson, teacherId, teacherId, now, now, now);
-    db.prepare("INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)")
-      .run(`sstudent_p69_${tag}`, sessionId, s1, orgId, lesson, series, teacherId, now, now);
+    await aq("INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,started_by,started_at,created_at,updated_at) VALUES (?,?,?,?,?,?,'ACTIVE','CANVAS',?,?,?,?)", [sessionId, `P69 ${tag} 课堂`, orgId, series, lesson, teacherId, teacherId, now, now, now]);
+    await aq("INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)", [`sstudent_p69_${tag}`, sessionId, s1, orgId, lesson, series, teacherId, now, now]);
     return sessionId;
   };
-  const a = makeSession('A', t1);   // teacher-1 自己建的
-  const b = makeSession('B', t2);   // teacher-2 建的 —— teacher-1 **不该**看到
+  const a = await makeSession('A', t1);   // teacher-1 自己建的
+  const b = await makeSession('B', t2);   // teacher-2 建的 —— teacher-1 **不该**看到
   // 两个课堂各记一条用量 + 一件作品（教师范围要能圈住这两个资源）
   for (const [tag, session] of [['A', a], ['B', b]]) {
-    db.prepare("INSERT INTO usage_records(id,org_id,user_id,class_session_id,project_id,modality,model,credits_charged,status,cost_fen,created_at) VALUES (?,?,?,?,NULL,'TEXT','p69-model',0,'SUCCESS',100,?)").run(`usage_p69_${tag}`, orgId, s1, session, now);
+    await aq("INSERT INTO usage_records(id,org_id,user_id,class_session_id,project_id,modality,model,credits_charged,status,cost_fen,created_at) VALUES (?,?,?,?,NULL,'TEXT','p69-model',0,'SUCCESS',100,?)", [`usage_p69_${tag}`, orgId, s1, session, now]);
   }
   Object.assign(seeded, { orgId, lessonId: lesson, seriesId: series, sessionA: a, sessionB: b, student1: s1, teacher1: t1, teacher2: t2 });
-  db.close();
+  
 }
 
 const port = 19069;
@@ -147,18 +160,16 @@ try {
   check('④ 作品接口可用（教师视角）', worksTeacher.status === 200, JSON.stringify(worksTeacher).slice(0, 160));
   // 教师自己的课堂里造一件作品：应当看得到；再给别人的课堂造一件：不该看到。
   {
-    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
+     
     const now = new Date().toISOString();
     // ⚠️ works.project_id 是 UNIQUE（一个项目一件作品），所以两件作品得挂在两个项目上。
     // ⚠️ works 表没有 created_at/updated_at（只有 submitted_at），canvas_snapshot 是 NOT NULL。
     for (const [tag, session] of [['A', seeded.sessionA], ['B', seeded.sessionB]]) {
       const projectId = `project_p69_${tag}`;
-      db.prepare("INSERT INTO student_projects(id,student_id,org_id,course_lesson_id,class_session_id,title,status,last_saved_at,created_at,updated_at) VALUES (?,?,?,?,?,?,'DRAFT',?,?,?)")
-        .run(projectId, seeded.student1, seeded.orgId, seeded.lessonId, session, `P69 项目 ${tag}`, now, now, now);
-      db.prepare("INSERT INTO works(id,project_id,student_id,org_id,course_lesson_id,class_session_id,title,description,canvas_snapshot,status,submitted_at) VALUES (?,?,?,?,?,?,?,'','{}','PENDING',?)")
-        .run(`work_p69_${tag}`, projectId, seeded.student1, seeded.orgId, seeded.lessonId, session, `P69 作品 ${tag}`, now);
+      await aq("INSERT INTO student_projects(id,student_id,org_id,course_lesson_id,class_session_id,title,status,last_saved_at,created_at,updated_at) VALUES (?,?,?,?,?,?,'DRAFT',?,?,?)", [projectId, seeded.student1, seeded.orgId, seeded.lessonId, session, `P69 项目 ${tag}`, now, now, now]);
+      await aq("INSERT INTO works(id,project_id,student_id,org_id,course_lesson_id,class_session_id,title,description,canvas_snapshot,status,submitted_at) VALUES (?,?,?,?,?,?,?,'','{}','PENDING',?)", [`work_p69_${tag}`, projectId, seeded.student1, seeded.orgId, seeded.lessonId, session, `P69 作品 ${tag}`, now]);
     }
-    db.close();
+    
   }
   const worksAfter = await api('/api/org/works', { token: teacher });
   const teacherWorkIds = idsOf(worksAfter.data?.items);

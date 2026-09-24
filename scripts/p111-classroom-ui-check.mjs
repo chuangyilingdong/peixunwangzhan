@@ -32,6 +32,21 @@ fs.mkdirSync(shotDir, { recursive: true });
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'classroom-ui-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 // 教学素材的「真文件」要落在服务端认的上传根下，预览才读得到（fileUploadSecurity.uploadRoot）
 const uploadRoot = path.join(temp, 'uploads');
 const env = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, FILE_UPLOAD_ROOT: uploadRoot, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'), DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
@@ -45,19 +60,19 @@ const run = (args, extraEnv = {}) => new Promise((resolve, reject) => {
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
-const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-const lesson = db.prepare("SELECT id, series_id FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get();
-const teacher = db.prepare("SELECT id, org_id FROM users WHERE login='teacher-1'").get();
-const seeded = db.prepare("SELECT id, login, display_name, password_hash FROM users WHERE role='STUDENT' AND org_id=? AND deleted_at IS NULL LIMIT 2").all(teacher.org_id);
+ 
+const lesson = await arow("SELECT id, series_id FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1");
+const teacher = await arow("SELECT id, org_id FROM users WHERE login='teacher-1'");
+const seeded = await arows("SELECT id, login, display_name, password_hash FROM users WHERE role='STUDENT' AND org_id=? AND deleted_at IS NULL LIMIT 2", [teacher.org_id]);
 assert.equal(seeded.length, 2, 'fixture: seed 应带 2 名学生');
 // 种子里每机构只有 2 名学生，候选池太少看不出「可加 / 不可加」的分别 —— 直接补几个。
 // 复用已有学生的 password_hash（这些账号只当候选，不登录）。
 const extraNames = ['周可欣', '赵天宇', '林子涵', '孙雨桐', '陈语桐'];
-const extra = extraNames.map((name, index) => {
+const extra = extraNames.map(async (name, index) => {
   const row = { id: `ui-student-${index + 1}`, login: `ui${index + 10}` };
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,created_at,updated_at)
-    VALUES(?,?,?,?,'STUDENT',?,'ACTIVE',?,?)`).run(row.id, teacher.org_id, row.login, name, seeded[0].password_hash, now, now);
+  await aq(`INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,created_at,updated_at)
+    VALUES(?,?,?,?,'STUDENT',?,'ACTIVE',?,?)`, [row.id, teacher.org_id, row.login, name, seeded[0].password_hash, now, now]);
   return row;
 });
 const students = [...seeded.map((s) => ({ id: s.id, name: s.display_name })), ...extra.map((s, i) => ({ id: s.id, name: extraNames[i] }))];
@@ -65,7 +80,7 @@ const students = [...seeded.map((s) => ({ id: s.id, name: s.display_name })), ..
 //   · grantedSeriesTitle —— 学生已持有的课包标题，用来验 002-04A 的候选池**真的**排除了它；
 //   · idleGrantName —— 有许可但没有任何课堂/调用的学生，用来验状态推导的**负例**（应当是「待激活」）。
 //     students[4] = 林子涵：在 grantedIds 里（有许可），但 rosterIds（前 3 人）里没有它、也没有调用记录。
-const grantedSeriesTitle = db.prepare('SELECT title FROM course_series WHERE id=?').get(lesson.series_id)?.title || '';
+const grantedSeriesTitle = (await arow('SELECT title FROM course_series WHERE id=?', [lesson.series_id]))?.title || '';
 const idleGrantName = students[4]?.name || '';
 // 只给前 5 人许可：其余 2 人保持「没有这个课包的许可」→ 判定说明里的 C 类有真实人数
 const grantedIds = students.slice(0, 5).map((s) => s.id);
@@ -73,9 +88,8 @@ const grantedIds = students.slice(0, 5).map((s) => s.id);
 // 否则「可添加学生」是空的，那张表根本渲染不出来（夹具踩过这个坑）
 const rosterIds = grantedIds.slice(0, 3);
 for (const studentId of grantedIds) {
-  const exists = db.prepare('SELECT id FROM student_course_grants WHERE org_id=? AND series_id=? AND student_id=?').get(teacher.org_id, lesson.series_id, studentId);
-  if (!exists) db.prepare("INSERT INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES(?,?,?,?,?)")
-    .run(`grant-ui-${studentId}`, teacher.org_id, studentId, lesson.series_id, new Date().toISOString());
+  const exists = await arow('SELECT id FROM student_course_grants WHERE org_id=? AND series_id=? AND student_id=?', [teacher.org_id, lesson.series_id, studentId]);
+  if (!exists) await aq("INSERT INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES(?,?,?,?,?)", [`grant-ui-${studentId}`, teacher.org_id, studentId, lesson.series_id, new Date().toISOString()]);
 }
 /**
  * 写一份**多页**的示例 PDF 夹具。
@@ -135,11 +149,10 @@ function writeSamplePdf(file, pageCount = 3) {
   fs.mkdirSync(path.dirname(samplePdf), { recursive: true });
   writeSamplePdf(samplePdf, 3);
   fs.writeFileSync(path.join(uploadRoot, relKey), fs.readFileSync(samplePdf));
-  db.prepare(`INSERT INTO file_assets(id,owner_type,storage_kind,storage_key,file_name,mime_type,category,visibility,status,review_status,metadata,created_at,updated_at)
-    VALUES(?,'PLATFORM','INTERNAL_PROXY',?,'ui-material.pdf','application/pdf','TEACHING_ASSET','PUBLIC_PLATFORM','ACTIVE','NOT_REQUIRED','{}',?,?)`)
-    .run(fileId, relKey, now, now);
-  db.prepare(`INSERT INTO course_series(id,title,description,owner_type,visibility,version,status,created_at,updated_at)
-    VALUES(?,'P111 教学素材课包','用于验证教学素材预览','PLATFORM','PUBLIC','1.0','PUBLISHED',?,?)`).run(seriesId, now, now);
+  await aq(`INSERT INTO file_assets(id,owner_type,storage_kind,storage_key,file_name,mime_type,category,visibility,status,review_status,metadata,created_at,updated_at)
+    VALUES(?,'PLATFORM','INTERNAL_PROXY',?,'ui-material.pdf','application/pdf','TEACHING_ASSET','PUBLIC_PLATFORM','ACTIVE','NOT_REQUIRED','{}',?,?)`, [fileId, relKey, now, now]);
+  await aq(`INSERT INTO course_series(id,title,description,owner_type,visibility,version,status,created_at,updated_at)
+    VALUES(?,'P111 教学素材课包','用于验证教学素材预览','PLATFORM','PUBLIC','1.0','PUBLISHED',?,?)`, [seriesId, now, now]);
   // 快照里那张票据**故意写成早已过期**（1000000000000 = 2001 年）
   const deadPreviewUrl = `/api/org/file-assets/${fileId}/preview?t=1000000000000.deadbeef`;
   const snapshot = {
@@ -150,9 +163,9 @@ function writeSamplePdf(file, pageCount = 3) {
     capabilities: [], materialGroups: [], generationBoxes: [],
     teachingGroups: [{ id: 'tg-ui', title: '备课资料', sort: 1, assets: [{ id: 'ta-ui', title: 'P111 讲义', description: '端到端素材', assetType: 'FILE', fileAssetId: fileId, assetUrl: null, sort: 1, previewKind: 'PDF', previewUrl: deadPreviewUrl }] }],
   };
-  db.prepare(`INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,delivery_mode,published_content,created_at,updated_at)
-    VALUES(?,?,'第 1 课 · 教学素材验证','',1,'PUBLISHED',45,'CANVAS',?,?,?)`).run(materialLessonId, seriesId, JSON.stringify(snapshot), now, now);
-  db.prepare("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_at) VALUES('assign-ui-materials',?,?,'ACTIVE',?)").run(seriesId, teacher.org_id, now);
+  await aq(`INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,delivery_mode,published_content,created_at,updated_at)
+    VALUES(?,?,'第 1 课 · 教学素材验证','',1,'PUBLISHED',45,'CANVAS',?,?,?)`, [materialLessonId, seriesId, JSON.stringify(snapshot), now, now]);
+  await aq("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_at) VALUES('assign-ui-materials',?,?,'ACTIVE',?)", [seriesId, teacher.org_id, now]);
   console.log('教学素材夹具：series=', seriesId, ' 快照里的票据已写死为过期');
 }
 
@@ -164,13 +177,15 @@ function writeSamplePdf(file, pageCount = 3) {
 {
   // 挂在上面那个素材课包的授权单上（seriesId 是那个块的局部变量，这里用同一个字面量并核对它真在）
   const batchSeriesId = 'series-ui-materials';
-  assert.ok(db.prepare('SELECT id FROM course_series WHERE id=?').get(batchSeriesId), 'fixture: 素材课包不在，批次夹具挂不上');
-  const insertBatch = db.prepare(`INSERT INTO license_purchase_batches(id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at)
-    VALUES(?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?)`);
+  assert.ok(await arow('SELECT id FROM course_series WHERE id=?', [batchSeriesId]), 'fixture: 素材课包不在，批次夹具挂不上');
+  
   // ⚠️ 表上的 CHECK：LEGACY_OPENING_BALANCE 必须金额与币种都为 NULL；PURCHASE 必须两者都有值
-  insertBatch.run('batch-ui-1', 'assign-ui-materials', teacher.org_id, batchSeriesId, 'PURCHASE', 10, 100000, 'CNY', 'PAID', 'P111-ORDER-1', null, 'p111-batch-1', teacher.id, '2026-09-01T02:00:00.000Z', '2026-09-01T02:00:00.000Z');
-  insertBatch.run('batch-ui-2', 'assign-ui-materials', teacher.org_id, batchSeriesId, 'PURCHASE', 5, 50000, 'CNY', 'PAID', null, 'P111-CONTRACT-2', 'p111-batch-2', teacher.id, '2026-09-10T02:00:00.000Z', '2026-09-10T02:00:00.000Z');
-  insertBatch.run('batch-ui-3', 'assign-ui-materials', teacher.org_id, batchSeriesId, 'LEGACY_OPENING_BALANCE', 3, null, null, 'PAID', null, null, 'p111-batch-3', null, '2026-08-01T02:00:00.000Z', '2026-08-01T02:00:00.000Z');
+  await aq(`INSERT INTO license_purchase_batches(id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?)`, ['batch-ui-1', 'assign-ui-materials', teacher.org_id, batchSeriesId, 'PURCHASE', 10, 100000, 'CNY', 'PAID', 'P111-ORDER-1', null, 'p111-batch-1', teacher.id, '2026-09-01T02:00:00.000Z', '2026-09-01T02:00:00.000Z']);
+  await aq(`INSERT INTO license_purchase_batches(id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?)`, ['batch-ui-2', 'assign-ui-materials', teacher.org_id, batchSeriesId, 'PURCHASE', 5, 50000, 'CNY', 'PAID', null, 'P111-CONTRACT-2', 'p111-batch-2', teacher.id, '2026-09-10T02:00:00.000Z', '2026-09-10T02:00:00.000Z']);
+  await aq(`INSERT INTO license_purchase_batches(id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?)`, ['batch-ui-3', 'assign-ui-materials', teacher.org_id, batchSeriesId, 'LEGACY_OPENING_BALANCE', 3, null, null, 'PAID', null, null, 'p111-batch-3', null, '2026-08-01T02:00:00.000Z', '2026-08-01T02:00:00.000Z']);
   console.log('002-06 夹具：3 条批次（初次开通 / 增购 / 平台调整各一条）');
 }
 
@@ -186,15 +201,13 @@ function writeSamplePdf(file, pageCount = 3) {
   // 「已完成当前课堂对应课程」的判定会让学生从候选池掉出去，
   // 把「共 3 条课堂记录」「3 名学生资格仍有效」这些别的断言一起带红（第一版就踩了）。
   const learnedLessonId = 'lesson-ui-learned';
-  db.prepare(`INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,delivery_mode,published_content,created_at,updated_at)
-    VALUES(?,?,'第 2 课 · 学习记录样本','',99,'PUBLISHED',45,'CANVAS','{"status":"PUBLISHED"}',?,?)`).run(learnedLessonId, lesson.series_id, learnedAt, learnedAt);
+  await aq(`INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,delivery_mode,published_content,created_at,updated_at)
+    VALUES(?,?,'第 2 课 · 学习记录样本','',99,'PUBLISHED',45,'CANVAS','{"status":"PUBLISHED"}',?,?)`, [learnedLessonId, lesson.series_id, learnedAt, learnedAt]);
   // teacher_id 特意留空：这节课只是「学习记录」的容器，不该出现在教师自己的课堂列表里
   // （挂了 teacher.id 就会把「共 3 条课堂记录」变成 4，污染教师视角的断言）。
-  db.prepare(`INSERT INTO class_sessions(id,title,org_id,lesson_id,series_id,teacher_id,status,delivery_mode,started_at,created_at,updated_at)
-    VALUES(?,'002-04 学习记录样本',?,?,?,NULL,'ENDED','CANVAS',?,?,?)`)
-    .run('csession-ui-learned', teacher.org_id, learnedLessonId, lesson.series_id, learnedAt, learnedAt, learnedAt);
-  db.prepare("INSERT INTO usage_records(id,org_id,user_id,class_session_id,project_id,modality,model,credits_charged,status,cost_fen,created_at) VALUES (?,?,?,?,NULL,'TEXT','gpt-4o-mini',0,'SUCCESS',100,?)")
-    .run('usage-ui-learned', teacher.org_id, students[0].id, 'csession-ui-learned', learnedAt);
+  await aq(`INSERT INTO class_sessions(id,title,org_id,lesson_id,series_id,teacher_id,status,delivery_mode,started_at,created_at,updated_at)
+    VALUES(?,'002-04 学习记录样本',?,?,?,NULL,'ENDED','CANVAS',?,?,?)`, ['csession-ui-learned', teacher.org_id, learnedLessonId, lesson.series_id, learnedAt, learnedAt, learnedAt]);
+  await aq("INSERT INTO usage_records(id,org_id,user_id,class_session_id,project_id,modality,model,credits_charged,status,cost_fen,created_at) VALUES (?,?,?,?,NULL,'TEXT','gpt-4o-mini',0,'SUCCESS',100,?)", ['usage-ui-learned', teacher.org_id, students[0].id, 'csession-ui-learned', learnedAt]);
   console.log('002-04 学习记录夹具：', students[0].name, '在', lesson.series_id, '的第 2 课上有一条成功调用（正面分支）');
 }
 
@@ -205,21 +218,19 @@ function writeSamplePdf(file, pageCount = 3) {
 //   · 素材课包（学生没持有）→ 应当出现在候选里；
 //   · 学生已持有的那个课包 → 有余额也必须**被排除**，这正是 002-04A 候选规则要证的。
 {
-  const upsertQuota = (seriesId, total, used) => {
-    const changed = db.prepare("UPDATE course_assignments SET quota_total=?, quota_used=? WHERE series_id=? AND org_id=? AND status='ACTIVE'")
-      .run(total, used, seriesId, teacher.org_id).changes;
+  const upsertQuota = async (seriesId, total, used) => {
+    const changed = (await aq("UPDATE course_assignments SET quota_total=?, quota_used=? WHERE series_id=? AND org_id=? AND status='ACTIVE'", [total, used, seriesId, teacher.org_id])).changes;
     if (!changed) {
-      db.prepare("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_at,quota_total,quota_used) VALUES(?,?,?,'ACTIVE',?,?,?)")
-        .run(`assign-ui-quota-${seriesId}`, seriesId, teacher.org_id, new Date().toISOString(), total, used);
+      await aq("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_at,quota_total,quota_used) VALUES(?,?,?,'ACTIVE',?,?,?)", [`assign-ui-quota-${seriesId}`, seriesId, teacher.org_id, new Date().toISOString(), total, used]);
     }
   };
   // 素材课包**故意给少一点**：后面「勾选要授权的学员」那一屏要验「按剩余人次封顶」
   // （可授权学员比剩余人次多 → 「全选本页」必须只选到剩余人次，并说明是按上限选的）。
-  upsertQuota('series-ui-materials', 5, 0);
-  upsertQuota(lesson.series_id, 10, grantedIds.length);
+  await upsertQuota('series-ui-materials', 5, 0);
+  await upsertQuota(lesson.series_id, 10, grantedIds.length);
   console.log(`002-04A 夹具：素材课包 5 人次（候选 + 后面验封顶用）、学生已持有的课包 10 人次其中 ${grantedIds.length} 已分配（应被候选池排除）`);
 }
-db.close();
+
 
 const apiPort = 18787;
 const webPort = 6175;

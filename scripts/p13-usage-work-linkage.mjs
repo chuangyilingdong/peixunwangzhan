@@ -21,6 +21,18 @@ import { ensureClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p13-usage-work-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -44,28 +56,28 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
 const { DatabaseSync } = await import('node:sqlite');
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 
 // ① 历史数据回填：造一条「项目已提交、用量未关联作品」的旧数据，再跑一次启动迁移
-const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
-const student = seedDb.prepare("SELECT * FROM users WHERE login='student-2'").get();
-const klass = seedDb.prepare('SELECT * FROM classes WHERE org_id=? LIMIT 1').get(student.org_id);
-const lesson = seedDb.prepare('SELECT lesson_id FROM class_curriculum_items WHERE class_id=? LIMIT 1').get(klass.id).lesson_id;
+ 
+const student = await arow("SELECT * FROM users WHERE login='student-2'");
+const klass = await arow('SELECT * FROM classes WHERE org_id=? LIMIT 1', [student.org_id]);
+const lesson = (await arow('SELECT lesson_id FROM class_curriculum_items WHERE class_id=? LIMIT 1', [klass.id])).lesson_id;
 const legacyProjectId = newId('project');
 const legacyWorkId = newId('work');
 const legacyUsageId = newId('usage');
-seedDb.prepare('INSERT INTO student_projects(id,student_id,org_id,class_id,course_lesson_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-  .run(legacyProjectId, student.id, student.org_id, klass.id, lesson, '历史用量项目', 'SUBMITTED', EMPTY_CANVAS, 1, now(), now(), now());
-seedDb.prepare('INSERT INTO works(id,project_id,student_id,org_id,class_id,course_lesson_id,title,canvas_snapshot,submitted_at) VALUES (?,?,?,?,?,?,?,?,?)')
-  .run(legacyWorkId, legacyProjectId, student.id, student.org_id, klass.id, lesson, '历史用量作品', EMPTY_CANVAS, now());
-seedDb.prepare('INSERT INTO usage_records(id,org_id,user_id,project_id,modality,credits_charged,status,created_at) VALUES (?,?,?,?,?,?,?,?)')
-  .run(legacyUsageId, student.org_id, student.id, legacyProjectId, 'IMAGE', 1, 'SUCCESS', now());
-seedDb.close();
+await aq('INSERT INTO student_projects(id,student_id,org_id,class_id,course_lesson_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [legacyProjectId, student.id, student.org_id, klass.id, lesson, '历史用量项目', 'SUBMITTED', EMPTY_CANVAS, 1, now(), now(), now()]);
+await aq('INSERT INTO works(id,project_id,student_id,org_id,class_id,course_lesson_id,title,canvas_snapshot,submitted_at) VALUES (?,?,?,?,?,?,?,?,?)', [legacyWorkId, legacyProjectId, student.id, student.org_id, klass.id, lesson, '历史用量作品', EMPTY_CANVAS, now()]);
+await aq('INSERT INTO usage_records(id,org_id,user_id,project_id,modality,credits_charged,status,created_at) VALUES (?,?,?,?,?,?,?,?)', [legacyUsageId, student.org_id, student.id, legacyProjectId, 'IMAGE', 1, 'SUCCESS', now()]);
+
 
 await run(['packages/database/src/db.js', '--init']);
 
-const afterMigration = new DatabaseSync(dbPath); afterMigration.exec('PRAGMA busy_timeout = 5000');
-const backfilled = afterMigration.prepare('SELECT work_id FROM usage_records WHERE id=?').get(legacyUsageId);
-afterMigration.close();
+ 
+const backfilled = await arow('SELECT work_id FROM usage_records WHERE id=?', [legacyUsageId]);
+
 assert.equal(backfilled.work_id, legacyWorkId, '启动迁移应把历史用量回填到对应作品');
 
 // ② 提交时实时回填 + ③ 报表按作品标题检索
@@ -96,7 +108,7 @@ try {
   for (let i = 0; i < 80; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* not up yet */ }
   // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
     await sleep(100);
   }
 
@@ -116,18 +128,17 @@ try {
 
   // 模拟该项目已产生的 AI 用量；真实生成链路由 p4-o12 / p6-a01 覆盖，这里只验证提交时的关联回填
   const liveUsageId = newId('usage');
-  const liveDb = new DatabaseSync(dbPath); liveDb.exec('PRAGMA busy_timeout = 5000');
-  liveDb.prepare('INSERT INTO usage_records(id,org_id,user_id,project_id,modality,credits_charged,status,created_at) VALUES (?,?,?,?,?,?,?,?)')
-    .run(liveUsageId, student.org_id, student.id, projectId, 'IMAGE', 1, 'SUCCESS', now());
-  liveDb.close();
+   
+  await aq('INSERT INTO usage_records(id,org_id,user_id,project_id,modality,credits_charged,status,created_at) VALUES (?,?,?,?,?,?,?,?)', [liveUsageId, student.org_id, student.id, projectId, 'IMAGE', 1, 'SUCCESS', now()]);
+  
 
   const submitted = await api(`/api/student/projects/${projectId}/submit`, { method: 'POST', token: studentToken, body: { copyrightConfirmed: true } });
   assert.equal(submitted.status, 200, `作品提交失败: ${JSON.stringify(submitted.data)}`);
   const workId = submitted.data.work.id;
 
-  const linkedDb = new DatabaseSync(dbPath); linkedDb.exec('PRAGMA busy_timeout = 5000');
-  const linked = linkedDb.prepare('SELECT work_id FROM usage_records WHERE id=?').get(liveUsageId);
-  linkedDb.close();
+   
+  const linked = await arow('SELECT work_id FROM usage_records WHERE id=?', [liveUsageId]);
+  
   assert.equal(linked.work_id, workId, '提交作品后应把该项目的用量记录关联到作品');
 
   const adminLogin = await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } });

@@ -24,6 +24,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p137-model-name-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -49,19 +64,19 @@ await run(['packages/database/src/seed.js']);
 {
   // 夹具（直接改库 —— 与 p128 / page-shot 的 fixture 同一条做法）：给 student-2 那节课
   // 一份「已发布、有生成框体」的快照，并把课时开放成画布课。
-  const db = new DatabaseSync(dbPath);
-  db.exec('PRAGMA busy_timeout = 5000');
-  const student = db.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get();
-  const grant = db.prepare('SELECT series_id FROM student_course_grants WHERE student_id=?').get(student.id);
-  const lesson = db.prepare('SELECT id FROM course_lessons WHERE series_id=? ORDER BY sort LIMIT 1').get(grant.series_id);
+  
+  
+  const student = await arow("SELECT id, org_id FROM users WHERE login='student-2'");
+  const grant = await arow('SELECT series_id FROM student_course_grants WHERE student_id=?', [student.id]);
+  const lesson = await arow('SELECT id FROM course_lessons WHERE series_id=? ORDER BY sort LIMIT 1', [grant.series_id]);
   const box = { id: 'box_p137', title: 'P137 文字框体', modality: 'TEXT', model: MODEL, prompt: '', assetUrl: '' };
-  db.prepare('UPDATE course_lessons SET status=?, delivery_modes=? WHERE id=?').run('PUBLISHED', JSON.stringify(['CANVAS']), lesson.id);
+  await aq('UPDATE course_lessons SET status=?, delivery_modes=? WHERE id=?', ['PUBLISHED', JSON.stringify(['CANVAS']), lesson.id]);
   // ⚠️ 走**发布快照**（学生读的就是它）：`published_content.generationBoxes` 是数组时，
   //    mergedLessonCanvas 就取这一份（见 lib.js 的逐键回退），所以这里放进去就等于"运营已发布"。
   const materialGroups = [{ id: 'p137-group', title: 'P137 素材组', materials: [{ id: box.id, materialType: 'GENERATION_BOX', title: box.title, snapshot: { box } }] }];
-  db.prepare('UPDATE course_lessons SET published_content=? WHERE id=?').run(JSON.stringify({ capabilities: ['text'], materialGroups, generationBoxes: [box] }), lesson.id);
+  await aq('UPDATE course_lessons SET published_content=? WHERE id=?', [JSON.stringify({ capabilities: ['text'], materialGroups, generationBoxes: [box] }), lesson.id]);
   Object.assign(SEEDED, { studentId: student.id, seriesId: grant.series_id, lessonId: lesson.id });
-  db.close();
+  
 }
 
 const port = 19137;

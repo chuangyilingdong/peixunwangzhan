@@ -8,6 +8,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-kids-p6-learn-portal-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -68,13 +83,13 @@ try {
   await waitForServer();
 
   // 1. Schema: personal_credit_ledger + users.personal_credits/magic_stones columns exist
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  db.exec('PRAGMA foreign_keys = ON');
-  const cols = db.prepare(`SELECT name FROM pragma_table_info('users') WHERE name IN ('personal_credits','magic_stones')`).all().map(r => r.name);
+   
+  
+  const cols = (await arows(`SELECT name FROM pragma_table_info('users') WHERE name IN ('personal_credits','magic_stones')`)).map(r => r.name);
   check('users columns migrated', () => assert.ok(cols.includes('personal_credits') && cols.includes('magic_stones'), 'missing cols: ' + cols.join(',')));
-  const tbl = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='personal_credit_ledger'`).get();
+  const tbl = await arow(`SELECT name FROM sqlite_master WHERE type='table' AND name='personal_credit_ledger'`);
   check('personal_credit_ledger table created', () => assert.ok(tbl && tbl.name === 'personal_credit_ledger'));
-  db.close();
+  
 
   // 2. /api/me includes personalCredits
   const student = await login('student-1', 'study123');
@@ -151,16 +166,16 @@ try {
   check('AppShell 不再有 item.external 分支', () => assert.ok(!uiJsx.includes('item.external'), 'external 分支已随该入口删除'));
 
   // 9. Personal credit ledger is writable + indexed
-  const db2 = new DatabaseSync(dbPath); db2.exec('PRAGMA busy_timeout = 5000');
+   
   const userId = student.user.id;
   const orgId = 'test-org';
-  db2.prepare(`INSERT INTO organizations (id, name, status, contract_start_at, contract_expires_at, created_at, updated_at) VALUES (?, 't', 'ACTIVE', datetime('now'), datetime('now', '+30 days'), datetime('now'), datetime('now'))`).run(orgId);
-  db2.prepare(`INSERT INTO users (id, org_id, login, display_name, role, password_hash, status, created_at, updated_at, personal_credits, magic_stones) VALUES ('user-ledger', ?, 'ledger-test', 'Ledger Test', 'STUDENT', 'x', 'ACTIVE', datetime('now'), datetime('now'), 50, 0)`).run(orgId);
-  db2.prepare(`INSERT INTO personal_credit_ledger (id, user_id, direction, type, credits, balance_after, source, reason, created_at) VALUES ('ledger-1', ?, 'IN', 'TOPUP', 50, 50, 'FREE_CANVAS', 'init', datetime('now'))`).run('user-ledger');
-  const rows = db2.prepare('SELECT * FROM personal_credit_ledger WHERE user_id = ?').all('user-ledger');
+  await aq(`INSERT INTO organizations (id, name, status, contract_start_at, contract_expires_at, created_at, updated_at) VALUES (?, 't', 'ACTIVE', datetime('now'), datetime('now', '+30 days'), datetime('now'), datetime('now'))`, [orgId]);
+  await aq(`INSERT INTO users (id, org_id, login, display_name, role, password_hash, status, created_at, updated_at, personal_credits, magic_stones) VALUES ('user-ledger', ?, 'ledger-test', 'Ledger Test', 'STUDENT', 'x', 'ACTIVE', datetime('now'), datetime('now'), 50, 0)`, [orgId]);
+  await aq(`INSERT INTO personal_credit_ledger (id, user_id, direction, type, credits, balance_after, source, reason, created_at) VALUES ('ledger-1', ?, 'IN', 'TOPUP', 50, 50, 'FREE_CANVAS', 'init', datetime('now'))`, ['user-ledger']);
+  const rows = await arows('SELECT * FROM personal_credit_ledger WHERE user_id = ?', ['user-ledger']);
   check('personal_credit_ledger insertable', () => assert.equal(rows.length, 1));
   check('personal_credit_ledger direction is IN', () => assert.equal(rows[0].direction, 'IN'));
-  db2.close();
+  
 
   console.log(JSON.stringify({ name: 'p6-learn-portal-e2e', pass: true, checks: checks.length, items: checks.map(c => c.name) }));
 } catch (e) {

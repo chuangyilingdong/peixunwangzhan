@@ -16,6 +16,18 @@ import { pathToFileURL } from 'node:url';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p19-platform-account-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -36,15 +48,18 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
 const { DatabaseSync } = await import('node:sqlite');
-const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
-const org = seedDb.prepare('SELECT id FROM organizations LIMIT 1').get();
-const student = seedDb.prepare("SELECT id, login FROM users WHERE login='student-2'").get();
-const rootUser = seedDb.prepare("SELECT id FROM users WHERE login='root'").get();
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
+ 
+const org = await arow('SELECT id FROM organizations LIMIT 1');
+const student = await arow("SELECT id, login FROM users WHERE login='student-2'");
+const rootUser = await arow("SELECT id FROM users WHERE login='root'");
 const now = new Date().toISOString();
 // 受限权限的平台管理员（只有内容域权限）+ 一个没有机构的用户
-seedDb.prepare("INSERT INTO users(id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES ('admin_limited','limited','受限管理员','SUPER_ADMIN','[\"ADMIN_CONTENT\"]','placeholder','ACTIVE',?,?)").run(now, now);
-seedDb.prepare("INSERT INTO users(id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES ('user_noorg','noorg','无机构用户','STUDENT','[]','placeholder','ACTIVE',?,?)").run(now, now);
-seedDb.close();
+await aq("INSERT INTO users(id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES ('admin_limited','limited','受限管理员','SUPER_ADMIN','[\"ADMIN_CONTENT\"]','placeholder','ACTIVE',?,?)", [now, now]);
+await aq("INSERT INTO users(id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES ('user_noorg','noorg','无机构用户','STUDENT','[]','placeholder','ACTIVE',?,?)", [now, now]);
+
 // placeholder 密码哈希用平台自己的 hashPassword 写一次（避免手工拼格式）
 const schemaUrl = pathToFileURL(path.join(root, 'packages/database/src/schema.js')).href;
 await run(['-e', `
@@ -146,10 +161,10 @@ try {
   const staleStudent = await api('/api/student/dashboard', { token: studentLogin.data.token });
   assert.equal(staleStudent.status, 401, `改角色后学生会话应失效，实际 ${staleStudent.status}`);
 
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const audit = db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action IN ('PLATFORM_USER_ROLE','PLATFORM_SELF_PASSWORD_UPDATE')").get();
-  const role = db.prepare('SELECT role FROM users WHERE id=?').get(student.id);
-  db.close();
+   
+  const audit = await arow("SELECT COUNT(*) n FROM audit_logs WHERE action IN ('PLATFORM_USER_ROLE','PLATFORM_SELF_PASSWORD_UPDATE')");
+  const role = await arow('SELECT role FROM users WHERE id=?', [student.id]);
+  
   assert.equal(audit.n, 3, `应写 3 条审计（1 次角色 + 2 次改密），实际 ${audit.n}`);
   assert.equal(role.role, 'TEACHER', '数据库里角色应已更新');
 

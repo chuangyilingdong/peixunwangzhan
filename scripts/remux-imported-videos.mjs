@@ -14,6 +14,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const KEEP_MOV = process.argv.includes('--keep-mov');
@@ -59,9 +62,9 @@ for (const file of movFiles) {
 
 // 库里把 .mov 地址换成 .mp4（JSON 感知地改，不做文本替换）
 if (!DRY_RUN && moved.length) {
-  const db = new DatabaseSync(DB_PATH);
-  db.exec('PRAGMA busy_timeout = 15000');
-  const rows = db.prepare("SELECT id, canvas_snapshot FROM works WHERE id LIKE 'work_ltai_%'").all();
+  
+  
+  const rows = await arows("SELECT id, canvas_snapshot FROM works WHERE id LIKE 'work_ltai_%'");
   let updated = 0;
   for (const row of rows) {
     const snapshot = JSON.parse(row.canvas_snapshot);
@@ -71,11 +74,11 @@ if (!DRY_RUN && moved.length) {
     const next = (imported.contentUrls || []).map((url) => url.replace(/\.mov$/i, '.mp4'));
     if (JSON.stringify(next) === before) continue;
     imported.contentUrls = next;
-    db.prepare('UPDATE works SET canvas_snapshot=? WHERE id=?').run(JSON.stringify(snapshot), row.id);
+    await aq('UPDATE works SET canvas_snapshot=? WHERE id=?', [JSON.stringify(snapshot), row.id]);
     updated += 1;
   }
   log(`[remux] 库里更新了 ${updated} 条作品的本体地址`);
-  db.close();
+  
 }
 
 // 删掉 .mov（默认删：转完留着只是占地方；--keep-mov 时保留做对照）

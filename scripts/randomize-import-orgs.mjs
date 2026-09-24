@@ -9,6 +9,9 @@
  * 跑法（服务器上）：node scripts/randomize-import-orgs.mjs [--orgs 8] [--seed 20260919] [--dry-run]
  */
 import { DatabaseSync } from 'node:sqlite';
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 
 const arg = (name, fallback) => {
   const index = process.argv.indexOf(name);
@@ -36,27 +39,26 @@ function makeRandom(seed) {
 }
 const random = makeRandom(Number(arg('--seed', 20260919)) || 20260919);
 
-const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA busy_timeout = 15000');
+
+
 const now = new Date().toISOString();
 
 const picks = [...CANDIDATES].sort(() => random() - 0.5).slice(0, ORG_COUNT);
 console.log(`[机构] 用 ${picks.length} 个机构：${picks.join(' / ')}`);
 
 // ① 机构行：第一个复用原来那条（改名），其余新建
-picks.forEach((name, index) => {
+picks.forEach(async (name, index) => {
   const id = index === 0 ? SOURCE_ORG_ID : `org_plaza_${index + 1}`;
   if (DRY_RUN) { console.log(`  （dry-run）机构 ${id} → ${name}`); return; }
-  const exists = db.prepare('SELECT id FROM organizations WHERE id=?').get(id);
-  if (exists) db.prepare('UPDATE organizations SET name=?, updated_at=? WHERE id=?').run(name, now, id);
-  else db.prepare(`INSERT INTO organizations
+  const exists = await arow('SELECT id FROM organizations WHERE id=?', [id]);
+  if (exists) await aq('UPDATE organizations SET name=?, updated_at=? WHERE id=?', [name, now, id]);
+  else await aq(`INSERT INTO organizations
       (id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,contact,created_by,created_at,updated_at)
-      VALUES (?,?, 'ACTIVE', ?, '2030-01-01T00:00:00.000Z', 1, 3, 0, '{}', NULL, ?, ?)`)
-    .run(id, name, now, now, now);
+      VALUES (?,?, 'ACTIVE', ?, '2030-01-01T00:00:00.000Z', 1, 3, 0, '{}', NULL, ?, ?)`, [id, name, now, now, now]);
 });
 
 // ② 按作者分配（每位作者一个机构，作品跟着作者走）
-const authors = db.prepare("SELECT id, display_name FROM users WHERE login LIKE 'ltai_%'").all();
+const authors = await arows("SELECT id, display_name FROM users WHERE login LIKE 'ltai_%'");
 const assignment = new Map();
 authors.forEach((author) => {
   const orgId = picks.length === 1 ? SOURCE_ORG_ID : (() => {
@@ -69,18 +71,18 @@ console.log(`[机构] 作者 ${authors.length} 位 → 机构归属：${JSON.str
 
 if (!DRY_RUN) {
   for (const [userId, orgId] of assignment) {
-    db.prepare('UPDATE users SET org_id=?, updated_at=? WHERE id=?').run(orgId, now, userId);
-    db.prepare("UPDATE student_projects SET org_id=?, updated_at=? WHERE student_id=? AND id LIKE 'project_ltai_%'").run(orgId, now, userId);
-    db.prepare("UPDATE works SET org_id=? WHERE student_id=? AND id LIKE 'work_ltai_%'").run(orgId, userId);
+    await aq('UPDATE users SET org_id=?, updated_at=? WHERE id=?', [orgId, now, userId]);
+    await aq("UPDATE student_projects SET org_id=?, updated_at=? WHERE student_id=? AND id LIKE 'project_ltai_%'", [orgId, now, userId]);
+    await aq("UPDATE works SET org_id=? WHERE student_id=? AND id LIKE 'work_ltai_%'", [orgId, userId]);
   }
 }
 
 // ③ 核对：不该再有「灵涛AI课」这个名字
-const left = db.prepare("SELECT COUNT(*) n FROM organizations WHERE name LIKE '%灵涛%'").get().n;
-const dist = db.prepare(`SELECT organization.name AS name, COUNT(*) n FROM works work
+const left = (await arow("SELECT COUNT(*) n FROM organizations WHERE name LIKE '%灵涛%'")).n;
+const dist = await arows(`SELECT organization.name AS name, COUNT(*) n FROM works work
     JOIN organizations organization ON organization.id = work.org_id
-   WHERE work.id LIKE 'work_ltai_%' GROUP BY organization.name ORDER BY n DESC`).all();
+   WHERE work.id LIKE 'work_ltai_%' GROUP BY organization.name ORDER BY n DESC`);
 console.log(`[机构] 名字里还有「灵涛」的机构：${left} 个`);
 console.log('[机构] 作品按机构的分布：');
 for (const item of dist) console.log(`  ${item.name} · ${item.n} 件`);
-db.close();
+

@@ -17,6 +17,21 @@ import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p59-gateway-routing-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const secretFile = path.join(temp, 'provider-secrets.json');
 const baseEnv = {
   ...process.env,
@@ -42,13 +57,13 @@ await run(['packages/database/src/seed.js']);
 // 这样同一个环境既能跑画布那条（同步/异步），也能跑 VibeCoding 对话那条（SSE）。
 // 直接改库（趁服务还没起，避免并发写锁），因为平台端传课时预算要绕好几个接口。
 {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  db.prepare('UPDATE course_lessons SET per_student_budget_fen=?').run(5000);
-  db.prepare("UPDATE course_lessons SET delivery_modes=?").run('["CANVAS","VIBECODING"]');
+   
+  await aq('UPDATE course_lessons SET per_student_budget_fen=?', [5000]);
+  await aq("UPDATE course_lessons SET delivery_modes=?", ['["CANVAS","VIBECODING"]']);
   for (const capability of ['text', 'image']) {
-    db.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) SELECT id, ?, datetime('now') FROM course_lessons").run(capability);
+    await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) SELECT id, ?, datetime('now') FROM course_lessons", [capability]);
   }
-  db.close();
+  
 }
 
 /* ────────────────────────── 假网关（管理接口 + 中继） ────────────────────────── */
@@ -124,7 +139,7 @@ const setGateway = (token, body) => api('/api/admin/compute-gateway', { method: 
 try {
   for (let i = 0; i < 80; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* wait */ } await sleep(100); }
   // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
   const admin = (await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } })).data.token;
   const student = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data.token;
   assert.ok(admin && student, '管理员或学生登录失败');
@@ -140,7 +155,7 @@ try {
   const items = courses.data?.items || courses.data?.courses || [];
   const lessonId = items?.[0]?.currentLessonId || items?.[0]?.lessons?.[0]?.id || items?.[0]?.lesson?.id || items?.[0]?.id;
   assert.ok(lessonId, '未取到课时 ID：' + JSON.stringify(courses.data).slice(0, 200));
-  const identity = (() => { const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000'); const r = db.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get(); db.close(); return r; })();
+  const identity = await (async () => {   const r = await arow("SELECT id, org_id FROM users WHERE login='student-2'");  return r; })();
   const studentName = `学生:${identity.id}`;
   const orgName = `机构:${identity.org_id}`;
   const lessonName = `课时:${lessonId}`;
@@ -184,7 +199,7 @@ try {
     { id: nextTokenId++, name: [orgName, studentName].join('/'), key: 'sk-org-student', remain_quota: 1000000, unlimited_quota: false, status: 1 },
     { id: nextTokenId++, name: studentName, key: 'sk-student-only', remain_quota: 1000000, unlimited_quota: false, status: 1 },
   ];
-  { const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000'); db.prepare('UPDATE course_lessons SET per_student_budget_fen=NULL').run(); db.prepare('UPDATE class_sessions SET platform_budget_fen=0').run(); db.close(); }
+  {   await aq('UPDATE course_lessons SET per_student_budget_fen=NULL'); await aq('UPDATE class_sessions SET platform_budget_fen=0');  }
   await setGateway(admin, { baseUrl: `http://127.0.0.1:${GW_PORT}`, username: 'root', password: 'p59-password', enabled: true });
   const beforePosts = gateway.tokenPosts.length;
   const noBudgetRun = await generate('无学生预算仍自动创建内部身份');
@@ -222,7 +237,7 @@ try {
         那是给运维看的，而真正的原因是这个学生这节课的钱花完了。 */
   // 批次 B：一个课堂只带一种入口类型，VibeCoding 那条链需要 VIBECODING 课堂。
   // 种子课时是**只画布**的，所以这里要 `requireSupports:false` 强制切过去。
-  switchClassroom(dbPath, { deliveryMode: 'VIBECODING', requireSupports: false });
+  await switchClassroom(dbPath, { deliveryMode: 'VIBECODING', requireSupports: false });
   const conversation = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student, body: { lessonId, title: 'P59 额度耗尽' } });
   check('⑥ 能开一个 VibeCoding 会话', conversation.status === 200 && Boolean(conversation.data?.id), JSON.stringify(conversation).slice(0, 200));
   const chatResponse = await fetch(`http://127.0.0.1:${port}/api/student/vibecoding/conversations/${encodeURIComponent(conversation.data.id)}/messages`, {
@@ -238,8 +253,8 @@ try {
         所以网关出口必须在 worker 里重新解析一遍 —— 靠创建任务时的 selection 是不够的。
         这里把网关上的令牌清空，只有 worker 真的解析过才会又出现一张令牌） */
   // ⑦ 走的是**画布**链路（异步任务），所以先把课堂入口类型切回 CANVAS。
-  switchClassroom(dbPath, { deliveryMode: 'CANVAS', requireSupports: false });
-  { const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000'); db.prepare('UPDATE course_lessons SET per_student_budget_fen=?').run(5000); db.close(); }
+  await switchClassroom(dbPath, { deliveryMode: 'CANVAS', requireSupports: false });
+  {   await aq('UPDATE course_lessons SET per_student_budget_fen=?', [5000]);  }
   gateway.tokens = [];
   await setGateway(admin, { baseUrl: `http://127.0.0.1:${GW_PORT}`, username: 'root', password: 'p59-password', enabled: true });
   const postsBeforeAsync = gateway.tokenPosts.length;
@@ -294,10 +309,10 @@ try {
     await new Promise((resolve) => shapeServer.close(resolve));
   }
 
-  { const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-    const charges = db.prepare('SELECT COUNT(*) n FROM usage_records WHERE credits_charged<>0').get();
+  {  
+    const charges = await arow('SELECT COUNT(*) n FROM usage_records WHERE credits_charged<>0');
     check('学生所有调用扣费为零', charges.n === 0, JSON.stringify(charges));
-    db.close();
+    
   }
   console.log(JSON.stringify({ name: 'gateway-routing', pass: failures === 0, failures }, null, 2));
 } catch (error) {

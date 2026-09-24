@@ -26,6 +26,21 @@ import { ensureClassroom, openDb } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-kids-p119-upload-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const PORT = 18919;
 const baseEnv = {
   ...process.env,
@@ -58,19 +73,19 @@ const check = async (name, fn) => {
 
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
-ensureClassroom(dbPath);
+await ensureClassroom(dbPath);
 {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  db.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING', delivery_modes=?").run(JSON.stringify(['VIBECODING']));
+   
+  await aq("UPDATE course_lessons SET delivery_mode='VIBECODING', delivery_modes=?", [JSON.stringify(['VIBECODING'])]);
   // ⚠️ 课堂的 delivery_mode 也要跟着改：夹具是**按当时的课时类型**建课堂的（种子里都是画布课），
   //    只改课时不改课堂的话，这间课堂仍然是 CANVAS —— 而运行时接口从 2026-09-21 起只看 VIBECODING 课堂
   //    （它的门禁就该这么严），于是这个守卫自己会被自己的门禁挡住。
-  db.prepare("UPDATE class_sessions SET delivery_mode='VIBECODING'").run();
+  await aq("UPDATE class_sessions SET delivery_mode='VIBECODING'");
   // 模型清单的夹具备料（2026-09-24 客户端口径）：/client-context 要把"当前 TEXT 渠道实际启用的
   // 模型"下发给桌面客户端，客户端**用 displayName 显示、用 id 发上游** —— 否则运营在后台改的
   // 别名到不了学生眼前（客户端现在把模型名写死在补丁层里）。
   // 三条的取值刚好覆盖 displayName 的三级来源（别名 → 上游名 → id 本身）。
-  db.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({
+  await aq('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1', [JSON.stringify({
     provider: 'local-mock',
     channels: [{
       id: 'p119-text', provider: 'local-mock', model: 'p119-flash',
@@ -82,8 +97,8 @@ ensureClassroom(dbPath);
     }],
     modalityChannels: { TEXT: 'p119-text' },
     modelDisplayNames: { 'p119-flash': '运营改的别名' },
-  }));
-  db.close();
+  })]);
+  
 }
 
 const server = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -109,15 +124,13 @@ try {
     await sleep(150);
   }
   const login = async (l, p) => (await api('/api/auth/login', { method: 'POST', body: { login: l, password: p } })).data.token;
-  const enrolled = (() => {
-    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-    const row = db.prepare(
-      `SELECT student.login FROM session_students part
+  const enrolled = await (async () => {
+     
+    const row = await arow(`SELECT student.login FROM session_students part
          JOIN class_sessions session ON session.id = part.session_id AND session.status='ACTIVE'
          JOIN users student ON student.id = part.student_id
-        WHERE part.status='ACTIVE' ORDER BY student.created_at LIMIT 1`,
-    ).get();
-    db.close();
+        WHERE part.status='ACTIVE' ORDER BY student.created_at LIMIT 1`);
+    
     return row;
   })();
   assert.ok(enrolled?.login, '夹具没把任何学生放进课堂');
@@ -139,10 +152,10 @@ try {
     () => assert.equal(submitted.status, 200, JSON.stringify(submitted.data).slice(0, 300)));
   await check('返回值与老入口同形（有 id / 轮次 / 产物清单）',
     () => assert.ok(submitted.data?.id && submitted.data?.entryFile === 'index.html', JSON.stringify(submitted.data).slice(0, 200)));
-  await check('二进制素材真的进了 file_assets，字节与上传的一模一样', () => {
-    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-    const row = db.prepare("SELECT id, file_size FROM file_assets WHERE file_name='cat.png' ORDER BY created_at DESC LIMIT 1").get();
-    db.close();
+  await check('二进制素材真的进了 file_assets，字节与上传的一模一样', async () => {
+     
+    const row = await arow("SELECT id, file_size FROM file_assets WHERE file_name='cat.png' ORDER BY created_at DESC LIMIT 1");
+    
     assert.ok(row, 'file_assets 里没有 cat.png');
     assert.equal(Number(row.file_size), png.length, '存下来的字节数与上传的不一致');
   });
@@ -199,19 +212,17 @@ try {
      （它拿不到类型字段，自己判断不了）。口径：这道门禁在**服务端**，
      客户端只执行"平台下发的可进入结论"；**判据与网页侧同源 = 课时声明的类型**。 */
   {
-    const db = openDb(dbPath);
-    const studentId = db.prepare('SELECT id FROM users WHERE login=?').get(enrolled.login).id;
-    const mine = db.prepare(
-      `SELECT session.id, session.lesson_id FROM class_sessions session
+    
+    const studentId = (await arow('SELECT id FROM users WHERE login=?', [enrolled.login])).id;
+    const mine = await arows(`SELECT session.id, session.lesson_id FROM class_sessions session
          JOIN session_students part ON part.session_id = session.id
-        WHERE part.student_id = ? AND part.status = 'ACTIVE' AND session.status = 'ACTIVE'`,
-    ).all(studentId);
+        WHERE part.student_id = ? AND part.status = 'ACTIVE' AND session.status = 'ACTIVE'`, [studentId]);
     assert.ok(mine.length >= 2, `夹具应给这个学生多节 ACTIVE 课堂（现在 ${mine.length} 节）`);
     // 门禁看的是**课时声明的类型**（可多选），所以这里切课时、不切课堂：
     //   '["CANVAS"]' / '["VIBECODING"]' / '["CANVAS","VIBECODING"]'（同时开两种）
-    const setLessonModes = (modesOf) => {
-      const statement = db.prepare('UPDATE course_lessons SET delivery_modes=?, delivery_mode=? WHERE id=?');
-      for (const item of mine) { const modes = modesOf(item); statement.run(JSON.stringify(modes), modes[0], item.lesson_id); }
+    const setLessonModes = async (modesOf) => {
+      
+      for (const item of mine) { const modes = modesOf(item); await aq('UPDATE course_lessons SET delivery_modes=?, delivery_mode=? WHERE id=?', [JSON.stringify(modes), modes[0], item.lesson_id]); }
     };
     const context = (sessionId = '') => api(`/api/student/runtime/client-context${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`, { token });
     const uploadWork = (patch) => upload({ name: 'index.html', title: '课堂类型门禁', copyrightConfirmed: true, files: [{ name: 'index.html', content: html }], ...patch });
@@ -220,7 +231,7 @@ try {
     //    ⚠️ 这里**故意不动课堂那个单值**（夹具把它设成了 VIBECODING）：它是"跟着课时带的第一个"、
     //    平台改了课时类型之后它可能还是老的 —— 门禁**不许看它**。上面那条反向自检（把它换回
     //    "按课堂单值判"）会让这一组全红，就是这个道理。
-    setLessonModes(() => ['CANVAS']);
+    await setLessonModes(() => ['CANVAS']);
     const canvasOnly = (await context()).data;
     await check('画布课堂：client-context 的 classroom 必须是 null', async () => {
       assert.equal(canvasOnly.classroom, null, JSON.stringify(canvasOnly).slice(0, 200));
@@ -257,7 +268,7 @@ try {
     });
 
     // ② 全是 VIBECODING 课 → 照常下发（客户端仍能进）
-    setLessonModes(() => ['VIBECODING']);
+    await setLessonModes(() => ['VIBECODING']);
     const vibeOnly = (await context()).data;
     await check('VIBECODING 课：classroom 正常返回 + 网关密钥正常下发', async () => {
       assert.ok(vibeOnly.classroom?.id, JSON.stringify(vibeOnly).slice(0, 200));
@@ -291,7 +302,7 @@ try {
     //     用户口径 2026-09-21：「上课模式只有三种情况，只选画布、只选 vibecoding、两个模式同时存在」。
     //     ⚠️ 这一条是**判据必须用课时类型、不能用课堂单值**的原因：课堂那个值是"跟着课时带的第一个"
     //        （两种时 = CANVAS），按它判会把这节课的客户端入口误挡。
-    setLessonModes(() => ['CANVAS', 'VIBECODING']);
+    await setLessonModes(() => ['CANVAS', 'VIBECODING']);
     const dual = (await context()).data;
     await check('同时开两种：客户端这一侧也要能进（下发 classroom + 密钥）', async () => {
       assert.ok(dual.classroom?.id, `双开课时被误挡了：${JSON.stringify(dual).slice(0, 200)}`);
@@ -301,7 +312,7 @@ try {
     // ④ 两种都存在（一节画布课 + 一节双开课）→ 候选里只放"声明了 VibeCoding"的；
     //    **点名那节纯画布课要明说，不许静默换课**
     const [first, ...rest] = mine;
-    setLessonModes((item) => (item.id === first.id ? ['CANVAS', 'VIBECODING'] : ['CANVAS']));
+    await setLessonModes((item) => (item.id === first.id ? ['CANVAS', 'VIBECODING'] : ['CANVAS']));
     const mixed = (await context()).data;
     await check('两种都存在：候选里只放"声明了 VibeCoding"的课', async () => {
       assert.equal(mixed.classroom?.id, first.id, JSON.stringify(mixed.classroom));
@@ -315,7 +326,7 @@ try {
       const result = (await uploadWork({ sessionId: rest[0].id })).data;
       assert.equal(result.error?.code, 'RUNTIME_NO_ACTIVE_CLASSROOM', JSON.stringify(result).slice(0, 200));
     });
-    db.close();
+    
   }
 
 } catch (error) {

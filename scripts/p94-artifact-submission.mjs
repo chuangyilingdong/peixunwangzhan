@@ -21,6 +21,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p94-artifact-submit-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const env = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -36,39 +51,37 @@ await run(['packages/database/src/seed.js']);
 let failures = 0;
 const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`); else { failures += 1; console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`); } };
 
-const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-const index = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_vibe_submission_conversation_entry'").get();
+ 
+const index = await arow("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_vibe_submission_conversation_entry'");
 check('① 复合唯一索引 (conversation_id, entry_file) 已建', Boolean(index));
-const ddl = String(db.prepare("SELECT sql FROM sqlite_master WHERE name='vibecoding_submissions'").get()?.sql || '');
+const ddl = String((await arow("SELECT sql FROM sqlite_master WHERE name='vibecoding_submissions'"))?.sql || '');
 check('旧约束 conversation_id 单列 UNIQUE 已去掉', !ddl.includes('conversation_id TEXT NOT NULL UNIQUE'));
 
 // 造一个对话（其余字段用最小可用值）
 const now = new Date().toISOString();
-const student = db.prepare("SELECT id, org_id FROM users WHERE role='STUDENT' LIMIT 1").get();
-const orgId = student?.org_id || db.prepare("SELECT id FROM organizations LIMIT 1").get()?.id;
+const student = await arow("SELECT id, org_id FROM users WHERE role='STUDENT' LIMIT 1");
+const orgId = student?.org_id || (await arow("SELECT id FROM organizations LIMIT 1"))?.id;
 if (student && orgId) {
   const convId = 'conv_p94';
-  db.prepare('INSERT INTO vibecoding_conversations(id,student_id,org_id,title,status,entry_file,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
-    .run(convId, student.id, orgId, 'P94 测试作品', 'DRAFT', 'index.html', now, now);
-  const insert = (id, entryFile) => db.prepare(`INSERT INTO vibecoding_submissions(id,conversation_id,student_id,org_id,title,entry_file,submitted_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`)
-    .run(id, convId, student.id, orgId, 'P94', entryFile, now, now, now);
+  await aq('INSERT INTO vibecoding_conversations(id,student_id,org_id,title,status,entry_file,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', [convId, student.id, orgId, 'P94 测试作品', 'DRAFT', 'index.html', now, now]);
+  const insert = async (id, entryFile) => await aq(`INSERT INTO vibecoding_submissions(id,conversation_id,student_id,org_id,title,entry_file,submitted_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, [id, convId, student.id, orgId, 'P94', entryFile, now, now, now]);
 
   let two = true; let detail = '';
-  try { insert('sub_p94_a', 'index.html'); insert('sub_p94_b', '演示文稿.pptx'); } catch (error) { two = false; detail = error.message; }
+  try { await insert('sub_p94_a', 'index.html'); await insert('sub_p94_b', '演示文稿.pptx'); } catch (error) { two = false; detail = error.message; }
   check('② 同一对话的两份不同产物都能提交（本次改动的目的）', two, detail);
 
   let blocked = false;
-  try { insert('sub_p94_c', 'index.html'); } catch { blocked = true; }
+  try { await insert('sub_p94_c', 'index.html'); } catch { blocked = true; }
   check('③ 同一份产物重复插入被唯一性挡住（重复提交走覆盖，不是新增）', blocked);
 
-  const rows = db.prepare('SELECT entry_file FROM vibecoding_submissions WHERE conversation_id=? ORDER BY entry_file').all(convId);
+  const rows = await arows('SELECT entry_file FROM vibecoding_submissions WHERE conversation_id=? ORDER BY entry_file', [convId]);
   check('④ 该对话最终是 2 条提交（各对应一份产物）', rows.length === 2, JSON.stringify(rows));
-  db.prepare('DELETE FROM vibecoding_submissions WHERE conversation_id=?').run(convId);
-  db.prepare('DELETE FROM vibecoding_conversations WHERE id=?').run(convId);
+  await aq('DELETE FROM vibecoding_submissions WHERE conversation_id=?', [convId]);
+  await aq('DELETE FROM vibecoding_conversations WHERE id=?', [convId]);
 } else {
   console.log('  · 种子数据里没有学生/机构，跳过插入验证');
 }
-db.close();
+
 
 // 接口层：提交必须按 entryFile 作用域，并且多提交时下发列表（源码断言，端到端在服务器上真机验证）
 const route = fs.readFileSync(path.join(root, 'apps/server/src/routes/vibecoding.js'), 'utf8');

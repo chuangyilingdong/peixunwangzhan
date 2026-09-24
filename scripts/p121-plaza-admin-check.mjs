@@ -29,6 +29,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'plaza-admin-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const mediaRoot = path.join(temp, 'public-media');
 const PORT = Number(process.env.P121_PORT || 8796);
 const env = {
@@ -69,32 +84,32 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
 // ── 夹具：一件普通画布作品（带一条举报，用来验级联）＋ 两件共用同一份媒体的导入件 ──────────────
-const db = new DatabaseSync(dbPath);
-db.exec('PRAGMA busy_timeout = 5000');
+
+
 const now = new Date().toISOString();
-const admin = db.prepare("SELECT id FROM users WHERE login='root'").get();
-const org = db.prepare("SELECT id FROM organizations LIMIT 1").get();
-const student = db.prepare("SELECT id, org_id FROM users WHERE role='STUDENT' LIMIT 1").get();
+const admin = await arow("SELECT id FROM users WHERE login='root'");
+const org = await arow("SELECT id FROM organizations LIMIT 1");
+const student = await arow("SELECT id, org_id FROM users WHERE role='STUDENT' LIMIT 1");
 assert.ok(admin && org && student, 'fixture: seed 里应该有 root / 机构 / 学生');
 
-function seedWork({ id, title, imported }) {
+async function seedWork({ id, title, imported }) {
   const snapshot = JSON.stringify({ nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 }, ...(imported ? { imported } : {}) });
-  db.prepare(`INSERT INTO student_projects(id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at)
-    VALUES(?,?,?,?, 'SUBMITTED', '{"nodes":[],"edges":[],"viewport":{"x":0,"y":0,"zoom":1}}', 1, ?, ?, ?)`).run(`p_${id}`, student.id, org.id, title, now, now, now);
-  db.prepare(`INSERT INTO works(id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at)
-    VALUES(?,?,?,?,?, '原描述', ?, 'PUBLISHED', ?, 1, ?, ?)`).run(id, `p_${id}`, student.id, org.id, title, snapshot, now, `tok_${id}`, now);
+  await aq(`INSERT INTO student_projects(id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at)
+    VALUES(?,?,?,?, 'SUBMITTED', '{"nodes":[],"edges":[],"viewport":{"x":0,"y":0,"zoom":1}}', 1, ?, ?, ?)`, [`p_${id}`, student.id, org.id, title, now, now, now]);
+  await aq(`INSERT INTO works(id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at)
+    VALUES(?,?,?,?,?, '原描述', ?, 'PUBLISHED', ?, 1, ?, ?)`, [id, `p_${id}`, student.id, org.id, title, snapshot, now, `tok_${id}`, now]);
 }
-seedWork({ id: 'work_p121_canvas', title: 'P121 画布作品' });
-seedWork({ id: 'work_p121_import_a', title: 'P121 导入件 A', imported: { source: 'webworks', sourceId: 'p121shared', workType: 'webpage', workTypeLabel: '网页', entryUrl: 'https://example.test/a' } });
-seedWork({ id: 'work_p121_import_b', title: 'P121 导入件 B', imported: { source: 'webworks', sourceId: 'p121shared', workType: 'webpage', workTypeLabel: '网页', entryUrl: 'https://example.test/b' } });
-seedWork({ id: 'work_p121_solo', title: 'P121 独占导入件', imported: { source: 'webworks', sourceId: 'p121solo', workType: 'webpage', workTypeLabel: '网页', entryUrl: 'https://example.test/c' } });
-db.prepare(`INSERT INTO work_reports(id,work_id,org_id,reporter_id,category,details,status,created_at)
-  VALUES('rep_p121','work_p121_canvas',?,?,'OTHER','夹具', 'PENDING', ?)`).run(org.id, student.id, now);
+await seedWork({ id: 'work_p121_canvas', title: 'P121 画布作品' });
+await seedWork({ id: 'work_p121_import_a', title: 'P121 导入件 A', imported: { source: 'webworks', sourceId: 'p121shared', workType: 'webpage', workTypeLabel: '网页', entryUrl: 'https://example.test/a' } });
+await seedWork({ id: 'work_p121_import_b', title: 'P121 导入件 B', imported: { source: 'webworks', sourceId: 'p121shared', workType: 'webpage', workTypeLabel: '网页', entryUrl: 'https://example.test/b' } });
+await seedWork({ id: 'work_p121_solo', title: 'P121 独占导入件', imported: { source: 'webworks', sourceId: 'p121solo', workType: 'webpage', workTypeLabel: '网页', entryUrl: 'https://example.test/c' } });
+await aq(`INSERT INTO work_reports(id,work_id,org_id,reporter_id,category,details,status,created_at)
+  VALUES('rep_p121','work_p121_canvas',?,?,'OTHER','夹具', 'PENDING', ?)`, [org.id, student.id, now]);
 for (const sourceId of ['p121shared', 'p121solo']) {
   fs.mkdirSync(path.join(mediaRoot, 'web-works', sourceId), { recursive: true });
   fs.writeFileSync(path.join(mediaRoot, 'web-works', sourceId, 'index.html'), '<!doctype html><p>fixture</p>');
 }
-db.close();
+
 console.log('夹具就绪：1 件画布（带举报）+ 3 件导入件（其中两件共用媒体 p121shared）');
 
 const server = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -142,7 +157,7 @@ await call('/api/admin/plaza-category-map', { method: 'PUT', token, body: { map:
 // ② 编辑：只改标题/描述，且状态类字段不动
 const edited = await call('/api/admin/works/work_p121_canvas', { method: 'PUT', token, body: { title: 'P121 改过的标题', description: '改过的描述' } });
 check('② 编辑标题与描述', edited.status === 200 && edited.data?.title === 'P121 改过的标题' && edited.data?.description === '改过的描述', `status=${edited.status}`);
-const reloaded = dbSafeRead("SELECT title,description,status,is_public,featured_at FROM works WHERE id='work_p121_canvas'");
+const reloaded = await dbSafeRead("SELECT title,description,status,is_public,featured_at FROM works WHERE id='work_p121_canvas'");
 check('② 编辑没有碰到发布状态 / 公开 / 精选', reloaded.status === 'PUBLISHED' && Number(reloaded.is_public) === 1 && reloaded.featured_at === null, JSON.stringify(reloaded));
 const blank = await call('/api/admin/works/work_p121_canvas', { method: 'PUT', token, body: { title: '   ' } });
 check('② 空标题被拒', blank.status === 400, `status=${blank.status}`);
@@ -156,9 +171,9 @@ check('③ 不带原因被拒', noReason.status === 400, `status=${noReason.stat
 // ④ 删画布作品：行没了，级联的子表（举报）跟着没
 const purge = await call('/api/admin/works/work_p121_canvas', { method: 'DELETE', token, body: { confirm: true, reason: 'P121 夹具清理' } });
 check('④ 彻底删除成功', purge.status === 200 && purge.data?.deleted === true, `status=${purge.status} ${JSON.stringify(purge.data).slice(0, 160)}`);
-const gone = dbSafeRead("SELECT (SELECT COUNT(*) FROM works WHERE id='work_p121_canvas') work, (SELECT COUNT(*) FROM work_reports WHERE work_id='work_p121_canvas') reports");
+const gone = await dbSafeRead("SELECT (SELECT COUNT(*) FROM works WHERE id='work_p121_canvas') work, (SELECT COUNT(*) FROM work_reports WHERE work_id='work_p121_canvas') reports");
 check('④ 作品与级联子表都删掉了', Number(gone.work) === 0 && Number(gone.reports) === 0, JSON.stringify(gone));
-const audited = dbSafeRead("SELECT COUNT(*) n FROM audit_logs WHERE action='PLATFORM_WORK_DELETE'");
+const audited = await dbSafeRead("SELECT COUNT(*) n FROM audit_logs WHERE action='PLATFORM_WORK_DELETE'");
 check('④ 删除进了审计日志', Number(audited.n) === 1, JSON.stringify(audited));
 
 // ⑤ 删导入件：媒体挪进 _trash；但**共用同一份媒体**的不挪
@@ -183,9 +198,9 @@ const list = await call('/api/admin/works?limit=5', { token });
 check('⑦ 作品列表仍然正常', list.status === 200 && Array.isArray(list.data?.items), `status=${list.status}`);
 
 /** 直接读库（夹具库就在临时目录里）。 */
-function dbSafeRead(sql) {
-  const handle = new DatabaseSync(dbPath);
-  try { return handle.prepare(sql).get(); } finally { handle.close(); }
+async function dbSafeRead(sql) {
+  
+  try { return await arow(sql); } finally {  }
 }
 
 if (problems.length) {

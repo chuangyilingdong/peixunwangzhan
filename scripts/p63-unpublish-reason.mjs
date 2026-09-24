@@ -19,6 +19,21 @@ import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p63-unpublish-reason-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),
@@ -42,10 +57,10 @@ await run(['packages/database/src/seed.js']);
 // → 把所有课时开成双入口并开放 text 能力（趁服务没起，避免并发写锁）
 {
   const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  db.prepare("UPDATE course_lessons SET delivery_modes='[\"CANVAS\",\"VIBECODING\"]'").run();
-  db.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) SELECT id, 'text', datetime('now') FROM course_lessons").run();
-  db.close();
+   
+  await aq("UPDATE course_lessons SET delivery_modes='[\"CANVAS\",\"VIBECODING\"]'");
+  await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) SELECT id, 'text', datetime('now') FROM course_lessons");
+  
 }
 
 const port = 18995;
@@ -62,7 +77,7 @@ async function api(pathname, { method = 'GET', token, body } = {}) {
 try {
   for (let i = 0; i < 80; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* wait */ } await sleep(100); }
   // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
+  await ensureClassroom(dbPath);
   const admin = (await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } })).data.token;
   const student = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data.token;
   assert.ok(admin && student, '登录失败');
@@ -90,9 +105,9 @@ try {
 
   /* 2026-09-13（C2）存储层：下架要有**自己的状态和原因列**，不再复用 REJECTED / teacher_comment */
   const { DatabaseSync } = await import('node:sqlite');
-  const afterUnpublish = new DatabaseSync(dbPath); afterUnpublish.exec('PRAGMA busy_timeout = 5000');
-  const rowAfter = afterUnpublish.prepare('SELECT status, unpublish_reason, unpublished_at, is_public, teacher_comment FROM works WHERE id=?').get(workId);
-  afterUnpublish.close();
+   
+  const rowAfter = await arow('SELECT status, unpublish_reason, unpublished_at, is_public, teacher_comment FROM works WHERE id=?', [workId]);
+  
   check('① 存储层：下架写的是 UNPUBLISHED，不再是 REJECTED',
     rowAfter?.status === 'UNPUBLISHED', JSON.stringify({ status: rowAfter?.status }));
   check('① 存储层：下架原因写进**独立列** unpublish_reason（不再占用 teacher_comment）',
@@ -107,23 +122,23 @@ try {
   /* 重新上架：状态回到 PUBLISHED，且**旧的下架原因被清掉**（不给学生过期说明） */
   const republished = await api(`/api/admin/works/${encodeURIComponent(workId)}/plaza`, { method: 'PUT', token: admin, body: { published: true } });
   check('① 重新上架成功（UNPUBLISHED → PUBLISHED 这条路是通的）', republished.status === 200, JSON.stringify(republished).slice(0, 200));
-  const recheck = new DatabaseSync(dbPath); recheck.exec('PRAGMA busy_timeout = 5000');
-  const rowRepublished = recheck.prepare('SELECT status, unpublish_reason, is_public FROM works WHERE id=?').get(workId);
-  recheck.close();
+   
+  const rowRepublished = await arow('SELECT status, unpublish_reason, is_public FROM works WHERE id=?', [workId]);
+  
   check('① 重新上架后：旧下架原因清空、状态回到 PUBLISHED',
     rowRepublished?.status === 'PUBLISHED' && !rowRepublished?.unpublish_reason && Number(rowRepublished?.is_public) === 1,
     JSON.stringify(rowRepublished));
 
   /* 历史行兜底：C2 之前的行是 REJECTED + teacher_comment，读取时仍要能给学生一句下架说明 */
-  const legacy = new DatabaseSync(dbPath); legacy.exec('PRAGMA busy_timeout = 5000');
-  legacy.prepare("UPDATE works SET status='REJECTED', unpublish_reason=NULL, teacher_comment=?, is_public=0 WHERE id=?").run('C2 之前的下架原因', workId);
-  legacy.close();
+   
+  await aq("UPDATE works SET status='REJECTED', unpublish_reason=NULL, teacher_comment=?, is_public=0 WHERE id=?", ['C2 之前的下架原因', workId]);
+  
   const legacyMine = ((await api('/api/student/works?limit=20', { token: student })).data?.items || []).find((item) => item.id === workId);
   check('① 历史行兜底：REJECTED + teacher_comment（老数据）仍能看到下架原因',
     legacyMine?.unpublishReason === 'C2 之前的下架原因', JSON.stringify({ status: legacyMine?.status, unpublishReason: legacyMine?.unpublishReason }));
 
   // 批次 B：一个课堂只有一种入口，画布那条验完了 → 换成 VibeCoding 课堂再验这条链
-  switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
+  await switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
 
   /* ── VibeCoding 链路 ── */
   const lessonAll = await api('/api/student/courses', { token: student });

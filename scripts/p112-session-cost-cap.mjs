@@ -41,6 +41,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p112-session-cost-cap-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'),
@@ -65,18 +80,18 @@ await run(['packages/database/src/seed.js']);
    两节都要声明 text 能力，否则生成前置先把请求拒了（那测的就不是额度了）。 */
 const seeded = {};
 {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const student = db.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get();
-  const grant = db.prepare('SELECT series_id FROM student_course_grants WHERE student_id=? AND revoked_at IS NULL').get(student.id);
-  const lessons = db.prepare("SELECT id FROM course_lessons WHERE series_id=? AND status='PUBLISHED' ORDER BY sort").all(grant.series_id);
+   
+  const student = await arow("SELECT id, org_id FROM users WHERE login='student-2'");
+  const grant = await arow('SELECT series_id FROM student_course_grants WHERE student_id=? AND revoked_at IS NULL', [student.id]);
+  const lessons = await arows("SELECT id FROM course_lessons WHERE series_id=? AND status='PUBLISHED' ORDER BY sort", [grant.series_id]);
   assert.ok(lessons.length >= 2, '种子课包至少要有两节已发布课时才能同时验「配了观测上限」与「留空」');
   seeded.studentId = student.id; seeded.orgId = student.org_id; seeded.seriesId = grant.series_id;
   seeded.lessonWithCapId = lessons[0].id;
   seeded.lessonNoCapId = lessons[1].id;
   for (const lesson of lessons) {
-    db.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
+    await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))", [lesson.id]);
   }
-  db.close();
+  
 }
 
 /* 假上游（OpenAI 形状）：`priced` 逐笔回 token 用量（→ 成本可折算），
@@ -105,16 +120,16 @@ async function api(pathname, { method = 'GET', token, body } = {}) {
   const j = await r.json().catch(() => ({}));
   return { status: r.status, data: j?.data ?? j, error: j?.error || null };
 }
-const sessionCapFen = (sessionId) => {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const row = db.prepare('SELECT student_cost_cap_fen FROM class_sessions WHERE id=?').get(sessionId);
-  db.close();
+const sessionCapFen = async (sessionId) => {
+   
+  const row = await arow('SELECT student_cost_cap_fen FROM class_sessions WHERE id=?', [sessionId]);
+  
   return row?.student_cost_cap_fen ?? null;
 };
-const attemptsOf = (sessionId) => {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const n = db.prepare('SELECT COUNT(*) n FROM compute_attempts WHERE class_session_id=?').get(sessionId).n;
-  db.close();
+const attemptsOf = async (sessionId) => {
+   
+  const n = (await arow('SELECT COUNT(*) n FROM compute_attempts WHERE class_session_id=?', [sessionId])).n;
+  
   return Number(n);
 };
 /** 这场课堂在老师端看到的观测状态（每个学生一份 + 整场一份都从接口拿，不自己算）。 */
@@ -173,7 +188,7 @@ try {
   })).data;
   assert.ok(cappedSession?.id, '建带观测上限的课堂失败');
   check('⓪ 建课堂时 `capabilities.studentCostCapFen` 落到 `class_sessions.student_cost_cap_fen`（分，观测口径）',
-    sessionCapFen(cappedSession.id) === CAP_FEN, String(sessionCapFen(cappedSession.id)));
+    await sessionCapFen(cappedSession.id) === CAP_FEN, String(await sessionCapFen(cappedSession.id)));
   const candidates = (await api(`/api/org/sessions/${cappedSession.id}/candidates`, { token: teacher })).data;
   const candidate = candidates?.selectable?.find((item) => item.id === seeded.studentId);
   check('⓪ 机构端候选名单带观测数字（已用 0 / 观测上限 200）且明写不拦人（poolEnforced=false）',
@@ -184,7 +199,7 @@ try {
   const cappedProject = await newProject(seeded.lessonWithCapId);
 
   const call1 = await generate(cappedProject, '第 1 次：已用 0 分');
-  check('① 第 1 次放行且真的打到上游', call1.status === 200 && attemptsOf(cappedSession.id) === 1, JSON.stringify(call1).slice(0, 200));
+  check('① 第 1 次放行且真的打到上游', call1.status === 200 && await attemptsOf(cappedSession.id) === 1, JSON.stringify(call1).slice(0, 200));
   check('① 第 1 次确实记了 100 分（按合同单价折算，不是次数）',
     (await capStatusOf(teacher, cappedSession.id))?.usedFen === PER_CALL_FEN);
 
@@ -208,7 +223,7 @@ try {
   /* ★ 本轮最要紧的一条：**超过观测上限照旧放行，并且真的打到上游** ★ */
   const upstreamBeforeOver = upstream.calls;
   const overCap = await generate(cappedProject, '第 4 次：已用 200 ≥ 观测上限 200 —— 观测口径下必须照旧放行');
-  const overAtt = attemptsOf(cappedSession.id);
+  const overAtt = await attemptsOf(cappedSession.id);
   check('①★ 已用 ≥ 观测上限之后**仍然 200**（额度只观测、不真拦）',
     overCap.status === 200, JSON.stringify(overCap).slice(0, 240));
   check('①★ 这一次**真的打到了上游**（不是被静默跳过/缓存命中）',
@@ -220,7 +235,7 @@ try {
     JSON.stringify(afterOver));
   const overCapAgain = await generate(cappedProject, '第 5 次：继续超，继续必须放行');
   check('①★ 再超一次也照旧放行（不是"只放行一次"的假动作）',
-    overCapAgain.status === 200 && attemptsOf(cappedSession.id) === 5, JSON.stringify(overCapAgain).slice(0, 200));
+    overCapAgain.status === 200 && await attemptsOf(cappedSession.id) === 5, JSON.stringify(overCapAgain).slice(0, 200));
 
   /* 学生端：不该知道内部额度，更不该因为额度被标成"不可用" */
   const center = (await api('/api/ai/center', { token: student })).data;
@@ -256,7 +271,7 @@ try {
   const noCapSession = (await api('/api/org/sessions', { method: 'POST', token: teacher, body: { lessonId: seeded.lessonNoCapId, title: 'P112 没配数字的课堂' } })).data;
   assert.ok(noCapSession?.id, '建"不设观测上限"的课堂失败');
   check('③ 不传观测上限 → 列就是 NULL（不设上限，不是 0）',
-    sessionCapFen(noCapSession.id) === null, String(sessionCapFen(noCapSession.id)));
+    await sessionCapFen(noCapSession.id) === null, String(await sessionCapFen(noCapSession.id)));
   check('③ 学员加得进去', (await api(`/api/org/sessions/${noCapSession.id}/students`, { method: 'POST', token: teacher, body: { studentIds: [seeded.studentId] } })).data?.added?.length === 1);
   check('③ 开始上课', (await api(`/api/org/sessions/${noCapSession.id}/start`, { method: 'POST', token: teacher })).data?.status === 'ACTIVE');
   const noCapProject = await newProject(seeded.lessonNoCapId);

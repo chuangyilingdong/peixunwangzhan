@@ -8,6 +8,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-kids-p6-delivery-mode-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -40,9 +55,9 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 // 此守卫覆盖两种已发布入口，种子课时只开放画布。
 {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  db.prepare(`UPDATE course_lessons SET delivery_modes='["CANVAS","VIBECODING"]' WHERE status='PUBLISHED'`).run();
-  db.close();
+   
+  await aq(`UPDATE course_lessons SET delivery_modes='["CANVAS","VIBECODING"]' WHERE status='PUBLISHED'`);
+  
 }
 
 const server = spawn(process.execPath, ['apps/server/src/index.js'], {
@@ -95,12 +110,12 @@ function assertStatus(result, status, message) {
   assert.equal(result.status, status, `${message}: ${JSON.stringify(result.raw)}`);
 }
 
-function readDeliveryMode(sessionId) {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
+async function readDeliveryMode(sessionId) {
+   
   try {
-    return db.prepare('SELECT delivery_mode FROM class_sessions WHERE id=?').get(sessionId)?.delivery_mode;
+    return (await arow('SELECT delivery_mode FROM class_sessions WHERE id=?', [sessionId]))?.delivery_mode;
   } finally {
-    db.close();
+    
   }
 }
 
@@ -135,7 +150,7 @@ try {
   });
   assertStatus(canvasSession, 200, '默认 Canvas 课堂开课失败');
   assert.equal(canvasSession.data?.deliveryMode, 'CANVAS');
-  assert.equal(readDeliveryMode(canvasSession.data.id), 'CANVAS');
+  assert.equal(await readDeliveryMode(canvasSession.data.id), 'CANVAS');
   // 批次 B：有许可 ≠ 能进 —— 还得被老师排进这节课的课堂，并且老师点了开始上课
   const roster = await api(`/api/org/sessions/${canvasSession.data.id}/students`, { method: 'POST', token: teacher, body: { studentIds: [studentId] } });
   assertStatus(roster, 200, '把学生排进 Canvas 课堂失败');
@@ -175,7 +190,7 @@ try {
   });
   assertStatus(vibeSession, 200, 'VibeCoding 课堂开课失败');
   assert.equal(vibeSession.data?.deliveryMode, 'VIBECODING');
-  assert.equal(readDeliveryMode(vibeSession.data.id), 'VIBECODING');
+  assert.equal(await readDeliveryMode(vibeSession.data.id), 'VIBECODING');
   const vibeRoster = await api(`/api/org/sessions/${vibeSession.data.id}/students`, { method: 'POST', token: teacher, body: { studentIds: [studentId] } });
   assertStatus(vibeRoster, 200, '把学生排进 VibeCoding 课堂失败');
   const startedVibe = await api(`/api/org/sessions/${vibeSession.data.id}/start`, { method: 'POST', token: teacher, body: {} });

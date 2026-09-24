@@ -24,6 +24,18 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p99-student-runtime-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const SECRET = 'p99-runtime-secret';
 const PORT = 19719;
 const IMAGE = String(process.env.DSH_STUDENT_IMAGE || '').trim() || 'dsh-student:local';
@@ -48,6 +60,9 @@ if (spawnSync('docker', ['image', 'inspect', IMAGE], { encoding: 'utf8' }).statu
 process.env.RUNTIME_GATEWAY_SECRET = SECRET;
 process.env.PLATFORM_DATA_DIR = temp;
 process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 // 这条守卫测的是**容器版**宿主脚本（本机有 docker）；用户版要 root 与 nginx，跑在真机上
 // （见 deploy/dsh-student/host-user/ 与真机验证记录）。
 process.env.DSH_RUNTIME_MODE = 'container';
@@ -75,24 +90,23 @@ const docker = (args) => spawnSync('docker', args, { encoding: 'utf8', maxBuffer
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
-const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-const teacher = db.prepare("SELECT * FROM users WHERE login='teacher-1'").get();
-const student = db.prepare("SELECT * FROM users WHERE login='student-1'").get();
-const lesson = db.prepare("SELECT * FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get();
+ 
+const teacher = await arow("SELECT * FROM users WHERE login='teacher-1'");
+const student = await arow("SELECT * FROM users WHERE login='student-1'");
+const lesson = await arow("SELECT * FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1");
 const now = new Date().toISOString();
-db.prepare('INSERT OR IGNORE INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES (?,?,?,?,?)')
-  .run('p99_grant', student.org_id, student.id, lesson.series_id, now);
+await aq('INSERT OR IGNORE INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES (?,?,?,?,?)', ['p99_grant', student.org_id, student.id, lesson.series_id, now]);
 const sessionId = 'csession_p99';
-db.prepare(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,created_at,updated_at,started_at)
-  VALUES (?,?,?,?,?,?,'ACTIVE','VIBECODING',?,?,?)`).run(sessionId, 'P99 平台侧拉起', student.org_id, lesson.series_id, lesson.id, teacher.id, now, now, now);
-db.prepare(`INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at)
-  VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)`).run('p99_part', sessionId, student.id, student.org_id, lesson.id, lesson.series_id, teacher.id, now, now);
-db.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({
+await aq(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,created_at,updated_at,started_at)
+  VALUES (?,?,?,?,?,?,'ACTIVE','VIBECODING',?,?,?)`, [sessionId, 'P99 平台侧拉起', student.org_id, lesson.series_id, lesson.id, teacher.id, now, now, now]);
+await aq(`INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at)
+  VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)`, ['p99_part', sessionId, student.id, student.org_id, lesson.id, lesson.series_id, teacher.id, now, now]);
+await aq('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1', [JSON.stringify({
   provider: 'local-mock', model: '', endpoint: '', allowStudentExternalContent: true,
   channels: [{ id: 'ch-t', name: '文本渠道', provider: 'local-mock', model: 'p99-text', models: ['p99-text'], endpoint: '' }],
   modalityChannels: { TEXT: 'ch-t' }, modalityBackupChannels: {}, modelRoutes: [], visionChannelId: '',
-}));
-db.close();
+})]);
+
 
 const server = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env: { ...baseEnv, PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
 let logs = '';
@@ -142,18 +156,18 @@ try {
 
   // ③④ 门禁不过就开不出来
   {
-    const probeDb = new DatabaseSync(dbPath); probeDb.exec('PRAGMA busy_timeout = 5000');
-    probeDb.prepare("UPDATE class_sessions SET status='ENDED', ended_at=? WHERE id=?").run(now, sessionId);
-    probeDb.close();
+     
+    await aq("UPDATE class_sessions SET status='ENDED', ended_at=? WHERE id=?", [now, sessionId]);
+    
     let code = '';
     try { await launchStudentRuntime({ sessionId, studentId: student.id, orgId: student.org_id, lessonId: lesson.id }); } catch (error) { code = error.code || ''; }
     check('③ 课堂已结束 → 开不出来（RUNTIME_CLASSROOM_INACTIVE）', code === 'RUNTIME_CLASSROOM_INACTIVE', code);
   }
   {
-    const probeDb = new DatabaseSync(dbPath); probeDb.exec('PRAGMA busy_timeout = 5000');
-    probeDb.prepare("UPDATE class_sessions SET status='ACTIVE' WHERE id=?").run(sessionId);
-    probeDb.prepare("UPDATE session_students SET status='REMOVED', removed_reason='P99' WHERE id='p99_part'").run();
-    probeDb.close();
+     
+    await aq("UPDATE class_sessions SET status='ACTIVE' WHERE id=?", [sessionId]);
+    await aq("UPDATE session_students SET status='REMOVED', removed_reason='P99' WHERE id='p99_part'");
+    
     let code = '';
     try { await launchStudentRuntime({ sessionId, studentId: student.id, orgId: student.org_id, lessonId: lesson.id }); } catch (error) { code = error.code || ''; }
     check('④ 学生被移出名单 → 开不出来（RUNTIME_STUDENT_NOT_ACTIVE）', code === 'RUNTIME_STUDENT_NOT_ACTIVE', code);

@@ -12,6 +12,18 @@ import { pathToFileURL } from 'node:url';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p26-vibecoding-chat-ops-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -33,30 +45,33 @@ await run(['packages/database/src/seed.js']);
 
 // 让课时带上正文，验证会注入到 system 上下文
 const { DatabaseSync } = await import('node:sqlite');
-const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
-const lesson = seedDb.prepare('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 1').get();
-seedDb.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING', lesson_content='本课目标：用 AI 做出一个会动的小网页。' WHERE id=?").run(lesson.id);
-seedDb.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
+ 
+const lesson = await arow('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 1');
+await aq("UPDATE course_lessons SET delivery_mode='VIBECODING', lesson_content='本课目标：用 AI 做出一个会动的小网页。' WHERE id=?", [lesson.id]);
+await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))", [lesson.id]);
 // 给 TEXT 渠道配上可选模型，验证「每会话选模型」
-seedDb.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({
+await aq('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1', [JSON.stringify({
   modalityChannels: { TEXT: 'channel-test-text' },
   channels: [{ id: 'channel-test-text', provider: 'local-mock', model: 'mock-model-a', models: ['mock-model-a', 'mock-model-b'], modelMappings: [{ id: 'mock-model-a', displayName: '模拟模型 A' }, { id: 'mock-model-z', displayName: '候选但未启用' }] }],
-}));
-const classroomStudent = seedDb.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get();
-const teacher = seedDb.prepare("SELECT id FROM users WHERE org_id=? AND role='TEACHER' LIMIT 1").get(classroomStudent.org_id);
-const seriesId = seedDb.prepare('SELECT series_id FROM course_lessons WHERE id=?').get(lesson.id).series_id;
+})]);
+const classroomStudent = await arow("SELECT id, org_id FROM users WHERE login='student-2'");
+const teacher = await arow("SELECT id FROM users WHERE org_id=? AND role='TEACHER' LIMIT 1", [classroomStudent.org_id]);
+const seriesId = (await arow('SELECT series_id FROM course_lessons WHERE id=?', [lesson.id])).series_id;
 assert.ok(teacher, '夹具需要真实教师');
-seedDb.prepare(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,allow_text,started_by,started_at,created_at,updated_at)
-  VALUES ('p26_session','P26 课堂',?,?,?,?,'ACTIVE','VIBECODING',1,?,datetime('now'),datetime('now'),datetime('now'))`).run(classroomStudent.org_id, seriesId, lesson.id, teacher.id, teacher.id);
-seedDb.prepare(`INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at)
-  VALUES ('p26_student','p26_session',?,?,?,?,'ACTIVE',?,datetime('now'))`).run(classroomStudent.id, classroomStudent.org_id, lesson.id, seriesId, teacher.id);
-assert.equal(seedDb.prepare("SELECT COUNT(*) n FROM class_sessions WHERE teacher_id=? AND status IN ('PENDING','ACTIVE')").get(teacher.id).n, 1, '教师只拥有一个未结束课堂');
-seedDb.close();
+await aq(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,allow_text,started_by,started_at,created_at,updated_at)
+  VALUES ('p26_session','P26 课堂',?,?,?,?,'ACTIVE','VIBECODING',1,?,datetime('now'),datetime('now'),datetime('now'))`, [classroomStudent.org_id, seriesId, lesson.id, teacher.id, teacher.id]);
+await aq(`INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at)
+  VALUES ('p26_student','p26_session',?,?,?,?,'ACTIVE',?,datetime('now'))`, [classroomStudent.id, classroomStudent.org_id, lesson.id, seriesId, teacher.id]);
+assert.equal((await arow("SELECT COUNT(*) n FROM class_sessions WHERE teacher_id=? AND status IN ('PENDING','ACTIVE')", [teacher.id])).n, 1, '教师只拥有一个未结束课堂');
+
 
 // 用与服务器相同的环境变量导入服务端模块，直接验证 system 上下文拼装
 process.env.PLATFORM_DATA_DIR = temp;
 process.env.PLATFORM_DB_PATH = dbPath;
 const { lessonSystemMessage } = await import(pathToFileURL(path.join(root, 'apps/server/src/routes/vibecoding.js')).href);
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const systemMessage = await lessonSystemMessage({ lesson_id: lesson.id });
 assert.equal(systemMessage.role, 'system', '应生成 system 消息');
 assert.ok(systemMessage.content.includes(lesson.title), 'system 上下文应含课时标题');

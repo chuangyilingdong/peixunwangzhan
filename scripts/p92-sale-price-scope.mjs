@@ -31,6 +31,18 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p92-sale-price-scope-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 process.env.PLATFORM_DATA_DIR = temp;
 process.env.PLATFORM_DB_PATH = dbPath;
 process.env.DEPLOYMENT_MODE = 'local-mock';
@@ -50,36 +62,33 @@ await run(['packages/database/src/seed.js']);
    usage_records.cost_fen 故意写成 999 —— 只要「消耗」还读那一列，断言立刻红。 */
 const seeded = {};
 {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const orgId = db.prepare("SELECT org_id FROM users WHERE login='org-admin'").get().org_id;
-  const student = db.prepare("SELECT id FROM users WHERE login='student-1'").get().id;
-  const teacher = db.prepare("SELECT id FROM users WHERE login='teacher-1'").get().id;
-  const lesson = db.prepare("SELECT id FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get().id;
-  const series = db.prepare('SELECT series_id FROM course_lessons WHERE id=?').get(lesson).series_id;
+   
+  const orgId = (await arow("SELECT org_id FROM users WHERE login='org-admin'")).org_id;
+  const student = (await arow("SELECT id FROM users WHERE login='student-1'")).id;
+  const teacher = (await arow("SELECT id FROM users WHERE login='teacher-1'")).id;
+  const lesson = (await arow("SELECT id FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1")).id;
+  const series = (await arow('SELECT series_id FROM course_lessons WHERE id=?', [lesson])).series_id;
   const now = new Date().toISOString();
   const sessionId = 'csession_p92';
-  db.prepare("INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,started_by,started_at,created_at,updated_at) VALUES (?,?,?,?,?,?,'ACTIVE','CANVAS',?,?,?,?)")
-    .run(sessionId, 'P92 消耗口径课堂', orgId, series, lesson, teacher, now, now, now);
-  db.prepare("INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)")
-    .run('sstudent_p92', sessionId, student, orgId, lesson, series, teacher, now, now);
+  await aq("INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,started_by,started_at,created_at,updated_at) VALUES (?,?,?,?,?,?,'ACTIVE','CANVAS',?,?,?,?)", [sessionId, 'P92 消耗口径课堂', orgId, series, lesson, teacher, now, now, now]);
+  await aq("INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)", ['sstudent_p92', sessionId, student, orgId, lesson, series, teacher, now, now]);
 
   // 成功一次：对外售价 100 分、上游成本 4 分（REPORTED），用量记录里塞 999 污染值
-  db.prepare("INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,channel_id,provider,model,routed_via,status,cost_source,upstream_cost_fen,sale_price_fen,sale_snapshot,class_session_id,lesson_id,created_at) VALUES (?,?,1,?,?,'IMAGE','p92-channel','custom','p92-model','direct','SUCCESS','REPORTED',4,100,'{}',?,?,?)")
-    .run('attempt_p92_ok', 'call_p92_ok', orgId, student, sessionId, lesson, now);
-  db.prepare("INSERT INTO usage_records(id,org_id,user_id,class_session_id,modality,model,credits_charged,status,cost_fen,compute_call_id,created_at) VALUES (?,?,?,?, 'IMAGE','p92-model',0,'SUCCESS',999,?,?)")
-    .run('usage_p92_ok', orgId, student, sessionId, 'call_p92_ok', now);
+  await aq("INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,channel_id,provider,model,routed_via,status,cost_source,upstream_cost_fen,sale_price_fen,sale_snapshot,class_session_id,lesson_id,created_at) VALUES (?,?,1,?,?,'IMAGE','p92-channel','custom','p92-model','direct','SUCCESS','REPORTED',4,100,'{}',?,?,?)", ['attempt_p92_ok', 'call_p92_ok', orgId, student, sessionId, lesson, now]);
+  await aq("INSERT INTO usage_records(id,org_id,user_id,class_session_id,modality,model,credits_charged,status,cost_fen,compute_call_id,created_at) VALUES (?,?,?,?, 'IMAGE','p92-model',0,'SUCCESS',999,?,?)", ['usage_p92_ok', orgId, student, sessionId, 'call_p92_ok', now]);
   // 失败一次：同样有售价快照，但**不该**计入消耗；成本来源 UNKNOWN（失败尝试成本天然为空）
-  db.prepare("INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,channel_id,provider,model,routed_via,status,cost_source,upstream_cost_fen,sale_price_fen,sale_snapshot,class_session_id,lesson_id,created_at) VALUES (?,?,1,?,?,'IMAGE','p92-channel','custom','p92-model','direct','FAILED','UNKNOWN',NULL,100,'{}',?,?,?)")
-    .run('attempt_p92_bad', 'call_p92_bad', orgId, student, sessionId, lesson, now);
-  db.prepare("INSERT INTO usage_records(id,org_id,user_id,class_session_id,modality,model,credits_charged,status,cost_fen,compute_call_id,created_at) VALUES (?,?,?,?, 'IMAGE','p92-model',0,'FAILED',999,?,?)")
-    .run('usage_p92_bad', orgId, student, sessionId, 'call_p92_bad', now);
+  await aq("INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,channel_id,provider,model,routed_via,status,cost_source,upstream_cost_fen,sale_price_fen,sale_snapshot,class_session_id,lesson_id,created_at) VALUES (?,?,1,?,?,'IMAGE','p92-channel','custom','p92-model','direct','FAILED','UNKNOWN',NULL,100,'{}',?,?,?)", ['attempt_p92_bad', 'call_p92_bad', orgId, student, sessionId, lesson, now]);
+  await aq("INSERT INTO usage_records(id,org_id,user_id,class_session_id,modality,model,credits_charged,status,cost_fen,compute_call_id,created_at) VALUES (?,?,?,?, 'IMAGE','p92-model',0,'FAILED',999,?,?)", ['usage_p92_bad', orgId, student, sessionId, 'call_p92_bad', now]);
   Object.assign(seeded, { orgId, student, teacher, lesson, series, sessionId });
-  db.close();
+  
 }
 
 /* 同进程直读口径函数（服务模块按 env 打开同一个库） */
 const { salePriceFenFor, classroomBudgetStatus } = await import('../apps/server/src/services/computePool.js');
 const { lessonCostFenFor } = await import('../apps/server/src/services/classroomSessions.js');
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 let failures = 0;
 const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`); else { failures += 1; console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`); } };
 

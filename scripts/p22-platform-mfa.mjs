@@ -18,6 +18,18 @@ import { pathToFileURL } from 'node:url';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p22-platform-mfa-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -39,6 +51,9 @@ await run(['packages/database/src/seed.js']);
 
 // 直接用服务端的 TOTP 实现算码（totp.js 只依赖 node:crypto + config.js，不碰数据库）
 const { totpCode } = await import(pathToFileURL(path.join(root, 'apps/server/src/services/totp.js')).href);
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 
 const port = 18861;
 const server = spawn(process.execPath, ['apps/server/src/index.js'], {
@@ -166,11 +181,11 @@ try {
 
   // 13) 审计落库
   const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const audits = db.prepare("SELECT action, COUNT(*) n FROM audit_logs WHERE action LIKE 'PLATFORM_MFA%' GROUP BY action").all();
-  const mfaLogin = db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='AUTH_LOGIN' AND after_data LIKE '%RECOVERY_CODE%'").get();
-  const credentials = db.prepare('SELECT COUNT(*) n FROM user_mfa_credentials').get();
-  db.close();
+   
+  const audits = await arows("SELECT action, COUNT(*) n FROM audit_logs WHERE action LIKE 'PLATFORM_MFA%' GROUP BY action");
+  const mfaLogin = await arow("SELECT COUNT(*) n FROM audit_logs WHERE action='AUTH_LOGIN' AND after_data LIKE '%RECOVERY_CODE%'");
+  const credentials = await arow('SELECT COUNT(*) n FROM user_mfa_credentials');
+  
   const auditMap = Object.fromEntries(audits.map((item) => [item.action, Number(item.n)]));
   assert.equal(auditMap.PLATFORM_MFA_SETUP, 1, `应有 1 条 PLATFORM_MFA_SETUP，实际 ${auditMap.PLATFORM_MFA_SETUP}`);
   assert.equal(auditMap.PLATFORM_MFA_ENABLE, 1, `应有 1 条 PLATFORM_MFA_ENABLE，实际 ${auditMap.PLATFORM_MFA_ENABLE}`);

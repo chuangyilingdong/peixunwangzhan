@@ -25,6 +25,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p74-scope-columns-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const env = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -40,13 +55,13 @@ const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
-const seeded = (() => {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  const student = db.prepare("SELECT id, login, org_id FROM users WHERE login='student-2'").get();
-  const lesson = db.prepare("SELECT id, series_id FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get();
-  db.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
-  const teacher = db.prepare("SELECT id FROM users WHERE role='TEACHER' AND org_id=? ORDER BY created_at LIMIT 1").get(student.org_id);
-  db.close();
+const seeded = await (async () => {
+   
+  const student = await arow("SELECT id, login, org_id FROM users WHERE login='student-2'");
+  const lesson = await arow("SELECT id, series_id FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1");
+  await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))", [lesson.id]);
+  const teacher = await arow("SELECT id FROM users WHERE role='TEACHER' AND org_id=? ORDER BY created_at LIMIT 1", [student.org_id]);
+  
   return { student, lesson, teacher };
 })();
 
@@ -92,69 +107,65 @@ try {
   const generated = await api('/api/ai/generations', { method: 'POST', token: student.token, body: { projectId: project.data.id, prompt: 'P74 用量归属', modality: 'TEXT' } });
   check('② 生成调用成功（前置）', generated.status === 200 || generated.status === 202, `${generated.status} ${JSON.stringify(generated.error || {}).slice(0, 140)}`);
   {
-    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-    const own = db.prepare('SELECT COUNT(*) n, MAX(class_session_id) sid FROM usage_records WHERE project_id=?').get(project.data.id);
+     
+    const own = await arow('SELECT COUNT(*) n, MAX(class_session_id) sid FROM usage_records WHERE project_id=?', [project.data.id]);
     check('③ 用量记录的 class_session_id 也被写上了（教师用量范围靠它）',
       Number(own.n) > 0 && own.sid === sessionId, JSON.stringify({ rows: own.n, sessionId: own.sid }));
-    db.close();
+    
   }
 
   const submitted = await api(`/api/student/projects/${project.data.id}/submit`, { method: 'POST', token: student.token, body: { copyrightConfirmed: true } });
   check('④ 提交作品成功（前置）', submitted.status === 200, JSON.stringify(submitted.data).slice(0, 160));
   {
-    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-    const work = db.prepare('SELECT id, class_session_id FROM works WHERE project_id=?').get(project.data.id);
+     
+    const work = await arow('SELECT id, class_session_id FROM works WHERE project_id=?', [project.data.id]);
     check('⑤ 作品的 class_session_id 被写上了（教师作品范围就靠它，漏了会静默看不到）',
       work?.class_session_id === sessionId, JSON.stringify(work));
-    db.close();
+    
   }
 
   /* A2. 正向证据：教师看得到自己课堂里的作品 */
   const teacherWorks = await api('/api/org/works', { token: teacher.token });
   const ids = (teacherWorks.data?.items || []).map((item) => item.id);
   {
-    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-    const workId = db.prepare('SELECT id FROM works WHERE project_id=?').get(project.data.id)?.id;
-    db.close();
+     
+    const workId = (await arow('SELECT id FROM works WHERE project_id=?', [project.data.id]))?.id;
+    
     check('⑥ 教师看得到自己课堂里的作品（范围真的圈得住，不是「谁都看不到」）', ids.includes(workId), JSON.stringify(ids).slice(0, 160));
   }
 
   /* B. 回填：老数据只按证据补、幂等、无证据留空 */
   const legacy = 'legacy_lesson_p74';
   {
-    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
+     
     const now = '2026-01-01T00:00:00.000Z';
     // 老项目/老作品：没记课堂；但他在那节课上有一条课堂名单记录（＝证据）
-    db.prepare("INSERT INTO student_projects(id,student_id,org_id,course_lesson_id,title,status,last_saved_at,created_at,updated_at) VALUES (?,?,?,?,?,'SUBMITTED',?,?,?)")
-      .run('p74_legacy_evidenced', seeded.student.id, seeded.student.org_id, seeded.lesson.id, '老项目·有证据', now, now, now);
-    db.prepare("INSERT INTO works(id,project_id,student_id,org_id,course_lesson_id,title,description,canvas_snapshot,status,submitted_at) VALUES (?,?,?,?,?,?,'','{}','PENDING',?)")
-      .run('w74_legacy_evidenced', 'p74_legacy_evidenced', seeded.student.id, seeded.student.org_id, seeded.lesson.id, '老作品·有证据', now);
+    await aq("INSERT INTO student_projects(id,student_id,org_id,course_lesson_id,title,status,last_saved_at,created_at,updated_at) VALUES (?,?,?,?,?,'SUBMITTED',?,?,?)", ['p74_legacy_evidenced', seeded.student.id, seeded.student.org_id, seeded.lesson.id, '老项目·有证据', now, now, now]);
+    await aq("INSERT INTO works(id,project_id,student_id,org_id,course_lesson_id,title,description,canvas_snapshot,status,submitted_at) VALUES (?,?,?,?,?,?,'','{}','PENDING',?)", ['w74_legacy_evidenced', 'p74_legacy_evidenced', seeded.student.id, seeded.student.org_id, seeded.lesson.id, '老作品·有证据', now]);
     // 老项目/老作品：既没记课堂、也没有任何名单记录（＝没证据）
-    db.prepare("INSERT INTO student_projects(id,student_id,org_id,course_lesson_id,title,status,last_saved_at,created_at,updated_at) VALUES (?,?,?,?,?,'SUBMITTED',?,?,?)")
-      .run('p74_legacy_orphan', seeded.student.id, seeded.student.org_id, legacy, '老项目·没证据', now, now, now);
-    db.prepare("INSERT INTO works(id,project_id,student_id,org_id,course_lesson_id,title,description,canvas_snapshot,status,submitted_at) VALUES (?,?,?,?,?,?,'','{}','PENDING',?)")
-      .run('w74_legacy_orphan', 'p74_legacy_orphan', seeded.student.id, seeded.student.org_id, legacy, '老作品·没证据', now);
-    db.close();
+    await aq("INSERT INTO student_projects(id,student_id,org_id,course_lesson_id,title,status,last_saved_at,created_at,updated_at) VALUES (?,?,?,?,?,'SUBMITTED',?,?,?)", ['p74_legacy_orphan', seeded.student.id, seeded.student.org_id, legacy, '老项目·没证据', now, now, now]);
+    await aq("INSERT INTO works(id,project_id,student_id,org_id,course_lesson_id,title,description,canvas_snapshot,status,submitted_at) VALUES (?,?,?,?,?,?,'','{}','PENDING',?)", ['w74_legacy_orphan', 'p74_legacy_orphan', seeded.student.id, seeded.student.org_id, legacy, '老作品·没证据', now]);
+    
   }
   // 「重启服务」＝重跑 schema（发布时就是这么跑回填的）。这里用同一个进程跑 db.js 即可。
   await run(['packages/database/src/db.js', '--init']);
   {
-    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-    const evidenced = db.prepare('SELECT class_session_id FROM works WHERE id=?').get('w74_legacy_evidenced');
-    const orphan = db.prepare('SELECT class_session_id FROM works WHERE id=?').get('w74_legacy_orphan');
-    const project = db.prepare('SELECT class_session_id FROM student_projects WHERE id=?').get('p74_legacy_evidenced');
+     
+    const evidenced = await arow('SELECT class_session_id FROM works WHERE id=?', ['w74_legacy_evidenced']);
+    const orphan = await arow('SELECT class_session_id FROM works WHERE id=?', ['w74_legacy_orphan']);
+    const project = await arow('SELECT class_session_id FROM student_projects WHERE id=?', ['p74_legacy_evidenced']);
     check('⑦ 老作品按「课堂名单记录」这条证据补上了课堂', evidenced?.class_session_id === sessionId, String(evidenced?.class_session_id));
     check('⑧ 老项目也补上了同一个课堂', project?.class_session_id === sessionId, String(project?.class_session_id));
     check('⑨ 没有任何证据的老作品保持留空（不硬认领）', orphan?.class_session_id === null, String(orphan?.class_session_id));
-    db.close();
+    
   }
   await run(['packages/database/src/db.js', '--init']);
   {
-    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
+     
     check('⑩ 再跑一次结果不变（回填幂等）',
-      db.prepare('SELECT class_session_id FROM works WHERE id=?').get('w74_legacy_evidenced').class_session_id === sessionId
-      && db.prepare('SELECT class_session_id FROM works WHERE id=?').get('w74_legacy_orphan').class_session_id === null);
-    db.close();
+      (await arow('SELECT class_session_id FROM works WHERE id=?', ['w74_legacy_evidenced'])).class_session_id === sessionId
+      && (await arow('SELECT class_session_id FROM works WHERE id=?', ['w74_legacy_orphan'])).class_session_id === null);
+    
   }
 
   console.log(JSON.stringify({ name: 'session-scope-columns', pass: failures === 0, failures }, null, 2));

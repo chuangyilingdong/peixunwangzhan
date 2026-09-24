@@ -9,6 +9,21 @@ import { DatabaseSync } from 'node:sqlite';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-kids-p6-classroom-tree-'));
 const dbPath = path.join(temp, 'platform.db');
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+process.env.PLATFORM_DB_PATH = dbPath;
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: temp,
@@ -41,9 +56,9 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 // 此守卫覆盖两种已发布入口，种子课时只开放画布。
 {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  db.prepare(`UPDATE course_lessons SET delivery_modes='["CANVAS","VIBECODING"]' WHERE status='PUBLISHED'`).run();
-  db.close();
+   
+  await aq(`UPDATE course_lessons SET delivery_modes='["CANVAS","VIBECODING"]' WHERE status='PUBLISHED'`);
+  
 }
 
 // Keep one published platform course outside the class curriculum so the
@@ -51,30 +66,22 @@ await run(['packages/database/src/seed.js']);
 // 它必须对该机构有生效授权：平台课包「发布」只上课程广场，机构能看到的前提是授权
 // （见交接说明第四节；否则这个课包在校端根本不会出现，就测不到「可见但未开课」了）。
 {
-  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
+   
   const now = new Date().toISOString();
   const seriesId = `series_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
   const lessonId = `lesson_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
-  db.prepare(`INSERT INTO course_series(
+  await aq(`INSERT INTO course_series(
     id,title,description,owner_type,visibility,version,sort,status,
     difficulty_level,age_range_min,age_range_max,tags,created_at,updated_at
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    seriesId, '未配置体验课包', '用于验证未加入班级课单时保持置灰。',
-    'PLATFORM', 'PUBLIC', '1.0', 99, 'PUBLISHED', 2, 8, 16, '[]', now, now,
-  );
-  db.prepare(`INSERT INTO course_lessons(
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [seriesId, '未配置体验课包', '用于验证未加入班级课单时保持置灰。', 'PLATFORM', 'PUBLIC', '1.0', 99, 'PUBLISHED', 2, 8, 16, '[]', now, now]);
+  await aq(`INSERT INTO course_lessons(
     id,series_id,title,summary,sort,status,duration_minutes,lesson_content,created_at,updated_at
-  ) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
-    lessonId, seriesId, '第1课：未配置课时', '未加入学生班级课单的测试课时。',
-    1, 'PUBLISHED', 45, '', now, now,
-  );
-  const studentOrg = db.prepare("SELECT org_id AS id FROM users WHERE login='student-1'").get();
-  db.prepare(`INSERT INTO course_assignments(
+  ) VALUES (?,?,?,?,?,?,?,?,?,?)`, [lessonId, seriesId, '第1课：未配置课时', '未加入学生班级课单的测试课时。', 1, 'PUBLISHED', 45, '', now, now]);
+  const studentOrg = await arow("SELECT org_id AS id FROM users WHERE login='student-1'");
+  await aq(`INSERT INTO course_assignments(
     id,series_id,org_id,status,assigned_by,assigned_at,expires_at
-  ) VALUES (?,?,?,?,?,?,?)`).run(
-    `assign_${randomUUID().replaceAll('-', '').slice(0, 20)}`, seriesId, studentOrg.id, 'ACTIVE', null, now, null,
-  );
-  db.close();
+  ) VALUES (?,?,?,?,?,?,?)`, [`assign_${randomUUID().replaceAll('-', '').slice(0, 20)}`, seriesId, studentOrg.id, 'ACTIVE', null, now, null]);
+  
 }
 
 const server = spawn(process.execPath, ['apps/server/src/index.js'], {
