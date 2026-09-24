@@ -87,7 +87,7 @@ function wrapError(error, sql, params) {
 }
 
 /**
- * SQLite → MySQL 的**方言翻译**（只做"可证明等价"的三条，逐条写明依据）。
+ * SQLite → MySQL 的**方言翻译**（只做"可证明等价"的四条，逐条写明依据）。
  *
  * 为什么集中在这里翻译、而不是逐个改调用点：改调用点要动 11 处字符串字面量（还得把单引号换成模板串），
  * 风险比翻译层大得多；而这几条差异是**语义等价**的，翻译层还自带"依据可审查"的好处。
@@ -100,12 +100,22 @@ function wrapError(error, sql, params) {
  *      本仓只有 2 处用它，且都是"不存在才插一条"的语义（主键/唯一键冲突）→ 安全。**新代码不要再依赖它。**
  *   ③ `INSERT OR REPLACE INTO` → `REPLACE INTO`
  *      两者都是"冲突时先删后插"，语义一致（连带后果也一样：都触发级联删除/触发器）。
+ *   ⑤ `ORDER BY … DESC NULLS LAST` → 去掉子句（MySQL 无此语法，而它的默认就是 NULL 排最后）
  *   ④ `json_extract`：**不能靠翻译层**（实测踩到）—— 它需要配对地补一个右括号，正则做不到。
  *      改成调用点用 shared.js 的 `jsonText(expr, path)`，它按驱动给出 `json_extract(...)` 或
  *      `JSON_UNQUOTE(JSON_EXTRACT(...))`（MySQL 对字符串会返回带引号的 JSON，不 unquote 会让 `= 'x'` 静默失效）。
  */
 function translateSqlite(sql) {
   let out = sql;
+  // ⑤ `ORDER BY x DESC NULLS LAST` / `ORDER BY x ASC NULLS FIRST` → 去掉子句
+  //    MySQL **没有** NULLS FIRST/LAST 语法（那是 PostgreSQL/SQLite 3.30+ 的），直接语法错。
+  //    而 MySQL 的默认正好就是这两种：**NULL 视为最小值** —— ASC 时排最前、DESC 时排最后。
+  //    所以这两种组合去掉子句后语义**完全相同**。
+  //    ⚠️ 另外两种组合（ASC NULLS LAST / DESC NULLS FIRST）与 MySQL 默认相反，**不在这里翻译** ——
+  //       那需要 `ORDER BY (x IS NULL), x` 的写法，留给调用点显式处理；不翻译会当场语法错，
+  //       总好过"悄悄换了个排序"。
+  if (/(?:^|[\s,)])(DESC|ASC|desc|asc)\s+NULLS\s+LAST/i.test(out)) out = out.replace(/\s+NULLS\s+LAST/gi, '');
+  if (/(?:^|[\s,)])(DESC|ASC|desc|asc)\s+NULLS\s+FIRST/i.test(out)) out = out.replace(/\s+NULLS\s+FIRST/gi, '');
   if (out.includes('COLLATE NOCASE')) out = out.replace(/\s+COLLATE\s+NOCASE/gi, '');
   if (/INSERT\s+OR\s+IGNORE\s+INTO/i.test(out)) out = out.replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, 'INSERT IGNORE INTO');
   if (/INSERT\s+OR\s+REPLACE\s+INTO/i.test(out)) out = out.replace(/INSERT\s+OR\s+REPLACE\s+INTO/gi, 'REPLACE INTO');

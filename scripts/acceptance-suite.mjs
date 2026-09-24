@@ -78,13 +78,36 @@ const nodeBin = process.env.SUITE_NODE || process.execPath;
 const started = Date.now();
 const results = [];
 
+// 探测一次"能不能建库"（决定用每脚本一库、还是就地清表）
+let canCreateDatabases = false;
+if (useMysql) {
+  try {
+    const env = mysqlEnvFromProcess();
+    const { pathToFileURL } = await import('node:url');
+    const path = await import('node:path');
+    const mysql = (await import(pathToFileURL(path.join(ROOT, 'packages/database/node_modules/mysql2/promise.js')).href)).default;
+    const conn = await mysql.createConnection({ host: env.MYSQL_HOST, port: Number(env.MYSQL_PORT), user: env.MYSQL_USER, password: env.MYSQL_PASSWORD });
+    try {
+      await conn.query('CREATE DATABASE IF NOT EXISTS aild_perm_probe');
+      await conn.query('DROP DATABASE aild_perm_probe');
+      canCreateDatabases = true;
+    } catch { canCreateDatabases = false; }
+    await conn.end();
+    console.log(canCreateDatabases
+      ? '（能建库：每脚本一个独立库）'
+      : '（无建库权限：固定库 + 每脚本就地清表）');
+  } catch { canCreateDatabases = false; }
+}
+
 console.log(`验收套件：${files.length} 个脚本（node ${process.version}，每脚本超时 ${Math.round(timeout / 1000)}s）\n`);
 
 for (let i = 0; i < files.length; i += 1) {
   const rel = files[i];
   // 每个脚本一个**全新的库名**：脚本 spawn 出来的服务器如果没被杀干净，它连的是**上一个库**，
   // 不会污染这一轮（否则会看到"同一个脚本单独跑能过、在套件里时好时坏"这种最浪费时间的假失败）。
-  const dbName = useMysql ? `aild_test_${i + 1}` : null;
+  // ⚠️ 但**只有真的能建库时**才能这么做：RDS 上那个账号只被授予了 `aild_admin`.*，
+  //    建不了新库 —— 这种情况下退回"固定库 + 就地清表"。
+  const dbName = useMysql && canCreateDatabases ? `aild_test_${i + 1}` : null;
   if (useMysql) {
     try { await resetMysqlDatabase({ silent: true, database: dbName, dropToo: i > 0 ? [`aild_test_${i}`] : [] }); }
     catch (error) { console.log(`  [mysql] 重置失败，跳过 ${rel}：${error.message}`); results.push({ script: rel, ok: false, status: -1, timedOut: false, ms: 0, tail: `mysql 重置失败：${error.message}` }); continue; }
@@ -103,7 +126,8 @@ for (let i = 0; i < files.length; i += 1) {
     stdio: ['ignore', fd, fd],
     env: {
       ...process.env,
-      ...(useMysql ? { ...mysqlEnvFromProcess(), MYSQL_DATABASE: dbName } : {}),
+      // ⚠️ 只有真给了库名才覆盖（否则会写进字符串 "null"，应用连到一个不存在的库）
+      ...(useMysql ? { ...mysqlEnvFromProcess(), ...(dbName ? { MYSQL_DATABASE: dbName } : {}) } : {}),
       PLATFORM_DATA_DIR: tmp,
       PLATFORM_DB_PATH: path.join(tmp, 'platform.db'),
       DEPLOYMENT_MODE: process.env.DEPLOYMENT_MODE || 'internal-test',

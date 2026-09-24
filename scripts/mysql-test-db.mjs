@@ -75,12 +75,27 @@ export async function resetMysqlDatabase({ silent = false, database = null, drop
     decimalNumbers: true,
   });
   try {
-    // 每脚本一个新库名 → 上一个脚本残留的服务器（有些脚本 spawn 出来不杀）只会写进它自己那个旧库，
-    // 不会污染下一个脚本。旧库在这里顺手清掉（连着的会话不会阻塞 DROP）。
     for (const name of dropToo) await conn.query(`DROP DATABASE IF EXISTS \`${name}\``).catch(() => {});
-    await conn.query(`DROP DATABASE IF EXISTS \`${env.MYSQL_DATABASE}\``);
-    await conn.query(`CREATE DATABASE \`${env.MYSQL_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci`);
     await conn.query(`USE \`${env.MYSQL_DATABASE}\``);
+    // 先试"DROP + CREATE DATABASE"（本机 Docker 的 root 可以）；
+    // **没有建库权限时**（例如 RDS 上那个账号只被授予 `aild_admin`.*）→ 退回"就地清表"。
+    let recreated = false;
+    try {
+      // 每脚本一个新库名 → 上一个脚本残留的服务器只会写进它自己那个旧库，不会污染下一个脚本。
+      await conn.query(`DROP DATABASE IF EXISTS \`${env.MYSQL_DATABASE}\``);
+      await conn.query(`CREATE DATABASE \`${env.MYSQL_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci`);
+      await conn.query(`USE \`${env.MYSQL_DATABASE}\``);
+      recreated = true;
+    } catch { recreated = false; }
+    if (!recreated) {
+      // 就地重置：把库里的表全删掉，再灌一遍结构（结构同样由代码现生成）
+      await conn.query('SET FOREIGN_KEY_CHECKS=0');
+      const [tables] = await conn.query(
+        "SELECT TABLE_NAME AS t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE='BASE TABLE'",
+      );
+      for (const row of tables) await conn.query(`DROP TABLE IF EXISTS \`${row.t}\``);
+      await conn.query('SET FOREIGN_KEY_CHECKS=1');
+    }
     await conn.query(sql);
   } finally {
     await conn.end();
