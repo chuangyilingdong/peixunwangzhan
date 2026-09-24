@@ -63,6 +63,31 @@ if [ -f "apps/server/package.json" ]; then
   cp apps/server/package.json "$RELEASE_DIR/apps/server/"
 fi
 cp packages/database/package.json "$RELEASE_DIR/packages/database/"
+
+# ── 运行时依赖：生产唯一需要的第三方包是 **mysql2**（RDS 驱动；sqlite 走 node 内置的 node:sqlite）。
+# 为什么必须在这一步装：release 是**自包含**的（只抄 src + 前端产物），而 pnpm 把 mysql2 装在
+# `packages/database/node_modules/` 下 —— 那个路径不在 release 里，于是 `DB_DRIVER=mysql` 时
+# store.js 的 `await import('./mysql.js')` → `import mysql from 'mysql2/promise'` 会在
+# 启动或首个查询时炸。服务端是按**相对路径**引数据层的
+# （`apps/server/src/lib.js` → `../../../packages/database/src/store.js`），所以 node 会在
+# `$RELEASE_DIR/packages/database/node_modules/` 找它 —— 装在这里正好。
+# 只装 @platform/database 这一支（--filter），别把前端那堆（react/pdfjs/ogl…）也拖进 release：
+# 前端产物是构建期打包好的，运行时不需要它们。
+# ⚠️ 这步失败必须让**构建失败**：静默少装 = 发出去的 release 连不上库，那是上线时才炸。
+if [[ "${SKIP_RUNTIME_DEPS:-0}" != "1" ]]; then
+  echo "  install runtime deps into release (mysql2)"
+  (
+    cd "$RELEASE_DIR"
+    COREPACK_NPM_REGISTRY="${COREPACK_NPM_REGISTRY:-https://registry.npmmirror.com}" \
+    npm_config_registry="${npm_config_registry:-https://registry.npmmirror.com}" \
+    "$PNPM_COMMAND" install --prod --frozen-lockfile --filter @platform/database --reporter=silent
+  )
+  if [[ ! -d "$RELEASE_DIR/packages/database/node_modules/mysql2" ]]; then
+    echo "Release 装完还是找不到 mysql2：$RELEASE_DIR/packages/database/node_modules/mysql2" >&2
+    exit 2
+  fi
+fi
+
 cat > "$RELEASE_DIR/BUILD-METADATA.txt" <<EOF
 release=${STAMP}
 commit=$(git rev-parse HEAD)
