@@ -476,7 +476,11 @@ for (const [file, mod] of mods) {
       else if (c && typeof c.type === 'string') walk(c);
     }
   })(mod.ast);
-  const needsClose = cleanupStmts.length > 0 && !/await closeDb()/.test(code);
+  // ⚠️ 清理那行**自带容错**的就别插 closeDb 了（`maxRetries` 是那种写法的标志）：
+//    p4-o09 特意保持连接打开到进程退出（communication 的 exit 钩子要用），插了反而
+//    在退出钩子里炸 "database is not open"。它的 rm 本来就 catch + 重试。
+const tolerantCleanup = cleanupStmts.some((stmt) => /maxRetries/.test(code.slice(stmt.start, stmt.end)));
+const needsClose = cleanupStmts.length > 0 && !tolerantCleanup && !/await closeDb()/.test(code);
   const needsDataLayer = converts || usesFixture || needsClose;
   if (needsDataLayer) {
     // 插入点：**脚本自己那句 `const dbPath = …platform.db` 之后**（env 行也插在同一位置），
