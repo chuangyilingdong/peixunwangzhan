@@ -118,8 +118,14 @@ check('④ ★ 打字只是"到了才开始打"：观察器不可用 / reduced-m
 check('④ 逐字显示不重排：每个单元是 opacity 过渡（不是"一个字一个字往 DOM 里塞"）',
   /\.hp-cmp-unit\{display:inline;transition:opacity/.test(css) && /\{ value, start: match\.index, end: match\.index \+ value\.length \}/.test(site));
 check('④ 高亮段是**整段**包裹（下划线才盖得住整段，不是只盖一个字）',
-  /<span className="hp-cmp-hl">[\s\S]{0,200}renderUnits\(hlStart, hlEnd\)/.test(site) && /\.hp-cmp-swash\{position:absolute/.test(css));
-check('④ 高亮词找不到时不留空：整句按高亮段处理', /const hlStart = title && hasHighlight \? title\.indexOf\(highlight\) : \(title \? 0 : -1\)/.test(site));
+  /<span className="hp-cmp-hl">[\s\S]{0,200}renderUnits\(hlFrom, hlTo\)/.test(site) && /\.hp-cmp-swash\{position:absolute/.test(css));
+// ⚠️ 2026-09-25 口径变更（不是测试漂移）：用户把标题改短、高亮词留在原处，结果高亮词**整段不显示**了。
+//    现在三种情形都有明确行为：① 高亮词在标题里 → 高亮那一段；② **不在标题里 → 当作后半段追加**
+//    （标题以标点结尾就不补逗号）；③ 留空 → 整句高亮。缺一种运营就会看到"字不见了"。
+check('④ 高亮词不在标题里时当作**后半段追加**（用户 2026-09-25 报的就是这条）',
+  /return \{ before: title \+ \(PUNCT_END\.test\(title\) \? '' : '，'\), mid: highlight, after: '' \};/.test(site));
+check('④ 标题以标点结尾不补逗号 / 高亮留空则整句高亮',
+  /const PUNCT_END = \/\[/.test(site) && /if \(!highlight\) return \{ before: '', mid: title, after: '' \};/.test(site));
 
 console.log('⑤ CMS：后台能配（真服务 / 真接口往返）');
 await run(['packages/database/src/db.js', '--init']);
@@ -193,8 +199,10 @@ try {
   check('⑤ 把 cards 删空是有效操作（官网据此整栏不显示，与 stats/steps 同一条口径）',
     cleared.status === 200 && Array.isArray(emptied?.compare?.cards) && emptied.compare.cards.length === 0,
     JSON.stringify(emptied?.compare || {}).slice(0, 120));
+  // ⚠️ 不卡"两个语句相邻"的窗口：打字机的 hook 必须在提前 return **之前**调用（React 的 hooks 规则，
+  //    p34 钉着这条），所以 `if (!cards.length) return null;` 与 `const cards = …` 之间隔着一段代码。
   check('⑤ 官网那侧确实按 cards 判空（空数组 → 整栏不渲染）',
-    /const cards = Array\.isArray\(block\?\.cards\)[\s\S]{0,200}if \(!cards\.length\) return null;/.test(site));
+    /const cards = Array\.isArray\(block\?\.cards\)/.test(site) && /if \(!cards\.length\) return null;/.test(site));
 } finally {
   server.kill();
 }

@@ -1,7 +1,6 @@
 // P4-C04 统一文件元数据与访问授权模型
 // 提供：file_assets / file_access_grants 表的 CRUD + 授权校验 + 受保护文件流下载
 import { createReadStream } from 'node:fs';
-import { Readable, Transform } from 'node:stream';
 import { stat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -31,21 +30,6 @@ const VISIBILITY_MODES = new Set(['PRIVATE', 'ORG', 'ASSIGNED_ORGS', 'PUBLIC_PLA
 const CATEGORIES = new Set(['PROMO_MATERIAL', 'PROMO_COVER', 'CLIENT_INSTALLER', 'MEDIA_ASSET', 'TEACHING_ASSET', 'GENERAL']);
 const REVIEW_STATUSES = new Set(['NOT_REQUIRED', 'PENDING', 'APPROVED', 'REJECTED']);
 const GRANT_TYPES = new Set(['ORG', 'ROLE', 'USER', 'PUBLIC']);
-// Image previews share the app server's memory/network budget; ordinary OSS downloads still redirect.
-const MAX_OSS_WORK_IMAGE_STREAMS = 8;
-let activeOssWorkImageStreams = 0;
-function acquireOssWorkImageStream() {
-  if (activeOssWorkImageStreams >= MAX_OSS_WORK_IMAGE_STREAMS) {
-    throw errors.serviceUnavailable('作品图片预览繁忙，请稍后重试', 'WORK_IMAGE_PREVIEW_BUSY');
-  }
-  activeOssWorkImageStreams += 1;
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    activeOssWorkImageStreams = Math.max(0, activeOssWorkImageStreams - 1);
-  };
-}
 
 
 function integer(value, label, { min = 0, max = 1000000, fallback = 0 } = {}) {
@@ -336,70 +320,22 @@ export async function prepareWorkImage(ctx, file) {
   }
   let stream;
   let bytes;
-  let releaseStreamSlot = null;
+  // ⭐ 2026-09-25：OSS 行**不再把字节搬过这台机**（本来是从内网取回来再转发给浏览器）——
+  //    这台机的公网出口只有 5 Mbps，7 张 2.4MB 的作品图要几十秒（用户看到的"预览一直是失效的样子"，
+  //    见交接 §二十二）；改成和下载口同一条路子：**302 到带签名的临时地址**，字节由 OSS 直接服务。
+  //    · `<img>/<video>/<audio>` 跟着 302 走 ✓（CSP 的 img-src/media-src 都允许 https:）；
+  //    · 需要字节的调用方（VibeCoding 沙箱文档要内联成 data:）走 `fetch` —— 桶上已配 CORS
+  //      （ACAO https://aicyld.com + credentials），所以 fetch 也读得到 ✓（2026-09-25 实测）。
+  //    · 大小上限改成看**库里记的字节数**（302 之后没法再拦响应体）：
+  //      file_size 是上传时校验过的，且下面这条与流式那条原来是同一个阈值。
   if (rowStorageBackend(file) === 'oss') {
-    releaseStreamSlot = acquireOssWorkImageStream();
-    const signed = ossRedirectUrl(file, { expires: 60 });
-    if (!signed) {
-      releaseStreamSlot();
-      releaseStreamSlot = null;
-      throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
-    }
-    const url = new URL(signed);
-    // OSS signatures bind the object path, not the host. ECS in the same region reads over the private endpoint.
-    const internal = String(process.env.OSS_INTERNAL_ENDPOINT || '').trim().replace(/^https?:\/\//, '');
-    if (internal) url.host = `${process.env.OSS_BUCKET}.${internal}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    let response;
-    try {
-      response = await fetch(url, { signal: controller.signal, redirect: 'error' });
-      if (!response.ok || !response.body) throw new Error(`OSS HTTP ${response.status}`);
-      const lengthHeader = response.headers.get('content-length');
-      const declared = lengthHeader === null ? null : Number(lengthHeader);
-      if (declared !== null && Number.isFinite(declared) && declared >= 0 && declared > maxBytes) {
-        controller.abort();
-        throw errors.badRequest('作品图片过大，无法在线预览', 'WORK_IMAGE_TOO_LARGE');
-      }
-      bytes = declared !== null && Number.isSafeInteger(declared) && declared >= 0 ? declared : null;
-      const source = Readable.fromWeb(response.body);
-      let seen = 0;
-      const limited = new Transform({
-        transform(chunk, encoding, callback) {
-          const size = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding);
-          seen += size;
-          if (seen > maxBytes) {
-            controller.abort();
-            callback(errors.badRequest('作品图片过大，无法在线预览', 'WORK_IMAGE_TOO_LARGE'));
-            return;
-          }
-          callback(null, chunk);
-        },
-      });
-      const onClientClose = () => limited.destroy();
-      ctx.res?.once?.('close', onClientClose);
-      source.once('error', (error) => limited.destroy(error));
-      limited.once('close', () => {
-        clearTimeout(timeout);
-        ctx.res?.off?.('close', onClientClose);
-        controller.abort();
-        source.destroy();
-        releaseStreamSlot();
-      });
-      // The caller attaches its error handler after this function returns; do not
-      // pull OSS bytes (or emit stream errors) while the audit write is pending.
-      limited.once('resume', () => {
-        if (!limited.destroyed) source.pipe(limited);
-      });
-      stream = limited;
-    } catch (error) {
-      clearTimeout(timeout);
-      controller.abort();
-      releaseStreamSlot();
-      if (error?.code === 'WORK_IMAGE_TOO_LARGE') throw error;
-      throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
-    }
-  } else {
+    const signed = ossRedirectUrl(file, { expires: 900 });
+    if (!signed) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+    await audit(ctx, 'FILE_WORK_IMAGE_PROXY', 'FILE_ASSET', file.id, null, { storageBackend: 'oss', redirected: true, bytes: file.file_size == null ? null : Number(file.file_size) });
+    return { __fileResponse: true, status: 302, redirectUrl: signed };
+  }
+  // 本地盘的行：没有 OSS 可指，照旧流式发（数量很少，且是本机文件）
+  {
     const root = uploadRoot();
     const absolute = path.resolve(root, storageKey);
     if (absolute !== root && !absolute.startsWith(root + path.sep)) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
@@ -414,7 +350,6 @@ export async function prepareWorkImage(ctx, file) {
     await audit(ctx, 'FILE_WORK_IMAGE_PROXY', 'FILE_ASSET', file.id, null, { storageBackend: rowStorageBackend(file), bytes });
   } catch (error) {
     stream.destroy();
-    releaseStreamSlot?.();
     throw error;
   }
   return {

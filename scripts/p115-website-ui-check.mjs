@@ -73,7 +73,8 @@ const RETIRED_COPY = ['给机构一套', '能落地的青少年 AI 课', '领航
 // 下载入口改到导航最后一项「VibeCoding客户端下载」→ /download。
 // 2026-09-19 更晚口径变更（不是测试漂移）：用户口径「灵动介绍页面和灵动介绍的导航全部删除，
 // 不需要这个了」——**去掉「灵动介绍」**（页面 / 导航 / 页脚入口 / 路由一起删，见交接文档 §二.N）。
-const NAV_LABELS = ['首页', '灵动学习', '灵动课程', '灵动作品', '机构手册', '常见问题', 'VibeCoding客户端下载'];
+// ⚠️ 2026-09-25 口径变更（不是测试漂移）：「灵动作品」按用户口径改成「课堂作品」——导航与页脚同一处文案。
+const NAV_LABELS = ['首页', '灵动学习', '灵动课程', '课堂作品', '机构手册', '常见问题', 'VibeCoding客户端下载'];
 // 品牌名只认这一个（用户口径 2026-09-18）。
 const BRAND_NAME = '灵动ai学院';
 
@@ -980,7 +981,7 @@ try {
   await page.locator('.site-topbar .header-user').click();
   await page.waitForTimeout(300);
   if (!(await page.locator('.student-dropdown-menu').count())) problems.push('顶栏下拉：再点一次应当还能打开');
-  await page.locator('.site-topbar nav a', { hasText: '灵动作品' }).first().click();
+  await page.locator('.site-topbar nav a', { hasText: '课堂作品' }).first().click();   // 2026-09-25 改名
   await page.waitForTimeout(700);
   const afterNav = await page.locator('.student-dropdown-menu').count();
   console.log(`  · 用顶栏切换页面之后下拉还在吗：${afterNav ? '还在 ✗' : '已收起 ✓'}（当前 ${new URL(page.url()).pathname}）`);

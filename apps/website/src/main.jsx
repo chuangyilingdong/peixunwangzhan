@@ -51,7 +51,7 @@ const BRAND_NAME = '灵动ai学院';
 const BRAND_TAGLINE = '青少年 AI 创作开课平台';
 // 官网主导航：桌面端与移动端抽屉共用这一份。
 // 此前 main.jsx 里有两份内容相同的硬编码导航（Header 的 nav 与 WEBSITE_NAV），改文案要改两处。
-const WEBSITE_NAV = [['/', '首页'], ['/learn', '灵动学习'], ['/marketplace', '灵动课程'], ['/works', '灵动作品'], ['/handbook', '机构手册'], ['/faq', '常见问题'], ['/download', 'VibeCoding客户端下载']];
+const WEBSITE_NAV = [['/', '首页'], ['/learn', '灵动学习'], ['/marketplace', '灵动课程'], ['/works', '课堂作品'], ['/handbook', '机构手册'], ['/faq', '常见问题'], ['/download', 'VibeCoding客户端下载']];
 // 未登录时的两个登录入口（用户口径 2026-09-18）。机构/老师与学生是**同一套账号体系、同一个登录接口**，
 // 两个入口只决定落点，不参与鉴权判定——所以不往 auth/login 里传 clientType，
 // 避免「老师从学生入口进来就被拒」这类按入口拦人的行为。
@@ -101,7 +101,7 @@ function Footer(){return <footer className="site-footer">
   <div className="ft-glow ft-glow--a" aria-hidden="true" /><div className="ft-glow ft-glow--b" aria-hidden="true" /><div className="ft-glow ft-glow--c" aria-hidden="true" />
   <div className="ft-inner">
     <div className="foot">
-      <div><strong>产品</strong><FooterLink to="/marketplace">灵动课程</FooterLink><FooterLink to="/org">机构方案</FooterLink><FooterLink to="/works">灵动作品</FooterLink></div>
+      <div><strong>产品</strong><FooterLink to="/marketplace">灵动课程</FooterLink><FooterLink to="/org">机构方案</FooterLink><FooterLink to="/works">课堂作品</FooterLink></div>
       <div><strong>合作</strong><FooterLink to="/demo">联系我们</FooterLink><FooterLink to="/handbook">机构手册</FooterLink><FooterLink href={ORG_APP_URL}>机构后台</FooterLink></div>
       <div><strong>了解更多</strong><FooterLink to="/download">下载客户端</FooterLink><FooterLink to="/faq">常见问题</FooterLink><FooterLink to="/compare">选型对比</FooterLink></div>
       <div><strong>条款与隐私</strong><FooterLink to="/terms">用户协议</FooterLink><FooterLink to="/privacy">隐私政策</FooterLink><FooterLink to="/minors">儿童 / 未成年人说明</FooterLink><FooterLink href="mailto:hello@aimagc.cn">联系合作</FooterLink></div>
@@ -652,14 +652,28 @@ function HomeCompare({ block }) {
   const title = String(block?.title || '');
   const highlight = String(block?.highlight || '');
   const cards = Array.isArray(block?.cards) ? block.cards.filter((card) => card && (card.title || (Array.isArray(card.items) && card.items.length))) : [];
-  const typed = useTypedCount(title, shown);
+  // 高亮词与标题的关系（2026-09-25 用户报「标题改短之后后半段不显示了」）：
+  //   ① 高亮词在标题里出现 → 高亮那一段（默认用法）；
+  //   ② **不在标题里** → 当作**后半段追加**显示：运营把标题写前半句、高亮词写后半句是常见用法
+  //      （用户就是这么改的：「同样都是Ai课」+「两种上法」），原来那种写法会让高亮词**整段不显示** ✗。
+  //      标题已经以标点结尾就不补逗号，否则补一个中文逗号（免得两句黏在一起）。
+  //   ③ 高亮词留空 → 整句按高亮色显示（与后台那句提示一致，别再改回"整句白字"）。
+  const PUNCT_END = /[，。！？、；：,.!?;:）)】」』…—-]$/;
+  const segments = (() => {
+    if (!title) return null;
+    if (!highlight) return { before: '', mid: title, after: '' };
+    const at = title.indexOf(highlight);
+    if (at >= 0) return { before: title.slice(0, at), mid: highlight, after: title.slice(at + highlight.length) };
+    return { before: title + (PUNCT_END.test(title) ? '' : '，'), mid: highlight, after: '' };
+  })();
+  const displayText = segments ? segments.before + segments.mid + segments.after : '';
+  const typed = useTypedCount(displayText, shown);
   if (!cards.length) return null;
-  // 高亮范围：标题里那一段（找不到就把整句当成高亮段，总比不高亮强）
-  const hasHighlight = Boolean(highlight) && title.includes(highlight);
-  const hlStart = title && hasHighlight ? title.indexOf(highlight) : (title ? 0 : -1);
-  const hlEnd = hlStart < 0 ? -1 : hlStart + (hasHighlight ? highlight.length : title.length);
-  const units = titleUnits(title);
-  // 打字是按"已经打出几个字"逐字亮的，单位用绝对下标，所以这里给每一段传一个起始偏移。
+  const units = titleUnits(displayText);
+  const hlFrom = segments ? segments.before.length : 0;
+  const hlTo = segments ? segments.before.length + segments.mid.length : 0;
+  const hasHighlight = hlTo > hlFrom;
+  // 打字是按"已经打出几个字"逐字亮的，单位用**显示文本里的绝对下标**，所以这里给每一段传范围。
   const renderUnits = (from, to) => units
     .filter((unit) => unit.start >= from && unit.end <= to)
     .map((unit) => <span className="hp-cmp-unit" key={unit.start} style={{ opacity: typed >= unit.end ? 1 : 0 }}>{unit.value}</span>);
@@ -667,16 +681,16 @@ function HomeCompare({ block }) {
     <div className="hp-cmp-inner">
       {(title || block?.lead) && <div className="hp-cmp-head">
         {title ? <h2 className="hp-cmp-title">
-          {renderUnits(0, hlStart < 0 ? title.length : hlStart)}
-          {hlStart >= 0 ? <span className="hp-cmp-hl">
-            {renderUnits(hlStart, hlEnd)}
+          {renderUnits(0, hlFrom)}
+          {hasHighlight ? <span className="hp-cmp-hl">
+            {renderUnits(hlFrom, hlTo)}
             {/* 高亮段底下那道手绘感下划线（纯内联 SVG，不引外部素材）。它包在**整段**里，
                 所以下划线盖的是整段高亮词，而不是某一个字。 */}
             <span className="hp-cmp-swash" aria-hidden="true">
               <svg viewBox="0 0 220 18" preserveAspectRatio="none" focusable="false"><path d="M4 13C46 5 118 3 214 8" /><path d="M16 17c44-7 108-9 186-5" /></svg>
             </span>
           </span> : null}
-          {hlStart >= 0 ? renderUnits(hlEnd, title.length) : null}
+          {renderUnits(hlTo, displayText.length)}
         </h2> : null}
         {block?.lead ? <p className="hp-cmp-lead">{block.lead}</p> : null}
       </div>}

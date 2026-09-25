@@ -97,6 +97,9 @@
 /* ── 只读回放（教师点评 / 公开作品页共用） ─────────────────────────────── */
 .c-replay { max-width: 1180px; margin: 0 auto; display: grid; gap: var(--sp-5); }
 .c-replay__grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: var(--sp-5); align-items: start; }
+/* 作品详情（官网 /works/<token>）：**作品占满整行**，源码收到下面的 .mw-source 折叠区里
+   （2026-09-25 用户口径：「网页展示应该是直接显示作品啊」）。 */
+.c-replay__grid.is-focus { grid-template-columns: minmax(0, 1fr); }
 .c-replay__panel {
   display: flex;
   flex-direction: column;

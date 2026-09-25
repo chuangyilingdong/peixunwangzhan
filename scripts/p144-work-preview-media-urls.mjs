@@ -41,6 +41,14 @@ const baseEnv = {
   FILE_UPLOAD_ROOT: uploadRoot,
   DEPLOYMENT_MODE: 'local-mock',
   AI_PROVIDER: 'local-mock',
+  // ⭐ 2026-09-25：给一组**假的 OSS 凭据**，好把"OSS 行必须 302 到签名地址"这条钉住 ——
+  //    签发只算签名（不发网络请求），所以不需要真桶。真实上传路径这个守卫不碰（它直接插库）。
+  FILE_STORAGE: 'oss',
+  OSS_BUCKET: 'p144-test-bucket',
+  OSS_REGION: 'cn-guangzhou',
+  OSS_ENDPOINT: 'oss-cn-guangzhou.aliyuncs.com',
+  OSS_ACCESS_KEY_ID: 'p144-test-ak',
+  OSS_ACCESS_KEY_SECRET: 'p144-test-sk',
 };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -143,6 +151,26 @@ try {
   const viaStudentUrl = await fetch(`${base}${studentUrl}`, { headers: { cookie: cookies } });
   check('③ 反向证明：同一个 cookie 去取**学生域**地址是 403（旧回退必然显示"已失效"）',
     viaStudentUrl.status === 403, `HTTP ${viaStudentUrl.status}`);
+
+  // ⭐ 2026-09-25（用户那条第 3 项）：**OSS 上的行不许把字节搬过这台机**（公网出口只有 5 Mbps）。
+  //    判据：插一行同一件作品的 OSS 素材 → 取那张图应该是 **302 到带签名的 OSS 地址**，
+  //    而不是 200 流式（流式就是"经过服务器那 5M 带宽"）。
+  const ossFileId = `file_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
+  const ossKey = `lingdong/${new Date().toISOString().slice(0, 7).replace('-', '/')}/${randomUUID()}.png`;
+  await aq('INSERT INTO file_assets(id,owner_type,owner_user_id,owner_org_id,storage_kind,storage_key,file_name,mime_type,file_size,category,visibility,status,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    [ossFileId, 'USER', student.id, student.org_id, 'INTERNAL_PROXY', ossKey, 'p144-oss.png', 'image/png', 2048, 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', '{"storageBackend":"oss"}', now, now]);
+  const canvas = JSON.parse((await arow('SELECT canvas_snapshot FROM works WHERE id=?', [workId])).canvas_snapshot);
+  canvas.nodes.push({ id: 'n2', type: 'image', position: { x: 300, y: 0 }, data: { title: 'OSS 图', caption: 'OSS 图', assetUrl: `/api/student/file-assets/${ossFileId}/download`, previewUrl: `/api/student/file-assets/${ossFileId}/download` } });
+  await aq('UPDATE works SET canvas_snapshot=? WHERE id=?', [JSON.stringify(canvas), workId]);
+  const detail2 = await fetch(`${base}/api/org/works/CANVAS/${workId}`, { headers: { authorization: `Bearer ${token}` } });
+  const payload2 = (await detail2.json().catch(() => ({})))?.data || {};
+  const ossImagePath = String(payload2.imageUrls?.[ossFileId] || '');
+  check('③ OSS 素材也出现在作品详情的 imageUrls 里', ossImagePath.endsWith(`/images/${ossFileId}`), ossImagePath);
+  const ossImage = await fetch(`${base}${ossImagePath}`, { headers: { cookie: cookies }, redirect: 'manual' });
+  const location = String(ossImage.headers.get('location') || '');
+  check('③ ★ OSS 行取图是 **302 到 OSS 签名地址**（字节不经服务器，不占那 5M 带宽）',
+    ossImage.status === 302 && /oss-cn-guangzhou\.aliyuncs\.com/.test(location) && /OSSAccessKeyId=/.test(location),
+    `HTTP ${ossImage.status} location=${location.slice(0, 90)}`);
 } finally {
   server.kill();
 }

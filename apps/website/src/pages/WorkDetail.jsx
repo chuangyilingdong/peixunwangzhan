@@ -111,7 +111,10 @@ export function WorkDetailPage({ api }) {
         {state.error ? <ConsoleEmpty icon="alert" title="打不开这个作品" body={state.error} /> : null}
         {work ? <>
           {work.description ? <p className="c-page__sub">{work.description}</p> : null}
-          <div className="c-replay__grid">
+          {/* 用户口径 2026-09-25：「网页展示应该是直接显示作品啊」——原来预览与源码**并排**，
+              作品只占一半宽（截图里右边半屏全是源码）。现在作品占满整行，源码收进下面的折叠区
+              （与「我的作品」页同一套做法，.mw-source）；想看过程仍然点得开。 */}
+          <div className="c-replay__grid is-focus">
             {/* 一件作品可能既有网页又有文档（学生后面又让 AI 做了份 PPT），
                 所以可预览的产物不止一份时才摆切换条 —— 否则另一半东西在广场上就摸不到了。 */}
             <div className="c-replay__stage">
@@ -159,10 +162,11 @@ export function WorkDetailPage({ api }) {
                 <ReplayPreview html={buildPreviewDocument(files, current.name)} title={work.title} />
               )}
             </div>
-            <ReplayPanel title="它是怎么写出来的" icon="code">
-              <ReplayFiles files={files} entryFile={sourceDefault} />
-            </ReplayPanel>
           </div>
+          {Object.keys(files).length ? <details className="mw-source">
+            <summary>它是怎么写出来的（{Object.keys(files).length} 个文件）</summary>
+            <ReplayFiles files={files} entryFile={sourceDefault} />
+          </details> : null}
           <div className="c-replay__actions">
             {current?.downloadUrl ? (
               <button type="button" className="button soft" onClick={() => window.location.assign(current.downloadUrl)}>

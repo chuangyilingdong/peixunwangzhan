@@ -337,7 +337,7 @@ export function WebsiteContent({ api }) {
             <div className="cms-section-heading top-gap"><strong>对比一栏（官网首页 · 页脚上方）</strong><span>标题 / 高亮词 / 副标题 / 卡片 · 卡片全删掉 ＝ 官网不显示这一栏</span></div>
             <div className="form-grid">
               <label>标题<input value={compareBlock.title || ''} onChange={(event) => updateCompare({ title: event.target.value })} maxLength={60} placeholder="例如：同样的 AI 课，两种上法。" /><small className="muted">官网会一个字一个字打出来（滚到这一栏才开始打）。</small></label>
-              <label>高亮词<input value={compareBlock.highlight || ''} onChange={(event) => updateCompare({ highlight: event.target.value })} maxLength={24} placeholder="标题里的某一段，例如：两种上法" /><small className="muted">必须是标题里原样出现的一段；不填就整句都按高亮色显示。</small></label>
+              <label>高亮词<input value={compareBlock.highlight || ''} onChange={(event) => updateCompare({ highlight: event.target.value })} maxLength={24} placeholder="标题里的某一段，例如：两种上法" /><small className="muted">标题里原样出现的一段就高亮那一段；<strong>不在标题里时会当作后半段追加显示</strong>（标题写前半句、这里写后半句也成立）；留空则整句按高亮色显示。</small></label>
             </div>
             <label>副标题<input value={compareBlock.lead || ''} onChange={(event) => updateCompare({ lead: event.target.value })} maxLength={160} /></label>
             <div className="cms-faq-list">{compareCards.map((card, index) => <div className="cms-faq-item" key={`hp-cmp-${index}`}>
