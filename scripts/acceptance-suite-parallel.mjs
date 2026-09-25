@@ -39,6 +39,9 @@ const HARNESS = new Set([
   'scripts/mysql-test-db.mjs',
   'scripts/rds-p1-codemod',
   'scripts/rds-p2-fixture-codemod.mjs',
+  // 切库前的「装得下」检查：**工具**（要显式给 --sqlite= 与 MYSQL_* 才会跑）——
+  // 不登记的话会被套件当成一个测试跑，然后因为没有源库而失败。
+  'scripts/rds-column-fit.mjs',
   'scripts/acceptance-suite-parallel.mjs',
 ]);
 

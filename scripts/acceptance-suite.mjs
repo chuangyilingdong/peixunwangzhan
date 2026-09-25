@@ -43,6 +43,9 @@ const HARNESS = new Set([
   // 漏在名单外时它会被当成一个测试跑（2026-09-24 那次全量里就跑了，虽然通过但计数被撑大一项，
   // 而且哪天默认行为变了、真去改验收脚本，就是"套件在改套件自己"）。
   'scripts/rds-p2-fixture-codemod.mjs',
+  // 切库前的「装得下」检查：**工具**（要显式给 --sqlite= 与 MYSQL_* 才会跑）——
+  // 不登记的话会被套件当成一个测试跑，然后因为没有源库而失败。
+  'scripts/rds-column-fit.mjs',
   // 并行跑法（MySQL 侧专用）：它是**调度器**，会自己再起套件进程 —— 漏在名单外会被当成一个测试跑
   // （表现是"套件里再套一层套件"、超时）。
   'scripts/acceptance-suite-parallel.mjs',
