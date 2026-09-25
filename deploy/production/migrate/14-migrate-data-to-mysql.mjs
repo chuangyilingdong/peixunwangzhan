@@ -34,6 +34,10 @@ const loadPath = arg('--load', '/tmp/data.mysql.sql');
 const dbPath = arg('--db', '/srv/ai-kids-platform/production/data/platform.db');
 const BATCH = Number(arg('--batch', '200'));
 
+// 目标库名：load 与 compare 都要用（两个模式各自都要显式带 -D，见下面的注释）
+const MYDB = String(process.env.RDS_DATABASE || 'aild_admin').trim();
+const loadDb = MYDB;
+
 const db = new DatabaseSync(dbPath, { readOnly: true });
 const q = (sql) => db.prepare(sql).all();
 const bt = (n) => `\`${String(n).replaceAll('`', '``')}\``;
@@ -89,7 +93,10 @@ if (mode === 'load') {
   if (!fs.existsSync(loadPath)) { console.error(`找不到 ${loadPath}`); process.exit(1); }
   const sql = fs.readFileSync(loadPath, 'utf8');
   try {
-    execFileSync('mysql', [], { input: sql, stdio: ['pipe', 'inherit', 'inherit'] });
+    // ⚠️ 必须带 -D <库名>：生成的数据 SQL 里没有 USE，mysql 不带库名会报
+    //    'ERROR 1046 (3D000) No database selected'（2026-09-25 切库时实测踩到，
+    //    compare 那步早就修过、load 这步漏了）。
+    execFileSync('mysql', ['-D', loadDb], { input: sql, stdio: ['pipe', 'inherit', 'inherit'] });
     console.log('灌库完成');
   } catch (error) {
     console.error('灌库失败：', error.message);
@@ -101,7 +108,6 @@ if (mode === 'load') {
 // ─────────────────────────── 模式三：逐表比对 ───────────────────────────
 // ⚠️ 必须显式带 -D <库名>：不带的话 mysql 会报 "No database selected"（我第一版就漏了，
 //    结果 89 张表全被误报成"查不到"）。
-const MYDB = String(process.env.RDS_DATABASE || 'aild_admin').trim();
 const my = (sql) => execFileSync('mysql', ['-D', MYDB, '--batch', '--raw', '--skip-column-names', '-e', sql], { encoding: 'utf8' })
   .trim().split('\n').filter((x) => x !== '');
 const digestOf = (rows, cols) => {
