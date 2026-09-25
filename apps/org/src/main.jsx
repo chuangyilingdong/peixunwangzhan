@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatDate, formatYuan, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, Status, useData, writeSession, WorkMediaGallery, errorText } from '@platform/shared';
+import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatDate, formatYuan, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, Status, useData, writeSession, WorkMediaGallery, resolveWorkMediaUrl, errorText } from '@platform/shared';
 import { StudentGrants } from './pages/StudentGrants.jsx';
 import { AccountSecurity } from './pages/AccountSecurity.jsx';
 import { SeriesOverview } from './pages/SeriesOverview.jsx';
@@ -359,22 +359,12 @@ function Works({ api }) {
   const [reportForm, setReportForm] = useState({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' });
   const [reportBusy, setReportBusy] = useState(false);
   const [selectedWork, setSelectedWork] = useState(null);
-  // 预览里"做出来的东西"若是**我们自己存的**素材（生成产物归档件），`<img>` 发不出 Authorization 头，
-  // 得带着 token 取回来转成 data: 才显示得出（与「我的作品」那条同一手法）。换一件作品就重取一份。
-  const [workImageData, setWorkImageData] = useState({});
-  useEffect(() => {
-    let cancelled = false;
-    setWorkImageData({});
-    const entries = Object.entries(selectedWork?.imageUrls || {});
-    if (!entries.length) return () => { cancelled = true; };
-    Promise.allSettled(entries.map(async ([fileId, path]) => [fileId, await api.fetchDataUrl(path)]))
-      .then((results) => {
-        if (cancelled) return;
-        setWorkImageData(Object.fromEntries(results.filter((item) => item.status === 'fulfilled' && item.value).map((item) => item.value)));
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [api, selectedWork]);
+  // ⚠️ 2026-09-25（用户报「作品预览还是失效状态」）：这里原来把每张图 fetch 回来转成 data: ——
+  //    一是慢（2.4MB×N 张走 5Mbps 出口要几十秒，这段时间缩略图全是"失效"的样子），
+  //    二是**第一帧只能退回原始地址**，而原始地址是学生域的、机构端取必然 403，于是被打上「已失效」。
+  //    现在直接同步用服务端备好的**同源代理地址**（`selectedWork.imageUrls`）：同源 + 老师自己的 cookie
+  //    + 流式边下边显示，既不会先失败一次，也不用把整张图 base64 进 JS 内存。
+  //    （VibeCoding 那条走 ClassroomWork，沙箱文档要把图片内联，那边的 data: 逻辑保留。）
   // 作品先看**做出来的东西**（图/视频/音频），画布只是过程（用户 2026-09-21 口径）。
   const [workMediaView, setWorkMediaView] = useState('media');
   // 「创作画布」那一档也要把快照里的素材地址换掉，否则那半屏**必然全是破图**：
@@ -382,14 +372,7 @@ function Works({ api }) {
   // **机构端**的会话 —— 那条路只认学生角色，直接 403（2026-09-25 生产实测：`/org/works`
   // 打开作品、24 个 403，响应体就是「当前角色无权访问此资源」）。判据与取值照
   // `pages/classroom/ClassroomWork.jsx` 的 snapshotImage 抄一份（那边一直是这么做的）。
-  const snapshotImage = (value) => {
-    const raw = String(value || '');
-    const match = raw.match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:[?#].*)?$/);
-    if (match) return workImageData[match[1]] || null;
-    const entry = Object.entries(selectedWork?.imageUrls || {}).find(([, path]) => path === raw);
-    if (entry) return workImageData[entry[0]] || null;
-    return /^data:image\//i.test(raw) || /^https:\/\//i.test(raw) || /^\/(?!\/|api\/student\/file-assets\/)/.test(raw) ? raw : null;
-  };
+  const snapshotImage = (value) => resolveWorkMediaUrl(value, selectedWork?.imageUrls);
   // VibeCoding 产物的预览走弹窗（画布那半仍是就地开只读画布）
   const [vibeWork, setVibeWork] = useState(null);
   const [featureAction, setFeatureAction] = useState(null);
@@ -448,7 +431,7 @@ function Works({ api }) {
         </div>
         {workMediaView === 'canvas'
           ? <CanvasEditor key={selectedWork.id} initialSnapshot={selectedWork.canvasSnapshot} readOnly resolveAssetUrl={snapshotImage} />
-          : <WorkMediaGallery media={selectedWork.media} assets={selectedWork.assets} resolveSrc={(item) => (item?.fileId ? (workImageData[item.fileId] || selectedWork.imageUrls?.[item.fileId] || '') : '')} />}
+          : <WorkMediaGallery media={selectedWork.media} assets={selectedWork.assets} resolveSrc={(item) => resolveWorkMediaUrl(item?.url, selectedWork?.imageUrls) || ''} />}
       </Panel>
     </>}
 

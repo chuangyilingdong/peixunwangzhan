@@ -245,6 +245,16 @@ check('侧栏新增有小幅错位和临时入场态，不污染节点快照；�
 check('生成过的文字/图片/视频框体不再接收提示词，插入时也重新校验',
   /!boxSucceeded\(node\.data\.boxId\) && !node\.data\.generatedText && !node\.data\.assetUrl/.test(workspace)
   && /boxSucceeded\(target\.data\?\.boxId\) \|\| target\.data\?\.generatedText \|\| target\.data\?\.assetUrl/.test(workspace));
+// ⚠️ 2026-09-25 用户报：「画布课堂提示词无法添加到音乐框体吗？」
+//    根因是 openPromptInsert 里那份"可插入的框体"清单写死成 ['text','image','video'] ——
+//    音乐（music）与音频/动画框体被漏掉：画布上明明摆着一个没生成的音乐框体，
+//    点提示词却提示「画布上没有可插入的未生成框体」。判据改成与"哪些框体能写提示词"同一份清单。
+check('提示词可插入的框体包含音乐/音频/动画（原来只认 text/image/video）',
+  /const PROMPT_SLOT_TYPES = \['text', 'prompt', 'image', 'video', 'animation', 'music', 'audio'\]/.test(workspace)
+  && /if \(!PROMPT_SLOT_TYPES\.includes\(String\(node\.data\?\.slotType \|\| ''\)\)\) return false;/.test(workspace));
+check('插入选择框里每个框体的动作名按模态给（音乐框体不许被标成「生图」）',
+  /PROMPT_SLOT_ACTION\[String\(node\.data\?\.slotType \|\| ''\)\]/.test(workspace)
+  && /music: '生音乐'/.test(workspace) && !/node\.type === 'video' \? '生视频' : '生图'/.test(workspace));
 check('文字卡片宽度固定且长串可折行，结果仍可选中/滚动/复制',
   /\.react-flow__node-prompt \{ width: 320px; max-width: 320px; \}/.test(canvasCss)
   && /\.learning-node__text-result \{ min-width: 0; max-width: 100%; overflow-wrap: anywhere;/.test(canvasCss)

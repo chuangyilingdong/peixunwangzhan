@@ -584,8 +584,12 @@ export async function handleCourses(ctx, part, method) {
       if (currentSeries.status !== 'PUBLISHED') throw errors.conflict('仅已发布课包可授权', 'COURSE_NOT_PUBLISHED');
       const existing = await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]);
       before = assignmentSnapshot(existing);
+      // ⭐ 允许 **0 次**（2026-09-25 用户口径）：0 次 = 只把课包**开通给这个机构查阅**
+      // （机构端能在「课包库存 / 教学课程库」里看到课包与课件），但**分不给学生上课** ——
+      // 分配那一步有独立的闸门：可用次数不足会拒（orgAdmin 的 course-grants → COURSE_QUOTA_EXHAUSTED）。
+      // 下界只到 0（负数无意义）；「不得低于已使用次数」那条不变。
       const quotaTotal = ctx.body?.quotaTotal === undefined && existing
-        ? Number(existing.quota_total) : integer(ctx.body?.quotaTotal, '授权总次数', { min: 1, max: 100000000 });
+        ? Number(existing.quota_total) : integer(ctx.body?.quotaTotal, '授权总次数', { min: 0, max: 100000000 });
       if (quotaTotal < Number(existing?.quota_used || 0)) throw errors.conflict('授权次数不能低于已使用次数', 'COURSE_QUOTA_BELOW_USED');
       const baseQuota = existing ? Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used) : 0;
       const delta = quotaTotal - baseQuota;

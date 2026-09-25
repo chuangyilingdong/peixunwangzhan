@@ -148,9 +148,15 @@ check('⑭ 机构端作品列表下发 imageUrls（批量查一次 media_assets�
   /item\.imageUrls = Object\.fromEntries\(\[\.\.\.fileIds\]\.map\(\(fileId\) => \[fileId, `\/api\/org\/works\/CANVAS\//.test(org)
   && /SELECT project_id, asset_url FROM media_assets WHERE project_id IN/.test(org));
 const orgApp = read('apps/org/src/main.jsx');
-check('⑮ 机构端预览传了 resolveSrc（<img> 发不出 Authorization 头，要转 data:）',
-  /<WorkMediaGallery media=\{selectedWork\.media\} assets=\{selectedWork\.assets\} resolveSrc=/.test(orgApp)
-  && /api\.fetchDataUrl\(path\)/.test(orgApp));
+// ⚠️ 2026-09-25 口径变更（不是测试漂移）：这里原来钉的是"机构端预览要把图片转成 data:"——
+//    那条路的实际后果是"整片缩略图先失效"：转 data: 要等整张图 fetch 完（2.4MB×N 张走 5Mbps 出口几十秒），
+//    而这期间前端只能退回**学生域地址**，机构端取它必然 403（用户报的「作品预览还是失效状态」）。
+//    现在改成同步用服务端备好的**同源代理地址**（`imageUrls` → `/api/org/works/.../images/...`）：
+//    同源 + 老师自己的 cookie + 流式边下边显示。专门的守卫见 scripts/p144-work-preview-media-urls.mjs。
+check('⑮ 机构端预览传了 resolveSrc，且走的是**同源代理地址**（不再转 data:）',
+  /<WorkMediaGallery media=\{selectedWork\.media\} assets=\{selectedWork\.assets\} resolveSrc=\{/.test(orgApp)
+  && /resolveWorkMediaUrl\(item\?\.url, selectedWork\?\.imageUrls\)/.test(orgApp)
+  && !/workImageData/.test(orgApp));
 
 /* ── ⑥ 读面：失效的媒体说人话，不再是浏览器的破图图标 ───────────────────────── */
 const gallery = read('packages/shared/src/workMedia.jsx');

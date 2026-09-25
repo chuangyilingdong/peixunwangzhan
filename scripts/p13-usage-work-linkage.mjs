@@ -120,6 +120,15 @@ try {
   assert.equal(created.status, 200, `学生项目创建失败: ${JSON.stringify(created.data)}`);
   const projectId = created.data.id;
 
+  // ⚠️ 2026-09-25：提交这一步多了「画布上要有**没提交过的产出**」这道闸（2026-09-24 §十二.A 的增量提交），
+  //    空画布提交会被 409 NO_NEW_OUTPUT 拒 —— 这条守卫因此长期一红一绿（跑得早时它还绿，闸加上去之后必红）。
+  //    这里按**真实形状**补一个产出（文字框体带 generatedText）再提交：本脚本验的是"提交时把用量关联到作品"，
+  //    不重复验生成链路（那条 p4-o12 / p6-a01 覆盖）。
+  await aq('UPDATE student_projects SET canvas_snapshot=?, updated_at=? WHERE id=?', [JSON.stringify({
+    nodes: [{ id: 'node-p13-text', type: 'prompt', position: { x: 120, y: 120 }, data: { title: 'P13 文字产出', slotType: 'text', generatedText: 'P13 用量作品关联的正文' } }],
+    edges: [], viewport: { x: 0, y: 0, zoom: 1 },
+  }), now(), projectId]);
+
   // 模拟该项目已产生的 AI 用量；真实生成链路由 p4-o12 / p6-a01 覆盖，这里只验证提交时的关联回填
   const liveUsageId = newId('usage');
    

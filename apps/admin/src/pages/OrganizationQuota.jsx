@@ -46,12 +46,14 @@ function AddPackageDrawer({ api, orgId = '', options = [], assignedIds = new Set
   const [busy, setBusy] = useState(false);
   const picked = options.find((item) => item.id === seriesId) || null;
   const quotaValue = Number(quotaTotal);
-  const quotaValid = Number.isInteger(quotaValue) && quotaValue > 0;
+  // ⭐ 允许 0（2026-09-25 用户口径）：0 次 = 只开通给机构**查阅**，分不给学生上课 ——
+  //    平台端要能这么开（机构想先看课件、或本季度不排这门课时用）。
+  const quotaValid = Number.isInteger(quotaValue) && quotaValue >= 0;
   const purchaseValid = purchase.amount !== '' && Number(purchase.amount) >= 0 && purchase.orderNo.trim() && purchase.contractNo.trim();
 
   async function submit() {
     if (!picked) { setError('请选择要开通的课包'); return; }
-    if (!quotaValid) { setError('初始授权次数必须是大于 0 的整数'); return; }
+    if (!quotaValid) { setError('初始授权次数必须是不小于 0 的整数（0 = 只开通查阅、不能分给学生上课）'); return; }
     if (!purchaseValid) { setError('请填写实际成交总额、订单号与合同号（现有开通接口必填）'); return; }
     setBusy(true); setError('');
     try {
@@ -95,7 +97,7 @@ function AddPackageDrawer({ api, orgId = '', options = [], assignedIds = new Set
         <section className="drawer-section">
           <h3>授权配置</h3>
           <div className="form-grid">
-            <label>初始授权次数 *<input type="number" min="1" max="100000000" value={quotaTotal} onChange={(event) => setQuotaTotal(event.target.value)} placeholder="如：100" /><small className="muted">单位：次</small></label>
+            <label>初始授权次数 *<input type="number" min="0" max="100000000" value={quotaTotal} onChange={(event) => setQuotaTotal(event.target.value)} placeholder="如：100" /><small className="muted">单位：次。填 <strong>0</strong> = 只开通给机构查阅课包与课件，机构<strong>分不给学生上课</strong>（可用次数不足会拒绝）。</small></label>
             <label>有效期<input value="自动跟随该机构合同到期日" readOnly /></label>
           </div>
           <div>

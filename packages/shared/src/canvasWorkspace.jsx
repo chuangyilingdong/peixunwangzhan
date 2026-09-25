@@ -15,6 +15,17 @@ import { errorText } from '@platform/shared';
 // （服务端直接 import packages/shared/src/canvasOutput.js，见 apps/server/src/routes/student.js）。
 import { canvasOutputSignature, createSaveGate, hasUnsubmittedOutput, isCanvasEditableProjectStatus } from './canvasOutput.js';
 
+/**
+ * 「哪些框体能接收一条提示词（课堂素材里的提示词/文本）」。与 canvas/index.jsx 的 supportsPrompt
+ * **同一份口径**：文字(prompt/text)、画面(image)、短片(video/animation)、音乐(music)、音频(audio)。
+ * ⚠️ 2026-09-25：这份清单原来只有 text/image/video，音乐框体被漏掉 ——
+ * 学生画布上摆着音乐框体、点提示词却被告知「没有可插入的未生成框体」（用户当场报的）。
+ * 插入时写哪个字段：画面写 `caption`、其余写 `text`（见下面的 insertPromptToSlot，与 buildBoxNode 一致）。
+ */
+const PROMPT_SLOT_TYPES = ['text', 'prompt', 'image', 'video', 'animation', 'music', 'audio'];
+/** 插入选择框里每个框体右边那行小字的动词（2026-09-25：原来只会写「生图 / 生视频」，音乐框体会被标成「生图」）。 */
+const PROMPT_SLOT_ACTION = { text: '写文字', prompt: '写文字', image: '生图', video: '生视频', animation: '生动画', music: '生音乐', audio: '生音频' };
+
 // Signatures and helpers (原独立学生端逻辑，已并入官网学习页)
 // 快照的「内容」用于判断有没有未保存改动。**必须包含节点位置**：
 // 漏掉位置时，学生把框体挪来挪去不会算成改动 → 不触发自动保存 → 一刷新位置全复原（用户反馈过）。
@@ -648,7 +659,11 @@ export function CanvasWorkspace({ api, ...props }) {
   function openPromptInsert(material) {
     if (!editable) return;
     const targets = boxNodes().filter((node) => {
-      if (!['text', 'image', 'video'].includes(node.data?.slotType)) return false;
+      // ⚠️ 2026-09-25 用户报：「画布课堂提示词无法添加到音乐框体吗？」
+      //    这里原来写死 ['text','image','video'] —— 音乐（music）与音频/动画框体被漏掉了：
+      //    画布上明明摆着一个还没生成的音乐框体，点提示词却提示「画布上没有可插入的未生成框体」。
+      //    判据改成**与"哪些框体能写提示词"同一份清单**（见 canvas/index.jsx 的 supportsPrompt）。
+      if (!PROMPT_SLOT_TYPES.includes(String(node.data?.slotType || ''))) return false;
       return !boxSucceeded(node.data.boxId) && !node.data.generatedText && !node.data.assetUrl;
     });
     if (!targets.length) { setMessage('画布上没有可插入的未生成框体，请先从「生成框体」添加。'); return; }
@@ -821,7 +836,7 @@ export function CanvasWorkspace({ api, ...props }) {
       </div>
     </section>
     {message && <div className={`cv-toast ${isErrorText(message) ? 'is-error' : ''}`}>{stripNoticeMark(message)}</div>}
-    {promptTarget && <div className="cv-dialog" role="dialog" aria-modal="true"><div className="cv-dialog__panel"><strong>把「{promptTarget.material.title}」插入到哪个框体？</strong><div className="cv-dialog__list">{promptTarget.targets.map((node) => <button key={node.id} type="button" onClick={() => insertPromptToSlot(node.id)}>{node.data?.title || node.type}<small>{node.type === 'video' ? '生视频' : '生图'}{node.data?.aspectRatio ? ' · ' + node.data.aspectRatio : ''}</small></button>)}</div><button type="button" className="cv-text-btn" onClick={() => setPromptTarget(null)}>取消</button></div></div>}
+    {promptTarget && <div className="cv-dialog" role="dialog" aria-modal="true"><div className="cv-dialog__panel"><strong>把「{promptTarget.material.title}」插入到哪个框体？</strong><div className="cv-dialog__list">{promptTarget.targets.map((node) => <button key={node.id} type="button" onClick={() => insertPromptToSlot(node.id)}>{node.data?.title || node.type}<small>{PROMPT_SLOT_ACTION[String(node.data?.slotType || '')] || ''}{node.data?.aspectRatio ? ' · ' + node.data.aspectRatio : ''}</small></button>)}</div><button type="button" className="cv-text-btn" onClick={() => setPromptTarget(null)}>取消</button></div></div>}
   </main>;
 
 }

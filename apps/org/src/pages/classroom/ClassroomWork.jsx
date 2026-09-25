@@ -1,7 +1,7 @@
 // 课堂里「只读作品预览」弹窗（2026-09-17 从 pages/Classrooms.jsx 原样搬进来，逻辑未改）。
 import { useEffect, useState } from 'react';
 import { CanvasEditor } from '@platform/canvas';
-import { buildPreviewDocument, Empty, ErrorState, formatDate, Loading, Notice, ReplayDocument, ReplayFiles, ReplayPreview, WorkMediaGallery, useData } from '@platform/shared';
+import { buildPreviewDocument, Empty, ErrorState, formatDate, Loading, Notice, ReplayDocument, ReplayFiles, ReplayPreview, WorkMediaGallery, resolveWorkMediaUrl, useData } from '@platform/shared';
 import { Modal } from './ui.jsx';
 
 export function previewHref(value) {
@@ -45,14 +45,13 @@ export function ClassroomWork({ api, workBase, work = {}, onClose }) {
     });
     return () => { cancelled = true; };
   }, [api, data, workBase, work.id, work.source]);
-  const snapshotImage = (value) => {
-    const raw = String(value || '');
-    const match = raw.match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:[?#].*)?$/);
-    if (match) return images[match[1]] || null;
-    const entry = Object.entries(data?.imageUrls || {}).find(([, path]) => path === raw);
-    if (entry) return images[entry[0]] || null;
-    return /^data:image\//i.test(raw) || /^https:\/\//i.test(raw) || /^\/(?!\/|api\/student\/file-assets\/)/.test(raw) ? raw : null;
-  };
+  // ⚠️ 2026-09-25：这里原来返回的是**转好的 data: 地址**（异步、几十秒才到），拿不到就先退回原始地址 ——
+  //    而原始地址是学生域的，机构端取必然 403，缩略图于是先被标成「已失效」（用户报的就是这个）。
+  //    现在同步返回服务端备好的**同源代理地址**（`/api/org/works/.../images/<fileId>`）：同源、cookie 就是
+  //    老师自己的会话、还能流式边下边显示。拿不到代理地址时返回 null（显示占位），不回退学生域地址。
+  const snapshotImage = (value) => resolveWorkMediaUrl(value, data?.imageUrls);
+  // `images`（data:）只剩**沙箱文档**那条路要用（VibeCoding 的 HTML 预览在 opaque origin 里跑，
+  // 拿不到 cookie，只能把图片内联进去）—— 见下面的 files / resolveImage。
   const files = Object.fromEntries(Object.entries(data?.files || {}).map(([name, content]) => {
     let resolved = String(content ?? '');
     for (const [id, url] of Object.entries(images)) {
@@ -93,7 +92,7 @@ export function ClassroomWork({ api, workBase, work = {}, onClose }) {
           </div>
           {workView === 'canvas'
             ? (data.canvasSnapshot ? <CanvasEditor key={data.id} initialSnapshot={data.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={snapshotImage} /> : <Empty title="暂无画布快照" />)
-            : <WorkMediaGallery media={data.media} assets={data.assets} resolveSrc={(item) => (item?.fileId ? snapshotImage(`/api/student/file-assets/${item.fileId}/download`) : '')} />}
+            : <WorkMediaGallery media={data.media} assets={data.assets} resolveSrc={(item) => snapshotImage(item?.url) || ''} />}
         </>
         : (data.canvasSnapshot
           ? <CanvasEditor key={data.id} initialSnapshot={data.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={snapshotImage} />

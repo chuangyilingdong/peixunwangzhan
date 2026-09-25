@@ -22,6 +22,33 @@ import { AudioPlayer } from '@platform/canvas';
 const MODALITY_LABELS = { IMAGE: '图片', VIDEO: '视频', AUDIO: '音频', MUSIC: '音乐', TEXT: '文字' };
 
 /**
+ * 把作品快照里的**站内素材地址**换成"当前这一端自己能取到"的地址（同步、同源）。
+ *
+ * 为什么需要它（2026-09-25 用户报「作品预览还是失效状态」）：
+ *   快照里存的是**学生域**地址 `/api/student/file-assets/<id>/download`，它只认学生角色；
+ *   机构端（老师）/访客拿它去取必然 403。而 `<img>/<video>/<audio>` 发不出 Authorization 头，
+ *   只能靠 cookie —— 浏览器会**立刻**拿这个地址去请求一次（403），缩略图于是被打上「已失效」，
+ *   老师看到的就是"整片作品图都失效"。原来的转 data: 方案要等每张图 fetch 完再 base64，
+ *   2.4MB 一张、7 张走 5Mbps 出口要几十秒，这段时间里页面就是那个失效的样子。
+ *
+ * 所以：**同步**返回服务端已经备好的同源代理地址（`imageUrls`，见 orgAdmin/public 那两处），
+ *   · 同源 → cookie 就是这一端自己的会话，`<img>` 直接能取到（也顺着流式边下边显示）；
+ *   · 同步 → 第一帧渲染就是对的地址，不会"先失败一次再补救"；
+ *   · 不 base64 → 省掉整张图的 JS 内存与时间。
+ * 拿不到代理地址时返回 `null`（调用方显示占位），**绝不回退到学生域地址**。
+ * 外链（上游图床 https）、data:、以及本来就是本站相对地址的（`/media/…`）原样返回。
+ */
+export function resolveWorkMediaUrl(value, imageUrls = null) {
+  const raw = String(value || '');
+  if (!raw) return null;
+  const fileId = raw.match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1] || null;
+  if (fileId) return String(imageUrls?.[fileId] || '') || null;
+  if (/^data:/i.test(raw) || /^https:\/\//i.test(raw)) return raw;
+  if (/^\/(?!\/)/.test(raw)) return raw;
+  return null;
+}
+
+/**
  * 媒体本体：**加载失败时说一句人话**。
  *
  * 为什么要有它（用户 2026-09-22 报的坏图）：作品里挂的媒体有些是上游的**临时地址**，

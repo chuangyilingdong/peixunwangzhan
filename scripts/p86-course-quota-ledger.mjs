@@ -245,6 +245,33 @@ try {
     
     check('① 全库机构编码唯一且无空值', Number(dup.n) === 0 && Number(nulls.n) === 0, JSON.stringify({ dup: dup.n, nulls: nulls.n }));
   }
+  // ── ⑦ 0 次开通（2026-09-25 用户口径）────────────────────────────────────────
+  // 「平台给机构课包授权支持 0 次数：可以开通给机构查阅，但 0 次他就无法分给学生上课，不影响查阅。」
+  // 原来服务端 min:1、后台表单 min="1"，0 次直接被拒 —— 想"先开通课件给他看"就做不到。
+  {
+    const zero = await api(`/api/admin/course-series/${seriesId}/assignments`, {
+      method: 'POST', token: admin, body: { orgId: createdB.data.id, quotaTotal: 0, ...purchase('zero', 0) },
+    });
+    check('⑦ ★ 平台可以用 **0 次**给机构开通课包（200；总次数 0 / 剩余 0）',
+      zero.status === 200 && zero.data.quotaTotal === 0 && Number(zero.data.allocations?.[0]?.remaining) === 0,
+      `${zero.status} ${JSON.stringify(zero.data || zero.error).slice(0, 240)}`);
+
+    const orgBLogin = await api('/api/auth/login', { method: 'POST', body: { login: 'p86-admin-b', password: 'secret123' } });
+    const orgBToken = orgBLogin.data?.token;
+    assert.ok(orgBToken, `乙机构管理员登录失败: ${JSON.stringify(orgBLogin.error || orgBLogin.data).slice(0, 160)}`);
+    const orgBSeries = await api('/api/org/course-series?limit=100', { token: orgBToken });
+    check('⑦ ★ 0 次开通后机构**查阅不受影响**（课包在该机构的列表里）',
+      (orgBSeries.data?.items || []).some((item) => item.id === seriesId),
+      JSON.stringify((orgBSeries.data?.items || []).map((item) => item.id)).slice(0, 200));
+
+    const studentB = await api('/api/org/users', { method: 'POST', token: orgBToken, body: { role: 'STUDENT', login: 'p86-student-2', displayName: 'P86 学员二', password: 'secret123' } });
+    assert.ok(studentB.data?.id, `乙机构建学员失败: ${JSON.stringify(studentB.data || studentB.error).slice(0, 160)}`);
+    const blocked = await api('/api/org/course-grants', { method: 'POST', token: orgBToken, body: { seriesId, studentIds: [studentB.data.id] } });
+    check('⑦ ★ 0 次时机构**分不给学生上课**（409 COURSE_QUOTA_EXHAUSTED）',
+      blocked.status === 409 && blocked.error?.code === 'COURSE_QUOTA_EXHAUSTED',
+      `${blocked.status} ${blocked.error?.code} ${blocked.error?.message}`);
+  }
+
 } catch (error) {
   failures += 1;
   console.log(serverLog);
