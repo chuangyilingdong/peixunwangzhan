@@ -84,7 +84,10 @@ try {
   const financeInventory = await handleAdmin(ctx('/api/admin/authorizations', financeOnly));
   check(Array.isArray(financeInventory.items) && Array.isArray(financeInventory.organizations), 'billing admin must read authorization purchase inventory');
   await expectError(() => handleAdmin(ctx('/api/admin/authorizations', coursesOnly)), 'PERMISSION_DENIED', 'courses-only authorization inventory deny');
-  await aq("INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES ('org-p9-billing','P9 Billing Org','ACTIVE',datetime('now'),datetime('now','+1 year'),0,datetime('now'),datetime('now'))");
+  // ⚠️ `datetime('now','+1 year')` 是 SQLite 专有（MySQL 上直接语法错）——时间在 JS 里算好再绑参数
+  const nowIso = new Date().toISOString();
+  const nextYearIso = new Date(Date.now() + 365 * 86400000).toISOString();
+  await aq("INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES ('org-p9-billing','P9 Billing Org','ACTIVE',?,?,0,?,?)", [nowIso, nextYearIso, nowIso, nowIso]);
   await aq("INSERT INTO course_series(id,title,owner_type,status,stock_total,created_at,updated_at) VALUES ('series-p9-billing','P9 Billing Series','PLATFORM','PUBLISHED',10,datetime('now'),datetime('now'))");
   const purchaseBody = { seriesId: 'series-p9-billing', orgId: 'org-p9-billing', additionalQuota: 2, amountMinor: 1200, currency: 'CNY', paymentStatus: 'PAID', orderNo: 'P9-ORDER', contractNo: 'P9-CONTRACT', idempotencyKey: 'p9-license-purchase' };
   const purchased = await handleAdmin(ctx('/api/admin/license-purchases/append', financeOnly, 'POST', purchaseBody));

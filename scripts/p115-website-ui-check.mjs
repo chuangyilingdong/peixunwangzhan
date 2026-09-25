@@ -46,7 +46,7 @@ const dbPath = path.join(temp, 'platform.db');
     // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
 process.env.PLATFORM_DB_PATH = dbPath;
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
+const { aq, arow, arows, atransaction } = await import('../packages/database/src/store.js');
 
 const env = {
   ...process.env,
@@ -199,14 +199,11 @@ try {
   const { context, pg: page } = await newPage();
 
   const settle = async () => { await page.waitForLoadState('networkidle').catch(() => {}); await page.waitForTimeout(400); };
-  // 写临时库的小工具。口径与 packages/database/src/schema.js 一致：连接必须有 busy_timeout，
-  // 写事务用 BEGIN IMMEDIATE（否则「延迟事务升级」会死锁 —— 这是第十六轮挖出来的真根因）。
-  const withDb = async (fn) => {
-    
-    
-    await aq('BEGIN IMMEDIATE');
-    try { const result = fn(); await aq('COMMIT'); return result; } catch (error) { await aq('ROLLBACK'); throw error; } finally {  }
-  };
+  // 写临时库的小工具。口径与 packages/database/src/schema.js 一致：写事务必须**串行**，
+  // 否则「延迟事务升级」会死锁（第十六轮挖出来的真根因）。这里直接用数据层的 atransaction ——
+  // 它按驱动选实现（SQLite 用 BEGIN IMMEDIATE、MySQL 用连接级事务），别在夹具里手写 BEGIN IMMEDIATE
+  // （那一条在 MySQL 上是语法错：ER_PARSE_ERROR near 'IMMEDIATE'）。
+  const withDb = async (fn) => await atransaction(fn);
   const bodyText = () => page.locator('body').innerText();
   const expectText = async (label, texts) => { const body = await bodyText(); for (const t of texts) if (!body.includes(t)) problems.push(`${label}：页面上找不到「${t}」`); };
   const expectNoRetired = async (label) => { const body = await bodyText(); for (const t of RETIRED_COPY) if (body.includes(t)) problems.push(`${label}：页面上出现了退役文案「${t}」——口径变更后不该再出现`); };

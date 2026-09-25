@@ -28,7 +28,7 @@ const dbPath = path.join(temp, 'platform.db');
     // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
 process.env.PLATFORM_DB_PATH = dbPath;
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
+const { aq, arow, arows, isMysql } = await import('../packages/database/src/store.js');
 const { closeDb } = await import("../packages/database/src/store.js");
 
 const env = { ...process.env, PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
@@ -47,10 +47,17 @@ let failures = 0;
 const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`); else { failures += 1; console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`); } };
 
  
-const index = await arow("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_vibe_submission_conversation_entry'");
+// ⚠️ 这两条原来直接查 `sqlite_master`（只有 SQLite 有）——MySQL 侧改查 information_schema：
+//    「索引在不在」看 STATISTICS；「旧的单列 UNIQUE 去没去掉」看有没有**只覆盖 conversation_id** 的唯一索引
+//    （比读 DDL 文本稳；SQLite 侧仍沿用原来的 DDL 文本判据，保持原意）。
+const index = isMysql
+  ? await arow("SELECT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vibecoding_submissions' AND INDEX_NAME='idx_vibe_submission_conversation_entry' LIMIT 1")
+  : await arow("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_vibe_submission_conversation_entry'");
 check('① 复合唯一索引 (conversation_id, entry_file) 已建', Boolean(index));
-const ddl = String((await arow("SELECT sql FROM sqlite_master WHERE name='vibecoding_submissions'"))?.sql || '');
-check('旧约束 conversation_id 单列 UNIQUE 已去掉', !ddl.includes('conversation_id TEXT NOT NULL UNIQUE'));
+const legacySingleUnique = isMysql
+  ? Number((await arow("SELECT COUNT(*) n FROM (SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vibecoding_submissions' AND NON_UNIQUE=0 GROUP BY INDEX_NAME HAVING COUNT(*)=1 AND MAX(COLUMN_NAME)='conversation_id') x"))?.n || 0) > 0
+  : String((await arow("SELECT sql FROM sqlite_master WHERE name='vibecoding_submissions'"))?.sql || '').includes('conversation_id TEXT NOT NULL UNIQUE');
+check('旧约束 conversation_id 单列 UNIQUE 已去掉', !legacySingleUnique);
 
 // 造一个对话（其余字段用最小可用值）
 const now = new Date().toISOString();

@@ -81,9 +81,10 @@ assert.equal(JSON.parse(appendAudit.after_data).additionalQuota, 1);
 // 有效期调整已不再是平台动作 → 这条审计不该再产生（它只在旧接口里写）
 assert.equal(validityAudit, undefined, '不该再有 COURSE_ASSIGNMENT_VALIDITY_UPDATE 审计');
 
-const originalGrant = await arow(`SELECT grant.* FROM student_course_grants grant
-  JOIN users student ON student.id=grant.student_id AND student.org_id=grant.org_id
-  WHERE grant.org_id=? AND grant.series_id='p77' AND grant.revoked_at IS NULL ORDER BY grant.granted_at LIMIT 1`, [orgA.id]);
+const originalGrant = await arow(`SELECT \`grant\`.* FROM student_course_grants \`grant\`
+  JOIN users student ON student.id=\`grant\`.student_id AND student.org_id=\`grant\`.org_id
+  WHERE \`grant\`.org_id=? AND \`grant\`.series_id='p77' AND \`grant\`.revoked_at IS NULL
+  ORDER BY \`grant\`.granted_at, \`grant\`.id LIMIT 1`, [orgA.id]);
 assert.ok(originalGrant?.id);
 const grantRevoke = await admin(`/course-grants/${originalGrant.id}/revoke`, 'POST', { reason: 'P82 撤销重授权回归' });
 assert.equal(grantRevoke.quotaRefunded, true);

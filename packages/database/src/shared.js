@@ -47,6 +47,18 @@ export function hashPassword(password) {
   const salt = randomBytes(16).toString('hex');
   return `scrypt:${salt}:${scryptSync(`${PEPPER}:${password}`, salt, 64).toString('hex')}`;
 }
+/**
+ * 「唯一键冲突」的统一判定 —— 两个驱动的错误形状完全不同，调用点不该各自猜：
+ *   · MySQL（mysql2）：`code === 'ER_DUP_ENTRY'`，消息 "Duplicate entry … for key …"
+ *   · SQLite（node:sqlite）：`code` 恒为 ERR_SQLITE_ERROR，靠消息 "UNIQUE constraint failed: 表.列" 认
+ * 为什么需要它：并发下的「先查再插」两个请求都会查不到、然后一起插，输的那个会撞唯一索引 ——
+ * 撞了要按已经存在处理（跳过），不能把整个请求打成 500（orgAdmin 的 /course-grants 就是这么栽的）。
+ */
+export function isUniqueViolation(error) {
+  const code = String(error?.code || '');
+  if (code === 'ER_DUP_ENTRY' || code === 'SQLITE_CONSTRAINT_UNIQUE' || code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return true;
+  return /UNIQUE constraint failed|Duplicate entry/i.test(String(error?.message || ''));
+}
 export function id(prefix) { return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`; }
 export function nowIso() { return new Date().toISOString(); }
 export function formatOrgCode(sequence) {

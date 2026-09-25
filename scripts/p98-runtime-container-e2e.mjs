@@ -168,7 +168,7 @@ try {
 
   {
      
-    const rows = await arows('SELECT model,modality,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC', [sessionId]);
+    const rows = await arows('SELECT model,modality,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, id DESC', [sessionId]);
     check('③ 两通调用都落进了 usage_records（读图与文本都进我们的账）', rows.length >= 2, JSON.stringify(rows.length));
     const visionRow = rows.find((item) => item.model === VISION_MODEL);
     check('③ 读图那一笔记在读图渠道的模型上', Boolean(visionRow), JSON.stringify(rows.map((r) => r.model)));
@@ -194,7 +194,7 @@ try {
       `${followCall.status} ${followBody.slice(0, 300)}`);
 
      
-    const row = await arow('SELECT model,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1', [sessionId]);
+    const row = await arow('SELECT model,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, id DESC LIMIT 1', [sessionId]);
     check('⑤ 这一通也记在文本渠道的模型上（钱一样进我们的账）', row?.model === TEXT_MODEL, String(row?.model));
     check('⑤ 记账里仍然带着「这轮有图」的证据', /"withImages":true/.test(String(row?.pricing_snapshot || '')), String(row?.pricing_snapshot).slice(0, 240));
     

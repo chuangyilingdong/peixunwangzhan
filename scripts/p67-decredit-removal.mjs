@@ -32,7 +32,7 @@ const dbPath = path.join(temp, 'platform.db');
     // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
 process.env.PLATFORM_DB_PATH = dbPath;
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
+const { aq, arow, arows, isMysql } = await import('../packages/database/src/store.js');
 
 const env = { ...process.env, PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
@@ -124,9 +124,13 @@ try {
   /* ④ 列还在（删代码不删表），但新写入的积分列恒为 0 */
   console.log('\n④ 积分列保留但不再写入');
    
-  const cols = (await arows("SELECT name FROM pragma_table_info('users') WHERE name IN ('personal_credits','magic_stones','monthly_credit_allowance','ai_credit_limit')")).map((r) => r.name);
+  const cols = (isMysql
+    ? await arows("SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME IN ('personal_credits','magic_stones','monthly_credit_allowance','ai_credit_limit')")
+    : await arows(`SELECT name FROM pragma_table_info('users') WHERE name IN ('personal_credits','magic_stones','monthly_credit_allowance','ai_credit_limit')`)).map((r) => r.name);
   check('users 的积分列仍在库里（历史数据可回查）', cols.length === 4, cols.join(','));
-  const tables = (await arows("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('credit_entries','personal_credit_ledger','user_credit_adjustments','org_billing_accounts')")).map((r) => r.name);
+  const tables = (isMysql
+    ? await arows("SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('credit_entries','personal_credit_ledger','user_credit_adjustments','org_billing_accounts')")
+    : await arows("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('credit_entries','personal_credit_ledger','user_credit_adjustments','org_billing_accounts')")).map((r) => r.name);
   check('积分相关表仍在库里', tables.length === 4, tables.join(','));
   const written = (await arow('SELECT COUNT(*) n FROM usage_records WHERE credits_charged != 0')).n;
   check('新写入的 usage_records.credits_charged 恒为 0', Number(written) === 0, `非 0 行数 ${written}`);

@@ -15,7 +15,7 @@ const dbPath = path.join(temp, 'platform.db');
     // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
 process.env.PLATFORM_DB_PATH = dbPath;
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
+const { aq, arow, arows, isMysql } = await import('../packages/database/src/store.js');
 
 const baseEnv = {
   ...process.env,
@@ -79,9 +79,13 @@ try {
   // 1. Schema: personal_credit_ledger + users.personal_credits/magic_stones columns exist
    
   
-  const cols = (await arows(`SELECT name FROM pragma_table_info('users') WHERE name IN ('personal_credits','magic_stones')`)).map(r => r.name);
+  const cols = (isMysql
+    ? await arows("SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME IN ('personal_credits','magic_stones')")
+    : await arows(`SELECT name FROM pragma_table_info('users') WHERE name IN ('personal_credits','magic_stones')`)).map(r => r.name);
   check('users columns migrated', () => assert.ok(cols.includes('personal_credits') && cols.includes('magic_stones'), 'missing cols: ' + cols.join(',')));
-  const tbl = await arow(`SELECT name FROM sqlite_master WHERE type='table' AND name='personal_credit_ledger'`);
+  const tbl = isMysql
+    ? await arow("SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='personal_credit_ledger'")
+    : await arow(`SELECT name FROM sqlite_master WHERE type='table' AND name='personal_credit_ledger'`);
   check('personal_credit_ledger table created', () => assert.ok(tbl && tbl.name === 'personal_credit_ledger'));
   
 
@@ -163,7 +167,9 @@ try {
    
   const userId = student.user.id;
   const orgId = 'test-org';
-  await aq(`INSERT INTO organizations (id, name, status, contract_start_at, contract_expires_at, created_at, updated_at) VALUES (?, 't', 'ACTIVE', datetime('now'), datetime('now', '+30 days'), datetime('now'), datetime('now'))`, [orgId]);
+  // ⚠️  是 SQLite 专有（MySQL 语法错）—— 时间在 JS 里算好再绑参数
+  const plus30Iso = new Date(Date.now() + 30 * 86400000).toISOString();
+  await aq(`INSERT INTO organizations (id, name, status, contract_start_at, contract_expires_at, created_at, updated_at) VALUES (?, 't', 'ACTIVE', datetime('now'), ?, datetime('now'), datetime('now'))`, [orgId, plus30Iso]);
   await aq(`INSERT INTO users (id, org_id, login, display_name, role, password_hash, status, created_at, updated_at, personal_credits, magic_stones) VALUES ('user-ledger', ?, 'ledger-test', 'Ledger Test', 'STUDENT', 'x', 'ACTIVE', datetime('now'), datetime('now'), 50, 0)`, [orgId]);
   await aq(`INSERT INTO personal_credit_ledger (id, user_id, direction, type, credits, balance_after, source, reason, created_at) VALUES ('ledger-1', ?, 'IN', 'TOPUP', 50, 50, 'FREE_CANVAS', 'init', datetime('now'))`, ['user-ledger']);
   const rows = await arows('SELECT * FROM personal_credit_ledger WHERE user_id = ?', ['user-ledger']);

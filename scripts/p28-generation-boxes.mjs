@@ -112,7 +112,7 @@ try {
   const student = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data.token;
   assert.ok(student, '学生登录失败');
   await aq('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1', [JSON.stringify({ provider: 'local-mock', channels: [{ id: 'p28-video', provider: 'local-mock', model: 'hailuo-h3-i2v', models: ['hailuo-h3-i2v'] }], modalityChannels: { VIDEO: 'p28-video' } })]);
-  const lesson = await arow("SELECT lesson.id, lesson.series_id FROM course_lessons lesson JOIN student_course_grants grant ON grant.series_id=lesson.series_id JOIN users student ON student.id=grant.student_id WHERE student.login='student-2' AND grant.revoked_at IS NULL AND lesson.status='PUBLISHED' ORDER BY lesson.sort LIMIT 1");
+  const lesson = await arow("SELECT lesson.id, lesson.series_id FROM course_lessons lesson JOIN student_course_grants `grant` ON `grant`.series_id=lesson.series_id JOIN users student ON student.id=`grant`.student_id WHERE student.login='student-2' AND `grant`.revoked_at IS NULL AND lesson.status='PUBLISHED' ORDER BY lesson.sort LIMIT 1");
   assert.ok(lesson?.id, '学生应持有目标课包许可');
 
   // 本用例只发布一个目标课时；其余种子课时未配置发布能力，不参与本次快照。

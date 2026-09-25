@@ -62,13 +62,13 @@ assert.equal(seeded.length, 2, 'fixture: seed 应带 2 名学生');
 // 种子里每机构只有 2 名学生，候选池太少看不出「可加 / 不可加」的分别 —— 直接补几个。
 // 复用已有学生的 password_hash（这些账号只当候选，不登录）。
 const extraNames = ['周可欣', '赵天宇', '林子涵', '孙雨桐', '陈语桐'];
-const extra = extraNames.map(async (name, index) => {
+const extra = await Promise.all(extraNames.map(async (name, index) => {
   const row = { id: `ui-student-${index + 1}`, login: `ui${index + 10}` };
   const now = new Date().toISOString();
   await aq(`INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,created_at,updated_at)
     VALUES(?,?,?,?,'STUDENT',?,'ACTIVE',?,?)`, [row.id, teacher.org_id, row.login, name, seeded[0].password_hash, now, now]);
   return row;
-});
+}));
 const students = [...seeded.map((s) => ({ id: s.id, name: s.display_name })), ...extra.map((s, i) => ({ id: s.id, name: extraNames[i] }))];
 // 002-04 两条断言要用的值（2026-09-17 按线框图加的状态推导）：
 //   · grantedSeriesTitle —— 学生已持有的课包标题，用来验 002-04A 的候选池**真的**排除了它；

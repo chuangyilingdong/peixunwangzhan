@@ -23,7 +23,8 @@ const dbPath = path.join(temp, 'platform.db');
     // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
 process.env.PLATFORM_DB_PATH = dbPath;
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
+// hashPassword 也从数据层拿（两驱动同一份实现），别再自己 import schema.js
+const { aq, arow, arows, hashPassword } = await import('../packages/database/src/store.js');
 
 const baseEnv = {
   ...process.env,
@@ -122,13 +123,10 @@ try {
   await aq("INSERT INTO users(id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES ('admin_limited','limited','受限管理员','SUPER_ADMIN','[\"ADMIN_CONTENT\"]','placeholder','ACTIVE',?,?)", [now, now]);
   
   assert.equal(auditCount, 3, `三次导出应写 3 条审计，实际 ${auditCount}`);
-  await run(['-e', `
-    const { DatabaseSync } = await import('node:sqlite');
-    const { hashPassword } = await import(${JSON.stringify(pathToFileURL(path.join(root, 'packages/database/src/schema.js')).href)});
-    const db = new DatabaseSync(${JSON.stringify(dbPath)});
-    db.prepare("UPDATE users SET password_hash=? WHERE id='admin_limited'").run(hashPassword('limited123'));
-    db.close();
-  `]);
+  // placeholder 密码哈希用平台自己的 hashPassword 写一次（避免手工拼格式）
+// ⚠️ 必须走**数据层**：这段原来是起子进程用 `new DatabaseSync(dbPath)` 直连 SQLite 文件的 ——
+//    MySQL 模式下那个文件没人读、应用读的是 MySQL，表现是「受限管理员怎么都登录不上」。
+await aq("UPDATE users SET password_hash=? WHERE id='admin_limited'", [hashPassword('limited123')]);
   const limitedLogin = await api('/api/auth/login', { method: 'POST', body: { login: 'limited', password: 'limited123' } });
   assert.equal(limitedLogin.status, 200, `受限管理员登录失败: ${JSON.stringify(limitedLogin.data)}`);
   const limitedToken = limitedLogin.data.token;

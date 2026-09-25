@@ -207,7 +207,7 @@ try {
       `实际 ${followModel.status} ${followModel.text.slice(0, 160)}`);
     {
        
-      const row = await arow('SELECT model,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1', [sessionId]);
+      const row = await arow('SELECT model,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, id DESC LIMIT 1', [sessionId]);
       check('⑦ 这一通读图照样进我们的账（记在 TEXT 渠道的模型上）', row?.model === 'local-mock-text', String(row?.model));
       check('⑦ 记账里留了「带图」与「报的名字 → 实际渠道/模型」', /"withImages":true/.test(String(row?.pricing_snapshot || '')) && /modelResolution/.test(String(row?.pricing_snapshot || '')), String(row?.pricing_snapshot).slice(0, 260));
       
@@ -221,7 +221,7 @@ try {
     check('⑦ 配了读图渠道 → 200，改走那条渠道', visionCall.status === 200, `实际 ${visionCall.status} ${visionCall.text.slice(0, 160)}`);
     {
        
-      const row = await arow('SELECT model FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1', [sessionId]);
+      const row = await arow('SELECT model FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, id DESC LIMIT 1', [sessionId]);
       check('⑦ 这一通读图记在**读图渠道的模型**上', row?.model === 'local-mock-vision', String(row?.model));
       
     }

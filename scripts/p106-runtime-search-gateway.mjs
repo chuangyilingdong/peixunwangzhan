@@ -229,7 +229,7 @@ try {
   /* ⑤ 记账：上游 tokens 与按合同单价折算的成本都落账 */
   {
      
-    const usage = await arow("SELECT * FROM usage_records WHERE class_session_id=? AND modality='TEXT' ORDER BY created_at DESC, rowid DESC LIMIT 1", [sessionId]);
+    const usage = await arow("SELECT * FROM usage_records WHERE class_session_id=? AND modality='TEXT' ORDER BY created_at DESC, id DESC LIMIT 1", [sessionId]);
     check('⑤ 落了 usage_records，tokens 来自上游回执', usage?.input_tokens === 1000000 && usage?.output_tokens === 500000,
       JSON.stringify({ in: usage?.input_tokens, out: usage?.output_tokens }));
     check('⑤ 还留在密钥里的归属（学生/机构）上，不是请求里塞的',
@@ -237,7 +237,7 @@ try {
     check('⑤ 留档写明了「插件报的名字 → 实际渠道/模型」与检索次数',
       /modelResolution/.test(String(usage?.pricing_snapshot || '')) && /web_search_requests|"requests":2/.test(String(usage?.pricing_snapshot || '')),
       String(usage?.pricing_snapshot).slice(0, 300));
-    const attempt = await arow("SELECT * FROM compute_attempts WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1", [sessionId]);
+    const attempt = await arow("SELECT * FROM compute_attempts WHERE class_session_id=? ORDER BY created_at DESC, id DESC LIMIT 1", [sessionId]);
     check('⑤ compute_attempts 落了 SUCCESS + 用量证据', attempt?.status === 'SUCCESS' && attempt?.input_tokens === undefined && /UPSTREAM_USAGE/.test(String(attempt?.usage_snapshot || '')),
       JSON.stringify({ status: attempt?.status, evidence: String(attempt?.usage_snapshot).slice(0, 120) }));
     check('⑤ 成本按合同单价折算成非零的分（1000000×200/1M + 500000×800/1M = 600）',
@@ -251,7 +251,7 @@ try {
     const limited = await search(pluginBody(), key);
     check('⑥ 上游 429 → 原样回吐 429 与上游原话', limited.status === 429 && /上游限流了/.test(limited.text), `${limited.status} ${limited.text.slice(0, 160)}`);
      
-    const failed = await arow("SELECT * FROM usage_records WHERE class_session_id=? AND status='FAILED' ORDER BY created_at DESC, rowid DESC LIMIT 1", [sessionId]);
+    const failed = await arow("SELECT * FROM usage_records WHERE class_session_id=? AND status='FAILED' ORDER BY created_at DESC, id DESC LIMIT 1", [sessionId]);
     check('⑥ 失败也落账（带 fail_code）', Boolean(failed?.fail_code), JSON.stringify({ code: failed?.fail_code }));
     
     reply = null;

@@ -14,7 +14,7 @@ const dbPath = path.join(tempDir, 'platform.db');
     // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
 process.env.PLATFORM_DB_PATH = dbPath;
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
+const { aq, arow, arows, isMysql } = await import('../packages/database/src/store.js');
 
 const env = { ...process.env, PLATFORM_DATA_DIR: tempDir, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath };
 
@@ -27,10 +27,14 @@ if (seed.status !== 0) throw new Error(`db seed failed: ${seed.stderr}`);
 const seedLogins = ['root', 'org-admin', 'teacher-1', 'teacher-2', 'student-1', 'student-2'];
 const seedOrgNames = ['示例创新学校'];
 
-const tables = (await arows(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)).map((x) => x.name);
+// ⚠️ 表名清单要两驱动都能查（`sqlite_master` 只有 SQLite 有；MySQL 用 information_schema）
+const tables = isMysql
+  ? (await arows("SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME")).map((x) => x.name)
+  : (await arows(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)).map((x) => x.name);
 const counts = {};
 for (const table of tables) {
-  counts[table] = Number((await arow(`SELECT COUNT(*) AS n FROM "${table}"`)).n);
+  // 表名要用**反引号**：双引号标识符只有 SQLite 认，MySQL 上直接语法错；反引号两边都认。
+  counts[table] = Number((await arow(`SELECT COUNT(*) AS n FROM \`${table}\``)).n);
 }
 
 const users = await arows(`SELECT id, login, display_name, role, org_id, status, deleted_at FROM users ORDER BY login`);
@@ -65,10 +69,18 @@ for (const [key, sql] of scopedQueries) scoped[key] = Number((await arow(sql)).n
 
 const foreignKeys = {};
 for (const table of tables) {
-  const cols = await arows(`PRAGMA table_info("${table}")`);
+  // 列名：SQLite 用 PRAGMA，MySQL 用 information_schema（PRAGMA 在 MySQL 上是语法错）
+  const cols = isMysql
+    ? (await arows("SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?", [table])).map((row) => ({ name: row.name }))
+    : await arows(`PRAGMA table_info(\`${table}\`)`);
   const userRefs = cols.filter((c) => /^(user_id|student_id|teacher_id|actor_id|assigned_by|requested_by|processed_by|owner_user_id|created_by|updated_by|published_by|changed_by)$/.test(c.name)).map((c) => c.name);
   const orgRefs = cols.filter((c) => /^org_id$/.test(c.name)).map((c) => c.name);
-  const rules = [...userRefs.map(async (name) => ({ column: name, seedMatches: Number((await arow(`SELECT COUNT(*) n FROM "${table}" WHERE "${name}" IN ${inList(seedUserIds)}`)).n) })), ...orgRefs.map(async (name) => ({ column: name, seedMatches: Number((await arow(`SELECT COUNT(*) n FROM "${table}" WHERE "${name}" IN ${inList(seedOrgIds)}`)).n) }))];
+  // ⚠️ 这段原来是 `[...map(async …)]` —— 数组里装的是 **Promise**，既没 await（报告里恒为 `[{},{}]`），
+  //    又一次性并发几百条查询（MySQL 的池子只有 10 条连接，实测会撞上
+  //    "Can't add new command when connection is in closed state"）。改成**串行 await**：慢一点，但真、且稳。
+  const rules = [];
+  for (const name of userRefs) rules.push({ column: name, seedMatches: Number((await arow(`SELECT COUNT(*) n FROM \`${table}\` WHERE \`${name}\` IN ${inList(seedUserIds)}`)).n) });
+  for (const name of orgRefs) rules.push({ column: name, seedMatches: Number((await arow(`SELECT COUNT(*) n FROM \`${table}\` WHERE \`${name}\` IN ${inList(seedOrgIds)}`)).n) });
   if (rules.length) foreignKeys[table] = rules;
 }
 

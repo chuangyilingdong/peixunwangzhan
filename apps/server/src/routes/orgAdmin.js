@@ -2,7 +2,7 @@ import { audit, clearAuthCookie, count, errors, id, json, normalizeOrg, normaliz
 import { normalizeLesson, canvasMediaFrom } from '../lib.js';
 import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
 import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from './fileAssets.js';
-import { hashPassword } from '@platform/database';
+import { hashPassword, isUniqueViolation } from '@platform/database';
 
 import { scheduleReminder } from './communication.js';
 import { assertTransition } from '../services/domainState.js';
@@ -1439,6 +1439,10 @@ export async function handleOrg(ctx) {
       throw errors.conflict(`可用次数不足：授权 ${quotaTotal} 次，已用 ${quotaUsed} 次，本次需要 ${fresh.length} 次`, 'COURSE_QUOTA_EXHAUSTED');
     }
     const now = nowIso();
+    // ⚠️ 并发同一个学生时，两个请求都"查不到 → 一起插"，输的那个会撞唯一索引。
+    //    撞了必须按"这个学生已经授权过"处理（跳过本次）—— 与"重复授权跳过"是同一件事，
+    //    不能把整个请求打成 500（p77/p82 在 MySQL 上就是这么红的：SQLite 侧全局写锁替我们兜住了）。
+    const raced = [];
       for (const studentId of fresh) {
         const existing = await arow('SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [currentOrgId, studentId, seriesId]);
         let grantId;
@@ -1462,7 +1466,13 @@ export async function handleOrg(ctx) {
           }
         } else {
           grantId = id('coursegrant');
-          await aq('INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at,granted_units,consumed_units) VALUES (?,?,?,?,?,?,?,?,?)', [grantId, currentOrgId, studentId, seriesId, assignment.id, auth.user.id, now, 1, 0]);
+          try {
+            await aq('INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at,granted_units,consumed_units) VALUES (?,?,?,?,?,?,?,?,?)', [grantId, currentOrgId, studentId, seriesId, assignment.id, auth.user.id, now, 1, 0]);
+          } catch (error) {
+            if (!isUniqueViolation(error)) throw error;
+            raced.push(studentId);
+            continue;
+          }
         }
         await appendLicenseGrantRevenue({ assignmentId: assignment.id, orgId: currentOrgId, seriesId, grantId, actorId: auth.user.id, occurredAt: now, idempotencyKey: experience ? `license-grant:${grantId}:${now}:u${unitSeq}` : `license-grant:${grantId}:${now}` });
       };
@@ -1471,8 +1481,9 @@ export async function handleOrg(ctx) {
       //   都以 `fresh`（= 本次真正新增的授权数）为准，所以不会记成两笔、也不会漏记。
       // 体验课包的重复分配同样是"真的扣了次数"（每次 +1 人次），所以照样记这一笔。
       // 与 quota_used 的更新在**同一个事务**里（本函数上面就是 atransaction(async () => {...})）。
-      if (fresh.length) {
-        await aq('UPDATE course_assignments SET quota_used=quota_used+? WHERE id=?', [fresh.length, assignment.id]);
+      const grantedNow = fresh.length - raced.length;
+      if (grantedNow) {
+        await aq('UPDATE course_assignments SET quota_used=quota_used+? WHERE id=?', [grantedNow, assignment.id]);
         await recordQuotaChange({
           orgId: currentOrgId, seriesId, assignmentId: assignment.id,
           changeType: 'GRANT_CONSUME', quotaTotalBefore: quotaTotal, quotaUsedBefore: quotaUsed,
@@ -1480,8 +1491,8 @@ export async function handleOrg(ctx) {
           reason: '', source: COURSE_QUOTA_SOURCES.ORG_GRANT,
         });
       }
-    await audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds: fresh, skipped: studentIds.length - fresh.length, source: grantSource, seriesType: seriesTypeOf(series) }, { orgId: currentOrgId });
-    return { granted: fresh.length, skipped: studentIds.length - fresh.length, quotaTotal, quotaUsed: quotaUsed + fresh.length, seriesType: seriesTypeOf(series) };
+    await audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds: fresh.filter((studentId) => !raced.includes(studentId)), skipped: studentIds.length - grantedNow, racedCount: raced.length, source: grantSource, seriesType: seriesTypeOf(series) }, { orgId: currentOrgId });
+    return { granted: grantedNow, skipped: studentIds.length - grantedNow, quotaTotal, quotaUsed: quotaUsed + grantedNow, seriesType: seriesTypeOf(series) };
     });
   }
 

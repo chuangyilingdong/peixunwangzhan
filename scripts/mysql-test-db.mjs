@@ -24,8 +24,11 @@ export function mysqlEnvFromProcess() {
     MYSQL_USER: process.env.MYSQL_USER || 'root',
     MYSQL_PASSWORD: process.env.MYSQL_PASSWORD || '',
     MYSQL_DATABASE: process.env.MYSQL_DATABASE || 'aild_admin',
-    // 测试用短空闲超时：脚本干完活要能自己退出（详见 mysql.js 里 idleTimeout 的注释）
-    MYSQL_IDLE_TIMEOUT: process.env.MYSQL_IDLE_TIMEOUT || '1500',
+    // ⚠️ 空闲超时**别设太小**：1500ms 实测会让长夹具踩到 mysql2 的空闲回收竞态 ——
+    //    连接刚被回收、下一次派发正好撞上 → Can't add new command when connection is in closed state
+    //    （p4-02 跑 init/seed 子进程时连接空闲好几秒，回来第一条查询就中招）。
+    //    进程退出的卫生**不靠它**：验收套件的包装层会在脚本结束后显式关池（见 acceptance-script-wrapper.mjs）。
+    MYSQL_IDLE_TIMEOUT: process.env.MYSQL_IDLE_TIMEOUT || '30000',
   };
 }
 
@@ -167,7 +170,7 @@ export async function resetMysqlDatabase({ silent = false, database = null, drop
       //    表现是 p33 / p139 这类脚本红在"生成应成功，实际 FAILED"，跟代码没关系。
       //    生产不受影响：真供应商那条路写进 preview_url 的是 OSS 地址（短的），
       //    所以这条加宽**只影响本机测试库**（要不要加宽以"本机能跑通"为准，见下面 ALTER 的注释）。
-      const WIDEN_NAME = /(policy|snapshot|content|metadata|attachments|settings|presets|references|payload|description|message|prompt|note|json|body|lines|params|options|before_data|after_data|_data$|url$)/i;
+      const WIDEN_NAME = /(policy|snapshot|content|metadata|attachments|settings|presets|references|payload|description|message|prompt|note|json|body|lines|params|options|before_data|after_data|_data$|url$|codes)/i;
       const [cols] = await conn.query(
         'SELECT TABLE_NAME AS t, COLUMN_NAME AS c, IS_NULLABLE, COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND DATA_TYPE IN ("varchar","char","tinytext","text")',
         [env.MYSQL_DATABASE],

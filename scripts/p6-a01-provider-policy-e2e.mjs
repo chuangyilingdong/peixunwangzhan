@@ -149,15 +149,11 @@ try {
   const providerInfo = await api('/api/ai/providers', { token: student });
   expect(providerInfo.status === 200 && providerInfo.data.mode !== 'mock', '外部策略未生效', providerInfo);
 
-  const jobCount = await run(['-e', `
-    const {DatabaseSync}=await import('node:sqlite');
-    const db=new DatabaseSync(${JSON.stringify(dbPath)});
-    const row=db.prepare("select count(*) n from generation_jobs where project_id=?").get(${JSON.stringify(project.data.id)});
-    const usage=db.prepare("select count(*) n from usage_records where project_id=?").get(${JSON.stringify(project.data.id)});
-    console.log(row.n + ':' + usage.n);
-    db.close();
-  `]);
-  const cleanJobCount = String(jobCount || '').trim();
+  // ⚠️ 这两行原来是起子进程 `new DatabaseSync(dbPath)` 直连 SQLite 文件的 —— MySQL 模式下那个文件没人读，
+  //    数出来恒为 0:0（表现就是这条断言红）。走数据层两驱动都成立；COUNT 在 MySQL 回来是字符串，显式转数。
+  const jobRow = await arow('SELECT COUNT(*) n FROM generation_jobs WHERE project_id=?', [project.data.id]);
+  const usageRow = await arow('SELECT COUNT(*) n FROM usage_records WHERE project_id=?', [project.data.id]);
+  const cleanJobCount = `${Number(jobRow?.n || 0)}:${Number(usageRow?.n || 0)}`;
   expect(cleanJobCount.includes('1:1'), 'provider 失败后应保留失败任务和 0 积分用量记录', { cleanJobCount, type: typeof cleanJobCount, length: cleanJobCount.length });
 
   console.log(JSON.stringify({

@@ -59,7 +59,7 @@ const { aq, arow, arows } = await import('../packages/database/src/store.js');
   const series = (await arow('SELECT series_id FROM course_lessons WHERE id=?', [lesson])).series_id;
   const now = new Date().toISOString();
   const sessionId = 'csession_p92';
-  await aq("INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,started_by,started_at,created_at,updated_at) VALUES (?,?,?,?,?,?,'ACTIVE','CANVAS',?,?,?,?)", [sessionId, 'P92 消耗口径课堂', orgId, series, lesson, teacher, now, now, now]);
+  await aq("INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,started_by,started_at,created_at,updated_at) VALUES (?,?,?,?,?,?,'ACTIVE','CANVAS',?,?,?,?)", [sessionId, 'P92 消耗口径课堂', orgId, series, lesson, teacher, now, now, now, now]);
   await aq("INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)", ['sstudent_p92', sessionId, student, orgId, lesson, series, teacher, now, now]);
 
   // 成功一次：对外售价 100 分、上游成本 4 分（REPORTED），用量记录里塞 999 污染值

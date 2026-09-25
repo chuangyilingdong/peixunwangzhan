@@ -14,9 +14,9 @@
  * 阶段 1 已把应用与验收脚本全部改成异步 API（门禁 p137 保证应用侧 0 处），所以这里给一组
  * "用了就报错"的桩：谁要是回退去用同步 API，会在**第一次调用**时看到明确的错。
  */
-import { dialect, isMysql, json, parseJson, jsonText, amap, hashPassword, id, nowIso, formatOrgCode, nextOrgCodeFrom, SQL_MAX, SQL_MIN } from './shared.js';
+import { dialect, isMysql, json, parseJson, jsonText, amap, hashPassword, id, nowIso, formatOrgCode, nextOrgCodeFrom, isUniqueViolation, SQL_MAX, SQL_MIN } from './shared.js';
 
-export { dialect, isMysql, json, parseJson, jsonText, amap, hashPassword, id, nowIso, formatOrgCode, SQL_MAX, SQL_MIN };
+export { dialect, isMysql, json, parseJson, jsonText, amap, hashPassword, id, nowIso, formatOrgCode, isUniqueViolation, SQL_MAX, SQL_MIN };
 
 const impl = isMysql ? await import('./mysql.js') : await import('./schema.js');
 

@@ -24,7 +24,7 @@ const dbPath = path.join(temp, 'platform.db');
     // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
 process.env.PLATFORM_DB_PATH = dbPath;
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
+const { aq, arow, arows, isMysql } = await import('../packages/database/src/store.js');
 
 const env = { ...process.env, PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath };
 const run = (args) => new Promise((resolve, reject) => {
@@ -52,6 +52,10 @@ let migratedSnapshot;
   const orgId = (await arow("SELECT org_id FROM users WHERE login='teacher-1'")).org_id;
   const cls = await arow('SELECT id FROM classes WHERE org_id=? LIMIT 1', [orgId]);
 
+  // ⚠️ MySQL 上 class_sessions 被 session_students 的外键指着，直接 DROP 会 ER_FK_CANNOT_DROP_PARENT
+  //    （SQLite 侧不受这个限制）。夹具要仿造「老库」，先把外键检查关掉。
+  const hadFkChecks = isMysql;
+  if (hadFkChecks) await aq('SET FOREIGN_KEY_CHECKS=0');
   await aq('DROP TABLE class_sessions');
   await aq(`CREATE TABLE class_sessions (
     id TEXT PRIMARY KEY, class_id TEXT NOT NULL, lesson_id TEXT,

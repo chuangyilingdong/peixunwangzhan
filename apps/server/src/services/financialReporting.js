@@ -129,10 +129,17 @@ export async function listFinancialCalls(filters = {}) {
   const scope = callScope(filters, range);
   const where = scope.conditions.join(' AND ');
   const total = Number((await arow(`SELECT COUNT(DISTINCT attempt.id) n ${CALL_FROM} WHERE ${where}`, scope.params))?.n || 0);
+  // ⚠️ 这里原来带 `GROUP BY attempt.id`，MySQL 的 only_full_group_by 会直接拒：
+  //    SELECT 里既有 `attempt.*`、又有三张 JOIN 表的列（organization.name / student.display_name /
+  //    usage.id / COALESCE(usage.series_id,session.series_id)…），它们都不在 GROUP BY 里
+  //    （报 ER_WRONG_FIELD_WITH_GROUP —— RDS 上"对账"这一页会整页 500）。
+  //    这些 JOIN 全是**按主键**连的（usage.id / session.id / organization.id / users.id 都是主键），
+  //    一条 attempt 最多配一行，本来就不会产生重复行 —— GROUP BY 是多余的，去掉后语义完全一致
+  //    （SQLite 侧同理：结果集逐行相同）。
   const raw = await arows(`SELECT attempt.*,organization.name organization_name,student.display_name student_name,
       usage.id linked_usage_id,COALESCE(usage.series_id,session.series_id) linked_series_id,
       COALESCE(attempt.class_session_id,usage.class_session_id) linked_session_id,COALESCE(attempt.lesson_id,session.lesson_id) linked_lesson_id
-    ${CALL_FROM} WHERE ${where} GROUP BY attempt.id ORDER BY attempt.created_at DESC,attempt.id DESC LIMIT ? OFFSET ?`, [...scope.params, limit, (page - 1) * limit]);
+    ${CALL_FROM} WHERE ${where} ORDER BY attempt.created_at DESC,attempt.id DESC LIMIT ? OFFSET ?`, [...scope.params, limit, (page - 1) * limit]);
   const pricing = await getComputePricing();
   const items = raw.map((item) => {
     const sale = resolveSalePrice({ salePriceFen: item.sale_price_fen, model: item.model, modality: item.modality }, pricing);
