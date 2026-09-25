@@ -3,11 +3,12 @@
  *
  * 用户口径：**「网站上的 dsh 就不要了，以后 vibecoding 就是在客户端进行」**。
  * 改版前那一排是「进入创作环境」（点一下由平台在服务器上拉起 dsh 盒子、再新标签页打开）
- * +「提交作品」；改版后只剩**把学生送到客户端**：`lingdong://open` 深链 + 下载入口。
+ * +「提交作品」；改版后只剩**把学生送到客户端**：`lingdong://open` 深链。
  * 这一道就是钉住"网页侧不许再拉起任何创作环境"这件事：
- *   · VibeCoding 课时上只有「打开创作客户端」+「下载客户端」两个入口；
+ *   · VibeCoding 课时上**只有「打开创作客户端」一个入口** —— 2026-09-25 用户口径：
+ *     卡片上「下载客户端」那个按钮与「打开没反应？先下载客户端。」那句文案一并删除；
  *   · 一个课时同时开画布与 VibeCoding 时**两个入口并列**（不许替学生挑一个）；
- *   · 没开始 / 已完课 / 未授权时按钮点不动，但**原因写在按钮上**、下载入口仍在；
+ *   · 没开始 / 已完课 / 未授权时按钮点不动，但**原因写在按钮上**；
  *   · ⭐ **整页跑一遍，一次 `/api/student/runtime/*` 的请求都不许发** ——
  *     这是"网页不再拉起创作环境"唯一能自动判的判据（接口还在，改回旧版就一定会打到它）；
  *   · 零控制台报错。
@@ -129,17 +130,15 @@ try {
 
   await check('零控制台报错', () => assert.deepEqual(errors, []));
   await check('五张课时卡片都渲染出来了', () => assert.equal(cards.length, 5));
-  await check('已开始的 VibeCoding 课：只有「打开创作客户端」+「下载客户端」',
+  await check('已开始的 VibeCoding 课：只有「打开创作客户端」（下载引导按 2026-09-25 口径已删）',
     () => assert.deepEqual(cardOf('用 AI 做一个自我介绍网页').actions, [
       { tag: 'a', text: '打开创作客户端', href: 'lingdong://open', disabled: false },
-      { tag: 'a', text: '下载客户端', href: '/download', disabled: false },
     ]));
   await check('画布 + VibeCoding 都开时：两个入口**并列**（不许替学生挑一个）',
-    () => assert.deepEqual(cardOf('画布 + AI 一起上').actions.map((item) => item.text), ['打开创作客户端', '下载客户端', '进入课堂']));
-  await check('没开始：按钮点不动、原因写在按钮上，下载入口仍在',
+    () => assert.deepEqual(cardOf('画布 + AI 一起上').actions.map((item) => item.text), ['打开创作客户端', '进入课堂']));
+  await check('没开始：按钮点不动、原因写在按钮上',
     () => assert.deepEqual(cardOf('还没开始的那节课').actions, [
       { tag: 'button', text: '等待开课', href: null, disabled: true },
-      { tag: 'a', text: '下载客户端', href: '/download', disabled: false },
     ]));
   await check('已完课 / 未授权：文案按状态给（沿用改版前那套口径）',
     () => {

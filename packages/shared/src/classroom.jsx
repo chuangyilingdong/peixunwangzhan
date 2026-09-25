@@ -275,9 +275,10 @@ export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
             <div className="lesson-detail-action">
               {/* VibeCoding 课（2026-09-19 口径）：**创作环境只在客户端里**。
                   用户原话「网站上的 dsh 就不要了，以后 vibecoding 就是在客户端进行」——
-                  网页这一屏只把学生送到客户端（打开 / 下载），不拉起任何创作环境，
+                  网页这一屏只把学生送到客户端（「打开创作客户端」），不拉起任何创作环境，
                   也不再有「提交作品」（作品上传改由客户端做，见交接文档）。
-                  两种都开时**两个入口并列**（画布按钮 + 客户端那两个），学生自己挑。 */}
+                  卡片上原并排的「下载客户端」按钮与引导文案，2026-09-25 按用户口径删除。
+                  两种都开时**两个入口并列**（画布按钮 + 客户端那个），学生自己挑。 */}
               {offersVibe ? <ClientEntryActions lesson={lesson} canEnter={canEnterVibe} /> : null}
               {/* 按钮文案按「本场课堂的项目到哪一步了」分三种（用户 2026-09-21 口径）：
                   草稿 → 继续创作；**已提交 → 查看作品**（打开的是同一个项目、画布只读）；
