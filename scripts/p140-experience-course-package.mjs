@@ -109,6 +109,27 @@ try {
       `HTTP ${normalTwo.status} ${JSON.stringify(normalTwo.error || {}).slice(0, 160)}`);
   }
 
+  /* ①′ 建体验课包**不带课时**必须也能建出来（2026-09-25 用户报的 bug）：
+        平台端「新建课包」这一步本来就**还没有课时编排**（前端压根不传 lessons），
+        旧校验按"本次提交了 0 节"直接 400 → 体验课包在平台端根本创建不了。
+        现在只在"本次提交的课时**多于 1 节**"时才拦（上面 ① 仍然成立），
+        真正的节数闸留在「改类型 / 补课时 / 发布」三处。 */
+  {
+    const bare = await api('/api/admin/course-series', {
+      method: 'POST', token: admin,
+      body: { title: 'P140 体验课包（建包时还没有课时）', description: '建包先于编排', coverImageUrl: 'https://example.com/p140.png', priceFen: 0, stockTotal: 10, seriesType: 'EXPERIENCE' },
+    });
+    check('①′ 不带 lessons 建体验课包能建成功（平台端新建课包的实际请求形状）★',
+      bare.status === 200 && bare.data?.seriesType === 'EXPERIENCE' && (bare.data?.lessons || []).length === 0,
+      `HTTP ${bare.status} ${JSON.stringify(bare.error || bare.data).slice(0, 200)}`);
+    // 建出来是**草稿且没有课时** → 发布这一步仍然发布不了（节数口径没被放宽；先撞到的是
+    // "至少一个未归档课时"，这正是它该给的提示）
+    const barePublish = await api(`/api/admin/course-series/${bare.data?.id}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
+    check('①′ 没有课时的体验课包照样发布不了（发布闸没放宽）',
+      barePublish.status === 400 && barePublish.code === 'COURSE_LESSONS_REQUIRED',
+      `HTTP ${barePublish.status} ${barePublish.code} ${JSON.stringify(barePublish.error).slice(0, 160)}`);
+  }
+
   /* ② 建体验课包 + 发布（类型要能下发给机构端/官网） */
   {
     const created = await createSeries('P140 体验课包', 'EXPERIENCE', [lessonBody('体验课')]);

@@ -181,8 +181,15 @@ export async function handleCourses(ctx, part, method) {
     const seriesType = normalizeSeriesType(body.seriesType);
     const lessons = body.lessons === undefined ? [] : body.lessons;
     if (!Array.isArray(lessons) || lessons.length > 200) throw errors.badRequest('课时列表无效', 'INVALID_LESSONS');
-    // 体验课包只包含 1 节课：建的时候就要拦（发布校验里还有一道，见 admin/helpers.js）
-    if (seriesType === EXPERIENCE_SERIES_TYPE && lessons.length !== 1) {
+    // 体验课包只包含 1 节课 —— 但**建包这一步还没有课时编排**：平台端「新建课包」根本不带
+    // `lessons`（上面那个 undefined → 空数组就是它），所以这里只在「本次真的提交了多余的课时」
+    // 时才拦（> 1）。原来判的是 `!== 1`，于是新建体验课包永远被
+    // 「只能包含 1 节课（本次提交了 0 节）」卡死 —— 2026-09-25 用户报的就是这个。
+    // 另外三道闸都在各自该在的位置，口径没放宽：
+    //   · 改成体验课包 → 要求现有未归档课时正好 1 节（下面 PATCH 那条）
+    //   · 补齐课时 → 要求合计不超过 1 节（POST /lessons 那条）
+    //   · 发布 → 再校验一次（admin/helpers.js 的 validateSeriesForPublishing）
+    if (seriesType === EXPERIENCE_SERIES_TYPE && lessons.length > 1) {
       throw errors.badRequest(`体验课包只能包含 1 节课（本次提交了 ${lessons.length} 节）`, 'EXPERIENCE_SERIES_LESSON_LIMIT');
     }
     // P5-W05: 课程资料核验字段校验

@@ -18,7 +18,7 @@
  *
  * ⚠️ 权限**没有因此放宽**：拿机构端的 cookie 直接打学生域素材口，仍然是 403（最后一条断言）。
  * ⚠️ 起真服务、发真请求（p139 那套起法）：cookie 的名字/路径/读取顺序只有走 HTTP 才验得出来。
- * 跑法：node scripts/p140-session-cookie-scope.mjs
+ * 跑法：node scripts/p141-session-cookie-scope.mjs
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -26,7 +26,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 const root = process.cwd();
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p140-cookie-scope-'));
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p141-cookie-scope-'));
 const dbPath = path.join(temp, 'platform.db');
 process.env.PLATFORM_DB_PATH = dbPath;
 
@@ -159,7 +159,7 @@ try {
 }
 
 if (failures) {
-  console.error(JSON.stringify({ name: 'p140-session-cookie-scope', pass: false, failed: failures, serverLog: serverLog.slice(-800) }, null, 1));
+  console.error(JSON.stringify({ name: 'p141-session-cookie-scope', pass: false, failed: failures, serverLog: serverLog.slice(-800) }, null, 1));
   process.exit(1);
 }
-console.log(JSON.stringify({ name: 'p140-session-cookie-scope', pass: true, checks: 12 }));
+console.log(JSON.stringify({ name: 'p141-session-cookie-scope', pass: true, checks: 12 }));
