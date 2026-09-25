@@ -58,7 +58,9 @@ function mockProvider(model = AI_PROVIDER_MODEL) {
       let full = '';
       for (const chunk of text.match(/[\s\S]{1,24}/g) || [text]) {
         full += chunk;
-        if (typeof onDelta === 'function') onDelta(chunk, full);
+        // 与真上游那条一样要 await：本地 mock 走的也是同一个消费者（理由见
+        // openaiCompatibleProvider 里那句注释 —— 不 await 会把消费者抛的错吞成 unhandledRejection）
+        if (typeof onDelta === 'function') await onDelta(chunk, full);
       }
       const inputTokens = Math.max(1, Math.ceil(String(prompt || lastUserText || '').length / 4));
       const outputTokens = Math.max(1, Math.ceil(text.length / 4));

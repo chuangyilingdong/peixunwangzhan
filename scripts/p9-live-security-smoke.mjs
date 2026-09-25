@@ -9,7 +9,10 @@
 import http from 'node:http';
 import https from 'node:https';
 
-const site = (process.env.SITE_URL || 'https://iicili.cyou').replace(/\/$/, '');
+// ⚠️ 2026-09-25：默认域名从 `iicili.cyou` 换成 `aicyld.com` —— 生产已搬到新域名，旧域名没有后端
+//    （实测 502 / 连不上），继续指着它跑等于**必红**而且红得没有信息量。
+//    要指别处：`SITE_URL=https://… node scripts/p9-live-security-smoke.mjs`。
+const site = (process.env.SITE_URL || 'https://aicyld.com').replace(/\/$/, '');
 
 // Keep the probe runnable on the repository's documented Node 16+ baseline;
 // global fetch is only available by default in newer Node releases.

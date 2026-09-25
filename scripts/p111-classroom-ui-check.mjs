@@ -295,11 +295,16 @@ try {
   const shot = async (name) => { await page.screenshot({ path: path.join(shotDir, `${name}.png`), fullPage: true }); };
   const settle = async () => { await page.waitForLoadState('networkidle').catch(() => {}); await page.waitForTimeout(350); };
 
-  // 登录（线框图是教师视角）
-  await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
-  await settle();
-  await page.getByRole('button', { name: /授课教师/ }).click();
-  await page.getByRole('button', { name: /进入工作台/ }).click();
+  // 登录（线框图是教师视角）。⚠️ 2026-09-25：**不再点登录页上的按钮** ——
+  // 2026-09-23 起机构端登录页改成「登录名 + 密码」表单（演示账号与「授课教师 / 进入工作台」
+  // 那两个按钮一起没了），老写法必然 30 秒超时（这条守卫长期挂在红名单上就是这个原因，
+  // 不是页面坏了）。做法跟 p117 同一套：把上面 API 已经拿到的教师会话直接写进机构端那个
+  // localStorage 桶（键名见 packages/shared/src/auth.js 的分桶规则），再进 /dashboard。
+  // 这一道要看的是**课堂四个页面**，登录页自己有守卫，不必在这里重考一遍。
+  await page.addInitScript(([session]) => {
+    window.localStorage.setItem('ai-kids-platform.session.v1.org', JSON.stringify(session));
+  }, [{ token, expiresAt: login.data.expiresAt, user: login.data.user, organization: login.data.organization }]);
+  await page.goto(`${base}/dashboard`, { waitUntil: 'domcontentloaded' });
   await page.waitForURL(/\/dashboard/, { timeout: 20000 }).catch(() => {});
   await settle();
 
@@ -571,8 +576,14 @@ try {
 
   await orgPage.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
   await orgSettle();
-  await orgPage.getByRole('button', { name: /机构管理员/ }).click();
-  await orgPage.getByRole('button', { name: /进入工作台/ }).click();
+  // 机构管理员视角：**同样塞会话，不点登录页**（理由见上面教师那段）。
+  // 这里要换的账号是 org-admin —— 002-* 那几页（课包库存 / 学生授权中心）只有机构管理员看得到。
+  const orgAdminLogin = await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } });
+  assert.ok(orgAdminLogin.data.token, 'org admin login failed');
+  await orgContext.addInitScript(([session]) => {
+    window.localStorage.setItem('ai-kids-platform.session.v1.org', JSON.stringify(session));
+  }, [{ token: orgAdminLogin.data.token, expiresAt: orgAdminLogin.data.expiresAt, user: orgAdminLogin.data.user, organization: orgAdminLogin.data.organization }]);
+  await orgPage.goto(`${base}/dashboard`, { waitUntil: 'domcontentloaded' });
   await orgPage.waitForURL(/\/dashboard/, { timeout: 20000 }).catch(() => {});
   await orgSettle();
 

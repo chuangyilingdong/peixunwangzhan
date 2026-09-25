@@ -595,7 +595,12 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
           reportEvidence(onEvidence, response, parsed);
           const text = responseText(parsed);
           if (!text) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
-          if (typeof onDelta === 'function') onDelta(text, text);
+          // ⚠️ **消费者回调必须 await**（2026-09-25 实测出来的坑）：消费者是「写 SSE + 落产物」的
+          //    异步函数，不 await 的话它抛错会变成**没人接的 rejected promise** —— 既不冒泡给调用方
+          //    （generateStream 照样按"成功"返回），又会在 Node 24 的默认策略下把整个进程带走
+          //    （生产没装 unhandledRejection 兜底）。await 之后：错误如实上抛，而 generationProvider
+          //    那边 `emitted` 已经是 true → **不会**重试（不会重复花钱），调用方能看见失败。
+          if (typeof onDelta === 'function') await onDelta(text, text);
           return { assets: [textAsset({ text, title, providerName, model: providerModel, tokens: tokenUsage(parsed), cost: reportedCost(parsed) })], usage: tokenUsage(parsed), streamed: false };
         }
         let full = '';
@@ -625,19 +630,19 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
             reportEvidence(onEvidence, response, chunk);
             const choice = chunk?.choices?.[0];
             const reasoning = choice?.delta?.reasoning_content ?? '';
-            if (reasoning && typeof onReasoning === 'function') onReasoning(reasoning);
+            if (reasoning && typeof onReasoning === 'function') await onReasoning(reasoning);
             // 工具调用（2026-09-16 打通）：**必须单独取** —— 带 tool_calls 的分片通常没有 content，
             // 而老代码下一行就是 `if (!delta) continue`，等于把工具调用整段丢掉，
             // 模型于是只能把调用写进正文（学生看到「AI 说一句就停」）。
             const toolCallDelta = choice?.delta?.tool_calls;
             if (Array.isArray(toolCallDelta) && toolCallDelta.length) {
               sawToolCalls = true;
-              if (typeof onToolCalls === 'function') onToolCalls(toolCallDelta, choice?.finish_reason || null);
+              if (typeof onToolCalls === 'function') await onToolCalls(toolCallDelta, choice?.finish_reason || null);
             }
             const delta = choice?.delta?.content ?? choice?.message?.content ?? chunk?.output_text ?? '';
             if (!delta) continue;
             full += delta;
-            if (typeof onDelta === 'function') onDelta(delta, full);
+            if (typeof onDelta === 'function') await onDelta(delta, full);
           }
         }
         if (!full.trim() && !sawToolCalls) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);

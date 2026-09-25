@@ -17,7 +17,11 @@ import { ensureClassroom } from './lib/classroomFixture.mjs';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p31-music-box-'));
 const dbPath = path.join(temp, 'platform.db');
-const baseEnv = { ...process.env, PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
+// ⚠️ 2026-09-25：这两项**硬设**（不是 ||=）—— 验收套件会给每个脚本设一份 PLATFORM_DB_PATH，
+//    而夹具走的是脚本自己 mkdtemp 出来的这份：不硬设的话，夹具写进套件那份、服务子进程读自己那份，
+//    两边不是同一个库 → 守卫表现成「数据不存在」（这条脚本一直在套件里红、单跑绿就是这个原因）。
+//    与 p111 那条注释是同一件事；MySQL 模式下这个键被忽略，硬设也无害。
+const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 process.env.PLATFORM_DATA_DIR = temp;
 process.env.PLATFORM_DB_PATH = dbPath;
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import

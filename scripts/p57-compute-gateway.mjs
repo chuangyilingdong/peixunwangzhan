@@ -51,9 +51,21 @@ const mock = http.createServer(async (req, res) => {
   }
   res.writeHead(404, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success: false, message: 'not found' }));
 });
-await new Promise((resolve) => mock.listen(18920, '127.0.0.1', resolve));
+// 端口**不能写死**（2026-09-25）：原来的 18920/18921 会被这台机器上别的项目占着，
+// 表现是一条 `EADDRINUSE 127.0.0.1:18920`，跟本仓库的代码毫无关系 —— 那是环境不是回归。
+// 现在两个都让系统分配（mock 直接 listen(0)；应用口先探一个空闲口再交给子进程）。
+await new Promise((resolve) => mock.listen(0, '127.0.0.1', resolve));
+const mockPort = mock.address().port;
+const mockBase = `http://127.0.0.1:${mockPort}`;
 
-const port = 18921;
+async function freePort() {
+  const probe = http.createServer();
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const value = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+  return value;
+}
+const port = await freePort();
 const server = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env: { ...baseEnv, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });
 let serverLog = '';
 server.stdout.on('data', (x) => { serverLog += x; });
@@ -73,8 +85,8 @@ try {
   check('① 未启用/未配置时测连被明确拒绝', before.status === 403 && before.error?.code === 'COMPUTE_GATEWAY_DISABLED', `${before.status} ${before.error?.code}`);
 
   // ② 配置网关（地址 + 管理员账号 + 密码）
-  const saved = await api('/api/admin/compute-gateway', { method: 'PUT', token: admin, body: { baseUrl: 'http://127.0.0.1:18920/', username: 'root', password: 'poc-password', enabled: true } });
-  check('② 能保存网关配置（地址去掉尾斜杠）', saved.status === 200 && saved.data.config.baseUrl === 'http://127.0.0.1:18920' && saved.data.config.enabled === true, JSON.stringify(saved.data).slice(0, 160));
+  const saved = await api('/api/admin/compute-gateway', { method: 'PUT', token: admin, body: { baseUrl: `${mockBase}/`, username: 'root', password: 'poc-password', enabled: true } });
+  check('② 能保存网关配置（地址去掉尾斜杠）', saved.status === 200 && saved.data.config.baseUrl === mockBase && saved.data.config.enabled === true, JSON.stringify(saved.data).slice(0, 160));
   check('② 密码不回显，只回显「已配置」', saved.data.config.passwordConfigured === true && saved.data.config.password === undefined, JSON.stringify(saved.data.config));
   const rereaded = await api('/api/admin/compute-gateway', { token: admin });
   check('② 读回的配置里没有密码字段', !('password' in (rereaded.data.config || {})) && rereaded.data.config.passwordConfigured === true);

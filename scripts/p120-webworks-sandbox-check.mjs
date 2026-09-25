@@ -25,7 +25,7 @@
  *      父窗口文档三项都必须是 SecurityError）—— 防止"参数写对了但浏览器行为变了"。
  *
  * 跑法（需要 node ≥ 20 与 Chrome/Chromium；本机 node 16 跑不了，服务器上跑）：
- *   node scripts/p120-webworks-sandbox-check.mjs [--site https://iicili.cyou]
+ *   node scripts/p120-webworks-sandbox-check.mjs [--site https://aicyld.com]
  *   环境变量：CHROME_PATH 覆盖浏览器路径（与 p115 同一套约定）
  */
 import fs from 'node:fs';
@@ -37,7 +37,9 @@ const arg = (name, fallback) => {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : fallback;
 };
-const SITE = (arg('--site', process.env.P120_SITE || 'https://iicili.cyou')).replace(/\/$/, '');
+// ⚠️ 2026-09-25：默认站点从 `iicili.cyou` 换成 `aicyld.com`（生产已搬域名，旧域名没有后端 ——
+//    指着它跑必红：`/api/public/works` 只有 502）。要指别处：--site 或 P120_SITE。
+const SITE = (arg('--site', process.env.P120_SITE || 'https://aicyld.com')).replace(/\/$/, '');
 const CHROME = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const PORT = Number(process.env.P120_PORT || 8794);
 /** 与 nginx `location /` 那条一致（见 /etc/nginx/sites-enabled/aicyld.com；2026-09-25 起 connect-src 多了 OSS 域）。 */

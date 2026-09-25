@@ -7,6 +7,12 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'compute-routing-'));
 process.env.PLATFORM_DB_PATH = path.join(temp, 'test.db');
 process.env.PLATFORM_DATA_DIR = temp;
 process.env.AI_PROVIDER_API_KEY = 'test-only';
+// ⚠️ 2026-09-25：**必须把上游超时调小**（默认 120000）—— 下面有一条验的是"瞬时错误（429）
+//    按退避重试到 deadline"，deadline 取的就是这个超时值：用默认值时它会老老实实等满 **120 秒**，
+//    正好撞上验收套件「每脚本 120s」的上限，于是这条守卫长期以**超时**的样子挂在红名单上
+//    （挂的是"p75(超时)"，而它在套件外面单跑其实是绿的）。调到 4 秒后整条脚本几秒就跑完、
+//    断言一条不少（那条验的是"至少提交 + 轮询一次"，不是"重试多少次"）。
+process.env.AI_PROVIDER_TIMEOUT_MS = '4000';
 const load = p => import(pathToFileURL(path.resolve(p)).href);
 const { getGenerationProvider } = await load('apps/server/src/services/generationProvider.js');
 const { rows, arows } = await load('apps/server/src/lib.js');
