@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import { db, q, rows, row, count, json, parseJson, jsonText, transaction, aq, arows, arow, aone, acount, atransaction, amap, dialect, isMysql, SQL_MAX, SQL_MIN } from '../../../packages/database/src/store.js';
 import { AUTH_PEPPER, CORS_ALLOWED_ORIGINS } from './config.js';
 import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, inputModeShortLabel, normalizeInputModeValue, normalizeAudioRole, audioRoleShortLabel, requiresFirstFrameFor, MUSIC_MODES } from './services/modelCapabilities.js';
-import { previewKindFor, previewModeFor, signPreviewTicket } from './services/materialPreview.js';
+import { previewKindFor, previewModeFor, canRenderNatively, signPreviewTicket } from './services/materialPreview.js';
 
 const TOKEN_TTL_DAYS = 7;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.DEPLOYMENT_MODE === 'internal-test' || process.env.NODE_ENV === 'production';
@@ -908,6 +908,12 @@ export async function previewInfoFor(fileAssetId) {
     // 两者背后都是转换出来的 PDF，但"PPT 形式"只能靠放映形态给 —— 见 materialPreview.js。
     previewMode: previewModeFor({ mimeType: file.mime_type, fileName: file.file_name }),
     previewUrl: `/api/org/file-assets/${encodeURIComponent(id)}/preview?t=${encodeURIComponent(ticket)}`,
+    // 原生渲染（2026-09-25 用户口径「我需要的原生渲染效果」）：`.pptx` 给一条**取原始文件**的
+    // 受权地址，前端用 pptx-preview 自己解析并画成幻灯片（右缩略图在左、放映无杂项、保真）。
+    // 非 pptx（.ppt 老二进制 / docx / xlsx / pdf）不给 —— 前端照旧走上面那条转好的 PDF。
+    sourceUrl: canRenderNatively({ mimeType: file.mime_type, fileName: file.file_name })
+      ? `/api/org/file-assets/${encodeURIComponent(id)}/preview-source?t=${encodeURIComponent(ticket)}`
+      : null,
   };
 }
 

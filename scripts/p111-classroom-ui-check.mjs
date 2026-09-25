@@ -562,6 +562,39 @@ try {
   await page.getByRole('button', { name: '关闭预览' }).click().catch(() => {});
   await page.waitForTimeout(400);
 
+  // ── 原生渲染（2026-09-25 用户口径「我需要的原生渲染效果…缩略在左边…全屏播放时跟 PPT 一样」）
+  //    这一节只钉**静态契约**：真·pptx 的端到端（解析保真、翻页、全屏）是在真课件上人工验过的
+  //    （见交接 §二十六），这里保证"那条路还在、没被改回去"：
+  //      · 只有服务端给了 sourceUrl（.pptx）才走原生，其它格式仍旧转 PDF；
+  //      · 缩略图栏在**左边**（放在 .preview-stage 里，靠 display:flex 并排 —— 放外面会上下堆叠）；
+  //      · 全屏只剩幻灯片（标题栏/缩略图/工具栏都藏起来）；
+  //      · 原生那一路不再写"原始文件不会下发"这种已经不再成立的话。
+  {
+    // 源码口径：在**构建之前**读（构建会把产物写进 dist，源码才是要钉的东西）
+    const viewer = fs.readFileSync(path.join(root, 'apps/org/src/components/TeachingAssetViewer.jsx'), 'utf8');
+    const css = fs.readFileSync(path.join(root, 'packages/shared/src/styles.css'), 'utf8');
+    // 这条守卫的报错口径是 problems.push，这里包一层好读
+    const check = (label, ok, detail = '') => { if (!ok) problems.push(`${label}${detail ? ` — ${detail}` : ''}`); };
+    check('原生渲染：只有拿到 sourceUrl 才走原生（其它格式仍旧转 PDF）',
+      /const isNative = Boolean\(state\.sourceUrl\) && kind === 'OFFICE'/.test(viewer));
+    check('原生渲染：按需加载 pptx-preview（不是进页面就下这 1.3MB）',
+      /import\('pptx-preview'\)/.test(viewer) && /loadPptxPreview/.test(viewer));
+    check('原生渲染：缩略图栏在**左边**（在 .preview-stage 里，靠 flex 并排）',
+      /{isNative && nativeCount \? <div className="ta-native-rail">/.test(viewer)
+      && /\.preview-stage:has\(\.ta-native-stage\) \{ display:flex; \}/.test(css)
+      && /\.ta-native-rail \{ flex:none; display:flex; flex-direction:column;/.test(css));
+    check('原生渲染：一屏一张（只显示 .on 那张，其余留在 DOM 里）',
+      /\.ta-native-host \.pptx-preview-slide-wrapper \{ display:none; margin:0 !important; \}/.test(css)
+      && /node\.classList\.toggle\('on', index \+ 1 === current\)/.test(viewer));
+    check('全屏只剩幻灯片：标题栏 / 缩略图栏 / 工具栏全屏时都藏起来',
+      /\.ta-panel:fullscreen \.preview-head,\n\.ta-panel:fullscreen \.ta-native-rail,/.test(css)
+      && /\.ta-panel:fullscreen \.ta-toolbar \{ display:none; \}/.test(css));
+    check('原生那一路不再声称"原始文件不会下发"（它确实会到浏览器，写假的更糟）',
+      /本页不提供下载入口：← → 或空格翻页/.test(viewer) && !/原始 PPT 文件不会下发/.test(viewer));
+    check('原生解析失败会**回退**到转 PDF 那条路（不把老师晾在报错上）',
+      /sourceUrl: null, nativeFallback: true/.test(viewer));
+  }
+
   // ── 放映形态（2026-09-25）：用户口径「预览 PPT 能否真的就是 PPT 形式」。
   // PPT 该像**放映**一样一张张翻，不该像文档那样滚 —— 判定看文件扩展名（服务端 previewMode），
   // 界面上一屏一张 + 缩略图条 + 说「张」。文档那份（P111 讲义）上面已经验过还是滚动阅读。

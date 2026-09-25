@@ -65,6 +65,20 @@ export function isSlideDeck(input) {
   return previewModeFor(input) === 'SLIDES';
 }
 
+/**
+ * 这份课件能不能**在浏览器里原生渲染**（2026-09-25 用户口径「我需要的原生渲染效果」）。
+ *
+ * 只有 `.pptx`（OOXML zip）可以：前端用 pptx-preview 解析 XML 自己画出来 —— 排版、字体、
+ * 图片与 PowerPoint 一致，而且**不再是"服务端转成 PDF 再当文档看"**。
+ *   · `.ppt`（97-2003 二进制）解析不了 → 仍旧走 LibreOffice 转 PDF 那条路；
+ *   · `.docx/.xlsx` 同理只走 PDF（这一轮只做幻灯片）。
+ * ⚠️ 代价要写清楚：原生渲染意味着**原始文件会到浏览器**（不然解析不了）。原来"原始 .pptx
+ *    绝不下发"的承诺在这条路上不成立 —— 界面文案已改成"不提供下载入口"，别再写"原始文件不下发"。
+ */
+export function canRenderNatively({ mimeType = '', fileName = '' } = {}) {
+  return /\.pptx$/i.test(String(fileName || '')) || /presentationml\.presentation/i.test(String(mimeType || ''));
+}
+
 function secret() {
   return String(process.env.AUTH_PEPPER || 'p0-local-pepper');
 }

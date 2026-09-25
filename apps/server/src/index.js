@@ -15,6 +15,7 @@ import { handleAiGeneration, initializeAsyncGenerationQueue, interruptOwnJobsOnS
 import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunication, handleStudentCommunication, shutdownCommunicationWorkers } from './routes/communication.js';
 import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets, handlePublicFileAssets } from './routes/fileAssets.js';
 import { handlePublicAssets } from './routes/publicAssets.js';
+import { handleClientInstallerUpload } from './routes/admin/clientInstallerUpload.js';
 // 2026-09-13（P4 删积分）：adminCredits.js / websiteCredits.js 两个路由文件已删除（积分体系下线）。
 import { handleAdminBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 import { handleVibeCoding } from './routes/vibecoding.js';
@@ -136,6 +137,10 @@ const server = http.createServer(async (req, res) => {
   };
 
   try {
+    // ⭐ 客户端安装包上传：**必须在读 body 之前分流**。它是 377MB 的二进制，通用管线会把整份读进
+    //    内存（硬顶 200MB，见 fileUploadSecurity 那段内存闸），这条走的是流式落盘 + 边写边算 sha256。
+    if (await handleClientInstallerUpload(ctx, req, res)) return;
+
     if (bodyMethods.has(ctx.method)) {
       const contentType = String(req.headers['content-type'] || '').toLowerCase();
       if (contentType.startsWith('multipart/form-data')) {

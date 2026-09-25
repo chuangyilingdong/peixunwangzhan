@@ -1339,6 +1339,40 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .ta-slide-nav:disabled { opacity:.25; cursor:default; }
 .ta-slide-nav.prev { left:10px; }
 .ta-slide-nav.next { right:10px; }
+/* ── 原生渲染的 PPTX（2026-09-25，pptx-preview）─────────────────────────────
+   用户口径：「我需要的原生渲染效果…缩略在左边…全屏播放时跟 PPT 一样」。
+   布局：左缩略图栏 + 右侧一张幻灯片；全屏时只剩幻灯片（.ta-panel:fullscreen 那段）。 */
+.ta-native-stage { position:absolute; inset:0; display:grid; overflow:auto; padding:18px; }
+.ta-native-slot { position:relative; margin:auto; background:#fff; box-shadow:0 10px 30px rgb(0 0 0 / 45%); }
+.ta-native-host { overflow:hidden; }
+/* 预览器自己画出来的那一堆（wrapper/slide-wrapper/分页按钮）全部收进我们的框里：
+   wrapper 的固定尺寸与黑底不要，幻灯片之间只显示当前那张（其余留在 DOM 里，翻页零成本）。 */
+.ta-native-host .pptx-preview-wrapper { width:auto !important; height:auto !important; background:transparent !important; overflow:visible !important; margin:0 !important; }
+.ta-native-host .pptx-preview-slide-wrapper { display:none; margin:0 !important; }
+.ta-native-host .pptx-preview-slide-wrapper.on { display:block; }
+/* 左缩略图栏（桌面端在左，窄屏自动移到下面 —— 手机上左边一栏会把幻灯片挤没） */
+.ta-native-rail { flex:none; display:flex; flex-direction:column; gap:8px; width:196px; max-height:62vh; padding:10px; overflow-y:auto; background:#241d3d; border-right:1px solid rgb(255 255 255 / 12%); }
+.ta-native-rail .ta-thumb { display:grid; justify-items:center; gap:4px; padding:4px; border:2px solid transparent; border-radius:8px; background:transparent; cursor:pointer; }
+.ta-native-rail .ta-thumb.on { border-color:#7c5cff; }
+.ta-native-rail .ta-thumb-view { overflow:hidden; background:#fff; border-radius:3px; }
+.ta-native-rail .ta-thumb span { color:rgb(255 255 255 / 72%); font-size:11px; font-variant-numeric:tabular-nums; }
+.ta-native-rail .ta-thumb.on span { color:#fff; font-weight:700; }
+/* 预览台与左栏并排 */
+.preview-stage:has(.ta-native-stage) { display:flex; }
+.preview-stage:has(.ta-native-stage) .ta-native-stage { position:static; flex:1; min-width:0; }
+/* ⭐ 全屏放映：只剩幻灯片本身 —— 用户原话「而不是像现在这样全屏后，上方下方都是内容」。
+   所以标题栏、缩略图栏、工具栏在全屏时都收起来（退出全屏仍然只用 Esc / F）。 */
+.ta-panel:fullscreen .preview-head,
+.ta-panel:fullscreen .ta-native-rail,
+.ta-panel:fullscreen .ta-rail,
+.ta-panel:fullscreen .ta-toolbar { display:none; }
+.ta-panel:fullscreen .ta-slide-stage,
+.ta-panel:fullscreen .ta-native-stage { padding:0; }
+@media(max-width:900px) {
+  .preview-stage:has(.ta-native-stage) { flex-direction:column; }
+  .ta-native-rail { flex-direction:row; width:auto; max-height:132px; overflow-x:auto; overflow-y:hidden; border-right:0; border-top:1px solid rgb(255 255 255 / 12%); }
+}
+
 /* 缩略图条：点哪张跳哪张。画布是进视口才画的（见组件里的 IntersectionObserver）。 */
 .ta-rail { flex:none; display:flex; align-items:flex-start; gap:8px; padding:10px 12px; overflow-x:auto; background:#241d3d; border-top:1px solid rgb(255 255 255 / 12%); }
 .ta-thumb { flex:none; display:grid; justify-items:center; gap:4px; padding:4px; border:2px solid transparent; border-radius:8px; background:transparent; cursor:pointer; }

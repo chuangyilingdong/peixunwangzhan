@@ -219,6 +219,42 @@ export async function putObject(key, buffer, contentType = 'application/octet-st
   return { key: fullKey, etag: String(res.headers.get('etag') || ''), size: body.length };
 }
 
+/**
+ * 服务器侧上传一个**大文件**（内网端点，流式，不把整份读进内存）。
+ *
+ * 为什么不能直接用 `putObject`：它要一个 Buffer —— 客户端安装包 377MB，读进内存正是这台机
+ * 之前 OOM 过的那种事（见 fileUploadSecurity 里"内存闸"那段注释）。这里用 `createReadStream`
+ * 当 body + 显式 `Content-Length`（undici 对流式 body 要求 `duplex: 'half'`）。
+ * 2026-09-25 在真桶上实测过：3MB 流式 PUT → 200，回探字节数一致。
+ */
+export async function putObjectFromFile(key, filePath, contentType = 'application/octet-stream', { cacheControl, size } = {}) {
+  if (!ossConfigured()) throw new Error('OSS 未配置，无法上传');
+  const { createReadStream } = await import('node:fs');
+  const { stat } = await import('node:fs/promises');
+  const c = cfg();
+  const fullKey = withPrefix(key);
+  const bytes = size == null ? (await stat(filePath)).size : Number(size);
+  const date = new Date().toUTCString();
+  const signature = signV1({ verb: 'PUT', key: fullKey, contentType, dateOrExpires: date });
+  const res = await fetch(serverUrl(fullKey), {
+    method: 'PUT',
+    headers: {
+      Date: date,
+      'Content-Type': contentType,
+      'Content-Length': String(bytes),
+      Authorization: `OSS ${c.accessKeyId}:${signature}`,
+      ...(cacheControl ? { 'Cache-Control': cacheControl } : {}),
+    },
+    body: createReadStream(filePath),
+    duplex: 'half',
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`OSS 上传失败：HTTP ${res.status} ${text.slice(0, 200)}`);
+  }
+  return { key: fullKey, etag: String(res.headers.get('etag') || ''), size: bytes };
+}
+
 /** 服务器侧探测对象是否存在（内网端点）。返回 { exists, size } —— 不抛错，探不到就当不存在。 */
 export async function headObject(key) {
   if (!ossConfigured()) return { exists: false, size: 0 };

@@ -37,9 +37,22 @@ const pkg = read('package.json');   // 官网没有自己的 package.json（依�
 check('① 首页也有页脚了（原来那句把首页排除了 —— 用户报的正是这个）',
   site.includes('{!isFullPage && <Footer/>}') && !stripComments(site).includes("loc.pathname !== '/'"));
 
-/* ── ② 四列真链接 + 品牌行只剩 logo 与版权 ──────────────────────────── */
-const titles = ['产品', '合作', '了解更多', '条款与隐私'].filter((name) => site.includes(`<strong>${name}</strong>`));
-check('② 四列链接（与参考稿的四列同构，内容仍是我们自己的）', titles.length === 4, JSON.stringify(titles));
+/* ── ② 两列六个入口 + 品牌行只剩 logo 与版权 ──────────────────────────
+   2026-09-25 用户口径：「条款与隐私下方那几项全部删除，其他的选型对比、机构方案、机构手册好多
+   都是重复的，只需要留关键的 5-6 个入口」。所以从"四列同构"改成"两列、每组三条"，
+   并把删掉的那几项钉死（免得过两天又被复制回来）。 */
+const titles = ['产品', '使用'].filter((name) => site.includes(`<strong>${name}</strong>`));
+check('② 两列链接（产品 / 使用），共 6 个入口', titles.length === 2, JSON.stringify(titles));
+// ⚠️ 先剥注释再判：页脚里刚加的那段注释**原样写着**被删掉的那几个路径（说明"页面还在、只是不列"），
+//    不剥的话下面每一条"不再列 X"都会命中注释 —— 这个守卫的文件头就警告过这一脚。
+const footerOnly = stripComments(site.slice(site.indexOf('function Footer('), site.indexOf('function Button(')));
+const kept = ['/marketplace', '/org', '/works', '/download', '/faq'].filter((to) => footerOnly.includes(`to="${to}"`));
+check('② 六个入口都在（灵动课程 / 机构方案 / 课堂作品 / 下载客户端 / 常见问题 / 机构后台）',
+  kept.length === 5 && footerOnly.includes('href={ORG_APP_URL}'), JSON.stringify(kept));
+for (const [to, label] of [['/compare', '选型对比'], ['/handbook', '机构手册'], ['/terms', '用户协议'], ['/privacy', '隐私政策'], ['/minors', '儿童 / 未成年人说明'], ['mailto:hello@aimagc.cn', '联系合作']]) {
+  check(`② 页脚不再列「${label}」（页面本身还在，直达 URL 照样能开）`, !footerOnly.includes(to) && !footerOnly.includes(label));
+}
+check('② 品牌行那句「面向 8–16 岁 · 浏览器即用」已删（用户 2026-09-25）', !footerOnly.includes('浏览器即用'));
 // 注意：那句「面向教培机构与学校的…」在 **/org 页面文案**里也有一处（正常文案，不该删）——
 // 所以这里只裁**页脚那一段**来判，别拿整个文件去 includes（那样会被别处的同款文案带偏）。
 const footerJsx = site.slice(site.indexOf('function Footer('), site.indexOf('function Button('));

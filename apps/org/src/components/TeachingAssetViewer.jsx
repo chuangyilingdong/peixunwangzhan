@@ -25,6 +25,15 @@ import { Empty, Notice } from '@platform/shared';
 
 // pdf.js 只在**真的打开素材**时才加载（动态 import → 单独的 chunk），
 // 免得每个进机构端的老师都为它付带宽。worker 是个静态 URL，很小。
+// pptx 原生渲染：同样**只在真的打开一份 PPT 时**才加载（它是独立 chunk，比 pdf.js 大：
+// 里面含 jszip / echarts）。载入的是 pptx-preview（纯前端解析 OOXML 画成 DOM）——
+// 用户口径 2026-09-25：「我需要的原生渲染效果 …缩略在左边…全屏播放时跟 PPT 一样」。
+let pptxPreviewPromise = null;
+function loadPptxPreview() {
+  if (!pptxPreviewPromise) pptxPreviewPromise = import('pptx-preview');
+  return pptxPreviewPromise;
+}
+
 let pdfjsPromise = null;
 function loadPdfjs() {
   if (!pdfjsPromise) {
@@ -44,6 +53,11 @@ const PAGE_GAP = 16;       // 页间距（px），与 CSS 的 gap 保持一致
 const RENDER_BUFFER = 1;   // 视口前后各多画一页
 const SLIDE_PADDING = 36;  // 放映台上下的留白（与 .ta-slide-stage 的 padding 对齐）
 const THUMB_WIDTH = 132;   // 缩略图条的宽度（px）
+// 原生渲染（pptx-preview）的画布尺寸：先按 16:9 起，解析完发现比例不对再用真实尺寸重画一次
+// （4:3 的老课件才会走到第二步；16:9 是绝大多数）。
+const NATIVE_WIDTH = 1280;
+const NATIVE_HEIGHT = 720;
+const NATIVE_THUMB_WIDTH = 168; // 左侧缩略图的宽度（px）
 
 export function TeachingAssetViewer({ api, asset, onClose }) {
   const [state, setState] = useState({ loading: true, error: '', previewUrl: '', previewKind: asset?.previewKind || null, previewMode: asset?.previewMode || null });
@@ -51,9 +65,15 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
   const [zoom, setZoom] = useState(1);           // 文档：1 = 按容器宽度铺满；放映：1 = 整张适应窗口
   const [current, setCurrent] = useState(1);     // 当前可见页 / 当前这张幻灯片
   const [scaleBase, setScaleBase] = useState(1); // 文档形态「铺满宽度」对应的缩放比
-  const [slideBox, setSlideBox] = useState({ width: 0, height: 0 }); // 放映台的可用尺寸
+  const [slideBox, setSlideBox] = useState({ width: 0, height: 0 }); // 放映台/原生台的可用尺寸
   const [renderingPage, setRenderingPage] = useState(0);
   const [fullscreen, setFullscreen] = useState(false);
+  // 原生渲染（.pptx）
+  const [nativeCount, setNativeCount] = useState(0);   // 一共多少张
+  const [nativeBox, setNativeBox] = useState({ width: 0, height: 0 }); // 渲染尺寸（DOM 就是按它画的）
+  const [nativeRail, setNativeRail] = useState([]);    // 缩略图占位（长度 = 张数）
+  const nativeThumbsRef = useRef([]);                  // 原始的幻灯片节点（缩略图从它复制）
+  const railButtonsRef = useRef(new Map());            // 序号 → 缩略图按钮
   const pdfRef = useRef(null);
   const canvasRefs = useRef(new Map());          // 页码 → canvas（文档形态）
   const renderTasksRef = useRef(new Map());      // 页码 → 正在跑的 pdf.js 渲染任务（文档形态）
@@ -68,10 +88,19 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
   const stageBoxRef = useRef(null);
   const panelRef = useRef(null);
   const scrollTokenRef = useRef(0);
+  // 原生渲染（.pptx）
+  const nativeHostRef = useRef(null);      // pptx-preview 画进来的容器
+  const nativeStageRef = useRef(null);     // 缩放到可用台面的外层（量尺寸用）
+  const nativeRef = useRef(null);          // 当前的预览器实例（翻页/销毁都靠它）
+  const nativeBoxRef = useRef({ width: 0, height: 0 });  // 解析出来的幻灯片原始尺寸
+  const railRefRef = useRef(null);         // 左侧缩略图条
 
   const kind = state.previewKind;
   const mode = state.previewMode === 'SLIDES' ? 'SLIDES' : 'DOCUMENT';
-  const isSlides = mode === 'SLIDES' && PDF_KINDS.has(kind);
+  // 原生渲染（2026-09-25）：服务端给了 `sourceUrl`（= 这份是 .pptx、可以浏览器解析）就走这条路；
+  // 拿不到就退回"转成 PDF 再放映"的老路（.ppt 老二进制、docx、pdf 都走那条）。
+  const isNative = Boolean(state.sourceUrl) && kind === 'OFFICE';
+  const isSlides = !isNative && mode === 'SLIDES' && PDF_KINDS.has(kind);
   const isDocument = mode === 'DOCUMENT' && PDF_KINDS.has(kind);
   const isPdfBacked = PDF_KINDS.has(kind);
   const scale = scaleBase * zoom;
@@ -85,7 +114,7 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
   /* ① 取一张**现签**的预览票据：抽屉可能是几小时前打开的，它那份 payload 里的票据早过期了。 */
   useEffect(() => {
     let cancelled = false;
-    setState({ loading: true, error: '', previewUrl: '', previewKind: asset?.previewKind || null, previewMode: asset?.previewMode || null });
+    setState({ loading: true, error: '', previewUrl: '', previewKind: asset?.previewKind || null, previewMode: asset?.previewMode || null, sourceUrl: null, nativeCount: 0 });
     setPages([]); setZoom(1); setCurrent(1);
     thumbDoneRef.current.clear();
     thumbCanvasRefs.current.clear();
@@ -102,13 +131,77 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
           previewUrl: data?.previewUrl || '',
           previewKind: data?.previewKind || asset?.previewKind || null,
           previewMode: data?.previewMode || asset?.previewMode || null,
+          // 原生渲染的入口（只对 .pptx 给）：服务端在票据里一起下发，见 lib.js 的 previewInfoFor
+          sourceUrl: data?.sourceUrl || asset?.sourceUrl || null,
         });
       })
       .catch((error) => {
-        if (!cancelled) setState({ loading: false, error: error?.message || '预览票据获取失败，请重试。', previewUrl: '', previewKind: null, previewMode: null });
+        if (!cancelled) setState({ loading: false, error: error?.message || '预览票据获取失败，请重试。', previewUrl: '', previewKind: null, previewMode: null, sourceUrl: null });
       });
     return () => { cancelled = true; };
   }, [api, asset?.fileAssetId]);
+
+  /* ②-b 原生渲染（.pptx）：把**原始文件**取回来，在浏览器里解析成幻灯片 DOM。
+     为什么是原生渲染（用户口径 2026-09-25）：「我需要的原生渲染效果…缩略在左边…全屏播放时跟 PPT
+     一样」。它换来的是与 PowerPoint 一致的排版/字体/图片，代价是**原始文件会到浏览器**
+     （不解析就没法画），所以界面上不再写"原始文件不下发"，只承诺"不提供下载入口"。
+     拿不到 sourceUrl（.ppt 老二进制 / docx / xlsx / pdf）就退回上面那条"转 PDF 再放映"的路。 */
+  useEffect(() => {
+    if (!isNative || !state.sourceUrl) return undefined;
+    const host = nativeHostRef.current;
+    if (!host) return undefined;
+    let cancelled = false;
+    let instance = null;
+    (async () => {
+      try {
+        const [lib, response] = await Promise.all([loadPptxPreview(), fetch(state.sourceUrl)]);
+        if (!response.ok) throw new Error(`取课件失败（HTTP ${response.status}）`);
+        const buffer = await response.arrayBuffer();
+        if (cancelled) return;
+        const build = async (width, height) => {
+          const created = lib.init(host, { width, height, mode: 'list' });
+          await created.preview(buffer);
+          return created;
+        };
+        instance = await build(NATIVE_WIDTH, NATIVE_HEIGHT);
+        if (cancelled) return;
+        // 比例不对就用真实尺寸重画（4:3 老课件才会走到；重画要再解析一次 zip，所以不做成默认路径）
+        const rawW = Number(instance.pptx?.width) || 0;
+        const rawH = Number(instance.pptx?.height) || 0;
+        if (rawW > 0 && rawH > 0 && Math.abs(rawW / rawH - NATIVE_WIDTH / NATIVE_HEIGHT) > 0.02) {
+          const height = Math.round((NATIVE_WIDTH * rawH) / rawW);
+          instance.destroy();
+          instance = await build(NATIVE_WIDTH, height);
+          if (cancelled) return;
+        }
+        nativeRef.current = instance;
+        // 注意：这里存的是**渲染尺寸**（DOM 就是按它画的），不是 pptx 里的 EMU 尺寸 ——
+        // 缩放与缩略图都要按 DOM 的真实尺寸算，不然会错位。
+        nativeBoxRef.current = { width: instance.options?.width || NATIVE_WIDTH, height: instance.options?.height || NATIVE_HEIGHT };
+        setNativeCount(instance.slideCount || 0);
+        setCurrent(1);
+        setNativeBox({ ...nativeBoxRef.current });
+        // 左侧缩略图：把每张幻灯片**复制一份**缩小放进去（复制品与主画面共用同一批图片地址，
+        // 不会再解码一份位图；这是 pptx-preview 没有缩略图 API 时的最省做法）。
+        const slides = [...host.querySelectorAll('.pptx-preview-slide-wrapper')];
+        nativeThumbsRef.current = slides;
+        setNativeRail((old) => (old.length === slides.length ? old : slides.map((_, index) => index)));
+        requestAnimationFrame(() => paintThumbs());
+      } catch (error) {
+        // 原生这一路失败（比如缺了某个部件、文件损坏）→ **回退到"服务端转 PDF 再放映"**那条老路，
+        // 而不是把老师晾在报错上。`sourceUrl` 置空即触发回退（render 分支与下面那条会跟着切换）。
+        if (!cancelled) setState((old) => ({ ...old, sourceUrl: null, nativeFallback: true, error: '' }));
+        console.warn('[教学素材] pptx 原生渲染失败，已回退到转换预览：', error?.message || error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      try { instance?.destroy(); } catch { /* 已经销毁过就算了 */ }
+      nativeRef.current = null;
+      nativeThumbsRef.current = [];
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNative, state.sourceUrl]);
 
   /* ② 文档/放映都交给 pdf.js（同一个票据地址）。
      ⚠️ 不要先 api.fetchBlobUrl 再喂 blob: 地址 —— 生产 CSP 是 `connect-src 'self'`，
@@ -120,7 +213,9 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
         5 Mbps 出口）；pdf.js 走 fetch、桶上有 CORS，跨域照样读得到 —— CSP 的 connect-src
         里那条 OSS 域就是为它留的。 */
   useEffect(() => {
-    if (!state.previewUrl || !isPdfBacked) return undefined;
+    // ⚠️ 原生渲染（.pptx）时**不要**再去取那份转换出来的 PDF：白跑一次转换（服务端要跑 LibreOffice），
+    //    而且本地没装 soffice 的机器上会稳稳报一句"文档解析失败"盖在幻灯片上（第一版就是这样，截图里能看到）。
+    if (!state.previewUrl || !isPdfBacked || isNative) return undefined;
     let cancelled = false;
     (async () => {
       try {
@@ -154,7 +249,7 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
       pdfRef.current = null;
       canvasRefs.current.clear();
     };
-  }, [state.previewUrl, isPdfBacked]);
+  }, [state.previewUrl, isPdfBacked, isNative]);
 
   /* ③-1 文档形态「铺满宽度」的基准比例：按容器可用宽度算；全屏、改窗口、换文档都要重算。 */
   const recompute = useCallback(() => {
@@ -172,10 +267,9 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
     return () => window.removeEventListener('resize', onResize);
   }, [recompute, fullscreen, isDocument]);
 
-  /* ③-2 放映形态的可用台面：量出来才能算"整张适应窗口"。 */
+  /* ③-2 放映台/原生台的可用尺寸：量出来才能算"整张适应窗口"。 */
   useEffect(() => {
-    if (!isSlides) return undefined;
-    const node = stageBoxRef.current;
+    const node = isSlides ? stageBoxRef.current : isNative ? nativeStageRef.current : null;
     if (!node) return undefined;
     const measure = () => setSlideBox({ width: node.clientWidth, height: node.clientHeight });
     measure();
@@ -186,7 +280,44 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [isSlides, fullscreen, pages.length]);
+  }, [isSlides, isNative, fullscreen, pages.length, nativeCount]);
+
+  /* ③-3 原生渲染：只显示当前那张（其余用 CSS 藏起来），并把左侧缩略图填上。 */
+  useEffect(() => {
+    if (!isNative || !nativeCount) return;
+    const host = nativeHostRef.current;
+    if (!host) return;
+    host.querySelectorAll('.pptx-preview-slide-wrapper').forEach((node, index) => {
+      node.classList.toggle('on', index + 1 === current);
+    });
+    railButtonsRef.current.get(current)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    paintThumbs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNative, nativeCount, current]);
+
+  /** 把每张幻灯片复制一份、缩小放进左侧缩略图条（复制品与主画面共用同一批图片地址，不重复解码）。 */
+  function paintThumbs() {
+    const box = nativeBoxRef.current;
+    if (!box.width || !box.height) return;
+    const scale = NATIVE_THUMB_WIDTH / box.width;
+    for (const [index, button] of railButtonsRef.current) {
+      if (button.querySelector('.ta-thumb-view')) continue;
+      const source = nativeThumbsRef.current[index - 1];
+      if (!source) continue;
+      const view = document.createElement('div');
+      view.className = 'ta-thumb-view';
+      view.style.width = `${NATIVE_THUMB_WIDTH}px`;
+      view.style.height = `${Math.floor(box.height * scale)}px`;
+      const inner = source.cloneNode(true);
+      inner.classList.remove('on');
+      inner.style.margin = '0';
+      inner.style.transform = `scale(${scale})`;
+      inner.style.transformOrigin = 'top left';
+      inner.style.display = 'block';
+      view.appendChild(inner);
+      button.prepend(view);
+    }
+  }
 
   /* ④-1 文档形态：按滚动位置算「该画哪几页」：只画窗口内的，离得远的释放掉。 */
 
@@ -281,13 +412,18 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
   }, [pages, scale]);
 
   /* ④-2 放映形态：**一次只画一张**（当前这张），翻页才画下一张。 */
+  // 总张数（原生与 PDF 两条路各有一份），翻页/工具栏都按它夹取
+  const totalSlides = isNative ? nativeCount : pages.length;
+  // 「一屏一张」的两条路：原生（.pptx）与转换后放映（.ppt/docx 转出的 PDF）
+  const showSlides = (isNative && nativeCount > 0) || (isSlides && pages.length > 0);
+  const totalRef = useRef(0);
+  totalRef.current = totalSlides;
   const goSlide = useCallback((target) => {
     setCurrent((oldValue) => {
-      const total = pages.length || 1;
-      const next = Math.max(1, Math.min(total, Number(target) || 1));
+      const next = Math.max(1, Math.min(totalRef.current || 1, Number(target) || 1));
       return next === oldValue ? oldValue : next;
     });
-  }, [pages.length]);
+  }, []);
 
   useEffect(() => {
     const pdf = pdfRef.current;
@@ -380,13 +516,13 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
         onClose?.();
         return;
       }
-      if (isSlides && pages.length) {
+      if (showSlides) {
         const key = String(event.key || '').toLowerCase();
         if (key === 'f') { event.preventDefault(); toggleFullscreen(); return; }
         if (['ArrowRight', 'PageDown', ' '].includes(event.key)) { event.preventDefault(); goSlide(current + 1); return; }
         if (['ArrowLeft', 'PageUp'].includes(event.key)) { event.preventDefault(); goSlide(current - 1); return; }
         if (event.key === 'Home') { event.preventDefault(); goSlide(1); return; }
-        if (event.key === 'End') { event.preventDefault(); goSlide(pages.length); return; }
+        if (event.key === 'End') { event.preventDefault(); goSlide(totalRef.current); return; }
         return;
       }
       if (!isDocument || !pages.length) return;
@@ -395,7 +531,7 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [isDocument, isSlides, pages.length, current, scrollToPage, goSlide, onClose]);
+  }, [isDocument, showSlides, isSlides, pages.length, current, scrollToPage, goSlide, onClose]);
 
   /* ⑦ 缩略图条跟着当前这张走：翻到第 20 张时把它滚进视野（长课件用得上）。 */
   useEffect(() => {
@@ -425,6 +561,17 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
   const slideSlotStyle = slidePage && slideScale
     ? { width: `${Math.floor(slidePage.width * slideScale)}px`, height: `${Math.floor(slidePage.height * slideScale)}px` }
     : undefined;
+  // 原生渲染的缩放：整张适应台面（与放映形态同一套算法），倍率之外再乘老师的缩放
+  const nativeScale = nativeBox.width && slideBox.width
+    ? Math.min((slideBox.width - SLIDE_PADDING) / nativeBox.width, (slideBox.height - SLIDE_PADDING) / nativeBox.height) * zoom
+    : 0;
+  const nativeSlotStyle = nativeScale
+    ? { width: `${Math.floor(nativeBox.width * nativeScale)}px`, height: `${Math.floor(nativeBox.height * nativeScale)}px` }
+    : undefined;
+  const nativeHostStyle = nativeScale
+    ? { width: `${nativeBox.width}px`, height: `${nativeBox.height}px`, transform: `scale(${nativeScale})`, transformOrigin: 'top left' }
+    : undefined;
+  const showSlidesToolbar = isSlides || (isNative && nativeCount > 0);
 
   return <div className="preview-overlay" onClick={() => { if (!document.fullscreenElement) onClose?.(); }}>
     <div className="preview-panel ta-panel" ref={panelRef} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
@@ -435,7 +582,7 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
         </div>
         <div className="row-actions">
           <button type="button" className="secondary-button" onClick={toggleFullscreen}>
-            {fullscreen ? '退出全屏' : isSlides ? '全屏放映' : '全屏观看'}
+            {fullscreen ? '退出全屏' : (isSlides || isNative) ? '全屏放映' : '全屏观看'}
           </button>
           <button type="button" className="drawer-close" onClick={() => { if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {}); onClose?.(); }} aria-label="关闭预览">×</button>
         </div>
@@ -443,12 +590,36 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
 
       <div className="preview-stage">
         <div className="preview-watermark" aria-hidden="true">内部备课资料 · 请勿外传 · {new Date().toLocaleString('zh-CN')}</div>
+        {/* 原生渲染：**缩略图在左边**（用户 2026-09-25 原话「缩略在左边」，与 WPS/PowerPoint 一致）。
+            必须放在 .preview-stage 里 —— 它靠 `.preview-stage:has(.ta-native-stage){display:flex}`
+            与幻灯片并排；放外面就变成上下堆叠了（第一版就是这么错的，截图里一眼看出）。
+            缩略图是解析完的幻灯片 DOM 复制一份缩小来的（复制品共用同一批图片地址，不重复解码）。 */}
+        {isNative && nativeCount ? <div className="ta-native-rail">
+          {nativeRail.map((_, index) => <button type="button" key={index}
+            className={'ta-thumb' + (current === index + 1 ? ' on' : '')}
+            ref={(node) => { if (node) railButtonsRef.current.set(index + 1, node); else railButtonsRef.current.delete(index + 1); }}
+            onClick={() => goSlide(index + 1)}
+            aria-label={`第 ${index + 1} 张`}>
+            <span>{index + 1}</span>
+          </button>)}
+        </div> : null}
         {state.loading ? <p className="ta-state">正在准备预览…</p>
           : state.error && !isPdfBacked ? <div className="ta-state"><Notice tone="warning">{state.error}</Notice></div>
             : kind === 'VIDEO' ? <video src={state.previewUrl} controls controlsList="nodownload noplaybackrate noremoteplayback" disablePictureInPicture />
               : kind === 'AUDIO' ? <audio src={state.previewUrl} controls controlsList="nodownload" />
                 : kind === 'IMAGE' ? <img className="ta-image" src={state.previewUrl} alt={asset?.title || '教学素材'} draggable="false" />
                   : kind === 'OTHER' ? <div className="ta-state"><Empty title="这种格式无法在线预览" body="请联系平台把它转成 PDF、图片或视频。" /></div>
+                    : isNative ? <div className="ta-native-stage" ref={nativeStageRef}>
+                      {/* pptx-preview 的容器**必须一直在**（解析是异步的，等画完再挂容器就晚了） */}
+                      <div className="ta-native-slot" style={nativeSlotStyle}>
+                        <div className="ta-native-host" ref={nativeHostRef} style={nativeHostStyle} />
+                      </div>
+                      {nativeCount ? <>
+                        <button type="button" className="ta-slide-nav prev" disabled={current <= 1} onClick={() => goSlide(current - 1)} aria-label="上一张">‹</button>
+                        <button type="button" className="ta-slide-nav next" disabled={current >= nativeCount} onClick={() => goSlide(current + 1)} aria-label="下一张">›</button>
+                      </> : <p className="ta-state">正在解析课件…</p>}
+                      {state.error ? <div className="ta-render-error"><Notice tone="warning">{state.error}</Notice></div> : null}
+                    </div>
                     : isSlides ? <div className="ta-slide-stage" ref={stageBoxRef}>
                       {pages.length ? <>
                         <button type="button" className="ta-slide-nav prev" disabled={current <= 1} onClick={() => goSlide(current - 1)} aria-label="上一张">‹</button>
@@ -484,10 +655,10 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
       </div> : null}
 
       <footer className="ta-toolbar">
-        {isSlides ? <>
+        {showSlidesToolbar ? <>
           <button type="button" className="secondary-button" disabled={current <= 1} onClick={() => goSlide(current - 1)}>‹ 上一张</button>
-          <span className="ta-page">第 {current}{totalPages ? ` / 共 ${totalPages}` : ''} 张</span>
-          <button type="button" className="secondary-button" disabled={!totalPages || current >= totalPages} onClick={() => goSlide(current + 1)}>下一张 ›</button>
+          <span className="ta-page">第 {current}{totalSlides ? ` / 共 ${totalSlides}` : ''} 张</span>
+          <button type="button" className="secondary-button" disabled={!totalSlides || current >= totalSlides} onClick={() => goSlide(current + 1)}>下一张 ›</button>
           <span className="ta-zoom">
             <button type="button" className="secondary-button" disabled={zoom <= 0.5} onClick={() => setZoom((value) => Math.max(0.5, Number((value - 0.25).toFixed(2))))} aria-label="缩小">−</button>
             <span className="ta-page">{Math.round(zoom * 100)}%</span>
@@ -507,9 +678,13 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
           </span>
           {renderingPage ? <span className="ta-hint muted">正在渲染第 {renderingPage} 页…</span> : null}
         </> : <span className="ta-page">{kind === 'VIDEO' ? '视频' : kind === 'AUDIO' ? '音频' : kind === 'IMAGE' ? '图片' : '素材'}预览</span>}
-        <span className="ta-hint muted">{isSlides
-          ? '本课件由平台在服务端转换后逐张放映（原始 PPT 文件不会下发）：← → 或空格翻页，F 切全屏。素材仅可在本页查看，请勿截屏外传。'
-          : 'PPT / Word 已由平台转换成 PDF 后展示，原始文件不会下发；素材仅可在本页查看，请勿截屏外传。'}</span>
+        {/* ⚠️ 文案口径（2026-09-25）：原生渲染那条路**原始 .pptx 是会到浏览器的**（不解析就画不出来），
+            所以这里只承诺"不提供下载入口"，不再写"原始文件不会下发" —— 写假的承诺比不写更糟。 */}
+        <span className="ta-hint muted">{isNative
+          ? '本页不提供下载入口：← → 或空格翻页，F 切全屏；全屏后只剩幻灯片本身。素材仅可在本页查看，请勿截屏外传。'
+          : isSlides
+            ? '本课件由平台在服务端转换后逐张放映（不提供下载入口）：← → 或空格翻页，F 切全屏。素材仅可在本页查看，请勿截屏外传。'
+            : 'PPT / Word 已由平台转换成 PDF 后展示（不提供下载入口）；素材仅可在本页查看，请勿截屏外传。'}</span>
       </footer>
     </div>
   </div>;

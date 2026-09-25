@@ -8,7 +8,9 @@ export class ApiError extends Error {
   }
 }
 
-function apiBase() {
+// 导出给**需要自己发请求**的场景（2026-09-25：客户端安装包上传要走 XHR 才拿得到上传进度 ——
+// 377MB 在 5 Mbps 上要十分钟，没有进度就等于让运维盯着一个不动的按钮）。
+export function apiBase() {
   const configured = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_API_BASE : null;
   return String(configured || '/api').replace(/\/+$/, '');
 }

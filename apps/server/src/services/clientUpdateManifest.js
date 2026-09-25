@@ -18,6 +18,15 @@ function policyPath(env = process.env) {
 }
 
 /**
+ * 安装包落哪个目录：**清单的同目录**（生产 = /srv/ai-kids-platform/downloads/，nginx 的 `/downloads/` 就是它）。
+ * 不另配一个目录 —— 清单里写的文件名和 `publish-client.sh` 放的、以及后台传的，必须是同一处，
+ * 否则会出现"清单说 377MB 的新包，下载口给的还是上一版"这种最难查的不一致。
+ */
+export function clientUpdateDir(env = process.env) {
+  return dirname(manifestPath(env))
+}
+
+/**
  * 原子写：先写同目录临时文件 → fsync → rename 覆盖。
  *
  * 客户端随时可能来读这份清单（它带 `?t=` 绕缓存），而契约明确要求「清单更新过程中不能出现半截 JSON」
@@ -124,6 +133,57 @@ export function updateClientUpdateManifest(input, env = process.env) {
   // 只写进清单的话，下一次发版会把后台刚配的策略静默重置成发布脚本里的默认值。
   writeAtomic(policyPath(env), `${JSON.stringify(policy, null, 2)}\n`)
   writeAtomic(current.path, `${JSON.stringify({ ...value, ...policy, updatedAt: new Date().toISOString() }, null, 2)}\n`)
+  return readClientUpdateManifest(env)
+}
+
+/**
+ * 安装包文件名 → `{ version, platform }`。
+ *
+ * ⚠️ 文件名是**客户端硬校验的**（`LingdongUpdater.ts` 要求恰好
+ * `lingdong-client-${version}-win-x64.exe`，还对 sha256 长度与字节数做比对），
+ * 所以这里不是"随便取个后缀"，而是把客户端的契约在**上传入口**先拦一道：
+ * 名字不合规的包就算传上来，客户端也永远更新不过去。
+ * Mac 包客户端目前**不参与自动更新**（updater 只认 win32+x64），但官网下载页要能列出它。
+ */
+const INSTALLER_NAME = /^lingdong-client-(.+)-(win-x64\.exe|mac-arm64\.dmg)$/
+
+export function parseClientInstallerName(fileName) {
+  const name = String(fileName || '').trim()
+  const match = INSTALLER_NAME.exec(name)
+  if (!match) throw new Error('安装包文件名必须是 lingdong-client-<版本>-win-x64.exe 或 lingdong-client-<版本>-mac-arm64.dmg')
+  const version = match[1]
+  if (!VERSION_PATTERN.test(version)) throw new Error(`版本号格式不正确：${version}`)
+  return { version, platform: match[2] === 'win-x64.exe' ? 'win-x64' : 'mac-arm64' }
+}
+
+/**
+ * 发布一个**刚上传的安装包**：写清单里的身份字段（版本/文件名/字节数/sha256），
+ * 并把后台配过的策略字段一起带上（否则这一写会把 enabled/mandatory/minVersion 抹掉）。
+ *
+ * ⚠️ 身份字段的所有权在这里与 `publish-client.sh` 是**同一份**（谁最后发布谁说了算），
+ * 而清单里**别的平台**的条目（比如这次发 win、上次发过 mac）要原样留着。
+ */
+export function publishClientInstaller({ fileName, size, sha256, env = process.env, now = new Date() } = {}) {
+  const { version, platform } = parseClientInstallerName(fileName)
+  if (!Number.isSafeInteger(Number(size)) || Number(size) <= 0) throw new Error('安装包字节数不合法')
+  const digest = String(sha256 || '')
+  if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error('安装包 sha256 不合法')
+  const current = readManifest(env)
+  const value = object(current.value)
+  const files = object(value.files)
+  const stamp = now.toISOString()
+  const next = {
+    ...value,
+    version,
+    channel: typeof value.channel === 'string' && value.channel ? value.channel : 'stable',
+    publishedAt: stamp,
+    updatedAt: stamp,
+    files: { ...files, [platform]: { name: String(fileName), size: Number(size), sha256: digest } },
+  }
+  // 策略字段以"后台存过的那份"为准（客户端的发布脚本也是这个口径，见 applyStoredPolicy）
+  const policy = readStoredPolicy(env)
+  if (policy) for (const key of POLICY_KEYS) if (key in policy) next[key] = policy[key]
+  writeAtomic(current.path, `${JSON.stringify(next, null, 2)}\n`)
   return readClientUpdateManifest(env)
 }
 

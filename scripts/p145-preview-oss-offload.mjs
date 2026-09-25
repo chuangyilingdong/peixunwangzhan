@@ -123,6 +123,41 @@ try {
   for (let i = 0; i < 100; i += 1) { try { if ((await fetch(`${base}/health`)).ok) break; } catch { /* 等起来 */ } await new Promise((r) => setTimeout(r, 100)); }
   const preview = (fileId, ticket) => fetch(`${base}/api/org/file-assets/${fileId}/preview?t=${encodeURIComponent(ticket)}`, { redirect: 'manual' });
 
+  /* ①-b 原生渲染的入口（2026-09-25 用户口径「我需要的原生渲染效果」）：
+     只有 .pptx 才给「取原始文件」的地址（前端拿它做原生解析），其它格式一律不给 ——
+     否则等于把"原始文件下载口"开给了所有课件。 */
+  console.log('①-b 原生渲染入口：.pptx 才给「取原始文件」的地址');
+  const { previewInfoFor } = await import('../apps/server/src/lib.js');
+  const nativeRows = [
+    ['file_ppt_native', '应用/slides.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', true],
+    ['file_ppt_legacy', '老课件.ppt', 'application/vnd.ms-powerpoint', false],
+    ['file_doc_native', '教案.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', false],
+    ['file_pdf_native', '讲义.pdf', 'application/pdf', false],
+  ];
+  for (const [id, name, mime, expected] of nativeRows) {
+    await aq(`INSERT INTO file_assets(id,owner_type,storage_kind,storage_key,file_name,mime_type,category,visibility,status,review_status,metadata,created_at,updated_at)
+      VALUES(?,'PLATFORM','INTERNAL_PROXY',?,?,?,'TEACHING_ASSET','PUBLIC_PLATFORM','ACTIVE','NOT_REQUIRED','{}',?,?)`, [id, `teaching/${id}`, name, mime, now, now]);
+    const info = await previewInfoFor(id);
+    check(`①-b ${name} → sourceUrl ${expected ? '有' : '没有'}`, Boolean(info.sourceUrl) === expected, JSON.stringify(info));
+    if (expected) check('①-b sourceUrl 走的是 preview-source 且带票据', /\/preview-source\?t=/.test(info.sourceUrl), info.sourceUrl);
+  }
+  // 真取一次：把 .pptx 的字节原样拿回来（本地行，走流式那条），并把 .docx 那条路的门关上
+  const nativeBytes = Buffer.concat([Buffer.from('PK\u0003\u0004', 'binary'), Buffer.from('p145-native-fixture')]);
+  const nativeKey = 'teaching/p145-native.pptx';
+  fs.mkdirSync(path.dirname(path.join(uploadRoot, nativeKey)), { recursive: true });
+  fs.writeFileSync(path.join(uploadRoot, nativeKey), nativeBytes);
+  const localPptxId = await mkRow({ oss: false, mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', name: '真夹具.pptx', key: nativeKey, bytes: nativeBytes, size: nativeBytes.length });
+  const sourceUrl = (await previewInfoFor(localPptxId)).sourceUrl;
+  const sourceRes = await fetch(`${base}${sourceUrl}`, { redirect: 'manual' });
+  const sourceBytes = Buffer.from(await sourceRes.arrayBuffer());
+  check('①-b 带票据取原始 .pptx：拿到的是**原始字节**（不是转出来的 PDF）',
+    sourceRes.status === 200 && sourceBytes.equals(nativeBytes), `HTTP ${sourceRes.status} ${sourceBytes.length}B`);
+  check('①-b content-type 是 pptx（浏览器按它当 zip 解析）', /presentationml/.test(String(sourceRes.headers.get('content-type') || '')), String(sourceRes.headers.get('content-type')));
+  const docSource = await fetch(`${base}/api/org/file-assets/file_doc_native/preview-source?t=${encodeURIComponent(signPreviewTicket('file_doc_native').ticket)}`, { redirect: 'manual' });
+  check('①-b docx 那条路是关着的（400，不是"什么都能取的原文件口"）', docSource.status === 400, `HTTP ${docSource.status}`);
+  const noTicket = await fetch(`${base}/api/org/file-assets/${localPptxId}/preview-source`, { redirect: 'manual' });
+  check('①-b 没有票据也不给（401/403）', noTicket.status === 401 || noTicket.status === 403, `HTTP ${noTicket.status}`);
+
   const ossTicket = signPreviewTicket(ossPngId).ticket;
   const ossRes = await preview(ossPngId, ossTicket);
   const location = String(ossRes.headers.get('location') || '');

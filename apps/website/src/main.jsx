@@ -100,15 +100,17 @@ function FooterLink({ to, href, children }) {
 function Footer(){return <footer className="site-footer">
   <div className="ft-glow ft-glow--a" aria-hidden="true" /><div className="ft-glow ft-glow--b" aria-hidden="true" /><div className="ft-glow ft-glow--c" aria-hidden="true" />
   <div className="ft-inner">
+    {/* 页脚只留 6 个**各有分工**的入口（2026-09-25 用户口径：原来四列里「选型对比 / 机构方案 /
+        机构手册」好几项是重复的，条款那一列整列删掉）。
+        ⚠️ 删掉的那些页面**仍然存在**、直达 URL 照样能开（/compare /handbook /terms /privacy /minors），
+        只是不再从页脚列出来 —— 想加回来就按这两组的形状补一条。 */}
     <div className="foot">
       <div><strong>产品</strong><FooterLink to="/marketplace">灵动课程</FooterLink><FooterLink to="/org">机构方案</FooterLink><FooterLink to="/works">课堂作品</FooterLink></div>
-      <div><strong>合作</strong><FooterLink to="/demo">联系我们</FooterLink><FooterLink to="/handbook">机构手册</FooterLink><FooterLink href={ORG_APP_URL}>机构后台</FooterLink></div>
-      <div><strong>了解更多</strong><FooterLink to="/download">下载客户端</FooterLink><FooterLink to="/faq">常见问题</FooterLink><FooterLink to="/compare">选型对比</FooterLink></div>
-      <div><strong>条款与隐私</strong><FooterLink to="/terms">用户协议</FooterLink><FooterLink to="/privacy">隐私政策</FooterLink><FooterLink to="/minors">儿童 / 未成年人说明</FooterLink><FooterLink href="mailto:hello@aimagc.cn">联系合作</FooterLink></div>
+      <div><strong>使用</strong><FooterLink to="/download">下载客户端</FooterLink><FooterLink to="/faq">常见问题</FooterLink><FooterLink href={ORG_APP_URL}>机构后台</FooterLink></div>
     </div>
     <div className="ft-brand">
       <Logo />
-      <div className="ft-legal">© 2026 {BRAND_NAME} <span>面向 8–16 岁 · 浏览器即用</span></div>
+      <div className="ft-legal">© 2026 {BRAND_NAME}</div>
     </div>
   </div>
 </footer>}
@@ -1203,10 +1205,13 @@ function Download() {
   const windows = manifest?.files?.['win-x64'] || null;
   const mac = manifest?.files?.['mac-arm64'] || null;
   const mb = (bytes) => (bytes ? (bytes / 1048576).toFixed(0) + ' MB' : '');
+  // 2026-09-25 用户口径：「第一屏，全部删除，就留个 windows 版和 mac 版安装就行。如果需要图标直接用 svg」
+  // —— 所以这一页只剩「两块的安装卡片」：原来底部那整块「装上以后怎么用」（四条步骤 + 两条尾注 +
+  //    打开客户端的深链）整块删掉了。图标从 emoji 换成 shared 那套线性 SVG（见 icons.jsx）。
   return <><Title eyebrow="创作客户端" title={<>把课堂装进<br/><em>学生的电脑</em></>} desc="VibeCoding 课堂用客户端上：老师开始上课后，学生用账号登录即可进入自己的创作环境。" /><main className="inner">
     <section className="dl">
       <article className="dl-card">
-        <i>🪟</i>
+        <Icon name="windows" size={30} />
         <h3>Windows 版</h3>
         {windows
           ? <><p>版本 {manifest.version} · {mb(windows.size)}</p><a className="button" href={'/downloads/' + windows.name}>下载安装包</a>
@@ -1214,23 +1219,10 @@ function Download() {
           : <><p>{error ? '安装包暂时取不到（' + error + '）' : '正在读取安装包信息…'}</p><small>稍后再试，或联系我们获取安装包。</small></>}
       </article>
       <article className="dl-card">
-        <i>🍎</i>
+        <Icon name="apple" size={30} />
         <h3>Mac 版（Apple 芯片）</h3>
         {mac ? <><p>版本 {manifest.version} · {mb(mac.size)}</p><a className="button" href={'/downloads/' + mac.name}>下载安装包</a></> : <><p>正在准备中</p><small>需要 macOS 12 以上、Apple 芯片（M 系列）。做好会在这一页放出。</small></>}
       </article>
-    </section>
-    <section className="dl-steps">
-      <h2>装上以后怎么用</h2>
-      <ol>
-        <li><b>用学生账号登录</b> —— 和网页端同一个账号。</li>
-        <li><b>等老师开始上课</b> —— 老师没点「立即上课」时，客户端只会显示你的课程。</li>
-        <li><b>进入课堂</b> —— 课堂开始后点进入，就在客户端里和 AI 一起做作品。</li>
-        <li><b>交作品</b> —— 做好的网页 / 文档直接提交，老师和你都能在「我的作品」里看到。</li>
-      </ol>
-      <p className="dl-note">还没有学生账号？<Link to="/demo">联系我们</Link>，我们会按你的班型开通。</p>
-      {/* 深链：装了客户端的人点一下就能把它叫起来（没装则什么都不会发生，所以下面说明这一点）。
-          客户端侧注册 lingdong:// 见 deploy/desktop/（electron-builder 的 protocols + setAsDefaultProtocolClient）。 */}
-      <p className="dl-note">已经装好了？<a href="lingdong://open">打开客户端</a>（点了没反应，说明这台电脑还没装）。</p>
     </section>
   </main></>;
 }

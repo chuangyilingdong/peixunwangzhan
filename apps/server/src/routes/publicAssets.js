@@ -105,3 +105,13 @@ export async function handlePublicAssets(ctx) {
 export function probeCacheStats() {
   return { size: probeCache.size, ttlMs: PROBE_TTL_MS };
 }
+
+/**
+ * 让某个键的"在不在 OSS"判断立即失效。
+ * 为什么需要（2026-09-25）：后台「上传并发布安装包」推完 OSS 之后，10 分钟的探测缓存还会说
+ * "OSS 上没有"→ 客户端下载走本机 5 Mbps 出口（377MB 要十分钟）。刚上传就作废一次，
+ * 下一次请求立刻 302 到 OSS。探不到就当作废失败 —— 反正 10 分钟后自己会过期。
+ */
+export function forgetProbe(key) {
+  return probeCache.delete(String(key || ''));
+}

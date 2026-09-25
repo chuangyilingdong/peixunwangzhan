@@ -21,7 +21,7 @@ import {
   previewInfoFor, arows, arow, aq, jsonText, isMysql } from '../lib.js';
 import { assertTransition } from '../services/domainState.js';
 import { maxUploadBytes, parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
-import { ensurePreviewPdf, needsConversion, previewKindFor, verifyPreviewTicket, previewPdfInOss, publishPreviewPdf } from '../services/materialPreview.js';
+import { ensurePreviewPdf, needsConversion, previewKindFor, verifyPreviewTicket, previewPdfInOss, publishPreviewPdf, canRenderNatively } from '../services/materialPreview.js';
 import { reserveUpload } from '../services/uploadLimits.js';
 import { rowStorageBackend, ossRedirectUrl, materializeObject } from '../services/fileStorage.js';
 import { ossConfigured, signedUrl } from '../services/objectStorage.js';
@@ -787,6 +787,48 @@ export async function prepareFilePreview(ctx, file, { ossOffload = false } = {})
   };
 }
 
+/**
+ * 取**原始文件**（不转换）—— 只给能在浏览器里原生渲染的形态（`.pptx`）。
+ *
+ * 为什么单开一条（2026-09-25）：用户口径要「PowerPoint 原生渲染效果」，而原生渲染必须让浏览器
+ * 拿到 .pptx 自己解析（形状/文字/图片都在 XML 里）。这条与 `prepareFilePreview` 的区别就是
+ * **不做转换**：OSS 行 302 到对象自己的签名地址（106MB 的课件也从 OSS 直取，不吃本机 5 Mbps），
+ * 本地行照旧流式发。
+ *
+ * ⚠️ 授权与 `/preview` **完全同一套**（票据 + 会话兜底 + 角色），别在这里放宽 ——
+ *    它的产物是原始文件，比转出来的 PDF 更"重"。
+ * ⚠️ 只认 pptx：其它格式一律 400。别做成"通用原始文件下载口"，那等于把下载入口又开回来了。
+ */
+export async function prepareFileSource(ctx, file) {
+  if (file.storage_kind !== 'INTERNAL_PROXY') throw errors.badRequest('这份素材没有可取的文件', 'SOURCE_UNAVAILABLE');
+  if (!canRenderNatively({ mimeType: file.mime_type, fileName: file.file_name })) {
+    throw errors.badRequest('这种格式不支持原生预览', 'SOURCE_NOT_RENDERABLE');
+  }
+  if (rowStorageBackend(file) === 'oss') {
+    const url = ossRedirectUrl(file, { expires: PREVIEW_LINK_TTL_SECONDS });
+    if (!url) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+    return { __fileResponse: true, status: 302, headers: { 'cache-control': 'private, max-age=600', 'x-content-type-options': 'nosniff' }, redirectUrl: url };
+  }
+  const root = uploadRoot();
+  const storageKey = String(file.storage_key || '').replaceAll('\\', '/');
+  if (!storageKey || storageKey.startsWith('/') || /^[A-Za-z]:/.test(storageKey) || storageKey.split('/').includes('..')) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+  const absolute = path.resolve(root, storageKey);
+  if (absolute !== root && !absolute.startsWith(root + path.sep)) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+  let info;
+  try { info = await stat(absolute); } catch { throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND'); }
+  return {
+    __fileResponse: true, status: 200,
+    headers: {
+      'content-type': file.mime_type || 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'content-length': String(info.size),
+      'content-disposition': 'inline',
+      'cache-control': 'private, no-store',
+      'x-content-type-options': 'nosniff',
+    },
+    stream: createReadStream(absolute),
+  };
+}
+
 export async function handleOrgFileAssets(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/org/file-assets')) return null;
@@ -810,6 +852,22 @@ export async function handleOrgFileAssets(ctx) {
     //    图片/视频是 <img>/<video>），两样都跟得上跨域跳转。别的地方（作品文件走 <iframe>）
     //    不能跳 —— 站点 CSP 的 default-src 'self' 会把跨域 iframe 挡成白屏。
     return await prepareFilePreview(ctx, file, { ossOffload: true });
+  }
+
+  // 原始文件（原生渲染用）：鉴权口径与 /preview **一字不差**，只是不做转换。见 prepareFileSource。
+  const sourceMatch = part.match(/^\/file-assets\/([^/]+)\/preview-source$/);
+  if (sourceMatch && method === 'GET') {
+    const fileId = sourceMatch[1];
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
+    const ticketOk = verifyPreviewTicket(fileId, ctx.search.get('t'));
+    if (!ticketOk) {
+      const session = requireRole(ctx, ['ORG_ADMIN', 'TEACHER', 'STUDENT']);
+      if (!session.user.orgId) throw errors.forbidden('当前账号未绑定机构', 'ORG_SCOPE_REQUIRED');
+      await authorizeFileAccess(ctx, fileId, 'READ');
+    }
+    await audit(ctx, 'FILE_PREVIEW_SOURCE', 'FILE_ASSET', file.id, null, { ticket: ticketOk, native: true });
+    return await prepareFileSource(ctx, file);
   }
 
   const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER', 'STUDENT']);
