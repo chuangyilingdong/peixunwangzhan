@@ -84,7 +84,8 @@ function pageNumber(value, fallback, max) {
 
 export async function financialReportOptions() {
   // 币种下拉：购买批次 / 许可收入事件两个账本，外加**上游成本账**的币种（第二本账也要能选出来看）。
-  const licenseCurrencies = await arows("SELECT currency id,currency name FROM (SELECT currency FROM license_purchase_batches WHERE currency IS NOT NULL UNION SELECT currency FROM license_revenue_events WHERE currency IS NOT NULL) ORDER BY currency");
+  // ⚠️ 派生表必须带别名（MySQL 强制、SQLite 容忍）—— 见 orgAdmin 里那条同样的注释。
+  const licenseCurrencies = await arows("SELECT currency id,currency name FROM (SELECT currency FROM license_purchase_batches WHERE currency IS NOT NULL UNION SELECT currency FROM license_revenue_events WHERE currency IS NOT NULL) currencies ORDER BY currency");
   const hasUpstreamCost = (await arows('SELECT 1 ok FROM compute_attempts WHERE upstream_cost_fen IS NOT NULL LIMIT 1')).length > 0;
   const currencies = hasUpstreamCost && !licenseCurrencies.some((item) => item.id === PLATFORM_COST_CURRENCY)
     ? [...licenseCurrencies, { id: PLATFORM_COST_CURRENCY, name: PLATFORM_COST_CURRENCY }].sort((a, b) => String(a.id).localeCompare(String(b.id)))

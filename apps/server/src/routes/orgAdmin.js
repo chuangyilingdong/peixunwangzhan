@@ -1550,7 +1550,10 @@ export async function handleOrg(ctx) {
     const fromSql = `FROM users student
       LEFT JOIN student_course_grants AS \`grant\` ON grant.student_id=student.id AND grant.org_id=student.org_id
       WHERE ${where} GROUP BY student.id${having}`;
-    const total = await acount(`SELECT COUNT(*) n FROM (SELECT student.id ${fromSql})`, params);
+    // ⚠️ 派生表必须带别名（2026-09-25 生产实测）：MySQL 强制要求，SQLite 容忍 ——
+    //    少了它这一页在 RDS 上直接 500（ER_DERIVED_MUST_HAVE_ALIAS / errno 1248），
+    //    而本地 SQLite 跑得好好的，`p111` 就是这么一路绿的。
+    const total = await acount(`SELECT COUNT(*) n FROM (SELECT student.id ${fromSql}) student_ids`, params);
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
     const listRows = await arows(`SELECT student.id, student.login, student.display_name, student.phone, student.status,
         ${activeCountSql} active_count,
