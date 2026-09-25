@@ -985,3 +985,49 @@ background:radial-gradient(120% 80% at 50% 0%,rgb(255 60 90 / 26%),transparent 6
 .site-footer .ft-legal{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 14px;color:rgb(255 255 255 / 46%);font-size:11px}
 @media(max-width:980px){.site-footer .foot{grid-template-columns:repeat(2,1fr);gap:34px 22px}}
 @media(max-width:700px){.site-footer{padding:52px 18px 22px}.site-footer .foot{grid-template-columns:repeat(2,1fr);gap:30px 16px}.site-footer .ft-brand{display:grid;gap:16px}.site-footer .ft-legal{display:grid;gap:6px}}
+
+/* ── 首页「对比一栏」（2026-09-25 用户口径：官网页脚上面加一栏，后台可配）─────────────────
+   参考稿是 Codecraft AI 的对比区（暗底 + 打字标题 + 高亮词 + 一正一反两张卡片）。
+   与「三步一栏」同一条底色口径（那是用户第二轮明确要求的）：
+     · 这一栏自己也必须是**渐变**，不是一块纯黑/纯灰 —— 夹在红色首屏与红色页脚之间会成断层；
+     · **首色 = 三步一栏的末色、末色 = 页脚的首色**（都是 #17060a），否则两段之间会留一条深色缝。
+   底色因此走"暗红 → 暗紫 → 暗红"：既接得住上下的红，又给这一栏一点自己的颜色（对比才立得住）。 */
+.hp-cmp{position:relative;z-index:1;padding:clamp(56px,7vw,104px) clamp(20px,4vw,40px) clamp(64px,8vw,112px);border-top:1px solid rgb(255 255 255 / 8%);background:radial-gradient(90% 60% at 50% 0%,rgb(139 92 246 / 20%),transparent 62%),linear-gradient(180deg,#17060a 0%,#1a0714 24%,#14081c 52%,#16070f 78%,#17060a 100%)}
+.hp-cmp-inner{max-width:1200px;margin:0 auto;display:flex;flex-direction:column;gap:clamp(30px,4vw,54px)}
+.hp-cmp-head{max-width:min(780px,94%);margin:0 auto;text-align:center}
+.hp-cmp-title{position:relative;margin:0;color:#fff;font-size:clamp(26px,3.6vw,46px);font-weight:700;line-height:1.24;letter-spacing:-.02em}
+/* 逐字显示：每个单元默认带 --cmp-fade 的过渡，运行时只改内联 opacity（不重排、不抖动） */
+.hp-cmp-unit{display:inline;transition:opacity .16s linear}
+/* 高亮段：整段一起着色，下划线盖整段（见 main.jsx 的注释） */
+.hp-cmp-hl{position:relative;display:inline-block;isolation:isolate}
+.hp-cmp-hl .hp-cmp-unit{background:linear-gradient(99deg,#ffda76,#fb9a67);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hp-cmp-swash{position:absolute;left:-10px;right:-10px;bottom:-.18em;z-index:-1;height:.42em;pointer-events:none}
+.hp-cmp-swash svg{display:block;width:100%;height:100%;overflow:visible;fill:none}
+.hp-cmp-swash svg path{stroke:#ffbf5c;stroke-width:3;stroke-linecap:round;opacity:.5}
+.hp-cmp-swash svg path+path{stroke:#fb9a67;stroke-width:2;opacity:.34}
+.hp-cmp-lead{margin:clamp(12px,1.6vw,18px) auto 0;max-width:min(620px,92%);color:#e6cdd4;font-size:clamp(13px,1.5vw,16px);line-height:1.7}
+.hp-cmp-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(16px,2.2vw,28px);align-items:start}
+/* 卡片**默认可见**（这条是从三步一栏那轮学来的：写成 opacity:0 等 JS 显示，脚本一没跑就是一块空白）——
+   `is-in` 只负责"进了视口播一次入场"。 */
+.hp-cmp-card{position:relative;display:flex;flex-direction:column;gap:clamp(16px,1.8vw,22px);padding:clamp(22px,2.6vw,34px);border:1px solid rgb(255 255 255 / 12%);border-radius:24px;background:rgb(255 255 255 / 4%);transition:transform .35s cubic-bezier(.22,1,.36,1),border-color .35s,box-shadow .35s}
+.hp-cmp-card.is-with{border-color:rgb(167 139 250 / 55%);background:linear-gradient(180deg,rgb(139 92 246 / 14%),rgb(139 92 246 / 4%));box-shadow:0 18px 44px -24px rgb(139 92 246 / 70%)}
+.hp-cmp-card.is-with:hover{transform:translateY(-8px);box-shadow:0 26px 56px -22px rgb(167 139 250 / 85%)}
+.hp-cmp-card.is-without:hover{transform:translateY(-5px);border-color:rgb(251 154 103 / 45%)}
+.hp-cmp-card-glow{position:absolute;inset:-40% -10% auto;height:70%;z-index:-1;background:radial-gradient(55% 60% at 50% 40%,rgb(139 92 246 / 34%),transparent 70%);pointer-events:none}
+.hp-cmp-card-title{margin:0;font-size:clamp(21px,2.3vw,28px);font-weight:700;letter-spacing:-.01em}
+.hp-cmp-card.is-with .hp-cmp-card-title{background:linear-gradient(99deg,#e9e2ff,#a78bfa);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hp-cmp-card.is-without .hp-cmp-card-title{color:#e9d9dd}
+.hp-cmp-list{display:flex;flex-direction:column;gap:clamp(11px,1.3vw,15px);margin:0;padding:0;list-style:none}
+.hp-cmp-item{display:flex;gap:12px;align-items:flex-start}
+.hp-cmp-item p{margin:0;color:#dcc6cc;font-size:clamp(13px,1.35vw,15px);line-height:1.62}
+.hp-cmp-card.is-with .hp-cmp-item p{color:#e6e0f5}
+.hp-cmp-ico{flex:none;display:grid;place-items:center;width:26px;height:26px;margin-top:1px;border-radius:9px}
+.hp-cmp-ico.is-with{color:#c4b5fd;background:rgb(167 139 250 / 16%)}
+.hp-cmp-ico.is-without{color:#fb9a67;background:rgb(251 154 103 / 14%)}
+/* 入场：卡片与条目各自淡入上浮（条目按 --cmp-item-delay 错开） */
+.hp-cmp.is-in .hp-cmp-card{animation:hp-cmp-in .7s cubic-bezier(.22,1,.36,1) both;animation-delay:var(--cmp-delay,0ms)}
+.hp-cmp.is-in .hp-cmp-item{animation:hp-cmp-in .55s cubic-bezier(.22,1,.36,1) both;animation-delay:var(--cmp-item-delay,0ms)}
+@keyframes hp-cmp-in{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+@media(max-width:820px){.hp-cmp-grid{grid-template-columns:minmax(0,1fr)}}
+/* reduced-motion：不播任何动画（打字那半在 JS 里已经改成直接显示全文，见 main.jsx） */
+@media(prefers-reduced-motion:reduce){.hp-cmp.is-in .hp-cmp-card,.hp-cmp.is-in .hp-cmp-item{animation:none}.hp-cmp-card{transition:none}.hp-cmp-card:hover{transform:none}.hp-cmp-unit{transition:none}}

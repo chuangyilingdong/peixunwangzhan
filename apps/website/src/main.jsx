@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, Icon, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, Icon, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { StudentAccountPage } from './pages/AccountSecurity.jsx';
 import { MyWorkDetailPage } from './pages/MyWorkDetail.jsx';
@@ -594,6 +594,115 @@ function HomeSteps({ block }) {
     </div>
   </section>;
 }
+
+/**
+ * 首页「对比一栏」（2026-09-25 用户口径）：
+ * 「参考以下代码，在官网首页页脚上面加一个以上代码的页面，后台可以配置」——
+ * 参考稿是 Codecraft AI 的对比区（暗底 + **打字标题** + 高亮词 + 一正一反两张卡片 + 条目逐条淡入）。
+ *
+ * **照做的**：打字标题（滚到这一栏才开始打）、高亮词带手绘感下划线、两张卡片一正一反、
+ *            条目逐条淡入、卡片悬停上浮、正面那张带渐变描边与光晕。
+ * **不照抄的**：参考稿的三个依赖（Tailwind / framer-motion / lucide）与 Google Fonts 外链，
+ *            官网一个都没引 —— 官网样式是全站共用的一份 styles.css，为一个区块引依赖会跟全局打架
+ *            （三步一栏那一轮已经定过这条口径）。所以：入场与打字用 IntersectionObserver + CSS 关键帧，
+ *            图标用现成的 `<Icon name="spark">` 与一段内联 SVG（不引图标库）。
+ *
+ * ⚠️ 两条硬约束（与三步一栏同源）：
+ *   ① **卡片内容默认可见** —— 样式里不写 `opacity:0`，`is-in` 只负责"进了视口播一次动画"；
+ *      脚本没跑/观察器没触发时，看到的必须是完整内容，不是一块空白；
+ *   ② **打字只是"到了才开始打"**：观察器不可用或 `prefers-reduced-motion` 时**直接显示完整标题**
+ *      （reduced-motion 下不播任何动画，见 styles.css 的媒体查询）。
+ *
+ * 文案全部来自 CMS（HOME.compare）：后台「官网内容 → 首页 → 对比一栏」可改；
+ * **把 cards 删空 = 官网不显示这一栏**（与 stats / steps 同一条口径）。
+ */
+/** 标题打字机：进入视口后逐字显示。返回"已经打出多少个字"。 */
+function useTypedCount(text, active) {
+  const full = String(text || '').length;
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    if (!full) { setCount(0); return undefined; }
+    const reduced = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // 没进视口就先不显示；一旦进了（或根本不该打字）就给全文 —— 内容不许停在"什么都没打"
+    if (!active || reduced) { setCount(active ? full : 0); return undefined; }
+    let index = 0;
+    const timer = setInterval(() => {
+      index += 1;
+      setCount(index >= full ? full : index);
+      if (index >= full) clearInterval(timer);
+    }, 55);
+    return () => clearInterval(timer);
+  }, [text, active, full]);
+  return count;
+}
+
+/** 把标题切成"可单独着色/淡入的单元"：中文按字、英文/数字按词（逐字切会把英文单词拆散）。 */
+function titleUnits(text) {
+  const units = [];
+  const pattern = /[A-Za-z0-9][A-Za-z0-9'’.,:;!?%+-]*|\s+|[\s\S]/gu;
+  for (const match of String(text || '').matchAll(pattern)) {
+    const value = match[0];
+    units.push({ value, start: match.index, end: match.index + value.length });
+  }
+  return units;
+}
+
+function HomeCompare({ block }) {
+  const [ref, shown] = useRevealOnce();
+  const title = String(block?.title || '');
+  const highlight = String(block?.highlight || '');
+  const cards = Array.isArray(block?.cards) ? block.cards.filter((card) => card && (card.title || (Array.isArray(card.items) && card.items.length))) : [];
+  const typed = useTypedCount(title, shown);
+  if (!cards.length) return null;
+  // 高亮范围：标题里那一段（找不到就把整句当成高亮段，总比不高亮强）
+  const hasHighlight = Boolean(highlight) && title.includes(highlight);
+  const hlStart = title && hasHighlight ? title.indexOf(highlight) : (title ? 0 : -1);
+  const hlEnd = hlStart < 0 ? -1 : hlStart + (hasHighlight ? highlight.length : title.length);
+  const units = titleUnits(title);
+  // 打字是按"已经打出几个字"逐字亮的，单位用绝对下标，所以这里给每一段传一个起始偏移。
+  const renderUnits = (from, to) => units
+    .filter((unit) => unit.start >= from && unit.end <= to)
+    .map((unit) => <span className="hp-cmp-unit" key={unit.start} style={{ opacity: typed >= unit.end ? 1 : 0 }}>{unit.value}</span>);
+  return <section className={'hp-cmp' + (shown ? ' is-in' : '')} ref={ref} aria-label="对比">
+    <div className="hp-cmp-inner">
+      {(title || block?.lead) && <div className="hp-cmp-head">
+        {title ? <h2 className="hp-cmp-title">
+          {renderUnits(0, hlStart < 0 ? title.length : hlStart)}
+          {hlStart >= 0 ? <span className="hp-cmp-hl">
+            {renderUnits(hlStart, hlEnd)}
+            {/* 高亮段底下那道手绘感下划线（纯内联 SVG，不引外部素材）。它包在**整段**里，
+                所以下划线盖的是整段高亮词，而不是某一个字。 */}
+            <span className="hp-cmp-swash" aria-hidden="true">
+              <svg viewBox="0 0 220 18" preserveAspectRatio="none" focusable="false"><path d="M4 13C46 5 118 3 214 8" /><path d="M16 17c44-7 108-9 186-5" /></svg>
+            </span>
+          </span> : null}
+          {hlStart >= 0 ? renderUnits(hlEnd, title.length) : null}
+        </h2> : null}
+        {block?.lead ? <p className="hp-cmp-lead">{block.lead}</p> : null}
+      </div>}
+      <div className="hp-cmp-grid">
+        {cards.map((card, index) => {
+          const tone = String(card.tone || '').toLowerCase() === 'with' ? 'with' : 'without';
+          const items = (Array.isArray(card.items) ? card.items : []).map((item) => String(item || '')).filter(Boolean);
+          return <article className={`hp-cmp-card is-${tone}`} key={`${tone}-${card.title || index}`} style={{ '--cmp-delay': `${index * 120}ms` }}>
+            {tone === 'with' ? <span className="hp-cmp-card-glow" aria-hidden="true" /> : null}
+            {card.title ? <h3 className="hp-cmp-card-title">{card.title}</h3> : null}
+            <ul className="hp-cmp-list">
+              {items.map((item, itemIndex) => <li className="hp-cmp-item" key={itemIndex} style={{ '--cmp-item-delay': `${120 + index * 120 + itemIndex * 70}ms` }}>
+                <span className={`hp-cmp-ico is-${tone}`} aria-hidden="true">
+                  {tone === 'with'
+                    ? <Icon name="spark" size={18} strokeWidth={2.4} />
+                    : <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" focusable="false"><circle cx="12" cy="12" r="9" /><path d="M9 16c.9-.9 1.9-1.3 3-1.3s2.1.4 3 1.3" /><path d="M9 9.6h.01M15 9.6h.01" /></svg>}
+                </span>
+                <p>{item}</p>
+              </li>)}
+            </ul>
+          </article>;
+        })}
+      </div>
+    </div>
+  </section>;
+}
 function HomeLanding() {
   const cms = useWebsiteContent('HOME');
   const navigate = useNavigate();
@@ -647,6 +756,11 @@ function HomeLanding() {
         但运营把三步删空（items: []）就是不要这一栏，不回退。
         ⚠️ 它在 `.hp-first` **外面**：第一屏（含背景视频）就是第一屏，页面再长也不许改变首屏的取景。 */}
     {ready ? <HomeSteps block={content.steps === undefined || content.steps === null ? HOME_STEPS_DEFAULT : content.steps} /> : null}
+    {/* 对比一栏（用户口径 2026-09-25：「在官网首页页脚上面加一个以上代码的页面，后台可以配置」）——
+        排在「三步一栏」之后，也就是**紧挨着页脚的那一段**；与 stats/steps 同一条口径：
+        整块没配用内置默认，运营把 cards 删空就是不要这一栏（不回退）。
+        ⚠️ 同样在 `.hp-first` **外面**：加它不许改变第一屏（含背景视频）的取景。 */}
+    {ready ? <HomeCompare block={content.compare === undefined || content.compare === null ? HOME_COMPARE_DEFAULT : content.compare} /> : null}
   </main>;
 }
 function Home(_props) { return <HomeLanding />; }
@@ -1121,7 +1235,7 @@ const CMS_FALLBACK = {
   // 而别处是 11 门 / 87 节 —— 于是同一页会因为「接口通 / 断」显示两套数字
   // （接口断 → 用这份；接口通但行里没有 stats → 用 HOME_STATS_FALLBACK）。
   // scripts/p115-website-ui-check.mjs 会把两条路径各渲染一遍并逐字对比，就是为了钉住这条。
-  HOME: { heroKicker: '', heroTitle: '培养青少年Ai思维', heroAccent: '掌握Ai时代的创造方式', heroDescription: 'AI 画布创作 + Vibe Coding 对话编程，从兴趣到独立创作', trustTitle: '', trustDescription: '', stats: HOME_STATS_FALLBACK, steps: HOME_STEPS_DEFAULT },
+  HOME: { heroKicker: '', heroTitle: '培养青少年Ai思维', heroAccent: '掌握Ai时代的创造方式', heroDescription: 'AI 画布创作 + Vibe Coding 对话编程，从兴趣到独立创作', trustTitle: '', trustDescription: '', stats: HOME_STATS_FALLBACK, steps: HOME_STEPS_DEFAULT, compare: HOME_COMPARE_DEFAULT },
   // 常见问题（/faq）：按端三档，与 packages/database/src/websiteContentDefaults.js 的 FAQ **逐字一致**
   // （口径①：接口通/断不能显示两套内容）。student 取的是**生产 CMS 已发布的原文** ——
   // 原来这里只有 3 条、且少了「授权次数用完会怎样」，与线上那份对不上，正是那条口径要防的隐患。

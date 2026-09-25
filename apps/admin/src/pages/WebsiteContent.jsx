@@ -2,7 +2,7 @@ import { useAdminConfirm } from '../components/AdminConfirm.jsx';
 import { readSession, errorText } from '@platform/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, HOME_STEPS_DEFAULT, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { ApiError, Empty, ErrorState, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 
 export function parseWebsiteDraft(value) {
@@ -185,6 +185,18 @@ export function WebsiteContent({ api }) {
   }
   function addStep() { updateSteps({ items: [...stepItems, { number: String(stepItems.length + 1).padStart(2, '0'), title: '', desc: '', imageUrl: '', imageAlt: '' }] }); }
   function removeStep(index) { updateSteps({ items: stepItems.filter((_, itemIndex) => itemIndex !== index) }); }
+  // ── 首页「对比一栏」（2026-09-25 用户口径：「在官网首页页脚上面加一个以上代码的页面，后台可以配置」）──
+  // 与三步一栏同一套做法：草稿里还没有这一块时，用官网内置默认（HOME_COMPARE_DEFAULT）预填，
+  // 运营看到的就是官网**正在显示**的那份；一改动就把整块（默认值 + 本次改动）写进草稿。
+  // 条目用**多行文本**编辑（一行一条）——比一条一个输入框快得多，也少一大截表单高度。
+  const compareBlock = structured?.compare && typeof structured.compare === 'object' ? structured.compare : HOME_COMPARE_DEFAULT;
+  const compareCards = Array.isArray(compareBlock.cards) ? compareBlock.cards : [];
+  function updateCompare(patch) { updateStructured({ compare: { ...compareBlock, ...patch } }); }
+  function updateCompareCard(index, patch) { updateCompare({ cards: compareCards.map((card, cardIndex) => (cardIndex === index ? { ...card, ...patch } : card)) }); }
+  function removeCompareCard(index) { updateCompare({ cards: compareCards.filter((_, cardIndex) => cardIndex !== index) }); }
+  function addCompareCard() { updateCompare({ cards: [...compareCards, { tone: compareCards.some((card) => card?.tone === 'with') ? 'without' : 'with', title: '', items: [] }] }); }
+  const asLines = (value) => (Array.isArray(value) ? value.join('\n') : '');
+  const fromLines = (value) => String(value || '').split('\n').map((line) => line.trim()).filter(Boolean);
   function updateCourse(index, patch) {
     const list = Array.isArray(structured?.courses) ? structured.courses : [];
     updateStructured({ courses: list.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) });
@@ -320,6 +332,25 @@ export function WebsiteContent({ api }) {
               <div className="row-actions top-gap"><label className="inline-file-upload">{uploading === `hp-step-${index}` ? '上传中…' : '上传配图'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url) => updateStep(index, { imageUrl: url }), `hp-step-${index}`); }} /></label></div>
             </div>)}</div>
             <button type="button" className="secondary-button top-gap" onClick={addStep}>新增一步</button>
+            {/* 对比一栏（2026-09-25 用户口径）：标题 + 要高亮的词 + 副标题 + 一正一反两张卡片（标题 + 一行一条的条目）。
+                高亮词会带手绘感下划线；tone 决定配色与图标（without 暖色皱眉 / with 紫色高亮）。 */}
+            <div className="cms-section-heading top-gap"><strong>对比一栏（官网首页 · 页脚上方）</strong><span>标题 / 高亮词 / 副标题 / 卡片 · 卡片全删掉 ＝ 官网不显示这一栏</span></div>
+            <div className="form-grid">
+              <label>标题<input value={compareBlock.title || ''} onChange={(event) => updateCompare({ title: event.target.value })} maxLength={60} placeholder="例如：同样的 AI 课，两种上法。" /><small className="muted">官网会一个字一个字打出来（滚到这一栏才开始打）。</small></label>
+              <label>高亮词<input value={compareBlock.highlight || ''} onChange={(event) => updateCompare({ highlight: event.target.value })} maxLength={24} placeholder="标题里的某一段，例如：两种上法" /><small className="muted">必须是标题里原样出现的一段；不填就整句都按高亮色显示。</small></label>
+            </div>
+            <label>副标题<input value={compareBlock.lead || ''} onChange={(event) => updateCompare({ lead: event.target.value })} maxLength={160} /></label>
+            <div className="cms-faq-list">{compareCards.map((card, index) => <div className="cms-faq-item" key={`hp-cmp-${index}`}>
+              <div className="cms-faq-heading"><strong>第 {index + 1} 张卡片（{card?.tone === 'with' ? '正面' : '负面'}）</strong>
+                <div className="row-actions"><button type="button" className="text-button danger-text" onClick={() => removeCompareCard(index)}>删除</button></div>
+              </div>
+              <div className="form-grid">
+                <label>正 / 反<select value={card?.tone === 'with' ? 'with' : 'without'} onChange={(event) => updateCompareCard(index, { tone: event.target.value })}><option value="without">负面（暖色 + 皱眉图标）</option><option value="with">正面（紫色高亮 + 星标图标）</option></select></label>
+                <label>卡片标题<input value={card?.title || ''} onChange={(event) => updateCompareCard(index, { title: event.target.value })} maxLength={40} /></label>
+              </div>
+              <label>条目（一行一条）<textarea value={asLines(card?.items)} onChange={(event) => updateCompareCard(index, { items: fromLines(event.target.value) })} rows={7} placeholder={'每行一条，例如：\n多个网站 / App 来回切换，课堂节奏被打断'} /></label>
+            </div>)}</div>
+            <button type="button" className="secondary-button top-gap" onClick={addCompareCard}>新增一张卡片</button>
           </div>}
           {selectedKey === 'FAQ' && (() => {
             // 三个档位各配一套问答（2026-09-18 晚用户口径）。三组共用同一套增删改 + 上下移，
