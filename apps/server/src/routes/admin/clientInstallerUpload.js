@@ -27,7 +27,10 @@
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, rename, rm, stat } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+// ⚠️ 用 `path.join` 而不是裸 `join(...)`：p143 那道静态网要扫"SQL 里 `JOIN (` 后面有没有别名"，
+//    裸 `join(` 会被它当成 SQL 关键词误报（它排除了 `x.join(` 与 `Buffer.from(`，但排除不了命名导入）。
+//    别为了少打四个字符把守卫弄红 —— 那条网是拦线上 500 的。
+import path from 'node:path';
 import { audit, envelope, errors, requirePlatformPermission, sendJson } from '../../lib.js';
 import { parseClientInstallerName, publishClientInstaller, clientUpdateDir } from '../../services/clientUpdateManifest.js';
 import { ossConfigured, putObjectFromFile } from '../../services/objectStorage.js';
@@ -54,7 +57,7 @@ async function streamToFile(req, destPath, limitBytes) {
   if (Number.isFinite(declared) && declared > limitBytes) {
     throw errors.badRequest(`安装包不能超过 ${Math.floor(limitBytes / 1024 / 1024)} MB`, 'INSTALLER_TOO_LARGE');
   }
-  await mkdir(dirname(destPath), { recursive: true });
+  await mkdir(path.dirname(destPath), { recursive: true });
   const temp = `${destPath}.uploading-${process.pid}-${Date.now()}`;
   const out = createWriteStream(temp, { flags: 'wx' });
   let bytes = 0;
@@ -103,9 +106,9 @@ export async function handleClientInstallerUpload(ctx, req, res) {
   try { parsed = parseClientInstallerName(rawName); } catch (error) { throw errors.badRequest(error.message, 'INVALID_INSTALLER_NAME'); }
 
   const dir = clientUpdateDir();
-  const target = join(dir, rawName);
+  const target = path.join(dir, rawName);
   // 兜一层目录逃逸（文件名已经被上面的正则钉死了，这里只是不给自己留后门）
-  if (resolve(target) !== resolve(join(dir, rawName)) || rawName.includes('/') || rawName.includes('\\') || rawName.includes('..')) {
+  if (path.resolve(target) !== path.resolve(path.join(dir, rawName)) || rawName.includes('/') || rawName.includes('\\') || rawName.includes('..')) {
     throw errors.badRequest('安装包文件名不合法', 'INVALID_INSTALLER_NAME');
   }
 
