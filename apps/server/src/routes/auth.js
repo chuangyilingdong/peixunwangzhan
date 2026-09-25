@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import {
   audit,
-  clearAuthCookie,
+  clearAuthCookies,
   errors,
   nonEmptyString,
   normalizeOrg,
@@ -116,7 +116,9 @@ export async function handleAuth(ctx) {
        VALUES (?,?,?,?,?,?,?,?)`,
       [id('session'), tokenHash(token), user.id, user.role, user.org_id || null, clientType, now, expiresAt],
     );
-    ctx.setCookie = setAuthCookie(token);
+    // cookie 按端签（学生端/官网用老名字 `platform_token`、Path=/；机构端/平台端各自的名字+路径）——
+    // 免得后台一登录就把学生浏览器里的 cookie 顶掉，画布素材跟着全部 403（见 lib.js 那段说明）。
+    ctx.setCookie = setAuthCookie(token, clientType);
     await audit(loginAuditContext(ctx, user), 'AUTH_LOGIN', 'USER', user.id, null, { clientType, mfa: mfaMethod });
     return {
       token,
@@ -130,7 +132,7 @@ export async function handleAuth(ctx) {
   if (pathname === '/api/auth/logout' && method === 'POST') {
     const auth = requireAuth(ctx);
     await aq('UPDATE sessions SET superseded_at = COALESCE(superseded_at, ?) WHERE id = ?', [nowIso(), auth.session.id]);
-    ctx.setCookie = clearAuthCookie();
+    ctx.setCookie = clearAuthCookies();
     await audit(ctx, 'AUTH_LOGOUT', 'USER', auth.user.id);
     return { loggedOut: true };
   }

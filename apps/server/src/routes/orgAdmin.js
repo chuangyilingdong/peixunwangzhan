@@ -1,4 +1,4 @@
-import { audit, clearAuthCookie, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arows, arow, aq, acount, atransaction, amap } from '../lib.js';
+import { audit, clearAuthCookies, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arows, arow, aq, acount, atransaction, amap } from '../lib.js';
 import { normalizeLesson, canvasMediaFrom } from '../lib.js';
 import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
 import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from './fileAssets.js';
@@ -170,7 +170,7 @@ export async function handleOrg(ctx) {
       sessionsRevoked = (await aq('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, me.id])).changes;
     });
     await audit(ctx, 'ORG_PASSWORD_CHANGE', 'USER', me.id, null, { sessionsRevoked });
-    ctx.setCookie = clearAuthCookie();
+    ctx.setCookie = clearAuthCookies();
     return { passwordChanged: true, sessionsRevoked, reloginRequired: true };
   }
 

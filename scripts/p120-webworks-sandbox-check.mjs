@@ -40,10 +40,10 @@ const arg = (name, fallback) => {
 const SITE = (arg('--site', process.env.P120_SITE || 'https://iicili.cyou')).replace(/\/$/, '');
 const CHROME = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const PORT = Number(process.env.P120_PORT || 8794);
-/** 与 nginx `location /` 那条一致（见 /etc/nginx/sites-enabled/iicili.cyou）。 */
+/** 与 nginx `location /` 那条一致（见 /etc/nginx/sites-enabled/aicyld.com；2026-09-25 起 connect-src 多了 OSS 域）。 */
 const PLAZA_CSP = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; " +
   "img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; " +
-  "script-src 'self'; connect-src 'self'";
+  "script-src 'self'; connect-src 'self' https://*.oss-cn-guangzhou.aliyuncs.com";
 /** 看图层 webwork 分支的 sandbox（**不许**出现 allow-same-origin）。 */
 const SANDBOX = 'allow-scripts allow-modals allow-forms allow-popups';
 /** 取不到的外域（作品里留的运行时接口 / 没镜像的素材）—— 允许失败，不算作品的问题。 */

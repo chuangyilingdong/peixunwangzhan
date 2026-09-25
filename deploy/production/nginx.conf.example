@@ -49,7 +49,10 @@ server {
     # ⚠️ img-src 与 media-src 都必须带 blob:：学生拖进画布的本地素材是「带 token 取回二进制 →
     # blob: 地址」再给 <img>/<video> 用的，CSP 少一个 blob: 就会静默变成破图
     # （2026-09-11 线上踩过：img-src 漏了 blob:，fetch 明明 200、图片就是不显示）。
-    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'" always;
+    # ⚠️ connect-src 里的 OSS 域同理必需：素材在 OSS 上时下载口 302 到签名地址，前端要 fetch
+    # 回来转 blob:（跨域 fetch 没有这条就是 `TypeError: Failed to fetch`，只能退回只带 cookie 的
+    # `<img>` 子资源 —— 2026-09-25 画布整屏图裂的成因）。域跟着 OSS_REGION 走。
+    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://*.oss-cn-guangzhou.aliyuncs.com" always;
 
     # Common scanner targets must not fall back to SPA HTML with HTTP 200.
     # Exact and prefix locations win before the SPA regex fallback behavior used by try_files.

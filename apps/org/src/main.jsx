@@ -377,6 +377,19 @@ function Works({ api }) {
   }, [api, selectedWork]);
   // 作品先看**做出来的东西**（图/视频/音频），画布只是过程（用户 2026-09-21 口径）。
   const [workMediaView, setWorkMediaView] = useState('media');
+  // 「创作画布」那一档也要把快照里的素材地址换掉，否则那半屏**必然全是破图**：
+  // 快照里存的是学生域地址 `/api/student/file-assets/<id>/download`，而子资源请求带的是
+  // **机构端**的会话 —— 那条路只认学生角色，直接 403（2026-09-25 生产实测：`/org/works`
+  // 打开作品、24 个 403，响应体就是「当前角色无权访问此资源」）。判据与取值照
+  // `pages/classroom/ClassroomWork.jsx` 的 snapshotImage 抄一份（那边一直是这么做的）。
+  const snapshotImage = (value) => {
+    const raw = String(value || '');
+    const match = raw.match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:[?#].*)?$/);
+    if (match) return workImageData[match[1]] || null;
+    const entry = Object.entries(selectedWork?.imageUrls || {}).find(([, path]) => path === raw);
+    if (entry) return workImageData[entry[0]] || null;
+    return /^data:image\//i.test(raw) || /^https:\/\//i.test(raw) || /^\/(?!\/|api\/student\/file-assets\/)/.test(raw) ? raw : null;
+  };
   // VibeCoding 产物的预览走弹窗（画布那半仍是就地开只读画布）
   const [vibeWork, setVibeWork] = useState(null);
   const [featureAction, setFeatureAction] = useState(null);
@@ -434,7 +447,7 @@ function Works({ api }) {
           <button type="button" role="tab" aria-selected={workMediaView === 'canvas'} className={workMediaView === 'canvas' ? 'primary-button' : 'secondary-button'} onClick={() => setWorkMediaView('canvas')}>创作画布</button>
         </div>
         {workMediaView === 'canvas'
-          ? <CanvasEditor key={selectedWork.id} initialSnapshot={selectedWork.canvasSnapshot} readOnly />
+          ? <CanvasEditor key={selectedWork.id} initialSnapshot={selectedWork.canvasSnapshot} readOnly resolveAssetUrl={snapshotImage} />
           : <WorkMediaGallery media={selectedWork.media} assets={selectedWork.assets} resolveSrc={(item) => (item?.fileId ? (workImageData[item.fileId] || selectedWork.imageUrls?.[item.fileId] || '') : '')} />}
       </Panel>
     </>}

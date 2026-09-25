@@ -1,4 +1,4 @@
-import { asPositiveInteger, audit, clearAuthCookie, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap } from '../lib.js';
+import { asPositiveInteger, audit, clearAuthCookies, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap } from '../lib.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
@@ -440,7 +440,7 @@ export async function handleStudent(ctx) {
       sessionsRevoked = (await aq('UPDATE sessions SET superseded_at = ? WHERE user_id = ? AND org_id = ? AND superseded_at IS NULL', [now, auth.user.id, auth.user.orgId])).changes;
     });
     await audit(ctx, 'STUDENT_PASSWORD_CHANGE', 'USER', auth.user.id, null, { sessionsRevoked });
-    ctx.setCookie = clearAuthCookie();
+    ctx.setCookie = clearAuthCookies();
     return { passwordChanged: true, sessionsRevoked, reloginRequired: true };
   }
 
@@ -453,7 +453,7 @@ export async function handleStudent(ctx) {
     await aq('UPDATE sessions SET superseded_at = ? WHERE id = ? AND superseded_at IS NULL', [nowIso(), session.id]);
     await audit(ctx, 'STUDENT_SESSION_REVOKE', 'SESSION', session.id);
     const current = session.id === ctx.auth.session.id;
-    if (current) ctx.setCookie = clearAuthCookie();
+    if (current) ctx.setCookie = clearAuthCookies();
     return { revoked: true, id: session.id, reloginRequired: current };
   }
 

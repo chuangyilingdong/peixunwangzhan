@@ -120,9 +120,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  const authResult = await resolveAuth(req);
+  // 请求上下文先算出来：解析会话时要知道**路径** —— 三个前端同源，各自用自己的会话 cookie
+  // （`/api/org` 认 `platform_token_org`、`/api/admin` 认 `platform_token_admin`，其余认老名字）。
+  // 见 lib.js 的 readToken / setAuthCookie。
+  const context = requestContext(req);
+  const authResult = await resolveAuth(req, context.pathname);
   const ctx = {
-    ...requestContext(req),
+    ...context,
     req,
     res,
     body: {},

@@ -251,14 +251,47 @@ export function sendNoContent(res, req, extraHeaders = {}) {
   res.end();
 }
 
-function readToken(req) {
+// ── 会话 cookie 的分端隔离（2026-09-25）──────────────────────────────────────────────
+// 为什么要有"三个名字"：三个前端在生产上同源（aicyld.com 的 /、/admin/、/org/），而 cookie 是
+// **浏览器级、只有一个名字**——谁最后登录谁把它顶掉。学生画布里的画面是 `<img>` 子资源请求，
+// 只能靠 cookie 认证（带不了 Authorization），于是"后台/机构端登一次，学生画布上所有素材 403"：
+// 2026-09-25 生产实测，9 张图 9 个 403，响应体正是 `requireRole(['STUDENT'])` 那条
+// 「当前角色无权访问此资源」。localStorage 早就按端分桶了（见 packages/shared/src/auth.js），
+// cookie 这次跟上：**每端自己的名字 + 自己的路径**，互相顶不掉。
+//   · 学生端/官网：`platform_token`、`Path=/` —— 沿用老名字，学生浏览器里的 cookie 一个字节不用变；
+//   · 机构端：`platform_token_org`、`Path=/api/org`（子资源都在 `/api/org/**` 下）；
+//   · 平台端：`platform_token_admin`、`Path=/api/admin`。
+// 读的时候按**请求路径**挑这一端的名字，找不到再退回老名字（老浏览器里 `Path=/` 的旧 cookie 还在，
+// 不能一刀切断；超管用它看学生素材也照旧放行 —— 那是 authorizeFileAccess 的事）。
+const LEGACY_COOKIE_NAME = 'platform_token';
+const SCOPED_COOKIE_NAMES = { admin: 'platform_token_admin', org: 'platform_token_org' };
+export const SCOPED_COOKIE_PATHS = { admin: '/api/admin', org: '/api/org' };
+
+/** 这条路该认哪个 cookie 名（学生端/官网 = 老名字） */
+function authCookieNameForPath(pathname) {
+  const path = String(pathname || '');
+  for (const [clientType, prefix] of Object.entries(SCOPED_COOKIE_PATHS)) {
+    if (path === prefix || path.startsWith(prefix + '/')) return SCOPED_COOKIE_NAMES[clientType];
+  }
+  return LEGACY_COOKIE_NAME;
+}
+
+function readCookieValue(req, name) {
+  const part = String(req.headers?.cookie || '')
+    .split(/;\s*/)
+    .find((item) => item.startsWith(name + '='));
+  return part ? decodeURIComponent(part.slice(name.length + 1)) : null;
+}
+
+function readToken(req, pathname = '') {
   const authorization = String(req.headers?.authorization || '').trim();
   const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   if (bearer) return bearer;
-  const cookie = String(req.headers?.cookie || '')
-    .split(/;\s*/)
-    .find((part) => part.startsWith('platform_token='));
-  return cookie ? decodeURIComponent(cookie.slice('platform_token='.length)) : null;
+  // 这一端的名字 → 老名字 → 另一端（兼容：同一个浏览器里跨端看东西，例如超管看学生素材）
+  return readCookieValue(req, authCookieNameForPath(pathname))
+    || readCookieValue(req, LEGACY_COOKIE_NAME)
+    || readCookieValue(req, SCOPED_COOKIE_NAMES.admin)
+    || readCookieValue(req, SCOPED_COOKIE_NAMES.org);
 }
 
 export function assertUserAccountAvailable(user, org = null) {
@@ -274,8 +307,8 @@ export function assertUserAccountAvailable(user, org = null) {
   }
 }
 
-export async function resolveAuth(req) {
-  const token = readToken(req);
+export async function resolveAuth(req, pathname = '') {
+  const token = readToken(req, pathname);
   if (!token) return { auth: null, error: null };
   const session = await arow('SELECT * FROM sessions WHERE token_hash = ?', [tokenHash(token)]);
   if (!session) {
@@ -297,8 +330,8 @@ export async function resolveAuth(req) {
   return { auth: { token, session, user: normalizeUser(user, { includeAuthMeta: true }), rawUser: user, org }, error: null };
 }
 
-export async function getAuth(req) {
-  return (await resolveAuth(req)).auth;
+export async function getAuth(req, pathname = '') {
+  return (await resolveAuth(req, pathname)).auth;
 }
 
 export function requireAuth(ctx) {
@@ -1307,12 +1340,25 @@ export async function audit(ctx, action, targetType, targetId, beforeData = null
   ]);
 }
 
-export function setAuthCookie(token) {
-  return 'platform_token=' + encodeURIComponent(token) + '; Path=/; HttpOnly; SameSite=Lax' + (COOKIE_SECURE ? '; Secure' : '') + '; Max-Age=' + (TOKEN_TTL_DAYS * 86400);
+/** 按端签这一端的会话 cookie（学生端/官网沿用老名字与 `Path=/`；见上面那段的来龙去脉）。 */
+export function setAuthCookie(token, clientType = 'web') {
+  const scoped = SCOPED_COOKIE_NAMES[clientType];
+  const name = scoped || LEGACY_COOKIE_NAME;
+  const path = SCOPED_COOKIE_PATHS[clientType] || '/';
+  return name + '=' + encodeURIComponent(token) + '; Path=' + path + '; HttpOnly; SameSite=Lax' + (COOKIE_SECURE ? '; Secure' : '') + '; Max-Age=' + (TOKEN_TTL_DAYS * 86400);
 }
 
-export function clearAuthCookie() {
-  return 'platform_token=; Path=/; HttpOnly; SameSite=Lax' + (COOKIE_SECURE ? '; Secure' : '') + '; Max-Age=0';
+/**
+ * 退出登录：**三个名字一起清**（谁在哪个端登出的都清干净，不留一个还在用的会话 cookie）。
+ * 返回数组 —— 一次响应里要发多条 Set-Cookie（见 index.js 的 setCookie 处理）。
+ */
+export function clearAuthCookies() {
+  const suffix = '; HttpOnly; SameSite=Lax' + (COOKIE_SECURE ? '; Secure' : '') + '; Max-Age=0';
+  return [
+    `${LEGACY_COOKIE_NAME}=; Path=/${suffix}`,
+    `${SCOPED_COOKIE_NAMES.org}=; Path=${SCOPED_COOKIE_PATHS.org}${suffix}`,
+    `${SCOPED_COOKIE_NAMES.admin}=; Path=${SCOPED_COOKIE_PATHS.admin}${suffix}`,
+  ];
 }
 
 export function tokenExpiresAt() {

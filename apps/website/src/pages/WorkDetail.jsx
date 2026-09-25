@@ -59,6 +59,16 @@ export function WorkDetailPage({ api }) {
     return () => { cancelled = true; };
   }, [api, work]);
   const isVibeCoding = work?.type === 'VIBECODING';
+  // 「创作画布」那一档也要把快照里的地址换掉，否则访客看到的是**整屏破图**：
+  // 快照里存的是学生域地址 `/api/student/file-assets/<id>/download`，访客没登录、那条路必然 401
+  // （2026-09-25 生产实测：画布上那张图 naturalWidth=0）。换成这份作品专属的公开代理 ——
+  // 服务端已经在 `media` 里给了同样的地址（见 routes/communication/public.js 那段说明），照着映射即可。
+  const canvasImage = (value) => {
+    const raw = String(value || '');
+    const match = raw.match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:[?#].*)?$/);
+    if (!match) return raw;   // 上游图床的外链、data:、站内相对地址都原样用
+    return (work?.media || []).find((item) => item.fileId === match[1])?.url || null;
+  };
   // 加载中也要先定好外壳：token 前缀已经说明它是哪一类作品，
   // 不然深色页会先闪一下浅色版式。
   const isVibeToken = String(token).startsWith('vbt_');
@@ -191,7 +201,7 @@ export function WorkDetailPage({ api }) {
         <button type="button" role="tab" aria-selected={view === 'canvas'} className={'work-detail__tab' + (view === 'canvas' ? ' is-active' : '')} onClick={() => setView('canvas')}>创作画布</button>
       </div>
       {view === 'canvas'
-        ? <div className="work-detail__canvas"><CanvasEditor key={work.id} initialSnapshot={work.canvasSnapshot} readOnly showStarter={false} /></div>
+        ? <div className="work-detail__canvas"><CanvasEditor key={work.id} initialSnapshot={work.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={canvasImage} /></div>
         : <WorkMediaGallery media={work.media} assets={work.assets} resolveSrc={(item) => (item?.fileId ? imageData[item.fileId] || work.imageUrls?.[item.fileId] || '' : '')} />}
       <div className="work-detail__foot"><Link className="button soft" to="/works">看看更多作品</Link></div>
     </> : null}
