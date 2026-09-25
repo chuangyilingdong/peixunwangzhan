@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import { db, q, rows, row, count, json, parseJson, jsonText, transaction, aq, arows, arow, aone, acount, atransaction, amap, dialect, isMysql, SQL_MAX, SQL_MIN } from '../../../packages/database/src/store.js';
 import { AUTH_PEPPER, CORS_ALLOWED_ORIGINS } from './config.js';
 import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, inputModeShortLabel, normalizeInputModeValue, normalizeAudioRole, audioRoleShortLabel, requiresFirstFrameFor, MUSIC_MODES } from './services/modelCapabilities.js';
-import { previewKindFor, signPreviewTicket } from './services/materialPreview.js';
+import { previewKindFor, previewModeFor, signPreviewTicket } from './services/materialPreview.js';
 
 const TOKEN_TTL_DAYS = 7;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.DEPLOYMENT_MODE === 'internal-test' || process.env.NODE_ENV === 'production';
@@ -898,12 +898,15 @@ export async function lessonCanvasConfig(lessonId, override = null) {
  */
 export async function previewInfoFor(fileAssetId) {
   const id = String(fileAssetId || '').trim();
-  if (!id) return { previewKind: null, previewUrl: null };
+  if (!id) return { previewKind: null, previewMode: null, previewUrl: null };
   const file = await arow('SELECT mime_type, file_name FROM file_assets WHERE id=?', [id]);
-  if (!file) return { previewKind: null, previewUrl: null };
+  if (!file) return { previewKind: null, previewMode: null, previewUrl: null };
   const { ticket } = signPreviewTicket(id);
   return {
     previewKind: previewKindFor({ mimeType: file.mime_type, fileName: file.file_name }),
+    // 形态（2026-09-25）：PPT 走**放映**（一屏一张 + 缩略图条），Word/PDF 仍连续滚动阅读。
+    // 两者背后都是转换出来的 PDF，但"PPT 形式"只能靠放映形态给 —— 见 materialPreview.js。
+    previewMode: previewModeFor({ mimeType: file.mime_type, fileName: file.file_name }),
     previewUrl: `/api/org/file-assets/${encodeURIComponent(id)}/preview?t=${encodeURIComponent(ticket)}`,
   };
 }

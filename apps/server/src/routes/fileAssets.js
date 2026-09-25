@@ -21,9 +21,13 @@ import {
   previewInfoFor, arows, arow, aq, jsonText, isMysql } from '../lib.js';
 import { assertTransition } from '../services/domainState.js';
 import { maxUploadBytes, parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
-import { ensurePreviewPdf, needsConversion, previewKindFor, verifyPreviewTicket } from '../services/materialPreview.js';
+import { ensurePreviewPdf, needsConversion, previewKindFor, verifyPreviewTicket, previewPdfInOss, publishPreviewPdf } from '../services/materialPreview.js';
 import { reserveUpload } from '../services/uploadLimits.js';
 import { rowStorageBackend, ossRedirectUrl, materializeObject } from '../services/fileStorage.js';
+import { ossConfigured, signedUrl } from '../services/objectStorage.js';
+
+/** 预览 302 到 OSS 的签名有效期（1 小时，与预览票据同量级）。 */
+const PREVIEW_LINK_TTL_SECONDS = 3600;
 
 const STORAGE_KINDS = new Set(['EXTERNAL_URL', 'INTERNAL_PROXY', 'PENDING']);
 const VISIBILITY_MODES = new Set(['PRIVATE', 'ORG', 'ASSIGNED_ORGS', 'PUBLIC_PLATFORM', 'PUBLIC_RELEASE']);
@@ -679,7 +683,7 @@ export async function handleAdminFileAssets(ctx) {
  * ⚠️ 边界：能渲染就能被录屏/截屏，这是 web 的物理限制；这里保证的是「没有下载入口 +
  *    链接带短时票据 + 原始 Office 文件不外发」。
  */
-export async function prepareFilePreview(ctx, file) {
+export async function prepareFilePreview(ctx, file, { ossOffload = false } = {}) {
   const kind = previewKindFor({ mimeType: file.mime_type, fileName: file.file_name });
   let servePath = null;
   let mimeType = file.mime_type || 'application/octet-stream';
@@ -687,10 +691,39 @@ export async function prepareFilePreview(ctx, file) {
   const root = uploadRoot();
   const storageKey = String(file.storage_key || '').replaceAll('\\', '/');
   if (!storageKey || storageKey.startsWith('/') || /^[A-Za-z]:/.test(storageKey) || storageKey.split('/').includes('..')) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+
+  // ⭐ 2026-09-25：OSS 行 + 调用方允许跳转 → **302 到签名地址，字节不过这台机**
+  //    （这台机公网出口只有 5 Mbps；一份课件转出来的 PDF 有几 MB 到几十 MB，
+  //     从这儿流出去就是全班一起等。口径见交接 §〇 ⭐4）。
+  //    `ossOffload` 是**调用方**显式打开的：只有自己渲染的页面才用得上（pdf.js 走 fetch、
+  //    桶上配了 CORS）。把预览地址塞进 `<iframe>` 的地方（平台端作品文件）不能跳 ——
+  //    站点 CSP 的 `default-src 'self'` 会把跨域 iframe 直接挡掉，那是白屏不是预览。
+  const ossRow = rowStorageBackend(file) === 'oss';
+  const offloadPossible = ossRow && ossOffload && ossConfigured();
+  const redirect = (url) => ({
+    __fileResponse: true, status: 302,
+    // 10 分钟内重复打开直接命中缓存（签名本身 1 小时有效，缓存的跳转目标仍然可用）
+    headers: { 'cache-control': 'private, max-age=600', 'x-content-type-options': 'nosniff' },
+    redirectUrl: url,
+  });
+  if (offloadPossible) {
+    if (!needsConversion(kind)) {
+      const url = ossRedirectUrl(file, { expires: PREVIEW_LINK_TTL_SECONDS });
+      if (url) return redirect(url);
+    } else {
+      // 已经转好并推上 OSS 的这一份 —— 连 LibreOffice 都不用跑
+      const published = await previewPdfInOss(file.id, file.file_size);
+      if (published) {
+        const url = signedUrl(published, { expires: PREVIEW_LINK_TTL_SECONDS });
+        if (url) return redirect(url);
+      }
+    }
+  }
+
   // OSS 行：预览必须先把对象取到本地 —— Office 转换（LibreOffice）只认本地文件路径。
   // 落到 uploads 下的一个缓存目录（该目录不在 web 根内），文件名用 file.id，同一份只下一次。
   let absolute;
-  if (rowStorageBackend(file) === 'oss') {
+  if (ossRow) {
     const scratch = path.resolve(root, '.oss-preview-cache', `${file.id}${path.extname(storageKey) || ''}`);
     try {
       absolute = await materializeObject(file, scratch);
@@ -707,6 +740,15 @@ export async function prepareFilePreview(ctx, file) {
     // 转不出来就明说「无法预览」，**绝不回退去发原始 Office 文件** —— 那等于把下载又放回来了
     if (!converted) throw errors.badRequest('这份课件暂时无法在线预览（转换失败），请联系平台', 'PREVIEW_CONVERSION_FAILED');
     servePath = converted; mimeType = 'application/pdf';
+    // 转好之后顺手推一份到 OSS：这一次请求不必等它（下面照旧从本地发），
+    // 从此**每一次**预览都是 302 —— 本机不再搬课件字节。
+    if (offloadPossible) {
+      const published = await publishPreviewPdf({ fileId: file.id, pdfPath: converted, sourceSize: file.file_size });
+      if (published) {
+        const url = signedUrl(published, { expires: PREVIEW_LINK_TTL_SECONDS });
+        if (url) return redirect(url);
+      }
+    }
   } else {
     servePath = absolute;
   }
@@ -764,7 +806,10 @@ export async function handleOrgFileAssets(ctx) {
       await authorizeFileAccess(ctx, fileId, 'READ');
     }
     await audit(ctx, 'FILE_PREVIEW', 'FILE_ASSET', file.id, null, { ticket: ticketOk });
-    return await prepareFilePreview(ctx, file);
+    // ⭐ 这一条**允许 302 到 OSS**：老师的预览器是自己渲染的（pdf.js 走 fetch 读 PDF、
+    //    图片/视频是 <img>/<video>），两样都跟得上跨域跳转。别的地方（作品文件走 <iframe>）
+    //    不能跳 —— 站点 CSP 的 default-src 'self' 会把跨域 iframe 挡成白屏。
+    return await prepareFilePreview(ctx, file, { ossOffload: true });
   }
 
   const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER', 'STUDENT']);

@@ -328,6 +328,70 @@ export async function deleteObject(key) {
 }
 
 /**
+ * 读桶的 CORS 规则（诊断/守卫用；没配过返回 null）。
+ * ⚠️ 为什么这块配置**是功能的一部分**、不是可选的优化：
+ *   浏览器里"读得到响应体"的请求（pdf.js 的 `fetch`、canvas 作品把图收成 blob）走的是
+ *   **CORS 模式**，响应头也必须**在 ExposeHeader 里列出来**才读得到。具体两条：
+ *     · `Accept-Ranges` → pdf.js 靠它决定"能不能只取需要的页"；
+ *     · `Content-Range` → 一旦按段取（206），解析时必须读它，读不到就直接报
+ *       `Missing or invalid "Content-Range" header` 并**整个文档失败**。
+ *   少了这两条，大课件的预览要么整份下完才出画面，要么直接报错 —— 都属于"配置不像代码"的坑。
+ */
+export async function getBucketCors() {
+  if (!ossConfigured()) return null;
+  const c = cfg();
+  const date = new Date().toUTCString();
+  const signature = signV1({ verb: 'GET', key: '', dateOrExpires: date, subResources: { cors: true } });
+  const res = await fetch(`https://${c.bucket}.${internalEndpoint()}/?cors`, {
+    method: 'GET',
+    headers: { Date: date, Authorization: `OSS ${c.accessKeyId}:${signature}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) return null;
+  const text = await res.text();
+  return { xml: text, rules: corsRulesOf(text) };
+}
+
+/** CORS 文档 → 规则数组（够用的解析：只认 AllowedOrigin/Method/ExposeHeader/MaxAge） */
+export function corsRulesOf(xml) {
+  const rules = [];
+  for (const block of String(xml || '').matchAll(/<CORSRule>([\s\S]*?)<\/CORSRule>/g)) {
+    const pick = (tag) => [...block[1].matchAll(new RegExp(`<${tag}>([^<]*)</${tag}>`, 'g'))].map((m) => m[1]);
+    rules.push({
+      allowedOrigins: pick('AllowedOrigin'),
+      allowedMethods: pick('AllowedMethod'),
+      exposeHeaders: pick('ExposeHeader'),
+      maxAgeSeconds: Number(pick('MaxAgeSeconds')[0] || 0) || null,
+    });
+  }
+  return rules;
+}
+
+/** 装一条 CORS 规则上去（会**覆盖**原有规则，所以调用方必须自己确认过要写什么）。 */
+export async function putBucketCors(xml) {
+  if (!ossConfigured()) throw new Error('OSS 未配置，无法设置 CORS');
+  const c = cfg();
+  const body = Buffer.from(String(xml), 'utf8');
+  const date = new Date().toUTCString();
+  const signature = signV1({ verb: 'PUT', key: '', contentType: 'application/xml', dateOrExpires: date, subResources: { cors: true } });
+  const res = await fetch(`https://${c.bucket}.${internalEndpoint()}/?cors`, {
+    method: 'PUT',
+    headers: {
+      Date: date,
+      'Content-Type': 'application/xml',
+      'Content-Length': String(body.length),
+      Authorization: `OSS ${c.accessKeyId}:${signature}`,
+    },
+    body,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`OSS 设置 CORS 失败：HTTP ${res.status} ${text.slice(0, 300)}`);
+  }
+  return { ok: true };
+}
+
+/**
  * 不带任何凭据的自检：只验证**签名算法本身**（HMAC-SHA1 + 待签串拼法）没被改坏。
  * 用固定输入算出一个固定摘要，由 scripts/p136-oss-signature.mjs 钉住期望值。
  * 不需要 OSS 配置也能跑 —— 真正的连通性验证要等密钥到位后走 deploy/production/migrate/09-verify-oss.mjs。

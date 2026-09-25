@@ -1328,6 +1328,25 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .ta-image { display:block; max-width:100%; max-height:74vh; margin:auto; }
 .ta-panel:fullscreen .ta-image { max-height:calc(100vh - 140px); }
 
+/* 放映形态（2026-09-25）：PPT 一屏一张、整张适应窗口 —— 这是"PPT 形式"与"文档滚动"的分别。
+   margin:auto（而不是 place-items:center）是为了**放大溢出时仍能滚到左上角**：
+   grid 的 place-items:center 会在内容比容器大时把上/左边裁掉，那是看不全的幻灯片。 */
+.ta-slide-stage { position:absolute; inset:0; display:grid; overflow:auto; padding:18px; }
+.ta-slide-slot { position:relative; margin:auto; background:#fff; box-shadow:0 10px 30px rgb(0 0 0 / 45%); }
+.ta-slide-nav { position:absolute; top:50%; z-index:3; transform:translateY(-50%); width:46px; height:76px; display:grid; place-items:center;
+  border:0; border-radius:12px; background:rgb(20 14 40 / 42%); color:#fff; font-size:30px; line-height:1; cursor:pointer; }
+.ta-slide-nav:hover:not(:disabled) { background:rgb(20 14 40 / 62%); }
+.ta-slide-nav:disabled { opacity:.25; cursor:default; }
+.ta-slide-nav.prev { left:10px; }
+.ta-slide-nav.next { right:10px; }
+/* 缩略图条：点哪张跳哪张。画布是进视口才画的（见组件里的 IntersectionObserver）。 */
+.ta-rail { flex:none; display:flex; align-items:flex-start; gap:8px; padding:10px 12px; overflow-x:auto; background:#241d3d; border-top:1px solid rgb(255 255 255 / 12%); }
+.ta-thumb { flex:none; display:grid; justify-items:center; gap:4px; padding:4px; border:2px solid transparent; border-radius:8px; background:transparent; cursor:pointer; }
+.ta-thumb.on { border-color:#7c5cff; }
+.ta-thumb canvas { display:block; background:#fff; border-radius:3px; }
+.ta-thumb span { color:rgb(255 255 255 / 72%); font-size:11px; font-variant-numeric:tabular-nums; }
+.ta-thumb.on span { color:#fff; font-weight:700; }
+
 /* 行内操作与状态徽标不许折行：半栏里的表格会出现「查看详 / 情」这种尴尬断行
    （2026-09-17 教师工作台截图里就是这个）。 */
 .table-wrap td .text-button,

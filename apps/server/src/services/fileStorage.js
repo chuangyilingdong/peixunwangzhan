@@ -10,6 +10,7 @@
  *   ① env 里有 FILE_STORAGE=oss
  *   ② OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET / 端点 都齐
  */
+import { stat } from 'node:fs/promises';
 import { parseJson } from '@platform/database';
 import { ossConfigured, storageBackend, putObject, signedUrl, getObjectToFile, headObject, withPrefix, deleteObject, ossInfo } from './objectStorage.js';
 
@@ -69,6 +70,14 @@ export async function materializeObject(file, destPath) {
   if (!key) throw new Error('这一行没有 storage_key');
   const probe = await headObject(key).catch(() => ({ exists: false }));
   if (!probe.exists) throw new Error(`OSS 上找不到对象：${key}`);
+  // ⭐ 2026-09-25：本地那份**字节数对得上就直接用**，不再无条件重下一次。
+  //    看起来只是"省一次下载"，其实还救了一件事：转换缓存（.preview/*.pdf）判"新不新"
+  //    用的是源文件 mtime，而每写一次本地副本 mtime 就变成"现在" ——
+  //    于是**每看一次课件都重跑一遍 LibreOffice**（106MB 那份要一分多钟）。
+  try {
+    const local = await stat(destPath);
+    if (local.isFile() && Number(probe.size) > 0 && local.size === Number(probe.size)) return destPath;
+  } catch { /* 本地没有/读不到，往下走去下载 */ }
   await getObjectToFile(key, destPath);
   return destPath;
 }

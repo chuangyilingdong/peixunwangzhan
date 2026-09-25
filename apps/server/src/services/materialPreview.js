@@ -10,16 +10,27 @@
  *   只要浏览器能显示，字节就到达了客户端 —— 录屏、截屏、开发者工具都拦不住。
  *   这里能做到的是：不给下载入口、URL 带**短时签名票据**（复制给别人也很快失效）、
  *   界面盖水印。**拦不住决心要存的人**，这是 web 的物理限制，不是实现缺陷。
+ *
+ * 2026-09-25 两处新增：
+ *   · `previewModeFor`：把「幻灯片」与「文档」分开。PPT 走**放映形态**（一屏一张 + 缩略图条，
+ *     见 apps/org 的 TeachingAssetViewer），Word / PDF 仍走连续滚动的文档形态。
+ *   · `publishPreviewPdf`：转出来的 PDF **推到 OSS**，之后预览是 302 到签名地址 ——
+ *     本机那 5 Mbps 出口不再搬课件字节（从前每看一次都要从这台机流出整份 PDF）。
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { mkdir, readdir, stat } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
+import { ossConfigured, putObject, headObject } from './objectStorage.js';
 
 const PREVIEW_DIR = '.preview';
-const CONVERT_TIMEOUT_MS = 120000;
+const CONVERT_TIMEOUT_MS = 300000; // 300s：106MB 的课件转出来要一分多钟，120s 会把它判死
 const TICKET_TTL_MS = 60 * 60 * 1000; // 1 小时：够一节课看完，转发出去也很快失效
 const OFFICE_EXTENSIONS = ['.ppt', '.pptx', '.doc', '.docx', '.odp', '.odt', '.xls', '.xlsx'];
+// 「幻灯片」形态：只按扩展名/类型判，不看内容。PPT 才按一屏一张放映，Word 仍是文档。
+const SLIDE_EXTENSIONS = ['.ppt', '.pptx', '.pps', '.ppsx', '.odp'];
+/** 预览产物在 OSS 里的目录（相对键，最终还会带上 OSS_PREFIX） */
+const PREVIEW_OBJECT_DIR = '_preview';
 
 /** 预览形态：决定前端用什么元素渲染，与后端要不要转换。 */
 export function previewKindFor({ mimeType = '', fileName = '' } = {}) {
@@ -36,6 +47,22 @@ export function previewKindFor({ mimeType = '', fileName = '' } = {}) {
 /** 只有 Office 文档需要转换；其它形态浏览器自己就能渲染。 */
 export function needsConversion(kind) {
   return kind === 'OFFICE';
+}
+
+/**
+ * 预览**形态**：'SLIDES'（成套幻灯片，一屏一张）还是 'DOCUMENT'（连续排版的文档）。
+ * 两者都可能是 OFFICE 转换来的 PDF，但观感完全不同 —— PPT 当文档滚动不是"PPT 形式"。
+ */
+export function previewModeFor({ mimeType = '', fileName = '' } = {}) {
+  const ext = path.extname(String(fileName || '')).toLowerCase();
+  if (SLIDE_EXTENSIONS.includes(ext)) return 'SLIDES';
+  // 没有扩展名时按 mime 兜底；识别不出来就当文档（滚动阅读，最保守）
+  if (/presentationml|ms-powerpoint/.test(String(mimeType || '').toLowerCase())) return 'SLIDES';
+  return 'DOCUMENT';
+}
+
+export function isSlideDeck(input) {
+  return previewModeFor(input) === 'SLIDES';
 }
 
 function secret() {
@@ -125,3 +152,50 @@ export async function ensurePreviewPdf({ sourcePath, cacheKey }) {
 
 /** 预览缓存目录名，供清理脚本/守卫识别（不要当成用户上传的文件）。 */
 export const PREVIEW_CACHE_DIR = PREVIEW_DIR;
+
+/**
+ * 转换产物在 OSS 里的**对象键**（相对键，putObject 会补上 OSS_PREFIX）。
+ *
+ * 键里带**源文件字节数**，于是"这份 PDF 还算不算数"不用查库、不用比时间戳：
+ * 对象在 = 就是这份源文件转出来的；源文件被换掉（字节数变了）→ 键跟着变 → 自然重转。
+ * `size` 拿不到时退回不带尺寸的老式键（宁可多转一次，也不给错版本的 PDF）。
+ */
+export function previewPdfObjectKey(fileId, sourceSize) {
+  const id = String(fileId || '').trim();
+  const size = Number(sourceSize);
+  if (!id) return null;
+  return `${PREVIEW_OBJECT_DIR}/${id}${Number.isFinite(size) && size > 0 ? `-${size}` : ''}.pdf`;
+}
+
+/** 这份转换产物在 OSS 上有没有（探测失败一律当"没有" → 走转换，绝不给一个不存在的地址）。 */
+export async function previewPdfInOss(fileId, sourceSize) {
+  const key = previewPdfObjectKey(fileId, sourceSize);
+  if (!key || !ossConfigured()) return null;
+  try {
+    const head = await headObject(key);
+    return head.exists && head.size > 0 ? key : null;
+  } catch { return null; }
+}
+
+/**
+ * 把转好的 PDF 推到 OSS（幂等：大小一致就不重传）。
+ * 返回对象键；**任何一步失败都返回 null**（调用方退回"本机流式发"这条老路，
+ * 宁可这一次仍占带宽，也不能让老师看到"无法预览"）。
+ */
+export async function publishPreviewPdf({ fileId, pdfPath, sourceSize }) {
+  const key = previewPdfObjectKey(fileId, sourceSize);
+  if (!key || !ossConfigured()) return null;
+  try {
+    const info = await stat(pdfPath);
+    if (!info.isFile() || info.size <= 0) return null;
+    const head = await headObject(key).catch(() => ({ exists: false, size: 0 }));
+    if (head.exists && Number(head.size) === info.size) return key;
+    // Cache-Control 写在**对象**上（阿里云不允许在签名 URL 上覆盖它）：同一份课件反复看时
+    // 浏览器直接命中缓存，连 OSS 的流量都省了。有效期与票据同量级（1 小时）。
+    await putObject(key, await readFile(pdfPath), 'application/pdf', { cacheControl: 'private, max-age=3600' });
+    return key;
+  } catch (error) {
+    console.error(`[materialPreview] 预览 PDF 推 OSS 失败（退回本机流式发）：${fileId} — ${error.message}`);
+    return null;
+  }
+}
