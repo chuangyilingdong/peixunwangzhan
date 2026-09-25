@@ -1,236 +1,534 @@
 {
-  "_note": "本机测试库的\"与生产对齐\"覆盖表：只收**生产比代码生成的结构更宽 / 更严（NOT NULL）/ 带默认值**的列。生成方式：导出生产 RDS 与本机重置后的 test 库的 information_schema.COLUMNS，逐列比对（scripts/rds-schema-diff.mjs --write 可刷新）。为什么要它：script 12 的列类型按**本机种子数据长度**定，生产那份按**真实数据**定 —— 种子很小，所以生产上 mediumtext 的列在本地成了 varchar(255)，一写大对象就 Data too long（假失败）。",
-  "generatedFrom": "RDS aild_admin @ 2026-09-24（MySQL 8.0.36）",
-  "columns": {
-    "analytics_events.metadata": {
-      "type": "varchar(255)",
-      "notNull": true,
-      "default": "{}"
-    },
-    "compute_attempts.sale_snapshot": {
-      "type": "varchar(256)",
-      "notNull": true
-    },
-    "course_lesson_materials.description": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "course_lesson_materials.snapshot": {
-      "type": "varchar(1216)",
-      "notNull": true,
-      "default": "{}"
-    },
-    "course_lesson_teaching_assets.description": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "course_lessons.canvas_template_snapshot": {
-      "type": "varchar(255)",
-      "notNull": true,
-      "default": "{}"
-    },
-    "course_lessons.classroom_config": {
-      "type": "varchar(2624)",
-      "notNull": true,
-      "default": "{}"
-    },
-    "course_lessons.lesson_content": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "course_lessons.summary": {
-      "type": "varchar(256)",
-      "notNull": true
-    },
-    "course_series_versions.note": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "course_series.description": {
-      "type": "varchar(256)",
-      "notNull": true
-    },
-    "file_assets.metadata": {
-      "type": "varchar(640)",
-      "notNull": true,
-      "default": "{}"
-    },
-    "generation_jobs.prompt": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "generation_jobs.reference_asset_urls": {
-      "type": "varchar(448)"
-    },
-    "help_feedback.body": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "leads.admin_notes": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "leads.notes": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "learning_task_submissions.student_note": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "learning_tasks.description": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "license_revenue_allocations.id": {
-      "type": "varchar(80)",
-      "notNull": true
-    },
-    "license_revenue_allocations.revenue_event_id": {
-      "type": "varchar(80)",
-      "notNull": true
-    },
-    "license_revenue_events.id": {
-      "type": "varchar(80)",
-      "notNull": true
-    },
-    "media_assets.asset_url": {
-      "type": "varchar(5568)",
-      "notNull": true
-    },
-    "media_assets.metadata": {
-      "type": "mediumtext",
-      "notNull": true,
-      "default": "{}",
-      "why": "2026-09-25 实测：生产数据已经超过当年定下的宽度（scripts/rds-column-fit.mjs），切库会失败/静默截断 → 目标结构改成 mediumtext"
-    },
-    "notification_events.body": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "notification_recipients.event_key": {
-      "type": "varchar(80)"
-    },
-    "notification_templates.body": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "notifications.body": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "platform_alert_thresholds.note": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "platform_config_change_logs.new_value": {
-      "type": "mediumtext",
-      "notNull": true
-    },
-    "platform_config_change_logs.old_value": {
-      "type": "mediumtext",
-      "notNull": true
-    },
-    "platform_modality_settings.description": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "platform_settings.ai_provider_policy": {
-      "type": "mediumtext",
-      "notNull": true
-    },
-    "project_snapshots.canvas_snapshot": {
-      "type": "mediumtext",
-      "notNull": true,
-      "why": "2026-09-25 实测：生产数据已经超过当年定下的宽度（scripts/rds-column-fit.mjs），切库会失败/静默截断 → 目标结构改成 mediumtext"
-    },
-    "promo_materials.description": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "student_enrollments.notes": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "student_enrollments.package_snapshot": {
-      "type": "varchar(256)",
-      "notNull": true,
-      "default": "{}"
-    },
-    "student_projects.canvas_snapshot": {
-      "type": "mediumtext",
-      "notNull": true
-    },
-    "student_projects.last_submitted_output_signature": {
-      "type": "mediumtext"
-    },
-    "usage_records.pricing_snapshot": {
-      "type": "varchar(1344)",
-      "notNull": true,
-      "default": "{}"
-    },
-    "vibecoding_artifacts.content": {
-      "type": "varchar(640)",
-      "notNull": true
-    },
-    "vibecoding_artifacts.generated_images": {
-      "type": "varchar(640)"
-    },
-    "vibecoding_messages.content": {
-      "type": "varchar(832)",
-      "notNull": true
-    },
-    "vibecoding_submissions.artifacts": {
-      "type": "mediumtext",
-      "notNull": true,
-      "default": "[]",
-      "why": "2026-09-25 实测：生产数据已经超过当年定下的宽度（scripts/rds-column-fit.mjs），切库会失败/静默截断 → 目标结构改成 mediumtext"
-    },
-    "vibecoding_submissions.description": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "vibecoding_submissions.files": {
-      "type": "mediumtext",
-      "notNull": true,
-      "default": "{}",
-      "why": "2026-09-25 实测：生产数据已经超过当年定下的宽度（scripts/rds-column-fit.mjs），切库会失败/静默截断 → 目标结构改成 mediumtext"
-    },
-    "vibecoding_submissions.transcript": {
-      "type": "varchar(2304)",
-      "notNull": true,
-      "default": "[]"
-    },
-    "website_content_revisions.content": {
-      "type": "varchar(2752)",
-      "notNull": true
-    },
-    "website_contents.draft_content": {
-      "type": "varchar(1728)",
-      "notNull": true,
-      "default": "{}"
-    },
-    "work_annotations.content": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "work_submissions.canvas_snapshot": {
-      "type": "mediumtext",
-      "notNull": true,
-      "why": "2026-09-25 实测：生产数据已经超过当年定下的宽度（scripts/rds-column-fit.mjs），切库会失败/静默截断 → 目标结构改成 mediumtext"
-    },
-    "work_submissions.description": {
-      "type": "varchar(255)",
-      "notNull": true
-    },
-    "works.canvas_snapshot": {
-      "type": "mediumtext",
-      "notNull": true,
-      "why": "2026-09-25 实测：生产数据已经超过当年定下的宽度（scripts/rds-column-fit.mjs），切库会失败/静默截断 → 目标结构改成 mediumtext"
-    },
-    "works.description": {
-      "type": "varchar(255)",
-      "notNull": true
-    }
+ "_note": "本机测试库的\"与生产对齐\"覆盖表：只收**生产比代码生成的结构更宽 / 更严（NOT NULL）**的列。生成方式：12 号脚本生成的 DDL 与生产 information_schema 逐列比对。⚠️ 2026-09-25 重算：非索引 TEXT 列已统一成 mediumtext（原来按\"当时数据长度\"定的 varchar，内容一长就 ER_DATA_TOO_LONG 500）；索引/外键列仍是 varchar，宽度按生产实际（本地按种子数据算会偏窄，夹具写长一点的值就 Data too long —— p52 的 idempotency_key 就是这么红的）。",
+ "generatedFrom": "RDS aild_admin @ 2026-09-25（列宽全量拉齐后按生成 DDL vs 生产重算）",
+ "columns": {
+  "account_requests.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "account_requests.resolved_by": {
+   "type": "varchar(255)"
+  },
+  "analytics_events.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "audit_logs.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "billing_packages.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "class_curriculum_items.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "class_members.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "class_members.class_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "class_members.user_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "class_sessions.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "classes.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "classes.org_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "classes.teacher_id": {
+   "type": "varchar(255)"
+  },
+  "client_download_releases.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "client_download_releases.version": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "compute_attempts.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "course_assignments.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "course_lesson_material_groups.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "course_lesson_materials.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "course_lesson_teaching_assets.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "course_lesson_teaching_groups.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "course_lessons.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "course_quota_changes.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "course_series.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "course_series.org_id": {
+   "type": "varchar(255)"
+  },
+  "course_series.cover_asset_id": {
+   "type": "varchar(255)"
+  },
+  "course_series_versions.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "credit_entries.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "credit_entries.reversal_of": {
+   "type": "varchar(255)"
+  },
+  "feature_flags.flag_key": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "feature_flags.created_by": {
+   "type": "varchar(255)"
+  },
+  "feature_flags.updated_by": {
+   "type": "varchar(255)"
+  },
+  "file_access_grants.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "file_access_grants.org_id": {
+   "type": "varchar(255)"
+  },
+  "file_access_grants.user_id": {
+   "type": "varchar(255)"
+  },
+  "file_access_grants.role": {
+   "type": "varchar(255)"
+  },
+  "file_access_grants.granted_by": {
+   "type": "varchar(255)"
+  },
+  "file_assets.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "file_assets.storage_key": {
+   "type": "varchar(255)"
+  },
+  "file_assets.created_by": {
+   "type": "varchar(255)"
+  },
+  "generation_jobs.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "help_feedback.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "help_feedback.handled_by": {
+   "type": "varchar(255)"
+  },
+  "leads.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "learning_task_progress.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "learning_task_submissions.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "learning_task_submissions.org_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "learning_task_submissions.project_id": {
+   "type": "varchar(255)"
+  },
+  "learning_tasks.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "learning_tasks.org_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "learning_tasks.lesson_id": {
+   "type": "varchar(255)"
+  },
+  "learning_tasks.created_by": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "legal_consents.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "legal_consents.org_id": {
+   "type": "varchar(255)"
+  },
+  "legal_consents.version": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "license_purchase_batches.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "license_purchase_batches.idempotency_key": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "license_revenue_allocations.id": {
+   "type": "varchar(80)",
+   "notNull": true
+  },
+  "license_revenue_allocations.revenue_event_id": {
+   "type": "varchar(80)",
+   "notNull": true
+  },
+  "license_revenue_events.id": {
+   "type": "varchar(80)",
+   "notNull": true
+  },
+  "license_revenue_events.reversal_of_event_id": {
+   "type": "varchar(255)"
+  },
+  "license_revenue_events.idempotency_key": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "media_assets.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "media_assets.job_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "media_assets.org_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "media_assets.user_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "notification_dispatch_jobs.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "notification_events.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "notification_events.org_id": {
+   "type": "varchar(255)"
+  },
+  "notification_events.created_by": {
+   "type": "varchar(255)"
+  },
+  "notification_recipients.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "notification_recipients.event_key": {
+   "type": "varchar(80)"
+  },
+  "notification_recipients.delivery_status": {
+   "type": "varchar(255)",
+   "notNull": true,
+   "default": "DELIVERED"
+  },
+  "notification_templates.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "notification_templates.created_by": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "notifications.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "notifications.sender_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "org_billing_accounts.org_id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "organizations.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "personal_credit_ledger.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "platform_alert_thresholds.alert_type": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "platform_credit_quotas.scope": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "platform_modality_settings.modality": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "platform_settings.id": {
+   "type": "bigint",
+   "notNull": true
+  },
+  "project_snapshots.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "promo_material_assignments.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "promo_material_events.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "promo_material_events.org_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "promo_material_events.user_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "promo_materials.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "promo_materials.created_by": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "recharge_orders.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "recharge_orders.order_no": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "session_students.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "sessions.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "sessions.token_hash": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "sessions.user_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "student_course_grants.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "student_enrollment_events.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "student_enrollment_events.org_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "student_enrollments.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "student_enrollments.package_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "student_lesson_progress.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "student_projects.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "usage_records.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "user_credit_adjustments.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "user_credit_adjustments.actor_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "user_mfa_credentials.user_id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "users.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "users.login": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "users.role": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "users.status": {
+   "type": "varchar(64)",
+   "notNull": true,
+   "default": "ACTIVE"
+  },
+  "users.deleted_at": {
+   "type": "varchar(64)"
+  },
+  "vibecoding_artifacts.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "vibecoding_conversations.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "vibecoding_messages.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "vibecoding_runs.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "vibecoding_submissions.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "vibecoding_submissions.share_token": {
+   "type": "varchar(255)"
+  },
+  "website_content_revisions.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "website_content_revisions.changed_by": {
+   "type": "varchar(255)"
+  },
+  "website_contents.content_key": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "website_contents.updated_by": {
+   "type": "varchar(255)"
+  },
+  "website_contents.published_by": {
+   "type": "varchar(255)"
+  },
+  "work_annotations.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "work_annotations.author_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "work_feedback_reads.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "work_feedback_reads.annotation_id": {
+   "type": "varchar(255)"
+  },
+  "work_publish_requests.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "work_publish_requests.project_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "work_publish_requests.student_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "work_publish_requests.resolved_by": {
+   "type": "varchar(255)"
+  },
+  "work_reports.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "work_reports.reporter_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "work_reports.handled_by": {
+   "type": "varchar(255)"
+  },
+  "work_submissions.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "work_submissions.project_id": {
+   "type": "varchar(255)",
+   "notNull": true
+  },
+  "works.id": {
+   "type": "varchar(64)",
+   "notNull": true
+  },
+  "works.share_token": {
+   "type": "varchar(255)"
   }
+ }
 }

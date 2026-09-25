@@ -149,7 +149,7 @@ export function StudentGrants({ api }) {
             <input readOnly value={!seriesId ? '先选课包' : noQuota ? '0 次（不可授权）' : `已用 ${quota.quotaUsed} / ${quotaTotal} 次 · 剩 ${remaining} 次`} />
           </label>
         </div>
-        {!items.length ? <Notice tone="info">当前机构还没有被平台授权的课包，请先在「课程中心」查看，或联系平台授权。</Notice> : null}
+        {!items.length ? <Notice tone="info">当前机构还没有被平台授权的课包，请先在「课程备课」里查看，或联系平台授权。</Notice> : null}
         {noQuota ? <Notice tone="warning">
           这个课包当前**可授权次数为 0**：平台还没有给本机构分配人次，所以现在不能授权。
         </Notice> : null}

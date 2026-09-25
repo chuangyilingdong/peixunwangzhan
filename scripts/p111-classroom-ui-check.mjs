@@ -259,6 +259,10 @@ try {
   await api(`/api/org/sessions/${c.id}/students`, { method: 'POST', token, body: { studentIds: rosterIds } });
   console.log('fixture ready:', { ended: a.id, dissolved: b.id, pending: c.id, selectable: grantedIds.length, noGrant: students.length - grantedIds.length });
 
+  // ⚠️ 2026-09-25：preview 之前**必须先构建** —— 这条守卫原来只跑 preview，serve 的是 `apps/org/dist`
+  //    这份**旧产物**：改了源码不重建，守卫照样绿（或像今天这样，新加的入口在界面上有、产物里没有）。
+  //    与 p115/p117 同一条口径：「不重建就绿得毫无意义」。
+  await run(['node_modules/vite/bin/vite.js', 'build', 'apps/org', '--config', 'apps/org/vite.config.mjs']);
   web = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', 'apps/org', '--config', 'apps/org/vite.config.mjs'], {
     cwd: root, env: { ...env, VITE_DEV_API_TARGET: `http://127.0.0.1:${apiPort}` }, stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -586,6 +590,18 @@ try {
   await orgPage.goto(`${base}/dashboard`, { waitUntil: 'domcontentloaded' });
   await orgPage.waitForURL(/\/dashboard/, { timeout: 20000 }).catch(() => {});
   await orgSettle();
+  // ⭐ 2026-09-25 用户口径：「课程中心藏得很深，应该放在左侧菜单栏里，文案改成：课程备课」——
+  //    机构管理员原来只能从工作台那张卡片点进去（侧栏没有它）。这里钉住入口**真的在侧栏里**、
+  //    而且指向 /courses（不是靠页面里别处出现"课程备课"四个字蒙混过关）。
+  {
+    const navEntry = orgPage.locator('.app-nav a', { hasText: '课程备课' });
+    const count = await navEntry.count();
+    if (count !== 1) problems.push(`机构管理员侧栏应有且只有一个「课程备课」入口（实际 ${count} 个）`);
+    else {
+      const href = await navEntry.getAttribute('href');
+      if (!String(href || '').endsWith('/courses')) problems.push(`侧栏「课程备课」指向 ${href}（应为 …/courses）`);
+    }
+  }
 
   // ── 002-01：四个页签都在（机构管理员能看到入口）
   await orgPage.goto(`${base}/series-overview`, { waitUntil: 'domcontentloaded' });

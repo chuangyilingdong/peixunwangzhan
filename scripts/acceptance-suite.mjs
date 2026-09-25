@@ -46,6 +46,10 @@ const HARNESS = new Set([
   // 切库前的「装得下」检查：**工具**（要显式给 --sqlite= 与 MYSQL_* 才会跑）——
   // 不登记的话会被套件当成一个测试跑，然后因为没有源库而失败。
   'scripts/rds-column-fit.mjs',
+  // 列宽余量体检（2026-09-25 那次「CMS 保存 500」之后加的）：**工具** —— 要连一个真 MySQL 库
+  // （`MYSQL_*`），而且有列超过阈值就退 1（那是给人看的信号，不是验收失败）。不登记就会在
+  // SQLite 套件里被当成一个测试跑、然后因为没有 MySQL 而红。
+  'scripts/rds-column-headroom.mjs',
   // 并行跑法（MySQL 侧专用）：它是**调度器**，会自己再起套件进程 —— 漏在名单外会被当成一个测试跑
   // （表现是"套件里再套一层套件"、超时）。
   'scripts/acceptance-suite-parallel.mjs',

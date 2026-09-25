@@ -614,7 +614,7 @@ export function SeriesOverview({ api }) {
                     <button className="secondary-button" type="button" onClick={() => goTab('students')}>学生授权中心<div className="muted">按学生看授权</div></button>
                     <button className="secondary-button" type="button" onClick={() => goTab('batches')}>采购与开通记录<div className="muted">人次从哪来</div></button>
                     <button className="secondary-button" type="button" onClick={() => goTab('grant')}>为学生添加课包<div className="muted">分发人次</div></button>
-                    <Link className="secondary-button" to="/courses">教学课程库<div className="muted">课包 / 课程 / 教学资料</div></Link>
+                    <Link className="secondary-button" to="/courses">课程备课<div className="muted">课包 / 课程 / 教学资料</div></Link>
                     <Link className="secondary-button" to="/members">机构成员管理<div className="muted">学生 / 教师 / 账号</div></Link>
                   </div>
                 </Panel>

@@ -73,7 +73,7 @@ export function CreateClassroom({ api, isAdmin, onCancel, onCreated, parentLabel
             <label>课包 *<SearchSelect ariaLabel="搜索课包" value={form.seriesId} options={seriesItems} placeholder="请选择课包"
               getLabel={(item) => item.title}
               onChange={(seriesId) => setForm({ ...form, seriesId, lessonId: '' })} />
-              <small className="muted">只能选择当前机构在「教学课程库」中可用于教学的课包。</small></label>
+              <small className="muted">只能选择当前机构在「课程备课」里可用于教学的课包。</small></label>
 
             <label>课程 *<SearchSelect ariaLabel="搜索课程" value={form.lessonId} options={lessonOptions} placeholder="请选择课程"
               getLabel={(item) => `第 ${item.sort} 节 · ${item.title}`} disabled={!form.seriesId}

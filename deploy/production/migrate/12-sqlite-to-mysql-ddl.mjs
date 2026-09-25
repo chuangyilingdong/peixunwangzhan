@@ -160,6 +160,22 @@ for (const ix of indexes) {
     if (col && !col.includes('(')) addIndexed(ix.tbl_name, col);
   }
 }
+// ⚠️ 2026-09-25：还有两类"被索引但上面没扫到"的列，**必须**算进来 ——
+//    非索引的 TEXT 列现在统一是 MEDIUMTEXT，而 TEXT 做不了索引键（`BLOB/TEXT column 'x' used in
+//    key specification without a key length`，本机重置实测全线失败过）：
+//      ① 外键列：MySQL 会自动为外键建索引；
+//      ② 内联 UNIQUE 生成的隐式索引（sqlite_autoindex_*，sqlite_master.sql 是 NULL，上面按 sql 扫漏了）。
+for (const m of meta) {
+  for (const match of m.body.join('\n').matchAll(/FOREIGN\s+KEY\s*\(([^)]*)\)/gi)) {
+    for (const raw of match[1].split(',')) {
+      const col = raw.trim().replace(/["'`]/g, '');
+      if (col && !col.includes('(')) addIndexed(m.table, col);
+    }
+  }
+}
+for (const ix of q(`SELECT name, tbl_name FROM sqlite_master WHERE type='index' AND sql IS NULL`)) {
+  for (const c of q(`SELECT * FROM pragma_index_info('${esc(ix.name)}')`)) addIndexed(ix.tbl_name, c.name);
+}
 
 // ── 第二遍：量每个 text 列的真实最大长度（类型选择的唯一依据） ──
 const maxLen = new Map();
@@ -215,9 +231,15 @@ for (const m of meta) {
       fixedWidth = size * 4;
       if (len > 255) notes.push(`⚠️ ${m.table}.${c.name} 是索引列但真实数据最长 ${len} 字符 > 255 —— **必须人工决定**（前缀索引？换做法？）`);
     } else {
-      const size = len === 0 ? minVarchar : Math.max(minVarchar, Math.ceil((len * 1.2) / 64) * 64);
-      mysqlType = size <= 16383 ? `VARCHAR(${size})` : 'MEDIUMTEXT';
-      fixedWidth = mysqlType === 'MEDIUMTEXT' ? MEDIUMTEXT_COST : size * 4;
+      // ⚠️ 2026-09-25：非索引的 TEXT 列**一律 MEDIUMTEXT**，不再按"当前最长 × 1.2"定 VARCHAR。
+      //    原来那套的理由是"能保留 DEFAULT"，但 MySQL 8.0.13+ 的**表达式默认值** `DEFAULT ('{}')`
+      //    TEXT 系也能用（生产已验证过），代价为零；而"按数据长度定宽"是**定时炸弹**：
+      //    内容一长就 ER_DATA_TOO_LONG 500 —— 2026-09-25 生产就是
+      //    `website_contents.draft_content varchar(1728)` 把官网内容 CMS 的保存打挂的；
+      //    全站排查还发现 80+ 列已用掉 70%+ 的宽度（media_assets.asset_url 86%）。
+      //    索引列仍然只能是 VARCHAR（MySQL 的 TEXT 索引要前缀长度），保持上面的做法。
+      mysqlType = 'MEDIUMTEXT';
+      fixedWidth = MEDIUMTEXT_COST;
     }
     return { c, indexed, hasDefault, len, mysqlType, fixedWidth, dropDefault: false };
   });
@@ -245,7 +267,12 @@ for (const m of meta) {
     const raw = m.body.find((x) => unq(x.split(/\s+/)[0]) === c.name) || '';
     let rest = raw ? raw.slice(raw.indexOf(c.name) + c.name.length).trim().replace(/^[A-Za-z]+(\s*\([^)]*\))?/i, '').trim() : '';
     if (Number(c.notnull) === 1 && !/\bNOT\s+NULL\b/i.test(rest)) rest = `NOT NULL ${rest}`.trim();
-    if (mysqlType === 'MEDIUMTEXT' && (p.hasDefault || p.dropDefault)) rest = rest.replace(/\s*DEFAULT\s+('(?:[^']|'')*'|\S+)/i, '').replace(/\s+/g, ' ').trim();
+    // ⚠️ 2026-09-25：TEXT 系不能有**字面量**默认值，但 MySQL 8.0.13+ 支持**表达式默认值** `DEFAULT ('{}')`。
+    //    所以这里改成表达式，而不是把默认值丢掉 —— 丢掉会让"省略该列的 INSERT"在 MySQL 上写 NULL/报错，
+    //    而 SQLite/生产本来是有默认值的（两边结构不一致，p 系列里踩过一次）。
+    if (mysqlType === 'MEDIUMTEXT') {
+      rest = rest.replace(/\s*DEFAULT\s+('(?:[^']|'')*'|\S+)/i, (_match, value) => ` DEFAULT (${value})`);
+    }
     lines.push(`  ${bt(c.name)} ${mysqlType}${rest ? ` ${rest}` : ''}`.replace(/\s+$/, ''));
     if (!raw) notes.push(`⚠️ ${m.table}.${c.name} 在原始 DDL 里没找到对应片段（约束可能没搬全）`);
   }

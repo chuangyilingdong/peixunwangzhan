@@ -17,6 +17,9 @@ const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/org').replace(/\/$/, '
 
 const navigation = [
   { to: '/dashboard', icon: '◈', label: '机构工作台' },
+  // ⭐ 2026-09-25 用户口径：「课程中心藏得很深，应该放在左侧菜单栏里，文案改成：课程备课」。
+  //    原来机构管理员只能从工作台那张卡片点进去（老师端侧栏里叫「教学课程库」）——两处文案都统一成「课程备课」。
+  { to: '/courses', icon: '◇', label: '课程备课' },
   { to: '/series-overview', icon: '◇', label: '课包库存与学生授权', adminOnly: true },
   { to: '/classrooms', icon: '▦', label: '机构课堂总览' },
   { to: '/members', icon: '♙', label: '机构成员管理', adminOnly: true },
@@ -134,7 +137,7 @@ function TeacherDashboard({ api }) {
 
     <Panel title="常用入口">
       <div className="row-actions">
-        <button className="secondary-button" onClick={() => navigate('/courses')}>教学课程库<div className="muted">课包 / 课程 / 教学资料</div></button>
+        <button className="secondary-button" onClick={() => navigate('/courses')}>课程备课<div className="muted">课包 / 课程 / 教学资料</div></button>
         <button className="secondary-button" onClick={() => navigate('/classrooms')}>我的课堂<div className="muted">课堂创建 / 治理 / 历史</div></button>
         <button className="secondary-button" onClick={() => navigate('/works')}>学生学习结果与作品<div className="muted">学习结果 / 作品查看</div></button>
       </div>
@@ -515,7 +518,7 @@ function OrgCourses({ api }) {
     const c = detail.data;
     if (!c) return <Empty title="课包不存在" body="该课包不存在或当前机构不可访问。" />;
     return <>
-      <PageHeader eyebrow="教学资源" title={c.title} description={c.description || '查看课包详细资料与课时正文。'} actions={<button className="secondary-button" onClick={() => navigate('/courses')}>返回课程中心</button>} />
+      <PageHeader eyebrow="教学资源" title={c.title} description={c.description || '查看课包详细资料与课时正文。'} actions={<button className="secondary-button" onClick={() => navigate('/courses')}>返回课程备课</button>} />
       <div className="metrics">
         <MetricCard label="难度" value={c.difficultyLevel ? `${c.difficultyLevel}/5` : '—'} hint="课程难度" />
         <MetricCard label="适学年龄" value={c.ageRangeMin || c.ageRangeMax ? `${c.ageRangeMin ?? '?'}-${c.ageRangeMax ?? '?'}岁` : '—'} hint="适学年龄范围" />
@@ -523,7 +526,7 @@ function OrgCourses({ api }) {
         <MetricCard label="版本" value={c.version} hint={'归属 ' + (c.ownerType === 'ORG' ? '本机构' : '平台授权')} tone="orange" />
       </div>
       {Array.isArray(c.tags) && c.tags.length ? <div className="tag-list"><span className="muted">标签：</span>{c.tags.map((t) => <span key={t} className="tag">{t}</span>)}</div> : null}
-      {c.assignmentExpiresAt ? <Notice>本课包对贵机构的授权有效期至 {formatDate(c.assignmentExpiresAt)}，到期后将从课程中心移除，如需继续使用请联系平台续期。</Notice> : null}
+      {c.assignmentExpiresAt ? <Notice>本课包对贵机构的授权有效期至 {formatDate(c.assignmentExpiresAt)}，到期后将从课程备课里移除，如需继续使用请联系平台续期。</Notice> : null}
       <Panel title="课时列表">
         {c.lessons?.length ? <div className="table-wrap"><table>{/* ⚠️ 序号用**行号**不用 lesson.sort：课时的 sort 是"第几节"的编排序号，删过课时之后会跳号
     （线上就出现过 1,2,4,5,…，用户报「序号好像还是乱的」）。「正文」列也去掉了：线上每一行都是「—」，
@@ -565,7 +568,7 @@ function OrgCourses({ api }) {
   // ——本机构能不能用，只看有没有一条在有效期内的授权（见下方「平台已授权」与有效期提示）。
   const sourceLabels = { PLATFORM: '平台课包', ORG: '机构自有' };
   return <>
-    <PageHeader eyebrow="教学资源" title="课程中心" description="查看本机构已开通的平台课包、机构课包与课时安排。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
+    <PageHeader eyebrow="教学资源" title="课程备课" description="查看本机构已开通的平台课包、机构课包与课时安排。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
     <div className="metrics"><MetricCard label="可用课包" value={data.items.length} hint="仅统计当前已发布课程" /><MetricCard label="平台授权课包" value={data.items.filter((item) => item.ownerType === 'PLATFORM' && item.assignedToCurrentOrg).length} hint="平台单独授权后可见" tone="teal" /><MetricCard label="总课时" value={data.items.reduce((sum, item) => sum + item.lessonCount, 0)} hint="已发布课时" tone="orange" /></div>
     <Panel title="课程列表">
       {data.items.length ? <><ListResultSummary total={data.total} page={data.page} totalPages={data.totalPages} label="个课包" />
@@ -718,7 +721,7 @@ export function App() {
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" onLogin={login} />;
   // 老师那一套导航是**另写的一份**（只给自己相关的入口）—— 加/删入口时两份都要动，
   // 否则会出现「机构管理员看得到、老师看不到」这种半边生效（本轮加「账号安全」就踩在这个点上）。
-  const visibleNavigation = session.user.role === 'TEACHER' ? [{ to: '/dashboard', icon: '◈', label: '教师工作台' }, { to: '/courses', icon: '◇', label: '教学课程库' }, { to: '/classrooms', icon: '▦', label: '我的课堂' }, { to: '/works', icon: '✦', label: '学生学习结果与作品' }, { to: '/account', icon: '🔑', label: '账号安全' }] : navigation;
+  const visibleNavigation = session.user.role === 'TEACHER' ? [{ to: '/dashboard', icon: '◈', label: '教师工作台' }, { to: '/courses', icon: '◇', label: '课程备课' }, { to: '/classrooms', icon: '▦', label: '我的课堂' }, { to: '/works', icon: '✦', label: '学生学习结果与作品' }, { to: '/account', icon: '🔑', label: '账号安全' }] : navigation;
   // 改密成功后所有会话都失效（服务端撤销），所以这里只能清本地会话回登录页 —— 不装还在登录。
   const signedOutByPasswordChange = () => { clearSession(); setSession(null); navigate('/login'); };
   return <AppShell product="灵动ai学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout} onChangePassword={() => navigate('/account')}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/account" element={<AccountSecurity api={api} user={session.user} onSignedOut={signedOutByPasswordChange} />} /><Route path="/classrooms" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId/students/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/members" element={session.user.role === 'ORG_ADMIN' ? <Members api={api} user={session.user} /> : <Navigate to="/classrooms" replace />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={session.user.role === 'ORG_ADMIN' ? <SeriesOverview api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={session.user.role === 'ORG_ADMIN' ? <EnrollmentPage api={api} user={session.user} /> : <Navigate to="/series-overview" replace />} /><Route path="/usage" element={session.user.role === 'ORG_ADMIN' ? <UsagePage api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/grants" element={session.user.role === 'ORG_ADMIN' ? <StudentGrants api={api} /> : <Navigate to="/series-overview" replace />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
