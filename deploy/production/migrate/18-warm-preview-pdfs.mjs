@@ -11,8 +11,7 @@
  *
  * 用法（服务器上，root）：
  *   cd /srv/ai-kids-platform/source
- *   export $(grep -E '^(FILE_STORAGE|OSS_)' /etc/ai-kids-platform/production.env | xargs)
- *   export MYSQL_HOST=… MYSQL_PORT=3306 MYSQL_USER=… MYSQL_PASSWORD=… MYSQL_DATABASE=aild_admin
+ *   export $(grep -E '^(FILE_STORAGE|OSS_|RDS_)' /etc/ai-kids-platform/production.env | xargs)
  *   node deploy/production/migrate/18-warm-preview-pdfs.mjs --dry-run     # 只列要转哪些
  *   node deploy/production/migrate/18-warm-preview-pdfs.mjs               # 真跑（建议 tmux/nohup）
  *   node deploy/production/migrate/18-warm-preview-pdfs.mjs --limit=5     # 先拿 5 份试
@@ -38,12 +37,14 @@ const uploadRoot = path.resolve(arg('--root', '/srv/ai-kids-platform/production/
 
 if (!ossConfigured()) { console.error('OSS 未配置齐。', JSON.stringify(ossInfo())); process.exit(1); }
 
+// 连接的键两套名字都认：RDS_* 是生产 /etc/ai-kids-platform/production.env 里的原名，
+// MYSQL_* 是仓库里其余运维脚本（rds-column-headroom 等）用的那套。
 const mysqlEnv = {
-  host: process.env.MYSQL_HOST || '127.0.0.1',
-  port: Number(process.env.MYSQL_PORT || 3306),
-  user: process.env.MYSQL_USER || 'root',
-  password: process.env.MYSQL_PASSWORD || '',
-  database: process.env.MYSQL_DATABASE || 'aild_admin',
+  host: process.env.MYSQL_HOST || process.env.RDS_HOST || '127.0.0.1',
+  port: Number(process.env.MYSQL_PORT || process.env.RDS_PORT || 3306),
+  user: process.env.MYSQL_USER || process.env.RDS_USER || 'root',
+  password: process.env.MYSQL_PASSWORD || process.env.RDS_PASSWORD || '',
+  database: process.env.MYSQL_DATABASE || process.env.RDS_DATABASE || 'aild_admin',
 };
 const mysql = (await import(pathToFileURL(path.join(ROOT, 'packages/database/node_modules/mysql2/promise.js')).href)).default;
 const conn = await mysql.createConnection(mysqlEnv);
