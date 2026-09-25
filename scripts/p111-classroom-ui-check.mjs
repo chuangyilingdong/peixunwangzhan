@@ -145,6 +145,17 @@ function writeSamplePdf(file, pageCount = 3) {
   fs.writeFileSync(path.join(uploadRoot, relKey), fs.readFileSync(samplePdf));
   await aq(`INSERT INTO file_assets(id,owner_type,storage_kind,storage_key,file_name,mime_type,category,visibility,status,review_status,metadata,created_at,updated_at)
     VALUES(?,'PLATFORM','INTERNAL_PROXY',?,'ui-material.pdf','application/pdf','TEACHING_ASSET','PUBLIC_PLATFORM','ACTIVE','NOT_REQUIRED','{}',?,?)`, [fileId, relKey, now, now]);
+  // 第二份：**放映形态**的夹具（文件名是 .pptx，字节就是上面那份 3 页 PDF）。
+  // ⚠️ 为什么不用真的 .pptx：真 PPTX 要服务端装了 soffice 才转得出来，而这条守卫要在**没装
+  //    soffice 的机器**（开发机 / CI）上也跑得动 —— 服务端转换本身由 p93 的真机段覆盖。
+  //    这一节要钉的是**形态判定 + 放映界面**：文件名叫 .pptx，老师看到的就必须是
+  //    「一屏一张、计数说『张』、带缩略图条」的放映，而不是文档那样的连续滚动。
+  //    mime 写 application/pdf 只是为了跳过转换（内容本来就是 PDF），形态判定看的是扩展名。
+  const slideFileId = 'file-ui-slides';
+  const slideRelKey = 'teaching/ui-slides.pdf';
+  fs.writeFileSync(path.join(uploadRoot, slideRelKey), fs.readFileSync(samplePdf));
+  await aq(`INSERT INTO file_assets(id,owner_type,storage_kind,storage_key,file_name,mime_type,category,visibility,status,review_status,metadata,created_at,updated_at)
+    VALUES(?,'PLATFORM','INTERNAL_PROXY',?,'P111 幻灯片.pptx','application/pdf','TEACHING_ASSET','PUBLIC_PLATFORM','ACTIVE','NOT_REQUIRED','{}',?,?)`, [slideFileId, slideRelKey, now, now]);
   await aq(`INSERT INTO course_series(id,title,description,owner_type,visibility,version,status,created_at,updated_at)
     VALUES(?,'P111 教学素材课包','用于验证教学素材预览','PLATFORM','PUBLIC','1.0','PUBLISHED',?,?)`, [seriesId, now, now]);
   // 快照里那张票据**故意写成早已过期**（1000000000000 = 2001 年）
@@ -155,7 +166,10 @@ function writeSamplePdf(file, pageCount = 3) {
     //    在机构端就是**看不见**的 —— 2026-09-20 加那道判据时这个夹具就这么红过一次。
     status: 'PUBLISHED',
     capabilities: [], materialGroups: [], generationBoxes: [],
-    teachingGroups: [{ id: 'tg-ui', title: '备课资料', sort: 1, assets: [{ id: 'ta-ui', title: 'P111 讲义', description: '端到端素材', assetType: 'FILE', fileAssetId: fileId, assetUrl: null, sort: 1, previewKind: 'PDF', previewUrl: deadPreviewUrl }] }],
+    teachingGroups: [{ id: 'tg-ui', title: '备课资料', sort: 1, assets: [
+      { id: 'ta-ui', title: 'P111 讲义', description: '端到端素材', assetType: 'FILE', fileAssetId: fileId, assetUrl: null, sort: 1, previewKind: 'PDF', previewUrl: deadPreviewUrl },
+      { id: 'ta-ui-slides', title: 'P111 幻灯片', description: '放映形态素材', assetType: 'FILE', fileAssetId: slideFileId, assetUrl: null, sort: 2, previewKind: 'PDF', previewUrl: deadPreviewUrl },
+    ] }],
   };
   await aq(`INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,delivery_mode,published_content,created_at,updated_at)
     VALUES(?,?,'第 1 课 · 教学素材验证','',1,'PUBLISHED',45,'CANVAS',?,?,?)`, [materialLessonId, seriesId, JSON.stringify(snapshot), now, now]);
@@ -545,6 +559,56 @@ try {
   await shot('15-material-viewer-fullscreen');
   await page.evaluate(() => document.exitFullscreen?.());
   await page.waitForTimeout(500);
+  await page.getByRole('button', { name: '关闭预览' }).click().catch(() => {});
+  await page.waitForTimeout(400);
+
+  // ── 放映形态（2026-09-25）：用户口径「预览 PPT 能否真的就是 PPT 形式」。
+  // PPT 该像**放映**一样一张张翻，不该像文档那样滚 —— 判定看文件扩展名（服务端 previewMode），
+  // 界面上一屏一张 + 缩略图条 + 说「张」。文档那份（P111 讲义）上面已经验过还是滚动阅读。
+  await page.locator('.teaching-asset-row', { hasText: 'P111 幻灯片' }).getByRole('button', { name: '在线预览' }).click();
+  await page.waitForTimeout(2600);
+  await expectText('幻灯片放映', ['第 1 / 共 3 张', '上一张', '下一张', '适应窗口', '全屏放映']);
+  const slideState = await page.evaluate(() => ({
+    stage: Boolean(document.querySelector('.ta-slide-stage')),
+    slots: document.querySelectorAll('.ta-page-slot').length,
+    scroll: Boolean(document.querySelector('.ta-scroll')),
+    thumbs: document.querySelectorAll('.ta-rail .ta-thumb').length,
+    navs: document.querySelectorAll('.ta-slide-nav').length,
+    active: document.querySelector('.ta-rail .ta-thumb.on span')?.textContent || '',
+    canvas: (() => { const node = document.querySelector('canvas.ta-canvas'); return node ? { w: node.width, h: node.height } : null; })(),
+  }));
+  if (!slideState.stage) problems.push('幻灯片放映：没有放映台（.ta-slide-stage）');
+  if (slideState.slots || slideState.scroll) problems.push('幻灯片放映：还在用文档那套（有 .ta-page-slot / .ta-scroll）——那是"转换后当文档滚动"，正是这次要修掉的观感');
+  if (slideState.thumbs !== 3) problems.push(`幻灯片放映：缩略图条应有 3 张，实际 ${slideState.thumbs}`);
+  if (slideState.navs !== 2) problems.push(`幻灯片放映：左右翻页按钮应有 2 个，实际 ${slideState.navs}`);
+  if (slideState.active !== '1') problems.push(`幻灯片放映：当前张高亮在「${slideState.active}」，应在 1`);
+  if (!slideState.canvas || slideState.canvas.w < 100 || slideState.canvas.h < 100) problems.push(`幻灯片放映：画布没画出来（${JSON.stringify(slideState.canvas)}）`);
+  const slideBox = await page.locator('canvas.ta-canvas').first().boundingBox().catch(() => null);
+  const stageBox = await page.locator('.ta-slide-stage').boundingBox().catch(() => null);
+  // 「整张适应窗口」：幻灯片要**装得进**台面（上下左右都留白），不是按宽度铺满、也不是溢出
+  if (!slideBox || !stageBox) problems.push('幻灯片放映：量不到幻灯片/台面尺寸');
+  else if (!(slideBox.width <= stageBox.width + 1 && slideBox.height <= stageBox.height + 1)) {
+    problems.push(`幻灯片放映：整张没有适应窗口（幻灯片 ${Math.round(slideBox.width)}×${Math.round(slideBox.height)} vs 台面 ${Math.round(stageBox.width)}×${Math.round(stageBox.height)}）`);
+  }
+  await shot('18-slides-viewer');
+
+  // 按钮翻页 + 缩略图高亮跟着走
+  await page.getByRole('button', { name: '下一张 ›' }).click();
+  await page.waitForTimeout(1100);
+  await expectText('放映翻页', ['第 2 / 共 3 张']);
+  const afterNext = await page.evaluate(() => document.querySelector('.ta-rail .ta-thumb.on span')?.textContent || '');
+  if (afterNext !== '2') problems.push(`幻灯片放映：翻到第 2 张后缩略图高亮在「${afterNext}」`);
+
+  // 键盘：← 回上一张（讲课时的肌肉记忆）
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForTimeout(900);
+  await expectText('放映键盘', ['第 1 / 共 3 张']);
+
+  // 点缩略图跳张
+  await page.locator('.ta-rail .ta-thumb').nth(2).click();
+  await page.waitForTimeout(1100);
+  await expectText('放映跳张', ['第 3 / 共 3 张']);
+  await shot('19-slides-last');
   await page.getByRole('button', { name: '关闭预览' }).click().catch(() => {});
   await page.waitForTimeout(400);
 
