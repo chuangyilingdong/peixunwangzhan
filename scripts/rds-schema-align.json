@@ -99,9 +99,10 @@
       "notNull": true
     },
     "media_assets.metadata": {
-      "type": "varchar(1280)",
+      "type": "mediumtext",
       "notNull": true,
-      "default": "{}"
+      "default": "{}",
+      "why": "2026-09-25 实测：生产数据已经超过当年定下的宽度（scripts/rds-column-fit.mjs），切库会失败/静默截断 → 目标结构改成 mediumtext"
     },
     "notification_events.body": {
       "type": "varchar(255)",
@@ -139,8 +140,9 @@
       "notNull": true
     },
     "project_snapshots.canvas_snapshot": {
-      "type": "varchar(5120)",
-      "notNull": true
+      "type": "mediumtext",
+      "notNull": true,
+      "why": "2026-09-25 实测：生产数据已经超过当年定下的宽度（scripts/rds-column-fit.mjs），切库会失败/静默截断 → 目标结构改成 mediumtext"
     },
     "promo_materials.description": {
       "type": "varchar(255)",
@@ -179,18 +181,20 @@
       "notNull": true
     },
     "vibecoding_submissions.artifacts": {
-      "type": "varchar(704)",
+      "type": "mediumtext",
       "notNull": true,
-      "default": "[]"
+      "default": "[]",
+      "why": "2026-09-25 实测：生产数据已经超过当年定下的宽度（scripts/rds-column-fit.mjs），切库会失败/静默截断 → 目标结构改成 mediumtext"
     },
     "vibecoding_submissions.description": {
       "type": "varchar(255)",
       "notNull": true
     },
     "vibecoding_submissions.files": {
-      "type": "varchar(7680)",
+      "type": "mediumtext",
       "notNull": true,
-      "default": "{}"
+      "default": "{}",
+      "why": "2026-09-25 实测：生产数据已经超过当年定下的宽度（scripts/rds-column-fit.mjs），切库会失败/静默截断 → 目标结构改成 mediumtext"
     },
     "vibecoding_submissions.transcript": {
       "type": "varchar(2304)",
@@ -211,16 +215,18 @@
       "notNull": true
     },
     "work_submissions.canvas_snapshot": {
-      "type": "varchar(5120)",
-      "notNull": true
+      "type": "mediumtext",
+      "notNull": true,
+      "why": "2026-09-25 实测：生产数据已经超过当年定下的宽度（scripts/rds-column-fit.mjs），切库会失败/静默截断 → 目标结构改成 mediumtext"
     },
     "work_submissions.description": {
       "type": "varchar(255)",
       "notNull": true
     },
     "works.canvas_snapshot": {
-      "type": "varchar(4992)",
-      "notNull": true
+      "type": "mediumtext",
+      "notNull": true,
+      "why": "2026-09-25 实测：生产数据已经超过当年定下的宽度（scripts/rds-column-fit.mjs），切库会失败/静默截断 → 目标结构改成 mediumtext"
     },
     "works.description": {
       "type": "varchar(255)",
