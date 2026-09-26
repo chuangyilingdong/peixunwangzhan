@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
+import { endActiveClassrooms, ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p25-vibecoding-plaza-'));
@@ -142,6 +142,10 @@ try {
   assert.equal(reviewGone.status, 404, `机构端点评接口应当已删除，实际 ${reviewGone.status}`);
 
   // 4) 平台作品库能看到（学生提交后平台就能挑），并发布到作品广场
+  // ⚠️ 2026-09-26 用户口径：**课堂还在进行中的作品不进平台后台**（列表没有、也不许发布）。
+  //    这条守卫验的是「发布到广场 → 下架」那一套，所以按现实顺序先下课，再走平台侧那几步。
+  const orgAdminToken = (await login('org-admin', 'org123')).data.token;
+  await endActiveClassrooms({ api, orgToken: orgAdminToken });
   const list = await api('/api/admin/vibecoding-works', { token: rootAdmin });
   assert.equal(list.status, 200, `平台列表失败: ${JSON.stringify(list.data)}`);
   const listed = (list.data.items || []).find((item) => item.id === submissionId);

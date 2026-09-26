@@ -5,6 +5,7 @@ import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arows, arow, amap, likeKeyword, likeEscapeClause,
+  inProgressClassroomSql, vibecodingSessionIdExpr,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -572,7 +573,9 @@ export async function handleOverview(ctx, part, method) {
     const marketplaceCourses = await singleNumber(`SELECT COUNT(*) n FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' AND marketplace_status='APPROVED'`);
     const classSessions = await singleNumber(`SELECT COUNT(*) n FROM class_sessions session WHERE (LENGTH(?)=0 OR session.org_id=?) AND session.started_at>=? AND session.started_at<?`, [orgFilter, orgFilter, since, until]);
     const projects = await singleNumber(`SELECT COUNT(*) n FROM student_projects WHERE (?='' OR org_id=?) AND created_at>=? AND created_at<?`, [orgFilter, orgFilter, since, until]);
-    const works = await singleNumber(`SELECT COUNT(*) n FROM works WHERE (?='' OR org_id=?) AND submitted_at>=? AND submitted_at<?`, [orgFilter, orgFilter, since, until]);
+    // ⭐ 2026-09-26 用户口径：课堂还在进行中的作品**不进平台后台** —— 工作台这个「提交作品」与
+    //    作品库列表用同一条判据，免得"列表里看不到、数字里却算着"两套口径（理由见 lib.js）。
+    const works = await singleNumber(`SELECT COUNT(*) n FROM works work WHERE (?='' OR work.org_id=?) AND work.submitted_at>=? AND work.submitted_at<? AND NOT ${inProgressClassroomSql('work.class_session_id')}`, [orgFilter, orgFilter, since, until]);
     // ── B4 统计指标细化：新增口径都写明来源，免得「这个数从哪来的」说不清 ──
     const newStudents = await singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='STUDENT' AND deleted_at IS NULL AND created_at>=? AND created_at<?`, [...usersParams, since, until]);
     const activeStudents = await singleNumber("SELECT COUNT(DISTINCT student_id) n FROM student_projects WHERE (?='' OR org_id=?) AND created_at>=? AND created_at<?", [orgFilter, orgFilter, since, until]);
@@ -653,7 +656,9 @@ export async function handleOverview(ctx, part, method) {
        WHERE series.owner_type='PLATFORM'
        GROUP BY lesson.id HAVING sessions > 0 ORDER BY sessions DESC, lesson.sort ASC LIMIT 5`, [since, until])).map((item) => ({ id: item.id, title: item.title, seriesTitle: item.series_title, sessions: Number(item.sessions || 0) }));
     // 作品发布：两条链路（画布 works / VibeCoding submissions）合并计数 —— 与用户看到的「一套状态话术」同口径
-    const submittedWorks = await singleNumber(`SELECT (SELECT COUNT(*) FROM works WHERE submitted_at>=? AND submitted_at<?) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE submitted_at>=? AND submitted_at<?) n`, [since, until, since, until]);
+    // ⚠️ 同样排除"课堂进行中"的作品（上面那条口径）：两条链路都要排 ——
+    //    否则工作台会出现"列表里没有、这里却算着"的两套数（2026-09-26 用户口径）。
+    const submittedWorks = await singleNumber(`SELECT (SELECT COUNT(*) FROM works work WHERE work.submitted_at>=? AND work.submitted_at<? AND NOT ${inProgressClassroomSql('work.class_session_id')}) + (SELECT COUNT(*) FROM vibecoding_submissions submission WHERE submission.submitted_at>=? AND submission.submitted_at<? AND NOT ${inProgressClassroomSql(vibecodingSessionIdExpr('submission'))}) n`, [since, until, since, until]);
     const content = {
       lessonHot,
       submittedWorks,

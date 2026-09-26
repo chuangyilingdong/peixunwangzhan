@@ -538,6 +538,34 @@ export function orgSeriesAccessSql(seriesAlias = 'series', assignmentAlias = 'as
     + ` OR (${seriesAlias}.owner_type='ORG' AND ${seriesAlias}.org_id = ?))`;
 }
 
+/**
+ * 「这条作品还挂在一门**进行中**（待上课 / 上课中）的课堂里」的 SQL 判据（2026-09-26 用户口径）。
+ *
+ * 口径：**课堂还在进行中的作品，先不进平台后台**（平台端作品库、工作台的「提交作品」都算）；
+ * 但机构端 / 教师端照旧看得见 —— 老师上课要拿这些作品讲解。
+ * 课堂一结束，它们就自动进平台后台。
+ *
+ * ⚠️ 这不是一个"顺手加的过滤"，它是那次卡死的解药，别删：
+ *   · 课堂没结束时学生**还能继续提交**（画布增量提交允许 SUBMITTED→SUBMITTED）；
+ *   · 平台端一「发布到官网」，作品就成 PUBLISHED，而状态机里 `PUBLISHED → PENDING` **不是合法转换**
+ *     → 学生再提交只会得到「当前作品状态不允许重新提交」，只能等平台下架（2026-09-26 现场：
+ *     15:31 平台发布、15:34 起学生连着 6 次提交全被拒）。
+ *   · 课堂一结束后，学生端的提交/保存本来就被**课堂门禁**挡住（403）→
+ *     "平台可以发布"与"学生还能提交"从此互斥，怎么点都不会撞。
+ *
+ * 用法：`sessionIdExpr` 是"取这条作品所属课堂 id"的 SQL 片段（两条链路取得不一样：
+ * 画布用 `work.class_session_id`；VibeCoding 要经 `vibecoding_conversations` 绕一下）。
+ */
+export function inProgressClassroomSql(sessionIdExpr) {
+  return `EXISTS (SELECT 1 FROM class_sessions platform_gate`
+    + ` WHERE platform_gate.id = ${sessionIdExpr} AND platform_gate.status IN ('PENDING','ACTIVE'))`;
+}
+
+/** VibeCoding 作品所属课堂的 id（经 conversation 绕一下）—— 配套 inProgressClassroomSql()。 */
+export function vibecodingSessionIdExpr(submissionAlias = 'submission') {
+  return `(SELECT conversation.class_session_id FROM vibecoding_conversations conversation WHERE conversation.id = ${submissionAlias}.conversation_id)`;
+}
+
 const DELIVERY_MODE_VALUES = ['CANVAS', 'VIBECODING'];
 
 /**

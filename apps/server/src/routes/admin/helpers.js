@@ -2,7 +2,7 @@ import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeLesson, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, orgSeriesAccessSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
-  normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE, normalizeSeriesVisibility, LOGIN_PATTERN, aq, arow, arows, acount, atransaction, amap, likeKeyword, likeEscapeClause } from '../../lib.js';
+  normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE, normalizeSeriesVisibility, LOGIN_PATTERN, aq, arow, arows, acount, atransaction, amap, likeKeyword, likeEscapeClause, inProgressClassroomSql, vibecodingSessionIdExpr } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
@@ -959,6 +959,10 @@ function platformWorkFilters(ctx, kind = 'canvas') {
   const alias = kind === 'vibecoding' ? 'submission' : 'work';
   const lessonColumn = kind === 'vibecoding' ? 'lesson_id' : 'course_lesson_id';
   const conditions = []; const params = [];
+  // ⭐ 2026-09-26 用户口径：**课堂还在进行中（待上课/上课中）的作品先不进平台后台** ——
+  //    它们留在机构端 / 教师端（老师上课要拿它们讲解），课堂结束后自动出现在这里。
+  //    这不是普通过滤，是"发布把学生提交路堵死"那次卡死的解药，理由见 lib.js 的 inProgressClassroomSql 注释。
+  conditions.push(`NOT ${inProgressClassroomSql(kind === 'vibecoding' ? vibecodingSessionIdExpr(alias) : 'work.class_session_id')}`);
   const value = (key) => String(ctx.search.get(key) || '').trim();
   const like = (columns, text) => {
     conditions.push('(' + columns.map((column) => `${column} LIKE ? ${likeEscapeClause()}`).join(' OR ') + ')');

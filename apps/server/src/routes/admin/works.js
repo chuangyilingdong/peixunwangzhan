@@ -2,7 +2,7 @@
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap,
+  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, inProgressClassroomSql,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -349,6 +349,14 @@ export async function handleWorks(ctx, part, method) {
     if (published) {
       if (!['PENDING', 'APPROVED', 'PUBLISHED', 'UNPUBLISHED'].includes(work.status)) throw errors.conflict('仅学生已提交的作品可以发布到作品广场（被驳回的作品需学生重新提交）', 'WORK_NOT_SUBMITTED');
       if (!work.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布到作品广场', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+      // ⭐ 2026-09-26 用户口径：**课堂还在进行中的作品不进平台后台，也不许在这里发布**。
+      //    课堂没结束时学生还能继续提交，而一发成 PUBLISHED，状态机里 `PUBLISHED → PENDING` 不合法
+      //    → 学生那边只会看到「当前作品状态不允许重新提交」，只能等平台下架（现场就是这么卡住的）。
+      //    课堂结束后学生端提交本来就被课堂门禁挡住，那时再发布怎么点都不会撞。
+      const gate = work.class_session_id
+        ? await arow(`SELECT id FROM class_sessions WHERE id=? AND ${inProgressClassroomSql('class_sessions.id')}`, [work.class_session_id])
+        : null;
+      if (gate) throw errors.conflict('这门课的课堂还在进行中：课堂里交上来的作品要等课堂结束后才能发布到作品广场（学生这会儿还会接着改它）', 'WORK_CLASSROOM_IN_PROGRESS');
       let shareToken = work.share_token;
       if (!shareToken) {
         shareToken = 'wst_' + randomUUID().replace(/-/g, '').slice(0, 24);
@@ -519,6 +527,16 @@ export async function handleWorks(ctx, part, method) {
     const now = nowIso();
     if (ctx.body.published) {
       if (!submission.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布到作品广场', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+      // 同画布那条：课堂还在进行中的作品不许发布（口径与理由见 lib.js 的 inProgressClassroomSql）。
+      // VibeCoding 这条的课堂要从 conversation 绕一下。
+      // 课堂要从 conversation 绕一下（与列表筛选里 vibecodingSessionIdExpr 取的是同一个东西）
+      const vibeSession = submission.conversation_id
+        ? await arow('SELECT class_session_id FROM vibecoding_conversations WHERE id=?', [submission.conversation_id])
+        : null;
+      if (vibeSession?.class_session_id) {
+        const gate = await arow("SELECT id FROM class_sessions WHERE id=? AND status IN ('PENDING','ACTIVE')", [vibeSession.class_session_id]);
+        if (gate) throw errors.conflict('这门课的课堂还在进行中：课堂里交上来的作品要等课堂结束后才能发布到作品广场（学生这会儿还会接着改它）', 'WORK_CLASSROOM_IN_PROGRESS');
+      }
       let shareToken = submission.share_token;
       if (!shareToken) {
         shareToken = 'vbt_' + randomUUID().replace(/-/g, '').slice(0, 24);

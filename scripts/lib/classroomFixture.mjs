@@ -185,6 +185,32 @@ async function sessionCapabilityFlags(lessonId) {
 }
 
 /**
+ * 把当前**进行中**（PENDING / ACTIVE）的课堂都结束掉（2026-09-26 用户口径的配套）。
+ *
+ * 为什么守卫需要它：口径定成「**课堂还在进行中的作品先不进平台后台**，也不许平台发布到作品广场」
+ * 之后，凡是"学生提交 → 平台发布 / 导出 / 列作品库"的守卫，夹具都得按**现实顺序**走：
+ *
+ *     学生交完（课堂进行中才交得了） → 老师下课 → 平台发布 / 导出
+ *
+ * ⚠️ 走的是机构端 API（`POST /api/org/sessions/:id/end`），**不是直接改库** —— 下课有它自己的
+ * 副作用（学员结算、释放环境），绕过它会让夹具和后面对不上的断言互相打架。
+ * ⚠️ 这条口径本身由 `p80`（筛选器，两条链路）与 `p139` ④″/⑤′（真接口，含"机构端仍看得见"那半句）
+ * 正面钉住；这里只是把其它守卫的夹具摆成现实顺序，别在这儿再验一遍规则。
+ *
+ * 用法：`await endActiveClassrooms({ api, orgToken })`（`api` 只要有 `{status, data}` 就够）。
+ */
+export async function endActiveClassrooms({ api, orgToken }) {
+  const { arows } = await store();
+  const ended = [];
+  for (const session of await arows("SELECT id FROM class_sessions WHERE status IN ('PENDING','ACTIVE')")) {
+    const result = await api(`/api/org/sessions/${encodeURIComponent(session.id)}/end`, { method: 'POST', token: orgToken, body: {} });
+    if (result?.status !== 200) throw new Error(`守卫夹具：结束课堂 ${session.id} 失败 —— ${JSON.stringify(result?.data ?? result)}`);
+    ended.push(session.id);
+  }
+  return ended;
+}
+
+/**
  * ⚠️ **2026-09-24 退役**（RDS 阶段 2 的夹具改造完成）。
  *
  * 改造前它返回一个 SQLite 句柄（`new DatabaseSync`），守卫拿它直接写库；改造后所有夹具写库

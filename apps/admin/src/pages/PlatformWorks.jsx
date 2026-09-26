@@ -151,6 +151,9 @@ export function PlatformWorks({ api }) {
       <button className="text-button" onClick={() => { setFilters(emptyFilters); setPage(1); }}>清空筛选</button>
       {organizations.error && <ErrorState error={organizations.error} onRetry={organizations.refresh} />}
     </Panel>
+    {/* 2026-09-26 用户口径：课堂还在进行中的作品先不进平台后台（老师上课要拿它们讲解），
+        课堂一结束它们会自动出现在下面这张表里。这句说明是给运营看的 —— 否则会以为"作品少了"。 */}
+    <Notice tone="info">课堂还在进行中（待上课 / 上课中）的作品<strong>暂时不出现在这里</strong>：它们这会儿留在机构端与教师端（上课要拿来看/讲解）。课堂一结束，作品会自动进到本列表，届时再发布到作品广场。已经下架的课堂作品仍会显示。</Notice>
     {message && <div role={message.tone === 'danger' ? 'alert' : 'status'}><Notice tone={message.tone}>{message.text}</Notice></div>}
     {action && <Panel title={`${action.published ? '发布到官网' : '下架'}《${action.item.title}》`}>
       <p>{action.published ? '确认后，所有官网访客都可以查看此作品。' : '确认后，作品将不再展示在官网；下架原因会告知学生。'}</p>

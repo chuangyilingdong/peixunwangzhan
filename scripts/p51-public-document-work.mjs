@@ -20,7 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { spawn } from 'node:child_process';
-import { ensureClassroom } from './lib/classroomFixture.mjs';
+import { endActiveClassrooms, ensureClassroom } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p51-public-doc-'));
@@ -213,6 +213,10 @@ try {
   check('提交快照里的正文按内容读得回来', String(submitted.data.files?.[DECK_NAME] || '').includes(DECK_TITLE));
 
   // 2) 平台发布（点评删掉之后只剩这一环，学生侧状态恒为 PENDING，不该卡住发布）
+  //    ⚠️ 2026-09-26 用户口径：课堂还在进行中的作品**不许平台发布**（一发就把学生"继续提交"的路堵死）。
+  //       按现实顺序先下课（学生已经交完了）再发布；这条口径本身由 p80 / p139 正面钉住。
+  const orgAdminToken = (await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } })).data.token;
+  await endActiveClassrooms({ api, orgToken: orgAdminToken });
   const published = await api(`/api/admin/vibecoding-works/${submissionId}/plaza`, { method: 'PUT', token: rootAdmin, body: { published: true } });
   assert.equal(published.status, 200, `发布失败: ${JSON.stringify(published.data)}`);
   const shareToken = published.data.shareToken;
@@ -269,17 +273,24 @@ try {
   const notMine = await fetch(`http://127.0.0.1:${port}/api/public/vibecoding-works/${shareToken}/images/file_not_in_this_work`);
   check('不在快照里的 fileId 一律 404（不能拿作品链接当素材探针）', notMine.status === 404, `status=${notMine.status}`);
 
-  // 7) 已发布作品重新提交必须先撤下，不能绕过平台把新稿直接替换到线上。
+  // 7) 「线上那份不会被学生悄悄替换」——2026-09-26 之后这条由**课堂门禁**保证，不再是"重新提交时先撤下"。
+  //    原因（用户口径 §33.5）：平台发布要求**课堂已结束**；而课堂一结束，这个学生会话的门禁就
+  //    永久关掉了（会话绑在那一堂课上，结束即 NOT_IN_CLASSROOM）→ 两边互斥，学生根本没有"替换"的入口。
+  //    ⚠️ 原来这里是"学生重新提交 → 作品回到待发布 + 旧分享码失效"。那条路现在走不通了
+  //    （要走通得让课堂还在进行中，而那样平台又发布不了），所以改钉这条更强的不变量。
   const resubmitted = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, {
-    method: 'POST', token: student, body: { copyrightConfirmed: true, entryFile: DECK_NAME, description: '修改后重新提交' },
+    method: 'POST', token: student, body: { copyrightConfirmed: true, entryFile: DECK_NAME, description: '课后想再改一版' },
   });
-  check('重新提交后恢复待发布状态并清除分享码', resubmitted.status === 200 && resubmitted.data.isPublic === false && !resubmitted.data.shareToken, JSON.stringify(resubmitted.data));
+  check('课堂结束后学生已交不了新版本（会话门禁：NOT_IN_CLASSROOM）——这就是"线上不会被悄悄替换"',
+    resubmitted.status === 403 && resubmitted.data?.error?.code === 'NOT_IN_CLASSROOM', JSON.stringify(resubmitted.data).slice(0, 200));
   const afterDetail = await api(`/api/public/vibecoding-works/${shareToken}`);
-  check('重新提交后旧公开详情立即 404', afterDetail.status === 404, `status=${afterDetail.status}`);
+  check('被拒之后线上那份**照旧可读**（没有被改坏/撤掉）', afterDetail.status === 200, `status=${afterDetail.status}`);
   const afterDownload = await fetch(`http://127.0.0.1:${port}${deck.downloadUrl}`);
-  check('重新提交后旧下载地址 404', afterDownload.status === 404, `status=${afterDownload.status}`);
+  check('被拒之后旧下载地址照旧可下', afterDownload.status === 200, `status=${afterDownload.status}`);
   const afterImage = await fetch(`http://127.0.0.1:${port}/api/public/vibecoding-works/${shareToken}/images/${PHOTO_ID}`);
-  check('重新提交后旧配图地址 404', afterImage.status === 404, `status=${afterImage.status}`);
+  check('被拒之后旧配图地址照旧可取', afterImage.status === 200, `status=${afterImage.status}`);
+  // 顺带留一条"这间课还能再开"的旁证：门禁关的是**这个学生会话**，不是这节课（新会话仍可正常提交）
+  await ensureClassroom(dbPath);
 
   console.log(JSON.stringify({
     name: 'public-document-work', pass: failures === 0,

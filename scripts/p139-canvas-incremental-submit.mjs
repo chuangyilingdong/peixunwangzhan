@@ -243,6 +243,22 @@ try {
     afterUnpublish.status === 200, `HTTP ${afterUnpublish.status} ${JSON.stringify(afterUnpublish.error).slice(0, 200)}`);
   await aq("UPDATE works SET status='PENDING',is_public=0,unpublish_reason=NULL WHERE id=?", [workId]);
 
+  /* ④″ 课堂**还在进行中**时：这份作品不进平台后台、也不许平台发布（2026-09-26 用户口径）。
+        —— 这就是"平台一发布就把学生提交路堵死"那个死结的解药：课堂没结束，平台根本看不到、也发不了。
+        机构端/教师端**照旧**看得见（老师上课要拿它讲解）—— 下面 ⑥ 会正面钉住这一条。 */
+  const adminListWhileRunning = await api('/api/admin/works?limit=50', { token: rootToken });
+  check('④″ 课堂进行中：作品**不在**平台作品库（但机构端看得见 —— 见 ⑥）★',
+    adminListWhileRunning.status === 200 && !(adminListWhileRunning.data?.items || []).some((item) => item.id === workId),
+    `HTTP ${adminListWhileRunning.status} 列表=${(adminListWhileRunning.data?.items || []).map((item) => item.id).join(',')}`);
+  const publishWhileRunning = await api(`/api/admin/works/${encodeURIComponent(workId)}/plaza`, { method: 'PUT', token: rootToken, body: { published: true } });
+  check('④″ 课堂进行中：平台「发布到官网」被拒（课堂结束后才允许）★',
+    publishWhileRunning.status === 409 && publishWhileRunning.code === 'WORK_CLASSROOM_IN_PROGRESS',
+    `HTTP ${publishWhileRunning.status} code=${publishWhileRunning.code} msg=${publishWhileRunning.error?.message}`);
+  const orgSeesWhileRunning = await api('/api/org/works?includeSnapshot=false', { token: orgAdmin });
+  check('④″ 同一时刻机构端**看得见**这份作品（老师上课要讲解）',
+    orgSeesWhileRunning.status === 200 && (orgSeesWhileRunning.data?.items || []).some((item) => item.id === workId),
+    `HTTP ${orgSeesWhileRunning.status} 机构端条数=${(orgSeesWhileRunning.data?.items || []).length}`);
+
   /* ⑤ 课堂结束 → 这一套立刻结束（提交 / 保存 / 生成都被课堂门禁拦住） */
   await api(`/api/org/sessions/${sessionId}/end`, { method: 'POST', token: orgAdmin, body: {} });
   const afterEnd = await submit(snapshotOf(outputNode('a', firstAsset), outputNode('b', '/api/student/file-assets/p139-third/download')));
@@ -253,6 +269,16 @@ try {
   check('⑤ 课堂结束后画布也不能再保存', saveAfterEnd.status !== 200, `HTTP ${saveAfterEnd.status} ${JSON.stringify(saveAfterEnd.error).slice(0, 160)}`);
   const state = await api(`/api/student/projects/${projectId}/session-state`, { token: student });
   check('⑤ 学生端能从 session-state 知道"老师已结束"（据此回课程中心）', state.data?.active === false, JSON.stringify(state.data).slice(0, 160));
+
+  /* ⑤′ 课堂结束后：作品进平台后台，而且这时发布**不会再挡住学生**（学生已经交不了了） */
+  const adminListAfterEnd = await api('/api/admin/works?limit=50', { token: rootToken });
+  check('⑤′ 课堂结束后：同一份作品进平台作品库 ★',
+    adminListAfterEnd.status === 200 && (adminListAfterEnd.data?.items || []).some((item) => item.id === workId),
+    `列表=${(adminListAfterEnd.data?.items || []).map((item) => item.id).join(',')}`);
+  const publishAfterEnd = await api(`/api/admin/works/${encodeURIComponent(workId)}/plaza`, { method: 'PUT', token: rootToken, body: { published: true } });
+  check('⑤′ 课堂结束后：平台可以发布到作品广场（学生那边已经交不了了，不会再撞）★',
+    publishAfterEnd.status === 200 && publishAfterEnd.data?.status === 'PUBLISHED',
+    `HTTP ${publishAfterEnd.status} status=${publishAfterEnd.data?.status} ${JSON.stringify(publishAfterEnd.error).slice(0, 160)}`);
 
   console.log(JSON.stringify({ name: 'canvas-incremental-submit', pass: failures === 0, failures }, null, 2));
 } catch (error) {

@@ -23,7 +23,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
+import { endActiveClassrooms, ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p100-runtime-deliverables-'));
@@ -371,6 +371,10 @@ try {
     mine.status === 200 && (mine.data?.items || []).some((item) => item.entryFile === 'index.html'), JSON.stringify(mine.data).slice(0, 200));
 
   /* ── 真文件产物发布到作品广场：看得到、下得动、预览不 500 ── */
+  // ⚠️ 2026-09-26 用户口径：课堂还在进行中的作品**不许平台发布**（一发就把学生"继续提交"的路堵死）。
+  //    按现实顺序先下课（学生已经交完这份真文件了）再发布；口径本身由 p80 / p139 正面钉住。
+  const orgAdminToken = (await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } })).data.token;
+  await endActiveClassrooms({ api, orgToken: orgAdminToken });
   const rootAdmin = (await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } })).data.token;
   const published = await api(`/api/admin/vibecoding-works/${binaryEntry.data.id}/plaza`, { method: 'PUT', token: rootAdmin, body: { published: true } });
   check('真文件产物能发布到作品广场', published.status === 200 && published.data?.isPublic === true, JSON.stringify(published.data).slice(0, 200));

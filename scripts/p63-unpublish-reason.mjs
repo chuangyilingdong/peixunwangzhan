@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
+import { endActiveClassrooms, ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p63-unpublish-reason-'));
@@ -86,6 +86,14 @@ try {
   const workId = submitted.data?.id || submitted.data?.work?.id;
   check('① 学生提交画布作品成功', Boolean(workId), JSON.stringify(submitted).slice(0, 240));
 
+  // ⭐ 2026-09-26 用户口径：**课堂还在进行中的作品不进平台后台、也不许平台发布**
+  //    （平台一发布就把学生"继续提交"的路堵死；课堂结束后两边就互斥了）。
+  //    这条守卫验的是"发布 / 下架原因"那一套，所以按**真实顺序**走：学生交完 → 老师下课 → 平台再发布。
+  //    （这条口径本身由 p80 与 p139 正面钉住，这里只是把夹具摆成现实里的顺序。）
+  const orgAdminForEnd = (await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } })).data?.token;
+  assert.ok(orgAdminForEnd, '机构管理员登录失败（下课要用它）');
+  await endActiveClassrooms({ api, orgToken: orgAdminForEnd });
+
   const publish = await api(`/api/admin/works/${encodeURIComponent(workId)}/plaza`, { method: 'PUT', token: admin, body: { published: true } });
   check('① 平台把它发布到作品广场', publish.status === 200, JSON.stringify(publish).slice(0, 200));
   const noReason = await api(`/api/admin/works/${encodeURIComponent(workId)}/unpublish`, { method: 'PUT', token: admin, body: {} });
@@ -150,6 +158,9 @@ try {
   const vibeSubmit = await api(`/api/student/vibecoding/conversations/${encodeURIComponent(conversation.id)}/submit`, { method: 'POST', token: student, body: { title: 'P63 VibeCoding 作品', description: '下架原因可见性', copyrightConfirmed: true } });
   const submissionId = vibeSubmit.data?.id || vibeSubmit.data?.submission?.id;
   check('② 学生提交 VibeCoding 作品成功', Boolean(submissionId), JSON.stringify(vibeSubmit).slice(0, 240));
+
+  // 同 ①：这条也挂在刚 switchClassroom 出来的**进行中**课堂里 → 先下课，平台再发布
+  await endActiveClassrooms({ api, orgToken: orgAdminForEnd });
 
   const vibePublish = await api(`/api/admin/vibecoding-works/${encodeURIComponent(submissionId)}/plaza`, { method: 'PUT', token: admin, body: { published: true } });
   check('② 平台把它发布到作品广场', vibePublish.status === 200 && vibePublish.data?.isPublic === true, JSON.stringify(vibePublish).slice(0, 200));

@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { ensureClassroom } from './lib/classroomFixture.mjs';
+import { endActiveClassrooms, ensureClassroom } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p21-platform-export-'));
@@ -83,6 +83,13 @@ try {
   assert.equal(project.status, 200, `项目创建失败: ${JSON.stringify(project.data)}`);
   const submitted = await api(`/api/student/projects/${project.data.id}/submit`, { method: 'POST', token: student, body: { copyrightConfirmed: true } });
   assert.equal(submitted.status, 200, `作品提交失败: ${JSON.stringify(submitted.data)}`);
+
+  // ⭐ 2026-09-26 用户口径：**课堂还在进行中的作品不进平台后台**（平台列表 / 导出 / 发布都不收）——
+  //    它们留在机构端与教师端（老师上课要拿来看）。这条守卫验的是"导出"，所以按真实顺序走：
+  //    学生交完 → 老师下课 → 平台再导出。
+  const orgAdminForEnd = (await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } })).data?.token;
+  assert.ok(orgAdminForEnd, '机构管理员登录失败（下课要用它）');
+  await endActiveClassrooms({ api, orgToken: orgAdminForEnd });
 
   const admin = (await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } })).data.token;
   assert.ok(admin, '管理员登录失败');
