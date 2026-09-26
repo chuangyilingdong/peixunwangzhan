@@ -734,6 +734,33 @@ try {
   }
   await orgShot('25-org-classrooms');
 
+  // ── 作品管理的关键词**防抖**（2026-09-26 用户报「每输入一个字符页面就要自动刷新一次」）
+  //    静态网 p151 只能证明"用了防抖钩子"，证明不了"依赖没写回原对象"（那种写法钩子照样在、
+  //    却仍然每个按键重取一次）—— 所以这一条必须**数真请求**：敲 3 个字符，只许发 1 次。
+  {
+    const workCalls = [];
+    const collect = (request) => { if (request.url().includes('/api/org/works?') && request.url().includes('search=')) workCalls.push(request.url()); };
+    orgPage.on('request', collect);
+    await orgPage.goto(`${base}/works`, { waitUntil: 'domcontentloaded' });
+    await orgSettle();
+    const searchBox = orgPage.locator('input[placeholder="作品、学生或课时"]');
+    if (await searchBox.count() !== 1) problems.push('作品管理：找不到关键词筛选框');
+    else {
+      await searchBox.click();
+      const before = workCalls.length;
+      for (const char of ['x', 'u', 'e']) await searchBox.type(char, { delay: 90 });
+      await orgPage.waitForTimeout(1200);
+      const typed = workCalls.length - before;
+      if (typed !== 1) problems.push(`作品管理：敲 3 个字符发了 ${typed} 次带 search 的请求（应防抖成 1 次）`);
+      // 重取时不许整页占位（"正在加载数据…"是 <Loading /> 的默认文案）
+      const bodyText = await orgPage.locator('body').innerText();
+      if (bodyText.includes('正在加载数据…')) problems.push('作品管理：重取时整页变成了 Loading（应该保留列表）');
+      if (!bodyText.includes('作品列表')) problems.push('作品管理：查询之后面板不见了');
+    }
+    orgPage.off('request', collect);
+  }
+  await orgShot('26-org-works-search');
+
   // ── 002-01：四个页签都在（机构管理员能看到入口）
   await orgPage.goto(`${base}/series-overview`, { waitUntil: 'domcontentloaded' });
   await orgSettle();
