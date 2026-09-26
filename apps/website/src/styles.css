@@ -1031,3 +1031,37 @@ background:radial-gradient(120% 80% at 50% 0%,rgb(255 60 90 / 26%),transparent 6
 @media(max-width:820px){.hp-cmp-grid{grid-template-columns:minmax(0,1fr)}}
 /* reduced-motion：不播任何动画（打字那半在 JS 里已经改成直接显示全文，见 main.jsx） */
 @media(prefers-reduced-motion:reduce){.hp-cmp.is-in .hp-cmp-card,.hp-cmp.is-in .hp-cmp-item{animation:none}.hp-cmp-card{transition:none}.hp-cmp-card:hover{transform:none}.hp-cmp-unit{transition:none}}
+
+/* ── 首页第二屏「视频展示」（2026-09-26 用户口径：「做一个官网的第二屏，放在第一屏下方，
+   后台可配置视频，我要上传多个视频来展示，文案也要可配置」）─────────────────────────────
+   参考稿是个卡片轮播（激活卡放大 + 左右箭头 + 圆点），这里按站内语言重画：
+   深红底接得住第一屏（与「三步一栏」同一套渐变家族）、圆角卡、自制 SVG 箭头（不引 lucide/Tailwind）。
+   ⚠️ 卡片里的 <video> 一律 preload="none"：**只有当前那张会加载与播放**（见 main.jsx 的 HomeVideos），
+      这台机公网出口只有 5 Mbps，一屏 6 个视频同时拉会把官网堵死。 */
+.hp-vid{position:relative;z-index:1;padding:clamp(48px,6vw,88px) 0 clamp(56px,7vw,96px);border-top:1px solid rgb(255 255 255 / 8%);background:radial-gradient(120% 85% at 50% 0%,rgb(255 60 90 / 18%),transparent 58%),linear-gradient(180deg,#17060a 0%,#4d0f1c 40%,#7a1424 64%,#1b070d 100%)}
+.hp-vid-inner{max-width:1240px;margin:0 auto}
+.hp-vid-head{max-width:min(760px,92%);margin:0 auto clamp(26px,3.4vw,42px);padding:0 clamp(20px,4vw,40px);text-align:center}
+.hp-vid-head h2{margin:0;color:#fff;font-size:clamp(25px,3.3vw,42px);font-weight:700;line-height:1.22;letter-spacing:-.02em}
+.hp-vid-head p{margin:14px auto 0;max-width:min(580px,92%);color:#e4c8cd;font-size:clamp(13px,1.5vw,16px);line-height:1.65}
+.hp-vid-stage{position:relative}
+.hp-vid-track{display:flex;gap:clamp(14px,1.8vw,22px);overflow-x:auto;scroll-snap-type:x mandatory;padding:14px clamp(20px,6vw,80px) 22px;scrollbar-width:none;-ms-overflow-style:none;scroll-behavior:smooth}
+.hp-vid-track::-webkit-scrollbar{display:none}
+.hp-vid-card{flex:none;width:clamp(260px,44vw,420px);scroll-snap-align:center;border-radius:18px;overflow:hidden;background:#140a10;border:1px solid rgb(255 255 255 / 10%);box-shadow:0 10px 30px rgb(0 0 0 / 45%);cursor:pointer;transition:transform .32s ease-out,border-color .32s ease-out,opacity .32s ease-out;transform:scale(.94);opacity:.6}
+.hp-vid-card.is-on{transform:scale(1);opacity:1;border-color:#ff6b8a;box-shadow:0 18px 44px rgb(255 60 90 / 22%)}
+.hp-vid-frame{position:relative;aspect-ratio:16 / 9;background:#000}
+.hp-vid-frame video{display:block;width:100%;height:100%;object-fit:cover;background:#000}
+.hp-vid-tag{position:absolute;left:10px;top:10px;padding:3px 9px;border-radius:999px;background:rgb(10 4 8 / 72%);border:1px solid rgb(255 255 255 / 14%);color:#ffd9e1;font-size:11px;letter-spacing:.04em;backdrop-filter:blur(6px)}
+.hp-vid-body{padding:14px 16px 16px}
+.hp-vid-body h3{margin:0;color:#fff;font-size:15px;font-weight:700;line-height:1.4}
+.hp-vid-body p{margin:8px 0 0;color:#d9bcc3;font-size:13px;line-height:1.65;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.hp-vid-arrow{position:absolute;top:calc(50% - 34px);z-index:3;display:grid;place-items:center;width:44px;height:44px;border-radius:999px;border:1px solid rgb(255 255 255 / 14%);background:rgb(12 5 9 / 82%);color:#e9cdd4;cursor:pointer;transition:border-color .25s ease-out,color .25s ease-out,transform .15s ease-out}
+.hp-vid-arrow:hover:not(:disabled){border-color:#ff6b8a;color:#fff}
+.hp-vid-arrow:active:not(:disabled){transform:scale(.94)}
+.hp-vid-arrow:disabled{opacity:.3;cursor:default}
+.hp-vid-arrow.is-prev{left:clamp(6px,1.6vw,18px)}
+.hp-vid-arrow.is-next{right:clamp(6px,1.6vw,18px)}
+.hp-vid-dots{display:flex;justify-content:center;align-items:center;gap:6px;margin-top:4px}
+.hp-vid-dots button{width:6px;height:6px;padding:0;border:0;border-radius:999px;background:rgb(255 255 255 / 22%);cursor:pointer;transition:width .25s ease-out,background .25s ease-out}
+.hp-vid-dots button.on{width:24px;background:#ff6b8a}
+@media(max-width:700px){.hp-vid-arrow{display:none}}
+@media(prefers-reduced-motion:reduce){.hp-vid-track{scroll-behavior:auto}.hp-vid-card{transition:none}}

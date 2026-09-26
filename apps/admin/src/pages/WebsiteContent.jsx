@@ -2,7 +2,7 @@ import { useAdminConfirm } from '../components/AdminConfirm.jsx';
 import { readSession, errorText } from '@platform/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { ApiError, Empty, ErrorState, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 
 export function parseWebsiteDraft(value) {
@@ -195,6 +195,23 @@ export function WebsiteContent({ api }) {
   function updateCompareCard(index, patch) { updateCompare({ cards: compareCards.map((card, cardIndex) => (cardIndex === index ? { ...card, ...patch } : card)) }); }
   function removeCompareCard(index) { updateCompare({ cards: compareCards.filter((_, cardIndex) => cardIndex !== index) }); }
   function addCompareCard() { updateCompare({ cards: [...compareCards, { tone: compareCards.some((card) => card?.tone === 'with') ? 'without' : 'with', title: '', items: [] }] }); }
+  // 第二屏「视频展示」（2026-09-26）：标题 + 副标题 + 多个视频卡（标签/标题/说明/视频/封面）。
+  const videosBlock = structured?.videos && typeof structured.videos === 'object' ? structured.videos : HOME_VIDEOS_DEFAULT;
+  const videoItems = Array.isArray(videosBlock.items) ? videosBlock.items : [];
+  function updateVideos(patch) { updateStructured({ videos: { ...videosBlock, ...patch } }); }
+  function updateVideo(index, patch) { updateVideos({ items: videoItems.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)) }); }
+  function removeVideo(index) { updateVideos({ items: videoItems.filter((_, itemIndex) => itemIndex !== index) }); }
+  function addVideo() { updateVideos({ items: [...videoItems, { tag: '', title: '', desc: '', videoUrl: '', posterUrl: '' }] }); }
+  // 视频上传：与配图同一条路（file-assets），只是 category 用 MEDIA_ASSET（语义更准，且公开口认它）。
+  // ⚠️ 生产上限 200MB（FILE_UPLOAD_MAX_BYTES），而且会过病毒扫描 —— 官网展示用的片段请压到 10MB 内。
+  async function uploadVideo(file, apply, key) {
+    setUploading(key); setMessage('');
+    try {
+      const asset = await api.upload('admin/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PUBLIC_PLATFORM' });
+      apply(`/api/public/file-assets/${asset.id}/download`);
+    } catch (error) { setMessage(errorText('视频上传失败：' + (error.message || '未知错误'))); }
+    finally { setUploading(''); }
+  }
   const asLines = (value) => (Array.isArray(value) ? value.join('\n') : '');
   const fromLines = (value) => String(value || '').split('\n').map((line) => line.trim()).filter(Boolean);
   function updateCourse(index, patch) {
@@ -332,6 +349,33 @@ export function WebsiteContent({ api }) {
               <div className="row-actions top-gap"><label className="inline-file-upload">{uploading === `hp-step-${index}` ? '上传中…' : '上传配图'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url) => updateStep(index, { imageUrl: url }), `hp-step-${index}`); }} /></label></div>
             </div>)}</div>
             <button type="button" className="secondary-button top-gap" onClick={addStep}>新增一步</button>
+            {/* 第二屏「视频展示」（2026-09-26 用户口径：「做一个官网的第二屏，放在第一屏下方，后台可配置
+                视频，我要上传多个视频来展示，文案也要可配置」）。位置：官网首页**第一屏下方、三步一栏上方**。
+                视频走平台已有的文件资产接口（category=MEDIA_ASSET + PUBLIC_PLATFORM 才能被公开口读到）。
+                ⚠️ 上传上限 200MB 且要过病毒扫描；官网展示片段建议 ≤10MB。卡片全删 ＝ 官网不显示这一屏。 */}
+            <div className="cms-section-heading top-gap"><strong>第二屏 · 视频展示（首页第一屏下方）</strong><span>标题 / 副标题 / 多个视频卡（标签、标题、说明、视频、封面）· 视频全删掉 ＝ 官网不显示这一屏</span></div>
+            <div className="form-grid">
+              <label>大标题<input value={videosBlock.title || ''} onChange={(event) => updateVideos({ title: event.target.value })} maxLength={60} /></label>
+              <label>副标题<input value={videosBlock.lead || ''} onChange={(event) => updateVideos({ lead: event.target.value })} maxLength={160} /></label>
+            </div>
+            <div className="cms-faq-list">{videoItems.map((item, index) => <div className="cms-faq-item" key={`hp-vid-${index}`}>
+              <div className="cms-faq-heading"><strong>第 {index + 1} 个视频</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveSectionList('videos', 'items', index, -1)} aria-label={`第 ${index + 1} 个上移`}>↑</button><button type="button" className="text-button" disabled={index === videoItems.length - 1} onClick={() => moveSectionList('videos', 'items', index, 1)} aria-label={`第 ${index + 1} 个下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeVideo(index)}>删除</button></div></div>
+              <div className="form-grid">
+                <label>角标<input value={item.tag || ''} onChange={(event) => updateVideo(index, { tag: event.target.value })} maxLength={16} placeholder="例如：第 1 课 / 3 分钟" /></label>
+                <label>标题<input value={item.title || ''} onChange={(event) => updateVideo(index, { title: event.target.value })} maxLength={40} /></label>
+              </div>
+              <label>说明<textarea value={item.desc || ''} onChange={(event) => updateVideo(index, { desc: event.target.value })} maxLength={200} rows={2} /></label>
+              <div className="form-grid">
+                <label>视频地址<input value={item.videoUrl || ''} onChange={(event) => updateVideo(index, { videoUrl: event.target.value })} placeholder="/api/public/file-assets/<id>/download" /></label>
+                <label>封面地址<input value={item.posterUrl || ''} onChange={(event) => updateVideo(index, { posterUrl: event.target.value })} placeholder="留空则视频第一帧出来前是黑底" /></label>
+              </div>
+              <div className="row-actions top-gap">
+                <label className="inline-file-upload">{uploading === `hp-vid-${index}` ? '上传中…' : '上传视频'}<input type="file" accept="video/mp4,video/webm" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadVideo(file, (url) => updateVideo(index, { videoUrl: url }), `hp-vid-${index}`); }} /></label>
+                <label className="inline-file-upload">{uploading === `hp-vid-cover-${index}` ? '上传中…' : '上传封面'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url) => updateVideo(index, { posterUrl: url }), `hp-vid-cover-${index}`); }} /></label>
+              </div>
+              <small className="muted">视频建议：横版 16:9、≤10MB 的短视频（官网按 5 Mbps 出口发放，越大首屏越慢）。封面会自动按 960 宽取缩略图。</small>
+            </div>)}</div>
+            <button type="button" className="secondary-button top-gap" onClick={addVideo}>新增视频</button>
             {/* 对比一栏（2026-09-25 用户口径）：标题 + 要高亮的词 + 副标题 + 一正一反两张卡片（标题 + 一行一条的条目）。
                 高亮词会带手绘感下划线；tone 决定配色与图标（without 暖色皱眉 / with 紫色高亮）。 */}
             <div className="cms-section-heading top-gap"><strong>对比一栏（官网首页 · 页脚上方）</strong><span>标题 / 高亮词 / 副标题 / 卡片 · 卡片全删掉 ＝ 官网不显示这一栏</span></div>

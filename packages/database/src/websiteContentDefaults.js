@@ -69,6 +69,17 @@ export const WEBSITE_CONTENT_DEFAULTS = {
         },
       ],
     },
+    // 首页第二屏「视频展示」（2026-09-26 用户口径：「做官网的第二屏，放在第一屏下方，后台可配置视频，
+    // 我要上传多个视频来展示，文案也要可配置」）。
+    // ⚠️ 这一份必须与 `packages/shared/src/siteDefaults.js` 的 HOME_VIDEOS_DEFAULT **逐字段一致**
+    //    （那一份是官网兜底与后台表单预填共用的；本文件要零依赖、不能 import 它，所以手抄一份）。
+    //    守卫 scripts/p147-home-videos-band.mjs 会比对这两份 —— 别只改一边。
+    // **把 items 删空 = 官网不显示这一屏**；默认就是空的（视频由运营自己传，仓库不预置素材）。
+    videos: {
+      title: '课堂里真实做出来的东西',
+      lead: '一节课一件作品：点开就是学生自己动手做出来的样子。',
+      items: [],
+    },
     // 首页「对比一栏」（2026-09-25 用户口径：「在官网首页页脚上面加一个以上代码的页面，后台可以配置」，
     // 参考稿是 Codecraft AI 的对比区：暗底 + 打字标题 + 高亮词 + 一正一反两张卡片）。
     // ⚠️ 这一份必须与 `packages/shared/src/siteDefaults.js` 的 HOME_COMPARE_DEFAULT **逐字一致**

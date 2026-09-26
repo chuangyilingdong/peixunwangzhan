@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, Icon, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, Icon, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { StudentAccountPage } from './pages/AccountSecurity.jsx';
 import { MyWorkDetailPage } from './pages/MyWorkDetail.jsx';
@@ -649,6 +649,111 @@ function titleUnits(text) {
   return units;
 }
 
+/**
+ * 首页第二屏「视频展示」（2026-09-26 用户口径：做一个第二屏放第一屏下方，后台可配视频（多个）+ 文案）。
+ * 参考稿是一个卡片横向轮播（大标题 + 激活卡放大 + 左右箭头 + 圆点），这里按站内语言重画：
+ * 深红底（与「三步一栏」同一套渐变）、圆角卡、手写 SVG 箭头（**不引 lucide / Tailwind**，
+ * 与 p135/p142 守卫钉的"官网不引第三方依赖"一条口径）。
+ *
+ * ⚠️ 三条硬约束（都对应过真实事故，别改）：
+ *   ① 这一屏必须在 `.hp-first` **外面** —— 它一变高不能改变第一屏（含背景视频）的取景（p135 钉着）；
+ *   ② **只有当前那张视频会加载与播放**（`preload="none"` + 只对激活卡调 play，离开视口全停）——
+ *      这台机公网出口只有 5 Mbps，一屏 6 个视频同时拉等于把官网堵死；
+ *   ③ 封面图若是**站内 file-asset**，自动加 `?w=960` 取缩略图（运营传的原图常有几 MB，
+ *      见 §二十七那次的教训：首页配图不缩就是 6MB）。
+ */
+function HomeVideos({ block }) {
+  const [ref, shown] = useRevealOnce();
+  const trackRef = useRef(null);
+  const cardRefs = useRef(new Map());
+  const videoRefs = useRef(new Map());
+  const [activeIndex, setActiveIndex] = useState(0);
+  const items = (Array.isArray(block?.items) ? block.items : [])
+    .filter((item) => item && (item.videoUrl || item.posterUrl))
+    .map((item) => ({
+      tag: String(item.tag || ''),
+      title: String(item.title || ''),
+      desc: String(item.desc || ''),
+      videoUrl: String(item.videoUrl || ''),
+      posterUrl: coverThumb(item.posterUrl),
+    }));
+  // 一屏里大概 2~3 张：滚到哪张就激活哪张（点卡片/箭头/圆点都走同一个"滚过去"动作）
+  const scrollToIndex = (index) => {
+    const track = trackRef.current; const card = cardRefs.current.get(index);
+    if (!track || !card) return;
+    track.scrollTo({ left: card.offsetLeft - (track.clientWidth - card.clientWidth) / 2, behavior: 'smooth' });
+    setActiveIndex(index);
+  };
+  const onScroll = () => {
+    const track = trackRef.current;
+    if (!track) return;
+    const center = track.scrollLeft + track.clientWidth / 2;
+    let best = 0; let bestDistance = Infinity;
+    for (const [index, card] of cardRefs.current) {
+      const distance = Math.abs(card.offsetLeft + card.clientWidth / 2 - center);
+      if (distance < bestDistance) { bestDistance = distance; best = index; }
+    }
+    setActiveIndex((old) => (old === best ? old : best));
+  };
+  // ② 只有激活那张在播；离开视口（或还没滚到）一律暂停 —— 省带宽也省电
+  useEffect(() => {
+    for (const [index, video] of videoRefs.current) {
+      if (!video) continue;
+      if (shown && index === activeIndex) video.play?.().catch(() => {});
+      else { video.pause?.(); }
+    }
+  }, [shown, activeIndex, items.length]);
+  if (!items.length) return null;
+  const go = (step) => scrollToIndex(Math.max(0, Math.min(items.length - 1, activeIndex + step)));
+  return <section className={'hp-vid' + (shown ? ' is-in' : '')} ref={ref} aria-label="视频展示">
+    <div className="hp-vid-inner">
+      {(block?.title || block?.lead) && <div className="hp-vid-head">
+        {block?.title ? <h2>{String(block.title)}</h2> : null}
+        {block?.lead ? <p>{String(block.lead)}</p> : null}
+      </div>}
+      <div className="hp-vid-stage">
+        <button type="button" className="hp-vid-arrow is-prev" onClick={() => go(-1)} disabled={activeIndex === 0} aria-label="上一个视频">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
+        </button>
+        <div className="hp-vid-track" ref={trackRef} onScroll={onScroll}>
+          {items.map((item, index) => <article key={index}
+            className={'hp-vid-card' + (index === activeIndex ? ' is-on' : '')}
+            ref={(node) => { if (node) cardRefs.current.set(index, node); else cardRefs.current.delete(index); }}
+            onClick={() => scrollToIndex(index)}>
+            <div className="hp-vid-frame">
+              <video ref={(node) => { if (node) videoRefs.current.set(index, node); else videoRefs.current.delete(index); }}
+                src={item.videoUrl || undefined}
+                poster={item.posterUrl || undefined}
+                preload="none" muted loop playsInline
+                onClick={(event) => { event.stopPropagation(); const video = event.currentTarget; if (video.paused) video.play?.().catch(() => {}); else video.pause?.(); }}
+              />
+              {item.tag ? <span className="hp-vid-tag">{item.tag}</span> : null}
+            </div>
+            {(item.title || item.desc) && <div className="hp-vid-body">
+              {item.title ? <h3>{item.title}</h3> : null}
+              {item.desc ? <p>{item.desc}</p> : null}
+            </div>}
+          </article>)}
+        </div>
+        <button type="button" className="hp-vid-arrow is-next" onClick={() => go(1)} disabled={activeIndex >= items.length - 1} aria-label="下一个视频">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+        </button>
+      </div>
+      {items.length > 1 ? <div className="hp-vid-dots">
+        {items.map((_, index) => <button type="button" key={index} aria-label={`第 ${index + 1} 个视频`}
+          className={index === activeIndex ? 'on' : ''} onClick={() => scrollToIndex(index)} />)}
+      </div> : null}
+    </div>
+  </section>;
+}
+
+/** 封面图若是站内 file-asset，按 960 宽取缩略图（运营传的原图常有几 MB，见 §二十七那次教训）。 */
+function coverThumb(url) {
+  const value = String(url || '');
+  if (!/^\/api\/public\/file-assets\/[^/]+\/download$/.test(value)) return value;
+  return `${value}?w=960`;
+}
+
 function HomeCompare({ block }) {
   const [ref, shown] = useRevealOnce();
   const title = String(block?.title || '');
@@ -772,6 +877,11 @@ function HomeLanding() {
     </section>
     {ready && stats.length ? <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><HomeStatIcon name={item.icon} /><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
     </div>
+    {/* 第二屏「视频展示」（用户口径 2026-09-26：「做一个官网的第二屏，放在第一屏下方，后台可配置
+        视频，我要上传多个视频来展示，文案也要可配置」）—— 所以它排在**第一屏之后、三步一栏之前**。
+        与 steps/compare 同一条口径：整块没配用内置默认，运营把 items 删空就是不要这一屏（不回退）。
+        ⚠️ 同样在 `.hp-first` **外面**：加它不许改变第一屏（含背景视频）的取景。 */}
+    {ready ? <HomeVideos block={content.videos === undefined || content.videos === null ? HOME_VIDEOS_DEFAULT : content.videos} /> : null}
     {/* 三步一栏（用户口径 2026-09-23：**在页脚上方**做一栏，文字与图片后台可配）—— 所以它排在
         首页内容的最后一段，紧接着就是全站页脚。与 stats 同一条口径：**整块没配**用内置默认，
         但运营把三步删空（items: []）就是不要这一栏，不回退。
@@ -1249,7 +1359,7 @@ const CMS_FALLBACK = {
   // 而别处是 11 门 / 87 节 —— 于是同一页会因为「接口通 / 断」显示两套数字
   // （接口断 → 用这份；接口通但行里没有 stats → 用 HOME_STATS_FALLBACK）。
   // scripts/p115-website-ui-check.mjs 会把两条路径各渲染一遍并逐字对比，就是为了钉住这条。
-  HOME: { heroKicker: '', heroTitle: '培养青少年Ai思维', heroAccent: '掌握Ai时代的创造方式', heroDescription: 'AI 画布创作 + Vibe Coding 对话编程，从兴趣到独立创作', trustTitle: '', trustDescription: '', stats: HOME_STATS_FALLBACK, steps: HOME_STEPS_DEFAULT, compare: HOME_COMPARE_DEFAULT },
+  HOME: { heroKicker: '', heroTitle: '培养青少年Ai思维', heroAccent: '掌握Ai时代的创造方式', heroDescription: 'AI 画布创作 + Vibe Coding 对话编程，从兴趣到独立创作', trustTitle: '', trustDescription: '', stats: HOME_STATS_FALLBACK, steps: HOME_STEPS_DEFAULT, compare: HOME_COMPARE_DEFAULT, videos: HOME_VIDEOS_DEFAULT },
   // 常见问题（/faq）：按端三档，与 packages/database/src/websiteContentDefaults.js 的 FAQ **逐字一致**
   // （口径①：接口通/断不能显示两套内容）。student 取的是**生产 CMS 已发布的原文** ——
   // 原来这里只有 3 条、且少了「授权次数用完会怎样」，与线上那份对不上，正是那条口径要防的隐患。
