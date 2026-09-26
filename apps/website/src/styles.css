@@ -18,7 +18,7 @@
      · 字体：提示词要从 Google Fonts / OnlineWebFonts / cdnjs 引复古点阵显示字体，但生产 CSP 是
        `default-src 'self'` 且没有 font-src（回落 'self'）——外链字体/样式会被浏览器拒收。
        这里改用自托管字体（Latin 走 Inter/Geist，中文走站内 Noto Sans SC），靠字重与字距复刻气质。
-     · 视频：提示词给的是第三方 CloudFront 地址，这里用站内 /assets/hero-animal.mp4。
+     · 视频：提示词给的是第三方 CloudFront 地址，这里用站内 /assets/hero-rabbit.mp4。
    单屏不滚动：.hp 撑满一屏，页脚在首页不渲染（main.jsx 里控制）。 */
 /* ⚠️ 这里必须是 `overflow:clip` 而不是 `overflow:hidden`（2026-09-23 踩过）：
    `hidden` 会把 `.hp` 变成**滚动容器**，于是里面「三步一栏」那层 `position:sticky` 会相对它钉住、
@@ -959,7 +959,7 @@
    ⚠️ prefers-reduced-motion 下不飘（站内其它动效同一条口径）。
    ════════════════════════════════════════════════════════════════════════════ */
 footer.site-footer{position:relative;overflow:hidden;padding:clamp(56px,7vw,92px) 28px 26px;border-top:1px solid rgb(255 255 255 / 7%);color:#c9b6bd;/* 用户 2026-09-23：「页脚现在是纯黑，可以跟首页那样渐变红就行」——
-   首页那片红是**视频背景**里的颜色（.hp-bg 里的 hero-animal.mp4），没有可复用的 CSS 渐变，
+   首页那片红是**视频背景**里的颜色（.hp-bg 里的 hero-rabbit.mp4），没有可复用的 CSS 渐变，
    所以按那个色调自己调一条：上缘深（接得住首页 hero 的暗底）→ 中段酒红 → 下缘再压暗。 */
 background:radial-gradient(120% 80% at 50% 0%,rgb(255 60 90 / 26%),transparent 62%),linear-gradient(180deg,#17060a 0%,#5f1020 44%,#8a1526 62%,#160409 100%)}
 .site-footer .ft-inner{position:relative;z-index:1;max-width:1184px;margin:auto}

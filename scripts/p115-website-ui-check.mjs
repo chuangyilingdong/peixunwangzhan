@@ -360,8 +360,29 @@ try {
   // WebGL 按钮：黑底首页的 CTA 是 specular 组件（每个按钮一个 canvas）
   const homeCanvases = await page.locator('.hp-actions canvas').count();
   if (homeCanvases < 2) problems.push(`首页：两个 hero CTA 应当各有一个 specular 的 WebGL canvas（实际 ${homeCanvases} 个）`);
+  // ⚠️ 判据是"**自托管**在 /assets/ 下"，不是某个固定文件名 —— 换素材时会改名（2026-09-26 换成
+  //    hero-rabbit.mp4，因为 /assets/ 加了 7 天长缓存：改名才会立刻生效）。钉死文件名会把换素材搞红。
   const homeVideoSrc = await page.locator('.hp-video').getAttribute('src');
-  if (homeVideoSrc !== '/assets/hero-animal.mp4') problems.push(`首页：背景视频不是自托管的 hero-animal.mp4（实际 ${homeVideoSrc}）`);
+  if (!/^\/assets\/[\w.-]+\.mp4$/.test(String(homeVideoSrc || ''))) {
+    problems.push(`首页：背景视频不是自托管的 /assets/*.mp4（实际 ${homeVideoSrc}）`);
+  }
+  // 流畅度（2026-09-26 用户口径「保证官网的流畅度」）：首屏那支视频**不许胖**。
+  // 这台机公网出口只有 5 Mbps，视频每多 1MB，首屏就多等约 1.6 秒 —— 所以把体积上限钉在守卫里。
+  {
+    const fsmod = await import('node:fs');
+    const pathmod = await import('node:path');
+    const rel = String(homeVideoSrc || '').replace(/^\//, '');
+    const videoFile = pathmod.join(root, 'apps/website/public', rel);
+    if (!fsmod.existsSync(videoFile)) {
+      problems.push(`首页：找不到背景视频文件 ${rel}（源码里写着它，文件却不在 public/assets 下）`);
+    } else {
+      const bytes = fsmod.statSync(videoFile).size;
+      if (bytes > 1.2 * 1024 * 1024) problems.push(`首页：背景视频 ${(bytes / 1048576).toFixed(2)}MB 超上限（1.2MB）—— 首屏会明显变慢`);
+      const poster = pathmod.join(root, 'apps/website/public', rel.replace(/\.mp4$/, '-poster.webp'));
+      if (!fsmod.existsSync(poster)) problems.push('首页：背景视频没有配套海报（poster），首帧会白一下');
+      else if (fsmod.statSync(poster).size > 160 * 1024) problems.push(`首页：海报 ${(fsmod.statSync(poster).size / 1024).toFixed(0)}KB 超上限（160KB）`);
+    }
+  }
 
   // ── ② 接口回来前不渲染文案（口径②）：定向延迟 CMS 响应，看首帧
   await page.route(CMS_HOME_URL, async (route) => { await new Promise((r) => setTimeout(r, 1800)); await route.continue(); });

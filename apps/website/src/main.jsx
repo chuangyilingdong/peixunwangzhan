@@ -35,7 +35,7 @@ function LoginPage() {
   }
   // 背景按首页来做（用户口径 2026-09-18）：同一份视频资产、同一套「视频 + 压暗层」叠法。
   // 平台端/机构端登录页没有这个视频资源，所以视频只铺在官网这一侧（共享面板只给底色）。
-  return <div className='website-login'><div className='login-bg' aria-hidden='true'><video src='/assets/hero-animal.mp4' poster='/assets/hero-animal-poster.webp' autoPlay muted loop playsInline preload='auto' /><div className='login-scrim' /></div><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title={asStudent ? '学生登录' : '机构 / 老师登录'} description={asStudent ? '登录后继续你的创作旅程。' : '登录后进入机构工作台。'} onLogin={handleLogin} /><p className='login-switch'>{asStudent ? <>我是机构 / 老师，<a href={ORG_APP_URL}>去机构后台</a></> : <>我是学生，<Link to='/login?as=student'>去学生登录</Link></>}</p></div>;
+  return <div className='website-login'><div className='login-bg' aria-hidden='true'><video src='/assets/hero-rabbit.mp4' poster='/assets/hero-rabbit-poster.webp' autoPlay muted loop playsInline preload='metadata' /><div className='login-scrim' /></div><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title={asStudent ? '学生登录' : '机构 / 老师登录'} description={asStudent ? '登录后继续你的创作旅程。' : '登录后进入机构工作台。'} onLogin={handleLogin} /><p className='login-switch'>{asStudent ? <>我是机构 / 老师，<a href={ORG_APP_URL}>去机构后台</a></> : <>我是学生，<Link to='/login?as=student'>去学生登录</Link></>}</p></div>;
 }
 
 const ORG_APP_URL = import.meta.env?.VITE_ORG_APP_URL || '/org/';
@@ -364,7 +364,7 @@ function Title({eyebrow,title,desc}){return <section className="page-title"><div
 //      会被浏览器直接拒收。CSP 是安全边界，不为换字体放宽，所以这里用**自托管**的 Geist / Noto Sans SC，
 //      靠字重、字距与大写复刻那套显示字体的气质。
 //   ② 背景视频：提示词给的是 r2.motionsites.dev 的 CloudFront 地址；这里换成站内已有的
-//      `/assets/hero-animal.mp4`（自托管，不受第三方可用性影响，也不把访客 IP/UA 带给外域）。
+//      `/assets/hero-rabbit.mp4`（自托管，不受第三方可用性影响，也不把访客 IP/UA 带给外域）。
 // 文案与数据全部走 CMS 的 HOME 键（`heroKicker/heroTitle/heroAccent/heroDescription/trustTitle/
 // trustDescription/stats`），后台「官网内容 → 首页」可改；没配就用下面的 fallback。
 // ⚠️ 数据区**不要**改成 IntersectionObserver 触发：首页是单屏不滚动，没有交叉可言；
@@ -750,7 +750,11 @@ function HomeLanding() {
         （原本分给 hero 的那点富余空间被下面那一栏吃掉了）。
         所以：视频只铺第一屏（100vh），hero + 数据区也限定在第一屏里 —— 与加那一栏之前的表现一致。 */}
     <div className="hp-first">
-      <div className="hp-bg" aria-hidden="true"><video className="hp-video" src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" autoPlay muted loop playsInline preload="auto" /><div className="hp-scrim" /></div>
+      {/* 首屏背景视频（2026-09-26 换新素材）：0.87MB / 1080p / 无音轨 ——
+          比上一版（1.86MB）小一半，官网是从这台 5 Mbps 的机器上发的，这一半就是首屏快一秒。
+          文件名带版本（hero-rabbit）是**故意的**：/assets/ 现在有 7 天长缓存，
+          换了素材要改名才会立刻生效（见 nginx-site.conf 的 assets 段）。 */}
+      <div className="hp-bg" aria-hidden="true"><video className="hp-video" src="/assets/hero-rabbit.mp4" poster="/assets/hero-rabbit-poster.webp" autoPlay muted loop playsInline preload="auto" /><div className="hp-scrim" /></div>
       <section className="hp-hero">
       {ready && (trustTitle || trustDescription) && <div className="hp-trust"><span className="hp-trust-mark">✦</span><div>{trustTitle ? <strong>{trustTitle}</strong> : null}{trustDescription ? <span>{trustDescription}</span> : null}</div></div>}
       {ready && kicker ? <p className="hp-kicker">{kicker}</p> : null}
@@ -1205,10 +1209,13 @@ function Download() {
   const windows = manifest?.files?.['win-x64'] || null;
   const mac = manifest?.files?.['mac-arm64'] || null;
   const mb = (bytes) => (bytes ? (bytes / 1048576).toFixed(0) + ' MB' : '');
-  // 2026-09-25 用户口径：「第一屏，全部删除，就留个 windows 版和 mac 版安装就行。如果需要图标直接用 svg」
-  // —— 所以这一页只剩「两块的安装卡片」：原来底部那整块「装上以后怎么用」（四条步骤 + 两条尾注 +
-  //    打开客户端的深链）整块删掉了。图标从 emoji 换成 shared 那套线性 SVG（见 icons.jsx）。
-  return <><Title eyebrow="创作客户端" title={<>把课堂装进<br/><em>学生的电脑</em></>} desc="VibeCoding 课堂用客户端上：老师开始上课后，学生用账号登录即可进入自己的创作环境。" /><main className="inner">
+  // 这一页按用户口径删到只剩「两块安装卡片」：
+  //   2026-09-25：「第一屏，全部删除，就留个 windows 版和 mac 版安装就行。如果需要图标直接用 svg」
+  //     → 删掉底部那整块「装上以后怎么用」（四条步骤 + 两条尾注 + 打开客户端的深链），图标换 shared 的线性 SVG；
+  //   2026-09-26：「客户端下载图1这部分也删掉」→ 连**页头那块**（创作客户端眉题 +「把课堂装进学生的电脑」
+  //     + 那句说明）一起去掉。所以现在 <main className="inner"> 里直接就是两张卡片。
+  //   ⚠️ 这一页**没有 Title 了**：给页面留一个 h1 是 SEO 的习惯，但用户明确要删 —— 别自作主张加回来。
+  return <main className="inner">
     <section className="dl">
       <article className="dl-card">
         <Icon name="windows" size={30} />
@@ -1224,7 +1231,7 @@ function Download() {
         {mac ? <><p>版本 {manifest.version} · {mb(mac.size)}</p><a className="button" href={'/downloads/' + mac.name}>下载安装包</a></> : <><p>正在准备中</p><small>需要 macOS 12 以上、Apple 芯片（M 系列）。做好会在这一页放出。</small></>}
       </article>
     </section>
-  </main></>;
+  </main>;
 }
 function Compare(){const rows=[['工具形态','多个网站 / App 来回切换','同一个工作台里完成：对话 + 预览 + 项目文件'],['课程交付','机构自建教案，平台不管课','课程中心标准课包，课时与课件一体'],['账号与安全','学生自备账号 / API Key，易泄露','机构账号分级，学员无需自备 Key'],['成本控制','个人账号各买各的，月底才知道超支','机构授权次数按班分配，用量有记录和提醒'],['成果沉淀','作业散落在群聊和个人电脑','作品展厅聚合展示，形成校区案例库'],['硬件实践','外部工具和环境另行配置','Arduino / micro:bit 软硬一体课程']];return <><Title eyebrow="选型对比" title={<>为什么不是<br/><em>再找个对话平台</em>？</>} desc="机构评估 AI 课程时，真正要比较的不是一个聊天框，而是一套能不能长期交付的课堂产品。"/><main className="inner"><section className="compare"><div className="compare-head"><span>对比维度</span><span>分散拼凑</span><b>{BRAND_NAME}</b></div>{rows.map(r=><div key={r[0]}><strong>{r[0]}</strong><span>{r[1]}</span><b>✓ {r[2]}</b></div>)}</section><section className="compare-end"><div><small>一句话总结</small><h2>把「创作、课程、账号、计费、作品」<em>统一起来</em>。</h2></div><Button>联系我们</Button></section></main></>}
 // 官网公开端的内容兜底：公开接口不可用、或后台还没发布过该区块时，官网仍要有东西可看。
