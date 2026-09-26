@@ -197,6 +197,14 @@ function AdjustQuotaDrawer({ api, orgId = '', assignment = null, assignments = [
           <label>调整数值（次）*<input type="number" min="1" step="1" value={value} onChange={(event) => { setValue(event.target.value); setError(''); }} placeholder="如：50" /><small className="muted">单位：次，必须是大于 0 的整数；{direction === 'ADD' ? '增加' : '减少'} {amountValid ? amount : 0} 次</small></label>
           <label>调整原因（必填，不超过 200 字）*<textarea rows={3} maxLength={200} value={reason} onChange={(event) => { setReason(event.target.value); setError(''); }} placeholder="如：机构追加采购 50 次" /><small className="muted">{reason.length}/200</small></label>
           <Notice tone="warning">调整后总授权次数不能少于当前已授权次数（{used} 次）。{amountValid ? <> 本次调整后总授权次数为 <strong>{nextTotal}</strong> 次，已授权 {used} 次、剩余 {Math.max(0, nextTotal - used)} 次。</> : null}</Notice>
+          {/* 两条路的区别写在按钮边上（2026-09-26 生产事故：这里调增过的次数没有对应的许可批次，
+              机构一点「授权给学员」就报「购买批次余额不足，无法确认收入」）。 */}
+          <Notice tone="info">
+            <strong>这个入口只改「能发多少次课」，不记钱</strong>：增加时会自动补一笔
+            <strong> 0 金额的平台开通批次</strong>（保证机构能正常发课）；<strong>减少不会动财务账</strong>。
+            如果是机构真的付了钱（要记成交金额 / 订单号 / 合同号），请走
+            「课包管理与发布 → 给机构开通 / 追加授权」那条路 —— 那里才填收款信息。
+          </Notice>
         </section>
         {error ? <Notice tone="danger">{error}</Notice> : null}
       </div>

@@ -13,6 +13,9 @@ import { effectiveCapabilities, normalizeAspectRatio } from '../../services/mode
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
 import { normalizeSubmission } from '../vibecoding.js';
 import { COURSE_QUOTA_CHANGE_TYPES, COURSE_QUOTA_SOURCES, normalizeQuotaChange, recordQuotaChange } from '../../services/courseQuotaLedger.js';
+// 「调整授权次数」调增时顺手把许可批次补上 —— 否则机构一点「授权给学员」就被 FIFO 拦下
+// （「购买批次余额不足，无法确认收入」，生产上三家撞过），见 adjust 分支的注释与交接 §二十九。
+import { ensureOpeningBalanceBatch } from '../../services/licenseLedger.js';
 import {
   ENROLLMENT_STATUSES,
   ORG_MEMBER_ROLES,
@@ -340,6 +343,14 @@ export async function handleOrganizations(ctx, part, method) {
         throw errors.conflict(`调整后总授权次数（${quotaTotalAfter}）不能少于当前已授权次数（${quotaUsedBefore}）`, 'COURSE_QUOTA_BELOW_USED');
       }
       await aq('UPDATE course_assignments SET quota_total=? WHERE id=?', [quotaTotalAfter, assignment.id]);
+      // ⭐ 2026-09-26：调增时**同步把账记上**（补一笔 0 金额的平台开通批次）。
+      //    这条路径原来是「不生成许可批次」（见函数头注释），后果是：授权单上有次数、批次里一条都没有 →
+      //    机构一点「授权给学员」就被 FIFO 拦下 —— 「购买批次余额不足，无法确认收入」，
+      //    生产上三家机构撞过（培扬 / 灵动未来 / 银河少年创客中心，见交接 §二十九）。
+      //    金额仍为空（平台给的额度不是采购收入），只是让「次数」与「批次」当场对上，
+      //    而不是等机构发课时才补（那样日志里会飘一条 warn，运营也看不懂）。
+      //    调减（delta<0）时它会因为「覆盖已够」直接返回 null —— 不动财务账。
+      const openingBatch = await ensureOpeningBalanceBatch({ assignmentId: assignment.id, orgId: organization.id, seriesId: series.id, actorId: auth.user.id });
       const change = await recordQuotaChange({
         orgId: organization.id, seriesId: series.id, assignmentId: assignment.id,
         changeType: delta > 0 ? 'ADD' : 'REDUCE',
@@ -347,7 +358,7 @@ export async function handleOrganizations(ctx, part, method) {
         actorId: auth.user.id, actorRole: auth.user.role, reason,
         source: COURSE_QUOTA_SOURCES.ADMIN_ADJUST,
       });
-      return { assignmentId: assignment.id, expiresAt: assignment.expires_at || null, quotaTotalBefore, quotaUsedBefore, quotaTotalAfter, quotaUsedAfter: quotaUsedBefore, change };
+      return { assignmentId: assignment.id, expiresAt: assignment.expires_at || null, quotaTotalBefore, quotaUsedBefore, quotaTotalAfter, quotaUsedAfter: quotaUsedBefore, change, openingBatch: openingBatch?.id || null };
     });
     await audit(ctx, 'ORG_COURSE_QUOTA_ADJUST', 'COURSE_ASSIGNMENT', applied.assignmentId,
       { orgId: organization.id, seriesId: series.id, quotaTotal: applied.quotaTotalBefore, quotaUsed: applied.quotaUsedBefore },
@@ -361,6 +372,7 @@ export async function handleOrganizations(ctx, part, method) {
       quotaUsed: applied.quotaUsedAfter,
       remaining: Math.max(0, applied.quotaTotalAfter - applied.quotaUsedAfter),
       change: applied.change,
+      openingBatch: applied.openingBatch || null,
     };
   }
 

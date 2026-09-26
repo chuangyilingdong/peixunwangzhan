@@ -112,6 +112,68 @@ catch (error) { refused = error; }
 check('⑤ ⭐ 作废后授权仍然被拒（不许绕过作废 —— 与 p85 同一条口径）',
   refused?.code === 'LICENSE_PURCHASE_BALANCE_EXHAUSTED', refused ? `${refused.code}` : '竟然过了');
 
-try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* Windows 上可能还被占着 */ }
-if (failures) { console.log(`\nP148 有 ${failures} 项未通过`); process.exitCode = 1; }
-else console.log('P148 平台调整次数后能正常发课：缺口补成 0 金额的平台开通批次、幂等、部分覆盖只补差额、作废仍拦 通过');
+
+// ── ⑥ 真接口端到端（2026-09-26 补）：平台「调整授权次数」调增 → 机构「授权给学员」必须能过 ──
+// 这一段是**用户报障的原始路径**：只用服务级断言证明不了"平台那个入口和机构那个入口能接上"。
+console.log('⑥ 真服务：平台调增 → 机构授权（用户报障的原始路径）');
+const { spawn } = await import('node:child_process');
+const httpPort = 19148;
+const netEnv = { ...process.env, PLATFORM_DATA_DIR: dir, PLATFORM_DB_PATH: path.join(dir, 'platform.db'), DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock', PORT: String(httpPort) };
+const server = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: process.cwd(), env: netEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+let serverLog = '';
+server.stdout.on('data', (x) => { serverLog += x; });
+server.stderr.on('data', (x) => { serverLog += x; });
+const call = async (pathname, { method = 'GET', token, body } = {}) => {
+  const response = await fetch(`http://127.0.0.1:${httpPort}${pathname}`, {
+    method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await response.text();
+  let payload = null; try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
+  return { status: response.status, payload };
+};
+try {
+  for (let i = 0; i < 120; i += 1) { try { if ((await fetch(`http://127.0.0.1:${httpPort}/health`)).ok) break; } catch { /* 等起来 */ } await new Promise((r) => setTimeout(r, 100)); }
+  // 造一家机构 + 一个已发布课包 + 一个学生，然后**只**走「调整授权次数」把次数调到 4（不建任何批次）
+  // 种子（org-admin / root 这些账号在种子里）—— 前面几段都是自己插数据，这一段要用真账号登录
+  for (const script of ['packages/database/src/db.js', 'packages/database/src/seed.js']) {
+    await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [script, ...(script.includes('db.js') ? ['--init'] : [])], { cwd: process.cwd(), env: netEnv, stdio: 'ignore' });
+      child.on('close', (code) => (code ? reject(new Error(script)) : resolve()));
+    });
+  }
+  const orgId = 'org148http'; const seriesId = 'series148http'; const studentId = 'student148http';
+  await aq("INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES (?,'P148 真服务','ACTIVE',?,?,0,?,?)", [orgId, now, new Date(Date.now() + 86400000).toISOString(), now, now]);
+  await aq("INSERT INTO course_series(id,title,status,owner_type,visibility,stock_total,created_at,updated_at) VALUES (?,'P148 真服务课包','PUBLISHED','PLATFORM','PUBLIC',50,?,?)", [seriesId, now, now]);
+  const orgAdminUser = await arow("SELECT id, org_id, password_hash FROM users WHERE login='org-admin'");
+  await aq("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_at,quota_total,quota_used) VALUES ('assign148http',?,?,'ACTIVE',?,0,0)", [seriesId, orgAdminUser.org_id, now]);
+  await aq("INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,created_at,updated_at) VALUES (?,?,'p148student','P148 学员','STUDENT',?,'ACTIVE',?,?)", [studentId, orgAdminUser.org_id, orgAdminUser.password_hash, now, now]);
+  const root = await call('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123', clientType: 'admin' } });
+  const orgLogin = await call('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123', clientType: 'org' } });
+  const rootToken = root.payload?.data?.token;
+  const orgToken = orgLogin.payload?.data?.token;
+  check('⑥ 两个身份都登录上了（平台超管 + 机构管理员）', Boolean(rootToken) && Boolean(orgToken));
+
+  const adjusted = await call(`/api/admin/organizations/${orgAdminUser.org_id}/course-quotas/${seriesId}/adjust`, { method: 'POST', token: rootToken, body: { delta: 4, reason: 'P148 端到端：平台调增 4 次' } });
+  check('⑥ 平台「调整授权次数」+4 成功', adjusted.status === 200, `HTTP ${adjusted.status} ${JSON.stringify(adjusted.payload).slice(0, 140)}`);
+  // ⭐ 新增的行为：调增时**当场**就补了批次（不再等到机构发课）
+  const batchesNow = await arows("SELECT * FROM license_purchase_batches WHERE assignment_id='assign148http'");
+  check('⑥ ⭐ 调增的同时就补了一笔 0 金额平台开通批次（不用等发课）',
+    batchesNow.length === 1 && batchesNow[0].purchase_type === 'LEGACY_OPENING_BALANCE' && Number(batchesNow[0].quantity) === 4 && batchesNow[0].amount_minor == null,
+    JSON.stringify(batchesNow.map((b) => ({ t: b.purchase_type, q: b.quantity, a: b.amount_minor }))));
+  check('⑥ 返回里带了这笔批次 id（后台/审计看得见）', Boolean(adjusted.payload?.data?.openingBatch), JSON.stringify(adjusted.payload?.data || {}).slice(0, 120));
+
+  const granted = await call('/api/org/course-grants', { method: 'POST', token: orgToken, body: { seriesId, studentIds: [studentId] } });
+  check('⑥ ⭐ 机构「授权给学员」成功（用户报障的那一步，原来 409「购买批次余额不足」）',
+    granted.status === 200 && Number(granted.payload?.data?.granted) === 1, `HTTP ${granted.status} ${JSON.stringify(granted.payload).slice(0, 140)}`);
+  check('⑥ 学员拿到了授权、次数扣了 1',
+    Number((await arow("SELECT COUNT(*) n FROM student_course_grants WHERE series_id=? AND student_id=?", [seriesId, studentId]))?.n) === 1
+    && Number((await arow("SELECT quota_used FROM course_assignments WHERE id='assign148http'"))?.quota_used) === 1);
+  check('⑥ 批次还是那一笔（发课时不再重复补）',
+    Number((await arow("SELECT COUNT(*) n FROM license_purchase_batches WHERE assignment_id='assign148http'"))?.n) === 1);
+} finally {
+  server.kill();
+}
+
+if (failures) { console.log(`\nP148 有 ${failures} 项未通过`); if (serverLog) console.log(serverLog.slice(-1200)); process.exitCode = 1; }
+else console.log('P148 平台调整次数后能正常发课：缺口补成 0 金额的平台开通批次、幂等、部分覆盖只补差额、作废仍拦、真接口端到端 通过');
