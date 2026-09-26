@@ -2,7 +2,7 @@
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, contractExpiryForOrg, normalizeSeriesVisibility, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, acount, atransaction, amap, SQL_MAX } from '../../lib.js';
+  assignmentActiveSql, contractExpiryForOrg, normalizeSeriesVisibility, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, acount, atransaction, amap, SQL_MAX, likeKeyword, likeEscapeClause } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
@@ -142,8 +142,8 @@ export async function handleCourses(ctx, part, method) {
     }[sort];
     const conditions = []; const params = [];
     if (search) {
-      conditions.push('(series.title LIKE ? OR series.id LIKE ?)');
-      const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
+      conditions.push(`(series.title LIKE ? ${likeEscapeClause()} OR series.id LIKE ? ${likeEscapeClause()})`);
+      const keyword = likeKeyword(search);
       params.push(keyword, keyword);
     }
     if (['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(statusFilter)) { conditions.push('series.status=?'); params.push(statusFilter); }
@@ -785,7 +785,7 @@ export async function handleCourses(ctx, part, method) {
     const wheres = ["series.status='PUBLISHED'"];
     const params = [];
     if (['PENDING', 'APPROVED', 'REJECTED', 'NONE'].includes(statusFilter)) { wheres.push('series.marketplace_status=?'); params.push(statusFilter); }
-    if (search) { wheres.push('series.title LIKE ?'); params.push('%' + search.replace(/[%_]/g, (c) => '[' + c + ']') + '%'); }
+    if (search) { wheres.push(`series.title LIKE ? ${likeEscapeClause()}`); params.push(likeKeyword(search)); }
     const where = wheres.join(' AND ');
     const total = Number((await arow('SELECT COUNT(*) n FROM course_series series WHERE ' + where, params))?.n || 0);
     const items = await amap((await arows(

@@ -2,7 +2,7 @@
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arow, arows, aq } from '../../lib.js';
+  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arow, arows, aq, likeKeyword, likeEscapeClause } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
@@ -96,7 +96,7 @@ export async function handleAdmins(ctx, part, method) {
       status: 'user.status ASC, user.created_at DESC, user.id DESC',
     }[sort];
     const params = []; const conditions = ["user.role='SUPER_ADMIN'", 'user.deleted_at IS NULL'];
-    if (search) { conditions.push('(user.login LIKE ? OR user.display_name LIKE ?)'); const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword); }
+    if (search) { conditions.push(`(user.login LIKE ? ${likeEscapeClause()} OR user.display_name LIKE ? ${likeEscapeClause()})`); const keyword = likeKeyword(search); params.push(keyword, keyword); }
     if (['ACTIVE', 'DISABLED'].includes(statusFilter)) { conditions.push('user.status=?'); params.push(statusFilter); }
     const where = conditions.join(' AND ');
     const total = Number((await arow('SELECT COUNT(*) n FROM users user WHERE ' + where, params))?.n || 0);

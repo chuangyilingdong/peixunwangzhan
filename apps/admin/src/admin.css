@@ -686,6 +686,16 @@ a.org-entry-card:hover {
   font-weight:600;
 }
 
+/* 抽屉页脚左侧的「还差什么才能提交」提示（2026-09-26）。
+ * `.drawer-foot` 是 `justify-content:flex-end`，这行得自己吃掉左侧空白（margin-right:auto），
+ * 否则它会紧贴按钮、把两枚按钮顶离右边缘。 */
+.drawer-foot-reason {
+  margin-right:auto;
+  align-self:center;
+  color:#8b85a0;
+  font-size:12px;
+}
+
 /* `.admin-confirm .row-actions` 是给弹窗**底部按钮行**定的（右对齐 + 24px 上边距），
  * 但弹窗表单里也有用 `.row-actions` 排 radio 的行（机构状态：正常 / 停用）——
  * 那两枚单选被这条规则顶到了右边、还多出一截上边距。这里把表单内的这类行改回左对齐、无额外边距。 */

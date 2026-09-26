@@ -49,22 +49,35 @@ function AddPackageDrawer({ api, orgId = '', options = [], assignedIds = new Set
   // ⭐ 允许 0（2026-09-25 用户口径）：0 次 = 只开通给机构**查阅**，分不给学生上课 ——
   //    平台端要能这么开（机构想先看课件、或本季度不排这门课时用）。
   const quotaValid = Number.isInteger(quotaValue) && quotaValue >= 0;
-  const purchaseValid = purchase.amount !== '' && Number(purchase.amount) >= 0 && purchase.orderNo.trim() && purchase.contractNo.trim();
+  // 成交与订单信息**只在真的增加次数时才要**：服务端就是这么判的 —— `delta > 0 ? 校验订单 : null`，
+  // 0 次开通既不校验订单、也不写许可购买批次（没花钱，没有账可记）。
+  // 前端原来一律把它当必填，于是「0 次开通」这条路逼着人现编订单号（2026-09-26 用户报的
+  // 「初始授权次数为 0 为什么不支持添加」就是它）。
+  const needsPurchase = quotaValue > 0;
+  const purchaseFilled = purchase.amount !== '' && Number(purchase.amount) >= 0 && Boolean(purchase.orderNo.trim()) && Boolean(purchase.contractNo.trim());
+  const purchaseValid = !needsPurchase || purchaseFilled;
+  // 按钮灰着的时候要说清差什么（原来只有灰，界面上一个字都没有）。
+  const blockReason = !picked ? '请先在上方的「选择课包」里挑一个课包'
+    : !quotaValid ? '初始授权次数要填不小于 0 的整数'
+      : !purchaseValid ? '还差成交与订单信息：实际成交总额 / 订单号 / 合同号' : '';
 
   async function submit() {
     if (!picked) { setError('请选择要开通的课包'); return; }
     if (!quotaValid) { setError('初始授权次数必须是不小于 0 的整数（0 = 只开通查阅、不能分给学生上课）'); return; }
-    if (!purchaseValid) { setError('请填写实际成交总额、订单号与合同号（现有开通接口必填）'); return; }
+    if (!purchaseValid) { setError('请填写实际成交总额、订单号与合同号（初始授权次数大于 0 时必填）'); return; }
     setBusy(true); setError('');
     try {
       await api.post(`admin/course-series/${encodeURIComponent(picked.id)}/assignments`, {
         orgId,
         quotaTotal: quotaValue,
-        amountMinor: Math.round(Number(purchase.amount) * 100),
-        currency: 'CNY',
-        paymentStatus: 'PAID',
-        orderNo: purchase.orderNo.trim(),
-        contractNo: purchase.contractNo.trim(),
+        // 0 次开通不带成交信息：既不需要（服务端会跳过校验），也免得把编的订单号写进流水。
+        ...(needsPurchase ? {
+          amountMinor: Math.round(Number(purchase.amount) * 100),
+          currency: 'CNY',
+          paymentStatus: 'PAID',
+          orderNo: purchase.orderNo.trim(),
+          contractNo: purchase.contractNo.trim(),
+        } : {}),
         idempotencyKey: newIdempotencyKey(),
         // 业务备注：服务端开通接口目前没有这个入参，会被忽略（已在交付报告里列为待补字段）。
         note: note.trim() || undefined,
@@ -110,8 +123,8 @@ function AddPackageDrawer({ api, orgId = '', options = [], assignedIds = new Set
           </div>
           <label>业务备注<textarea rows={3} maxLength={200} value={note} onChange={(event) => setNote(event.target.value)} placeholder="如：本批次为秋季学期采购" /><small className="muted">{note.length}/200 · 服务端开通接口暂不接收该字段，仅随本次操作提示回显。</small></label>
         </section>
-        <section className="drawer-section">
-          <h3>成交与订单信息（现有开通接口必填）</h3>
+        {needsPurchase ? <section className="drawer-section">
+          <h3>成交与订单信息（授权次数大于 0 时必填）</h3>
           <p className="muted">平台给机构开通课包时，服务端会同时记一笔许可购买批次（许可三账里的库存账），所以这几项必填；收款状态固定为已收款。</p>
           <div className="form-grid">
             <label>实际成交总额（元）*<input type="number" min="0" step="0.01" value={purchase.amount} onChange={(event) => setPurchase({ ...purchase, amount: event.target.value })} /></label>
@@ -119,10 +132,15 @@ function AddPackageDrawer({ api, orgId = '', options = [], assignedIds = new Set
             <label>订单号 *<input maxLength={200} value={purchase.orderNo} onChange={(event) => setPurchase({ ...purchase, orderNo: event.target.value })} /></label>
             <label>合同号 *<input maxLength={200} value={purchase.contractNo} onChange={(event) => setPurchase({ ...purchase, contractNo: event.target.value })} /></label>
           </div>
-        </section>
+        </section> : <Notice tone="info">
+          <strong>初始授权次数填 0，无需成交与订单信息</strong>：这一次只是把课包<strong>开通给该机构查阅</strong>
+          （机构端能看到课包与课件，但分不给学生上课），没有产生购买，所以不会写许可购买批次、也不记收入。
+          要真的卖次数时，把上面的次数填成正数，这里会出现成交与订单信息。
+        </Notice>}
         {error ? <Notice tone="danger">{error}</Notice> : null}
       </div>
       <footer className="drawer-foot">
+        {blockReason ? <span className="drawer-foot-reason">{blockReason}</span> : null}
         <button type="button" className="secondary-button" disabled={busy} onClick={onClose}>取消</button>
         <button type="button" className="primary-button" disabled={busy || !picked || !quotaValid || !purchaseValid} onClick={submit}>{busy ? '开通中…' : '确认添加'}</button>
       </footer>

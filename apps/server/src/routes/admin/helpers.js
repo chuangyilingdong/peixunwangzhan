@@ -881,7 +881,7 @@ function auditQuery(ctx, opts) {
   if (actorId) { conditions.push('audit.actor_id=?'); params.push(actorId); }
   if (targetType) { conditions.push('audit.target_type=?'); params.push(targetType); }
   if (targetId) { conditions.push('audit.target_id=?'); params.push(targetId); }
-  if (requestPath) { conditions.push('audit.request_path LIKE ?'); params.push('%' + requestPath.replace(/[%_]/g, (c) => '[' + c + ']') + '%'); }
+  if (requestPath) { conditions.push(`audit.request_path LIKE ? ${likeEscapeClause()}`); params.push(likeKeyword(requestPath)); }
   if (fromProvided) {
     const t = new Date(from);
     if (!from || Number.isNaN(t.getTime())) throw errors.badRequest('开始时间必须是有效 ISO 时间', 'INVALID_FROM');
@@ -940,7 +940,7 @@ function platformUserFilters(ctx) {
   const params = []; const conditions = ['user.deleted_at IS NULL'];
   if (['SUPER_ADMIN', 'ORG_ADMIN', 'TEACHER', 'STUDENT'].includes(role)) { conditions.push('user.role=?'); params.push(role); }
   if (orgIdFilter) { conditions.push('user.org_id=?'); params.push(orgIdFilter); }
-  if (search) { conditions.push('(user.login LIKE ? OR user.display_name LIKE ? OR user.phone LIKE ?)'); const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword, keyword); }
+  if (search) { conditions.push(`(user.login LIKE ? ${likeEscapeClause()} OR user.display_name LIKE ? ${likeEscapeClause()} OR user.phone LIKE ? ${likeEscapeClause()})`); const keyword = likeKeyword(search); params.push(keyword, keyword, keyword); }
   return { where: conditions.join(' AND '), params };
 }
 function organizationFilters(ctx) {
@@ -948,8 +948,8 @@ function organizationFilters(ctx) {
   const statusFilter = String(ctx.search.get('status') || '').trim();
   const conditions = []; const params = [];
   if (search) {
-    conditions.push('(organization.name LIKE ? OR organization.id LIKE ?)');
-    const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
+    conditions.push(`(organization.name LIKE ? ${likeEscapeClause()} OR organization.id LIKE ? ${likeEscapeClause()})`);
+    const keyword = likeKeyword(search);
     params.push(keyword, keyword);
   }
   if (['TRIAL', 'ACTIVE', 'DISABLED'].includes(statusFilter)) { conditions.push('organization.status=?'); params.push(statusFilter); }
@@ -960,10 +960,9 @@ function platformWorkFilters(ctx, kind = 'canvas') {
   const lessonColumn = kind === 'vibecoding' ? 'lesson_id' : 'course_lesson_id';
   const conditions = []; const params = [];
   const value = (key) => String(ctx.search.get(key) || '').trim();
-  const keyword = (text) => '%' + text.replace(/[\\%_]/g, '\\$&') + '%';
   const like = (columns, text) => {
     conditions.push('(' + columns.map((column) => `${column} LIKE ? ${likeEscapeClause()}`).join(' OR ') + ')');
-    params.push(...columns.map(() => keyword(text)));
+    params.push(...columns.map(() => likeKeyword(text)));
   };
   const status = value('status');
   if (['PENDING', 'APPROVED', 'REJECTED', 'PUBLISHED', 'UNPUBLISHED'].includes(status)) { conditions.push(`${alias}.status=?`); params.push(status); }
@@ -975,11 +974,11 @@ function platformWorkFilters(ctx, kind = 'canvas') {
   if (value('search')) like([`${alias}.title`, 'student.display_name', 'student.login', 'organization.name'], value('search'));
   if (value('packageName')) {
     conditions.push(`EXISTS (SELECT 1 FROM course_lessons filter_lesson JOIN course_series filter_series ON filter_series.id=filter_lesson.series_id WHERE filter_lesson.id=${alias}.${lessonColumn} AND filter_series.title LIKE ? ${likeEscapeClause()})`);
-    params.push(keyword(value('packageName')));
+    params.push(likeKeyword(value('packageName')));
   }
   if (value('lesson')) {
     conditions.push(`EXISTS (SELECT 1 FROM course_lessons filter_lesson WHERE filter_lesson.id=${alias}.${lessonColumn} AND filter_lesson.title LIKE ? ${likeEscapeClause()})`);
-    params.push(keyword(value('lesson')));
+    params.push(likeKeyword(value('lesson')));
   }
   return { where: conditions.length ? ' WHERE ' + conditions.join(' AND ') : '', params, publicationStateSql };
 }

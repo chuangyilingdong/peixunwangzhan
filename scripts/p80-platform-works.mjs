@@ -2,6 +2,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
+// ⚠️ 这个脚本的库**永远是自己那份内存 SQLite**（下面 `new DatabaseSync(':memory:')`），
+//    而 suite 在 MySQL 模式下会把 DB_DRIVER=mysql 传进来 —— 那样 lib.js 的 likeEscapeClause()
+//    会给 MySQL 写法（`ESCAPE '\\'` = 两个字符），SQLite 直接拒（"ESCAPE expression must be a single character"）。
+//    所以先钉死驱动再取 helper：**要的是"这段 SQL 在 SQLite 上跑得对"**，
+//    MySQL 侧那套由 p149（真请求）与套件的 `--mysql` 兜。
+process.env.DB_DRIVER = 'sqlite';
+const { likeEscapeClause, likeKeyword } = await import('../apps/server/src/lib.js');
+
 const helperSource = fs.readFileSync(new URL('../apps/server/src/routes/admin/helpers.js', import.meta.url), 'utf8');
 const routeSource = fs.readFileSync(new URL('../apps/server/src/routes/admin/works.js', import.meta.url), 'utf8');
 const pageSource = fs.readFileSync(new URL('../apps/admin/src/pages/PlatformWorks.jsx', import.meta.url), 'utf8');
@@ -11,7 +19,11 @@ const helper = helperSource.slice(
   helperSource.indexOf('function platformWorkFilters('),
   (() => { const m = helperSource.match(/\n(?:async )?function buildOrganizationDetail\(/); return m ? m.index : -1; })(),
 );
-const platformWorkFilters = new Function(`${helper}; return platformWorkFilters;`)();
+// ⚠️ 切出来的这段源码里现在会调用 lib.js 的 likeEscapeClause() / likeKeyword()
+//    （2026-09-26 的 LIKE 转义统一），而 `new Function` 只认自己那层参数表 —— 不注入就是
+//    `ReferenceError: likeEscapeClause is not defined`（这条守卫当时就是这么被 §三十一 的修复弄红的，
+//    而 MySQL 套件当时没重跑，所以谁都没看见）。
+const platformWorkFilters = new Function('likeEscapeClause', 'likeKeyword', `${helper}; return platformWorkFilters;`)(likeEscapeClause, likeKeyword);
 const db = new DatabaseSync(':memory:'); db.exec('PRAGMA busy_timeout = 5000');
 db.exec(`
 CREATE TABLE users(id TEXT, display_name TEXT, login TEXT);
@@ -53,8 +65,8 @@ const atransaction = async (fn) => { db.exec('BEGIN IMMEDIATE'); try { const res
 const requireRole = (ctx) => assert.equal(ctx.role, 'SUPER_ADMIN');
 const normalize = (value) => ({ id: value.id, title: value.title });
 const integer = (value, label, opts) => value ? Number(value) : opts.fallback;
-const route = new Function('platformWorkFilters', 'rows', 'row', 'arow', 'arows', 'aq', 'atransaction', 'amap', 'requireRole', 'integer', 'normalizeWork', 'normalizeSubmission', 'csvDocument', 'csvFileName', 'audit', routeSource.slice(routeSource.indexOf('export async function handleWorks')).replace('export async function', 'async function') + '; return handleWorks;')(
-  platformWorkFilters, rows, row, arow, arows, aq, atransaction, amap, requireRole, integer, normalize, normalize, (headers, items) => JSON.stringify(items), () => 'works.csv', () => {},
+const route = new Function('platformWorkFilters', 'rows', 'row', 'arow', 'arows', 'aq', 'atransaction', 'amap', 'requireRole', 'integer', 'normalizeWork', 'normalizeSubmission', 'csvDocument', 'csvFileName', 'audit', 'likeEscapeClause', 'likeKeyword', routeSource.slice(routeSource.indexOf('export async function handleWorks')).replace('export async function', 'async function') + '; return handleWorks;')(
+  platformWorkFilters, rows, row, arow, arows, aq, atransaction, amap, requireRole, integer, normalize, normalize, (headers, items) => JSON.stringify(items), () => 'works.csv', () => {}, likeEscapeClause, likeKeyword,
 );
 const query = (path, filters = {}, role = 'SUPER_ADMIN') => route({ search: new URLSearchParams(filters), role }, path, 'GET');
 for (const path of ['/works', '/vibecoding-works']) {

@@ -4,7 +4,7 @@ import { classroomBudgetReport, lessonPlatformBudgetOverview, computePoolReconci
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arows, arow, amap,
+  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arows, arow, amap, likeKeyword, likeEscapeClause,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -738,8 +738,8 @@ export async function handleOverview(ctx, part, method) {
     if (modality) { conditions.push('usage.modality=?'); params.push(modality); }
     if (['SUCCESS', 'FAILED', 'BLOCKED'].includes(status)) { conditions.push('usage.status=?'); params.push(status); }
     if (search) {
-      conditions.push('(organization.name LIKE ? OR user.login LIKE ? OR user.display_name LIKE ? OR project.title LIKE ? OR work.title LIKE ?)');
-      const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
+      conditions.push(`(organization.name LIKE ? ${likeEscapeClause()} OR user.login LIKE ? ${likeEscapeClause()} OR user.display_name LIKE ? ${likeEscapeClause()} OR project.title LIKE ? ${likeEscapeClause()} OR work.title LIKE ? ${likeEscapeClause()})`);
+      const keyword = likeKeyword(search);
       params.push(keyword, keyword, keyword, keyword, keyword);
     }
     const sortKey = String(ctx.search.get('sort') || 'created').trim();

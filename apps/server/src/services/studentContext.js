@@ -9,7 +9,7 @@ import {
   rows,
   assignmentActiveSql,
   orgSeriesAccessSql,
-  publishedLessonVisibilitySql, arows, arow, amap,
+  publishedLessonVisibilitySql, arows, arow, amap, likeKeyword, likeEscapeClause,
 } from '../lib.js';
 // 画布还能不能编辑（DRAFT / SUBMITTED 都算开着）—— 与前端同一份口径，见 packages/shared/src/canvasOutput.js
 import { isCanvasEditableProjectStatus } from '../../../../packages/shared/src/canvasOutput.js';
@@ -261,12 +261,12 @@ export async function getStudentAccessibleCourses(user, filters = {}) {
     params.push(filters.ageMax);
   }
   if (filters.tag) {
-    wheres.push('series.tags LIKE ?');
-    params.push('%' + filters.tag + '%');
+    wheres.push(`series.tags LIKE ? ${likeEscapeClause()}`);
+    params.push(likeKeyword(filters.tag));
   }
   if (filters.search) {
-    wheres.push('(series.title LIKE ? OR series.description LIKE ?)');
-    const like = '%' + filters.search + '%';
+    wheres.push(`(series.title LIKE ? ${likeEscapeClause()} OR series.description LIKE ? ${likeEscapeClause()})`);
+    const like = likeKeyword(filters.search);
     params.push(like, like);
   }
   const items = await arows(

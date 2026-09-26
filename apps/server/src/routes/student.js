@@ -481,7 +481,7 @@ export async function handleStudent(ctx) {
     const keyword = String(ctx.search.get('search') || '').trim().slice(0, 100);
     if (keyword) {
       where += ` AND (project.title LIKE ? ${likeEscapeClause()} OR lesson.title LIKE ? ${likeEscapeClause()} OR series.title LIKE ? ${likeEscapeClause()})`;
-      const escaped = '%' + keyword.replace(/[\\%_]/g, (char) => '\\' + char) + '%';
+      const escaped = likeKeyword(keyword);
       params.push(escaped, escaped, escaped);
     }
     const seriesId = ctx.search.get('seriesId');

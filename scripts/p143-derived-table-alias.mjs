@@ -122,25 +122,38 @@ check('② 生产代码里没有"派生表没别名"（MySQL 会 500，SQLite �
   problems.length === 0, problems.join(' ｜ '));
 
 
-console.log('③ LIKE 的 ESCAPE 子句不许手写（MySQL 会 ER_PARSE_ERROR，SQLite 容忍 —— 2026-09-26 生产事故）');
+console.log('③ LIKE 的转义：子句与关键字都不许手写（MySQL 会 ER_PARSE_ERROR，SQLite 容忍 —— 2026-09-26 生产事故）');
 {
   // 事故：`... LIKE ? ESCAPE '\'` 在 MySQL 上是**没结束的字符串**（反斜杠把引号转义了）→ 整条 SQL
   // 报 ER_PARSE_ERROR；SQLite 不把反斜杠当转义符，所以本地全量一路绿 —— 生产上"只要带关键字搜索就 500"，
   // 三端都中（平台端作品库 / 机构端作品 / 学生端我的作品），p13 那条"间歇飘"的根因就是它。
+  //
   // 判据：SQL 里不许出现手写的 ESCAPE 字面量，一律走 lib.js 的 likeEscapeClause()（按方言选写法）。
-  const files = ['apps/server/src/routes/orgAdmin.js', 'apps/server/src/routes/admin/helpers.js', 'apps/server/src/routes/student.js', 'apps/server/src/lib.js'];
-  const offenders = [];
+  // ⚠️ 这里**扫全仓生产代码**，不是上一版那份硬编码的 4 个文件：那次修复是"改哪几处、就只钉哪几处"，
+  //    明天在别的文件里再手写一遍 ESCAPE 是扫不出来的 —— 而这次事故的教训正是"网只盖了一半"。
+  //
+  // 外加一条（2026-09-26 同一轮补的）：**关键字也不许手搓**。仓里原来并存四种写法，
+  // 其中 `'%' + x.replace(/[%_]/g, c => '[' + c + ']') + '%'`（T-SQL 的方括号转义）在 **MySQL 与 SQLite
+  // 上都不转义** —— `[%]` 在 LIKE 里只是三个普通字符。它不会 500（所以日志里看不出来），但
+  // 「搜 % 等于搜全部 / 搜 _ 会乱命中」都会发生。一律用 likeKeyword()。
+  const ESCAPE_EXEMPT = new Set(['apps/server/src/lib.js']);   // helper 自己就住在这儿
+  const escapeOffenders = [];
+  const keywordOffenders = [];
   for (const file of files) {
-    const text = fs.readFileSync(file, 'utf8');
-    for (const line of text.split(/\r?\n/)) {
-      if (!/ESCAPE/.test(line)) continue;
-      if (file.endsWith('lib.js')) continue;                    // helper 自己就住在这儿
-      offenders.push(`${file}: ${line.trim().slice(0, 80)}`);
-    }
+    // 路径分隔符按平台走（Windows 上是 `\`），豁免名单写的是 `/` —— 归一化后再比
+    if (ESCAPE_EXEMPT.has(file.split(path.sep).join('/'))) continue;
+    const text = fs.readFileSync(path.join(root, file), 'utf8');
+    text.split(/\r?\n/).forEach((line, index) => {
+      if (/\bESCAPE\b/.test(line)) escapeOffenders.push(`${file}:${index + 1} ${line.trim().slice(0, 80)}`);
+      if (/replace\(\/\[[^\]]*%_\]\/g/.test(line)) keywordOffenders.push(`${file}:${index + 1} ${line.trim().slice(0, 80)}`);
+    });
   }
-  check('③ 生产代码里没有手写的 LIKE ... ESCAPE（都得用 likeEscapeClause()）', offenders.length === 0, offenders.join(' | '));
+  check('③ 生产代码里没有手写的 LIKE ... ESCAPE（都得用 likeEscapeClause()）', escapeOffenders.length === 0, escapeOffenders.join(' | '));
+  check('③ 生产代码里没有手搓的 LIKE 通配符转义（都得用 likeKeyword()）', keywordOffenders.length === 0, keywordOffenders.join(' | '));
   const lib = fs.readFileSync('apps/server/src/lib.js', 'utf8');
   check('③ likeKeyword 会把 % _ 转义掉（否则用户搜 % 就等于匹配全部）', lib.includes('export function likeKeyword(search)') && lib.includes('[%_') && lib.includes(']/g'));
+  check('③ likeEscapeClause 按方言分叉（MySQL 与 SQLite 的反斜杠个数不同）',
+    /ESCAPE '\\\\\\\\'/.test(lib) && /ESCAPE '\\\\'/.test(lib));
 }
 
 if (failures) {

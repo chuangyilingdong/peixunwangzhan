@@ -13,7 +13,7 @@ import {
   requireRole,
   row,
   rows,
-  transaction, arows, aq, arow, atransaction,
+  transaction, arows, aq, arow, atransaction, likeKeyword, likeEscapeClause,
 } from '../../lib.js';
 import { hostname } from 'node:os';
 import { assertTransition } from '../../services/domainState.js';
@@ -564,7 +564,7 @@ scheduler.unref();
 
 async function notificationAdminRows({ search = '', status = '', page = 1, limit = 20, sort = 'created' } = {}) {
   const conditions = ["n.scope_type='PLATFORM'"]; const params = [];
-  if (search) { conditions.push('(n.title LIKE ? OR n.body LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
+  if (search) { conditions.push(`(n.title LIKE ? ${likeEscapeClause()} OR n.body LIKE ? ${likeEscapeClause()})`); params.push(likeKeyword(search), likeKeyword(search)); }
   if (status && ['DRAFT', 'PUBLISHED', 'SCHEDULED', 'RECALLED'].includes(status)) {
     if (status === 'SCHEDULED') conditions.push("n.status='DRAFT' AND n.publish_at IS NOT NULL");
     else { conditions.push('n.status=?'); params.push(status); }
@@ -638,7 +638,7 @@ async function materialRows({ currentOrgId = null, admin = false, search = '', s
   const conditions = []; const params = [];
   if (admin) conditions.push('1=1');
   else { conditions.push("material.status='ACTIVE'"); conditions.push("(material.visibility='ALL_ORGS' OR EXISTS (SELECT 1 FROM promo_material_assignments assignment WHERE assignment.material_id=material.id AND assignment.org_id=?))"); params.push(currentOrgId); }
-  if (search) { conditions.push('(material.title LIKE ? OR material.description LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
+  if (search) { conditions.push(`(material.title LIKE ? ${likeEscapeClause()} OR material.description LIKE ? ${likeEscapeClause()})`); params.push(likeKeyword(search), likeKeyword(search)); }
   if (status && ['ACTIVE', 'DISABLED'].includes(status)) { conditions.push('material.status=?'); params.push(status); }
   if (category && ['GENERAL', 'COURSE', 'POSTER', 'ACTIVITY', 'PARTNERSHIP'].includes(category)) { conditions.push('material.category=?'); params.push(category); }
   if (visibility && ['ALL_ORGS', 'ASSIGNED_ORGS'].includes(visibility)) { conditions.push('material.visibility=?'); params.push(visibility); }

@@ -17,7 +17,7 @@ import {
   row,
   rows,
   seriesDeliveryModesOf,
-  transaction, canvasMediaFrom, arows, arow, aq, amap } from '../../lib.js';
+  transaction, canvasMediaFrom, arows, arow, aq, amap, likeKeyword, likeEscapeClause } from '../../lib.js';
 import { hostname } from 'node:os';
 import { Readable } from 'node:stream';
 import { assertTransition } from '../../services/domainState.js';
@@ -315,8 +315,8 @@ export async function handlePublicCommunication(ctx) {
       params.push(Number(ctx.search.get('ageMax')));
     }
     if (ctx.search.get('tag')) {
-      wheres.push('series.tags LIKE ?');
-      params.push('%' + String(ctx.search.get('tag')) + '%');
+      wheres.push(`series.tags LIKE ? ${likeEscapeClause()}`);
+      params.push(likeKeyword(String(ctx.search.get('tag'))));
     }
     const items = await amap((await arows(
       `SELECT series.* FROM course_series series WHERE ${wheres.join(' AND ')} ORDER BY series.sort, series.title`,
@@ -372,8 +372,8 @@ export async function handlePublicCommunication(ctx) {
     if (difficulty != null) { wheres.push('series.difficulty_level=?'); params.push(Number(difficulty)); }
     if (ageMin != null) { wheres.push('series.age_range_max IS NOT NULL AND series.age_range_max>=?'); params.push(Number(ageMin)); }
     if (ageMax != null) { wheres.push('series.age_range_min IS NOT NULL AND series.age_range_min<=?'); params.push(Number(ageMax)); }
-    if (tag) { wheres.push('series.tags LIKE ?'); params.push('%' + String(tag) + '%'); }
-    if (search) { wheres.push('series.title LIKE ?'); params.push('%' + String(search) + '%'); }
+    if (tag) { wheres.push(`series.tags LIKE ? ${likeEscapeClause()}`); params.push(likeKeyword(String(tag))); }
+    if (search) { wheres.push(`series.title LIKE ? ${likeEscapeClause()}`); params.push(likeKeyword(String(search))); }
     const where = wheres.join(' AND ');
     const total = Number((await arow('SELECT COUNT(*) n FROM course_series series WHERE ' + where, params))?.n || 0);
     const orderBy = sort === 'recent' ? 'series.created_at DESC' : 'series.sort ASC, series.title COLLATE NOCASE ASC';

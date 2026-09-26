@@ -290,7 +290,7 @@ export async function handleOrg(ctx) {
     if (!(auth.user.role === 'TEACHER' && role === 'STUDENT') && !hasPermission(auth, 'MANAGE_MEMBERS')) throw errors.forbidden('无账号管理权限', 'ORG_MEMBER_PERMISSION_REQUIRED');
     const search = String(ctx.search.get('search') || '').trim(); const params = [currentOrgId]; let where = 'org_id=? AND deleted_at IS NULL';
     if (ORG_MEMBER_ROLES.has(role)) { where += ' AND role=?'; params.push(role); }
-    if (search) { where += ' AND (login LIKE ? OR display_name LIKE ? OR phone LIKE ?)'; const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword, keyword); }
+    if (search) { where += ` AND (login LIKE ? ${likeEscapeClause()} OR display_name LIKE ? ${likeEscapeClause()} OR phone LIKE ? ${likeEscapeClause()})`; const keyword = likeKeyword(search); params.push(keyword, keyword, keyword); }
     // 2026-09-16：名单会很长（一百个学生很正常），所以支持**真分页 + 搜索**，
     // 并且**最新添加的排在最前**（created_at DESC）—— 老师刚建完账号就能在第一页看到。
     //
@@ -600,7 +600,7 @@ export async function handleOrg(ctx) {
       params.push(...teacherUsageParams);
       conditions.push(`(${teacherUsageScope.replace(/^ AND /, '')})`);
     }
-    if (search) { const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; conditions.push('(user.login LIKE ? OR user.display_name LIKE ? OR project.title LIKE ? OR class.name LIKE ? OR usage.fail_code LIKE ?)'); params.push(keyword, keyword, keyword, keyword, keyword); }
+    if (search) { const keyword = likeKeyword(search); conditions.push(`(user.login LIKE ? ${likeEscapeClause()} OR user.display_name LIKE ? ${likeEscapeClause()} OR project.title LIKE ? ${likeEscapeClause()} OR class.name LIKE ? ${likeEscapeClause()} OR usage.fail_code LIKE ? ${likeEscapeClause()})`); params.push(keyword, keyword, keyword, keyword, keyword); }
     const items = (await arows(`SELECT \`usage\`.*,user.login user_login,user.display_name user_name,project.title project_title,project.course_lesson_id project_lesson_id,
       session.title session_title,session.lesson_id session_lesson_id,lesson.title lesson_title,
       job.provider job_provider,job.model job_model,
@@ -876,21 +876,21 @@ export async function handleOrg(ctx) {
     const seriesId = String(ctx.search.get('seriesId') || '').trim();
     if (seriesId) { baseConditions.push('session.series_id=?'); baseParams.push(seriesId); }
     const search = String(ctx.search.get('search') || '').trim();
-    if (search) { baseConditions.push('(session.title LIKE ? OR lesson.title LIKE ?)'); baseParams.push(`%${search}%`, `%${search}%`); }
+    if (search) { baseConditions.push(`(session.title LIKE ? ${likeEscapeClause()} OR lesson.title LIKE ? ${likeEscapeClause()})`); baseParams.push(likeKeyword(search), likeKeyword(search)); }
     // 教师名称 / 学生名称（2026-09-26 用户口径：机构「课堂总览」的筛选要能按这两样找）
     //   · 教师：`teacher` 那个 JOIN 上面已经有了，直接按姓名或登录名匹配；
     //   · 学生：名单在 session_students 里，用 EXISTS 子查询 —— 不要 JOIN，
     //     否则一个班多个学生命中会把同一条课堂**放大成多行**（分页与总数都会错）。
     //   两者都同时匹配姓名与登录名：运营手上往往只有账号名。
     const teacherName = String(ctx.search.get('teacherName') || '').trim();
-    if (teacherName) { baseConditions.push('(teacher.display_name LIKE ? OR teacher.login LIKE ?)'); baseParams.push(`%${teacherName}%`, `%${teacherName}%`); }
+    if (teacherName) { baseConditions.push(`(teacher.display_name LIKE ? ${likeEscapeClause()} OR teacher.login LIKE ? ${likeEscapeClause()})`); baseParams.push(likeKeyword(teacherName), likeKeyword(teacherName)); }
     const studentName = String(ctx.search.get('studentName') || '').trim();
     if (studentName) {
       baseConditions.push(`EXISTS (SELECT 1 FROM session_students seat
         JOIN users student ON student.id = seat.student_id
         WHERE seat.session_id = session.id AND seat.status <> 'REMOVED'
-          AND (student.display_name LIKE ? OR student.login LIKE ?))`);
-      baseParams.push(`%${studentName}%`, `%${studentName}%`);
+          AND (student.display_name LIKE ? ${likeEscapeClause()} OR student.login LIKE ? ${likeEscapeClause()}))`);
+      baseParams.push(likeKeyword(studentName), likeKeyword(studentName));
     }
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 90 });
     baseConditions.push('COALESCE(session.created_at, session.started_at) >= ?');
@@ -1566,8 +1566,8 @@ export async function handleOrg(ctx) {
     let where = "student.org_id=? AND student.role='STUDENT' AND student.deleted_at IS NULL";
     if (accountStatus === 'ACTIVE' || accountStatus === 'DISABLED') { where += ' AND student.status=?'; params.push(accountStatus); }
     if (search) {
-      const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
-      where += ' AND (student.login LIKE ? OR student.display_name LIKE ? OR student.phone LIKE ?)';
+      const keyword = likeKeyword(search);
+      where += ` AND (student.login LIKE ? ${likeEscapeClause()} OR student.display_name LIKE ? ${likeEscapeClause()} OR student.phone LIKE ? ${likeEscapeClause()})`;
       params.push(keyword, keyword, keyword);
     }
     // 有效课包数用**同一个字面量表达式**算两遍（HAVING 与 SELECT）：SQLite 里别名进 HAVING 靠不住，

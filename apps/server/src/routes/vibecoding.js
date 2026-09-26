@@ -6,7 +6,7 @@
 // 每有一个围栏闭合就立刻落库并推 `artifact` 事件，所以产物卡片是逐个出现的。
 import {
   ApiError, audit, count, corsHeaders, errors, id, json, modelDisplayName, nonEmptyString, nowIso, normalizeLesson,
-  pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, arow, aq, arows, acount, atransaction, amap, isMysql,
+  pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, arow, aq, arows, acount, likeKeyword, likeEscapeClause, atransaction, amap, isMysql,
 } from '../lib.js';
 import { Readable } from 'node:stream';
 import { resolveStudentLessonContext } from '../services/studentContext.js';
@@ -964,7 +964,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const status = String(ctx.search.get('status') || '').trim().toUpperCase();
     if (['DRAFT', 'SUBMITTED', 'ARCHIVED'].includes(status)) { conditions.push('conversation.status = ?'); params.push(status); }
     const search = String(ctx.search.get('search') || '').trim();
-    if (search) { conditions.push('conversation.title LIKE ?'); params.push('%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'); }
+    if (search) { conditions.push(`conversation.title LIKE ? ${likeEscapeClause()}`); params.push(likeKeyword(search)); }
     const where = conditions.join(' AND ');
     const total = Number(await acount(`SELECT COUNT(*) n FROM vibecoding_conversations conversation WHERE ${where}`, params) || 0);
     const items = await amap((await arows(
