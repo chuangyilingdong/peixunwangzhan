@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
-import { AppShell, ApiError, clearSession, createApiClient, LoginPanel, readSession, writeSession } from '@platform/shared';
+import { ApiError, clearSession, createApiClient, LoginPanel, readSession, writeSession } from '@platform/shared';
 import { CourseSeriesDetailPage, CourseSeriesListPage } from './components/CourseManagement.jsx';
 import { ModelCompute } from './pages/ModelCompute.jsx';
 import { AdminPermissionGate, visibleNavigation } from './shared.jsx';

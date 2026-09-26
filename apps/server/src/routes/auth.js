@@ -55,6 +55,10 @@ function recordLoginFailure(ctx, login) {
     : previous;
   record.failures += 1;
   loginAttempts.set(key, record);
+  // ⚠️ 2026-09-26 审计：这个 Map 只有「登录成功」才会删条目 —— 换着用户名爆破就是**无界增长**
+  //    （键是 ip:login）。超过上限整体清掉：代价是可能放过一轮失败计数，换回内存有界
+  //    （与 publicAssets 的探针缓存同款做法）。
+  if (loginAttempts.size > 5000) loginAttempts.clear();
 }
 
 function clearLoginFailures(ctx, login) {

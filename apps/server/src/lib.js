@@ -368,21 +368,22 @@ export function requireRole(ctx, roles) {
   return auth;
 }
 
-export function requirePermission(ctx, permission) {
-  const auth = requireRole(ctx, ['SUPER_ADMIN', 'ORG_ADMIN', 'TEACHER']);
-  if (auth.user.role === 'SUPER_ADMIN' || auth.user.role === 'ORG_ADMIN') return auth;
-  if (!auth.user.permissions.includes(permission)) {
-    throw errors.forbidden('当前账号没有所需权限', 'PERMISSION_DENIED', { permission });
-  }
-  return auth;
+/**
+ * 解析可选的 ISO 时间字段（expiresAt 那类）。返回 null = 没给/清空。
+ *
+ * ⚠️ 顺序必须是「先判无效、再 toISOString()」：反过来的话 `new Date('abc').toISOString()` 会抛
+ *    `RangeError: Invalid time value`，被全局兜底变成 **500**，精心写的那条 400 分支永远走不到
+ *    （2026-09-26 全站审计发现：fileAssets 里 6 处同款写法都是这样）。
+ */
+export function parseOptionalIsoDate(value, { label = 'expiresAt', code = 'INVALID_EXPIRES_AT' } = {}) {
+  if (value === undefined || value === null || value === '') return null;
+  const time = new Date(value);
+  if (Number.isNaN(time.getTime())) throw errors.badRequest(`${label} 无效`, code);
+  return time.toISOString();
 }
 
-export function asBoolean(value, fallback = false) {
-  if (value === undefined || value === null || value === '') return fallback;
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'number') return value !== 0;
-  return ['true', '1', 'yes', 'on'].includes(String(value).trim().toLowerCase());
-}
+// ⚠️ 2026-09-26 全站审计：这里原有的 `asBoolean()` 与上面的 `requirePermission()` **全仓零引用**，
+//    已删除（留着会让新代码误以为"已经有人做布尔归一化/权限判据"）。需要时再写回来。
 
 export function asPositiveInteger(value, field, { min = 1, max = Number.MAX_SAFE_INTEGER, fallback = undefined } = {}) {
   if ((value === undefined || value === null || value === '') && fallback !== undefined) return fallback;
@@ -1144,6 +1145,12 @@ export async function normalizeSeries(value, { includeLessons = false, orgId = n
     gradeRange: value.grade_range || '',
     ownerType: value.owner_type,
     orgId: value.org_id || null,
+    // ⚠️ 2026-09-26 审计：这三个字段在快照里都**写了**，但读的时候原来只看实时列 ——
+    //    于是改完标签/年级区间不点「更新发布」，机构端与官网立刻就看到了（草稿隔离在这三个字段上静默失效）。
+    //    tags / gradeRange 改走快照（老快照没这两个键时 snapPick 自动回退实时，行为不变）；
+    //    visibility 是**访问控制位**，有意保持实时：撤权不能等一次版本发布。
+    tags: snapPick('tags', parseJson(value.tags, [])),
+    gradeRange: snapPick('gradeRange', value.grade_range || ''),
     visibility: value.visibility,
     version: value.version,
     // 平台课包库存（可授权出去的次数池）；机构能拿到多少由 course_assignments.quota_total 决定

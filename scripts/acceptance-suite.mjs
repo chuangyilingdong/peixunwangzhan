@@ -32,7 +32,10 @@ const flag = (name, fallback = null) => {
 };
 
 // 不是测试的脚本：基准/截图/导入/上线后检查/夹具 —— 跑它们要么超时要么需要外部依赖
-const NOT_TESTS = /^scripts\/(dev-bench|page-shot|import-|live-|verify-production|classroom-detail-qa-fixture)/;
+// ⚠️ 2026-09-26 全站审计：`remux-imported-videos`（默认真的转码并**删原 .mov**、还会改 works.canvas_snapshot）
+//    与 `randomize-import-orgs`（默认改真库机构名/作品归属）原来**不在排除表里** —— 套件会把这两个
+//    "会改/删真实文件的运维工具"当测试跑：在有 /srv 的机器（含生产机）上跑一次全量就是真动线上媒体。
+const NOT_TESTS = /^scripts\/(dev-bench|page-shot|import-|remux-imported|randomize-import|live-|verify-production|classroom-detail-qa-fixture)/;
 // 本套件自己的工具/夹具也不算测试（否则它会把自己再跑一遍 → 递归超时）
 const HARNESS = new Set([
   'scripts/acceptance-suite.mjs',

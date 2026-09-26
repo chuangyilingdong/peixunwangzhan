@@ -664,7 +664,10 @@ export async function handleOverview(ctx, part, method) {
       submittedWorks,
       // 在广场上 = 两条链路各自的 is_public（与 worksState 的判据一致）
       onPlaza: await singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE is_public=1) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE is_public=1) n"),
-      featured: await singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE featured_at IS NOT NULL) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE featured_at IS NOT NULL) n"),
+      // ⚠️ 2026-09-26 审计：原来这里还加了半条 `vibecoding_submissions WHERE featured_at IS NOT NULL`，
+      //    但全仓**没有任何代码**给那一列写非 NULL 值（VibeCoding 没有精选入口）→ 那半条恒为 0。
+      //    留着它会让人以为"VibeCoding 也能精选"。真要支持时再连同写入口一起加回来。
+      featured: await singleNumber("SELECT COUNT(*) n FROM works WHERE featured_at IS NOT NULL"),
       // 2026-09-13（C2）：画布链路数**独立状态** UNPUBLISHED（以前数 teacher_comment，会把「未通过」也算成已下架）
       unpublished: await singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE status='UNPUBLISHED') + (SELECT COUNT(*) FROM vibecoding_submissions WHERE is_public=0 AND unpublish_reason IS NOT NULL AND unpublish_reason<>'') n"),
       lessonsPublished: await singleNumber("SELECT COUNT(*) n FROM course_lessons WHERE status='PUBLISHED'"),

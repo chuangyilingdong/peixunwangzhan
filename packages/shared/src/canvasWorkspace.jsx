@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CanvasEditor, createCanvasTemplate } from '@platform/canvas';
-import { formatDate } from './auth.js';
+import { CanvasEditor } from '@platform/canvas';   // createCanvasTemplate 全仓零使用（2026-09-26 审计）
 import { Icon } from './icons.jsx';
 import { materialVisual } from './materialTypes.js';
 import { readSession } from './auth.js';
 import { isErrorText, stripNoticeMark } from './ui.jsx';
 // 品牌标（学生画布左上角）。与 dsh 学生端用的是同一张图，见 deploy/dsh-student/assets/。
 import brandLogo from './assets/lingdong-ai-logo.webp';
-import { ErrorState, Loading, Notice, Empty, Panel, PageHeader, Status } from './ui.jsx';
+import { ErrorState, Loading, Notice, Empty, PageHeader } from './ui.jsx';   // Panel / Status 未使用（2026-09-26 审计）
 import { useData } from './classroom.jsx';
 import { errorText } from '@platform/shared';
 // 画布「可提交产出」的判定与提交/保存互斥的闸门 —— 与服务端**同一份算法**
@@ -105,7 +104,7 @@ function ChangeList({ diff, fromSnapshot, toSnapshot }) {
   </ul>;
 }
 
-const MAX_CANVAS_IMPORT_BYTES = 1024 * 1024;
+// （MAX_CANVAS_IMPORT_BYTES 已随「画布导入校验」一起下线 —— 2026-09-26 审计删掉这个孤儿常量）
 
 // 校验 exportVersion 产出的 JSON：{format, formatVersion, project, canvasSnapshot}
 
@@ -564,7 +563,11 @@ export function CanvasWorkspace({ api, ...props }) {
       //    "画布上写着中文名、左侧素材面板却还写着 deepseek-flash"（2026-09-23 真浏览器核验抓到的就是它）。
       modelLabel: raw.modelLabel || '',
       aspectRatio: raw.aspectRatio || '', resolution: raw.resolution || '',
-      durationSeconds: raw.durationSeconds, audio: raw.audio === true,
+      // ⚠️ 2026-09-26 全站审计：音频是**三态** —— null＝学生自选 / true·false＝课包定了
+      //    （见 buildBoxNode 里那条注释）。这里原来把"没配"写成 false，于是老课包兜底出来的
+      //    框体被当成"课包定了不含音频" → 面板藏掉音频选择器、请求里硬发 audio:false。
+      durationSeconds: Number.isInteger(Number(raw.durationSeconds)) && Number(raw.durationSeconds) > 0 ? Number(raw.durationSeconds) : null,
+      audio: raw.audio === true ? true : raw.audio === false ? false : null,
       // 本节课锁定的生成方式（'' = 不锁）—— 列表里没有该框体时要自己拼，别漏（漏了画布就按模型自由发挥）
       inputMode: String(raw.inputMode || '').toUpperCase(), inputModeLabel: raw.inputModeLabel || '',
       // 课包锁的「音频怎么用」：漏了它会退回"对口型"（默认），与课包配的就不一致了

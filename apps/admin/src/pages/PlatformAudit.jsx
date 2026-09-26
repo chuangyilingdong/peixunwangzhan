@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData, useDebouncedValue, errorText } from '@platform/shared';
-import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
+import {  } from 'react-router-dom';
+import { Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, useData, useDebouncedValue, errorText } from '@platform/shared';
+import { downloadCsv } from '../shared.jsx';
 
 export function PlatformAudit({ api }) {
   const [filters, setFilters] = useState({ action: '', actorId: '', targetType: '', targetId: '', requestPath: '', from: '', to: '', orgId: '' });
@@ -37,12 +37,9 @@ export function PlatformAudit({ api }) {
     try {
       const exportParams = new URLSearchParams(fullQuery); exportParams.delete('page'); exportParams.set('limit', '2000');
       const result = await api.get(`admin/audit-logs/export?${exportParams.toString()}`);
-      const blob = new Blob([result.content], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url; link.download = result.filename || 'audit-logs.csv';
-      document.body.appendChild(link); link.click(); document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      // ⚠️ 2026-09-26 全站审计：这一段是 apps/admin/src/shared.jsx 的 downloadCsv() 的副本
+      //    （同文件第 4 行本来就 import 了它却没用）—— 两处一改一漏就会分叉（BOM、文件名规则）。
+      downloadCsv(result.filename || 'audit-logs.csv', result.content);
       setMessage(`已导出 ${result.count} 条审计记录。`);
     } catch (err) { setMessage(errorText(err)); } finally { setExporting(false); }
   }

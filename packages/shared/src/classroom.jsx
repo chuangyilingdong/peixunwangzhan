@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ErrorState, Loading, Notice, Empty, Panel, PageHeader, errorText } from './ui.jsx';
+import { ErrorState, Loading, Notice, Empty, PageHeader, errorText } from './ui.jsx';
 import { ClientEntryActions } from './clientEntry.jsx';
 
 export function useData(load, deps = []) {

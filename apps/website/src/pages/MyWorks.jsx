@@ -166,7 +166,9 @@ export function MyWorksPage({ api }) {
         </div>
         <p className="student-work-card__source">来自：{work.seriesTitle || '未绑定课包'} › {work.courseLessonTitle || '未绑定课程'}</p>
         {work.description ? <p className="student-card__desc">{work.description}</p> : null}
-        {work.status === 'REJECTED' && work.unpublishReason ? <p className="student-card__desc" data-testid="unpublish-reason"><strong>下架原因：</strong>{work.unpublishReason}</p> : null}
+        {/* ⚠️ 2026-09-26 全站审计：原来只认旧枚举 REJECTED，而 C2 起下架写的是 UNPUBLISHED —— */}
+        {/*    新下架的作品徽标显示「已下架」、原因却看不到（学生申诉就靠这句）。改按"有原因且当前不在广场上"。 */}
+{work.unpublishReason && !work.plazaPublished ? <p className="student-card__desc" data-testid="unpublish-reason"><strong>下架原因：</strong>{work.unpublishReason}</p> : null}
         <div className="student-work-card__foot">
           <span>创建时间 {formatDate(work.submittedAt)}</span>
           {/* ⭐ 每件作品都要能打开看（用户口径 2026-09-20：「我的作品要实际能用」）。

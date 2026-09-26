@@ -140,10 +140,11 @@ export function WorkMediaGallery({ media = [], assets = [], resolveSrc = null, e
   const items = useMemo(() => normalizeItems(media, assets), [media, assets]);
   const [opened, setOpened] = useState(-1);
   if (!items.length) return <p className={`work-media__empty ${className}`.trim()}>{emptyText}</p>;
-  const srcOf = (item) => {
-    const resolved = typeof resolveSrc === 'function' ? resolveSrc(item) : '';
-    return String(resolved || item.url || item.previewUrl || '');
-  };
+  // ⚠️ 2026-09-26 全站审计：给了 `resolveSrc` 就**只信它** —— 原来在它返回空时又回退到 `item.url`，
+  //    而 `item.url` 常常是学生域地址（服务端原样透出的那个），老师/访客的浏览器拿它请求必然 403，
+  //    缩略图被打上「已失效」—— 正是 resolveWorkMediaUrl 契约里明令禁止的那次回退。
+  //    返回空时 MediaThumb 会渲染「已失效」占位，比"先发一次必败的请求"干净。
+  const srcOf = (item) => (typeof resolveSrc === 'function' ? String(resolveSrc(item) || '') : String(item.url || item.previewUrl || ''));
   const openedItem = opened >= 0 ? items[opened] : null;
   return <>
     <div className={`work-media work-media--cards ${className}`.trim()} data-media-count={items.length}>

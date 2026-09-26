@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData, useDebouncedValue } from '@platform/shared';
-import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, useData, useDebouncedValue } from '@platform/shared';
+import {  } from '../shared.jsx';
 
 export function Dashboard({ api }) {
   const organizations = useData(() => api.get('admin/organizations/options'), [api]);
@@ -13,7 +13,13 @@ export function Dashboard({ api }) {
     const params = new URLSearchParams();
     if (debouncedFilters.orgId) params.set('orgId', debouncedFilters.orgId);
     if (debouncedFilters.from) params.set('from', new Date(debouncedFilters.from).toISOString());
-    if (debouncedFilters.to) params.set('to', new Date(debouncedFilters.to).toISOString());
+    // ⚠️ 2026-09-26 全站审计：服务端的时间区间是**左闭右开**（from 含 / to 不含），
+    //    这里原来直接把 date 输入的原值转 ISO —— 选「结束=今天」会把今天整天漏掉
+    //    （日期输入给的是当天 00:00，UTC+8 下还要再退 8 小时）。与 OrganizationQuotaChanges 对齐：to 补一天。
+    if (debouncedFilters.to) {
+      const end = new Date(debouncedFilters.to); end.setUTCDate(end.getUTCDate() + 1);
+      params.set('to', end.toISOString());
+    }
     return params.toString();
   }, [JSON.stringify(debouncedFilters)]);
   const { loading, error, data, refresh } = useData(() => api.get(`admin/dashboard/overview${query ? `?${query}` : ''}`), [api, query]);

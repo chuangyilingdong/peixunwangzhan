@@ -44,10 +44,16 @@ check('画布 toast 也按标记判（错误红 + 留着不自动消失；其余
 const appFiles = [
   ...fs.readdirSync(path.join(root, 'apps/admin/src/pages')).filter((f) => f.endsWith('.jsx')).map((f) => `apps/admin/src/pages/${f}`),
   ...fs.readdirSync(path.join(root, 'apps/admin/src/components')).filter((f) => f.endsWith('.jsx')).map((f) => `apps/admin/src/components/${f}`),
-  'apps/admin/src/App.jsx',
+  // ⚠️ 2026-09-26 全站审计：这里原来列的是 apps/admin/src/App.jsx（**该文件不存在**），
+  //    而它被下面的 .filter(existsSync) **静默丢掉** —— 扫描面缩水了却一声不吭。
+  //    现在把真实入口补上（admin 的 main.jsx / shared.jsx），并且缺文件就判红。
+  'apps/admin/src/main.jsx',
+  'apps/admin/src/shared.jsx',
   'apps/org/src/main.jsx',
   'apps/org/src/pages/StudentGrants.jsx',
-].filter((f) => fs.existsSync(path.join(root, f)));
+];
+const missing = appFiles.filter((f) => !fs.existsSync(path.join(root, f)));
+check('【自检】名单里的文件都存在（缺文件=扫描面缩水，必须报出来）', missing.length === 0, missing.join('、'));
 const guessing = appFiles.filter((file) => /tone=\{[^}]*\.includes\(/.test(read(file)));
 check('【反向自检】没有页面再按"消息里有没有某个词"决定红绿（这一条以前到处都是）',
   guessing.length === 0, guessing.join('、'));

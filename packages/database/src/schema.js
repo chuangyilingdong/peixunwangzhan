@@ -1624,19 +1624,8 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 db.exec('CREATE INDEX IF NOT EXISTS idx_projects_student_status_updated ON student_projects(student_id, org_id, status, updated_at DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_projects_student_deleted ON student_projects(student_id, deleted_at)');
 // Lightweight forward-compatible migration for student account privacy and requests.
-for (const statement of [
-  'ALTER TABLE users ADD COLUMN avatar_key TEXT',
-  'ALTER TABLE users ADD COLUMN guardian_name TEXT',
-  'ALTER TABLE users ADD COLUMN guardian_phone TEXT',
-  'ALTER TABLE users ADD COLUMN guardian_relationship TEXT',
-  'ALTER TABLE users ADD COLUMN guardian_consented_at TEXT',
-  'ALTER TABLE users ADD COLUMN privacy_showcase_anonymous INTEGER NOT NULL DEFAULT 1',
-  'ALTER TABLE users ADD COLUMN privacy_allow_feature INTEGER NOT NULL DEFAULT 1',
-]) {
-  try { db.exec(statement); }
-  catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
-}
-// Lightweight forward-compatible migration for student account privacy and requests.
+// ⚠️ 2026-09-26 全站审计：这一段原来**逐字写了两遍**（第二遍必然全部 duplicate column name 被吞）——
+//    纯复制粘贴残留，两段一改一漏就是隐性地基，删掉后一份。
 for (const statement of [
   'ALTER TABLE users ADD COLUMN avatar_key TEXT',
   'ALTER TABLE users ADD COLUMN guardian_name TEXT',
@@ -2181,7 +2170,9 @@ try { db.exec('ALTER TABLE course_series ADD COLUMN difficulty_level INTEGER'); 
 try { db.exec('ALTER TABLE course_series ADD COLUMN age_range_min INTEGER'); } catch (_) {}
 try { db.exec('ALTER TABLE course_series ADD COLUMN age_range_max INTEGER'); } catch (_) {}
 try { db.exec("ALTER TABLE course_series ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"); } catch (_) {}
-try { db.exec('ALTER TABLE course_series ADD CONSTRAINT chk_difficulty CHECK (difficulty_level IS NULL OR difficulty_level BETWEEN 1 AND 5)'); } catch (_) {}
+// ⚠️ 2026-09-26 审计：SQLite 的 ALTER TABLE 只支持 RENAME / ADD COLUMN / DROP COLUMN / RENAME COLUMN，
+//    `ADD CONSTRAINT` 是语法错、被 catch 吞掉 —— 对「加列时没有 CHECK」的老库，这条约束从来没加上过。
+//    新库靠建表 CHECK、重建库靠重建表那块，都不需要它，直接删。
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_course_series_difficulty ON course_series(difficulty_level)'); } catch (_) {}
 try { db.exec('ALTER TABLE course_series ADD COLUMN price_fen INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 try { db.exec('ALTER TABLE course_series ADD COLUMN validity_days INTEGER NOT NULL DEFAULT 365'); } catch (_) {}
@@ -2714,8 +2705,9 @@ if (seriesDdl.includes("'ASSIGNED_ORGS'")) {
   }
 }
 
-// 发布快照里如果还留着老的三值，一并改成两值（快照是 JSON，不受 CHECK 约束，但要一起读得懂）
-try {
-  db.exec(`UPDATE course_series_versions SET snapshot = REPLACE(REPLACE(snapshot, '"visibility":"ALL_ORGS"', '"visibility":"PUBLIC"'), '"visibility":"ASSIGNED_ORGS"', '"visibility":"PUBLIC"') WHERE snapshot LIKE '%"visibility":"ALL_ORGS"%' OR snapshot LIKE '%"visibility":"ASSIGNED_ORGS"%'`);
-} catch (_) { /* 老库可能没有这张表/这一列，忽略 */ }
+// ⚠️ 2026-09-26 全站审计：这里原来有一条"把发布快照里的三值 visibility 洗成两值"的语句 ——
+//    但 `course_series_versions` 表**没有 snapshot 列**（只有 id/series_id/version/note/status/…），
+//    所以它每次启动都抛 `no such column: snapshot` 并被 catch 吞掉，**一次都没生效过**。
+//    读取侧已经做了归一化（normalizeSeriesVisibility：ALL_ORGS/ASSIGNED_ORGS → PUBLIC），
+//    数据面不受影响，所以直接删掉这条死语句。
 

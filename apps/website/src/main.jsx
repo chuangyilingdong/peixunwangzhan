@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, Icon, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, Icon, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { StudentAccountPage } from './pages/AccountSecurity.jsx';
 import { MyWorkDetailPage } from './pages/MyWorkDetail.jsx';
@@ -144,7 +144,6 @@ const PL_CATEGORY_ICON = { CANVAS: 'brush', VIBECODING: 'code' };
 const plCategoryOf = (w) => (w.plazaCategory || (w.type === 'VIBECODING' ? 'VIBECODING' : 'CANVAS'));
 /** 一页 12 件（用户口径：「每一页 12 个作品然后翻页」）。 */
 const PL_PER_PAGE = 12;
-const PL_TYPE_ORDER = ['canvas','VIBECODING','image','video','webpage','miniGame','ppt','brandDesign','music','podcast','agent','workflow','pictureBook'];
 const PL_TYPE_META = {
   canvas:{label:'画布',icon:'brush'}, VIBECODING:{label:'VibeCoding',icon:'code'},
   image:{label:'图片',icon:'image'}, video:{label:'视频',icon:'video'}, webpage:{label:'网页',icon:'globe'},
@@ -167,7 +166,6 @@ const plDateOf = (w) => {
 //    类型是第一判据，扩展名只在「类型没给出线索」时兜底。
 const PL_IMAGE_TYPES = new Set(['image', 'brandDesign', 'pictureBook', 'workflow']);
 // 音频（音乐 / AI播客）：有本体文件就直接播
-const PL_AUDIO_TYPES = new Set(['music', 'podcast']);
 const plIsAudio = (w) => (w.contentUrls || []).some((url) => /\.(mp3|m4a|wav|aac|ogg|flac)(\?|$)/i.test(url));
 // ⚠️ 外链作品能不能"在我们页面里打开"，**取决于对方允不允许被 iframe 嵌入**：
 //    实测 lingguang.com 没写 frame-ancestors（可以嵌），而 qianwen.com / doubao.com 都写了
@@ -1547,7 +1545,6 @@ function Marketplace(){
 }
 
 function MarketplaceDetail(){
-  const params=new URLSearchParams(window.location.search);
   const pathParts=window.location.pathname.split('/');
   const id=pathParts[pathParts.length-1];
   const [data,setData]=useState(null);

@@ -208,7 +208,10 @@ async function assertProjectUsable(ctx, project) {
 
 const USAGE_MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO']);
 const USAGE_STATUSES = new Set(['SUCCESS', 'FAILED', 'BLOCKED']);
-const WORK_STATUS_RANK = { PUBLISHED: 4, APPROVED: 3, REJECTED: 2, PENDING: 1 };
+// ⚠️ 2026-09-26 审计：这张表原来少了 UNPUBLISHED（状态字典里是 5 个值）——
+//    某节课只有一件「已下架」作品时，权重查不到 → bestWork 恒为 null →
+//    「我的课程」会把那节课显示成「没有作品」。已下架按"曾发布过"排在 REJECTED 之上。
+const WORK_STATUS_RANK = { PUBLISHED: 4, APPROVED: 3, UNPUBLISHED: 2.5, REJECTED: 2, PENDING: 1 };
 
 async function studentCourseOverview(ctx) {
   const context = await buildStudentContext(ctx.auth.rawUser);
@@ -462,7 +465,10 @@ export async function handleStudent(ctx) {
     if (!['ACTIVE', 'ARCHIVED', 'DELETED'].includes(view)) throw errors.badRequest('无效的项目视图', 'INVALID_PROJECT_VIEW');
     const status = ctx.search.get('status');
     if (status && !['DRAFT', 'SUBMITTED', 'GRADED', 'ARCHIVED'].includes(status)) throw errors.badRequest('无效的项目状态', 'INVALID_PROJECT_STATUS');
-    if (view !== 'ACTIVE' && status === 'ARCHIVED') throw errors.badRequest('归档视图无需重复按归档状态筛选', 'INVALID_PROJECT_FILTER');
+    // ⚠️ 2026-09-26 审计：原来只拦「归档视图 + status=ARCHIVED」这一种组合，其它 status 会被**静默丢弃**
+    //    （校验白名单与实际生效条件不一致 → 传 ?view=ARCHIVED&status=DRAFT 会返回全部归档项目）。
+    //    归档视图本身已经按状态圈定，多余的 ARCHIVED 允许（幂等）；其余一律 400。
+    if (view !== 'ACTIVE' && status && status !== 'ARCHIVED') throw errors.badRequest('该视图不支持按状态筛选', 'INVALID_PROJECT_FILTER');
 
     const params = [auth.user.id, auth.user.orgId];
     let where = 'project.student_id = ? AND project.org_id = ?';

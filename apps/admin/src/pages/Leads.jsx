@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from 'react';
-import { Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, useData, errorText } from '@platform/shared';
+import { Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, useData, errorText, isErrorText } from '@platform/shared';
 import { downloadCsv } from '../shared.jsx';
 
 /**
@@ -58,7 +58,9 @@ export function Leads({ api }) {
 
   return <>
     <PageHeader eyebrow="平台运营" title="联系我们（商机）" description="官网「联系我们」表单的提交都落在这里（含隐私同意版本与时间）。按「待联系 → 已联系 → 已约演示 → 已转化」推进，沟通结果记在跟进记录里。" actions={<div className="row-actions"><button className="secondary-button" onClick={() => leads.refresh()}>刷新</button><button className="secondary-button" disabled={!items.length} onClick={exportCsv}>导出 CSV</button></div>} />
-    {message ? <Notice tone={/失败|不能|无效|不存在|没有权限/.test(message) ? 'danger' : 'success'}>{message}</Notice> : null}
+    {/* ⚠️ 2026-09-26 全站审计：靠正则猜消息里的字决定红绿是 packages/shared/src/notice.js 明令禁止的 */}
+    {/*    （用户报过「通过/报错都是绿框」）。改用 isErrorText：它认的是 errorText() 打的标记。 */}
+    {message ? <Notice tone={isErrorText(message) ? 'danger' : 'success'}>{message}</Notice> : null}
     <div className="metrics">
       <MetricCard label="待联系" value={countOf('NEW')} hint="刚提交、还没人跟进" tone="orange" />
       <MetricCard label="已联系" value={countOf('CONTACTED')} hint="已沟通、待约演示" tone="violet" />

@@ -18,7 +18,9 @@ import { DatabaseSync } from 'node:sqlite';
 const { aq, arow, arows } = await import('../packages/database/src/store.js');
 
 
-const DRY_RUN = process.argv.includes('--dry-run');
+// ⚠️ 2026-09-26 全站审计：原来是 opt-in 的 --dry-run（**默认真干**：转码、改 works.canvas_snapshot，
+//    并在成功后删掉原 .mov），而它还会被验收套件当测试跑。改成默认 dry-run，要真动线上就显式 --apply。
+const DRY_RUN = !process.argv.includes('--apply');
 const KEEP_MOV = process.argv.includes('--keep-mov');
 const MEDIA_ROOT = process.env.PLAZA_MEDIA_ROOT || '/srv/ai-kids-platform/public-media';
 const DB_PATH = process.env.PLATFORM_DB_PATH || '/srv/ai-kids-platform/production/data/platform.db';

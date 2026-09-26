@@ -314,3 +314,8 @@ try {
   okServer.close(); failServer.close(); hangServer.close();
   await sleep(200);
 }
+
+// ⚠️ 2026-09-26 全站审计：这个脚本原来**没有 process.exit** —— 而套件是按退出码判绿的
+//    （acceptance-suite.mjs：res.status === 0），所以它那 32 条业务断言一条都不能把它判红：
+//    上线钱包链（渠道余额 / 扣费 / 对账）坏掉时，全量套件照样报 PASS。
+if (failures) process.exit(1);

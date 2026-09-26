@@ -18,7 +18,7 @@ import {
   rows,
   assignmentActiveSql,
   orgSeriesAccessSql,
-  previewInfoFor, arows, arow, aq, jsonText, isMysql } from '../lib.js';
+  previewInfoFor, arows, arow, aq, jsonText, isMysql, parseOptionalIsoDate } from '../lib.js';
 import { assertTransition } from '../services/domainState.js';
 import { maxUploadBytes, parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
 import { ensurePreviewPdf, needsConversion, previewKindFor, verifyPreviewTicket, previewPdfInOss, publishPreviewPdf, canRenderNatively } from '../services/materialPreview.js';
@@ -417,8 +417,7 @@ async function createUploadedFileAsset(ctx, { auth, ownerType, ownerOrgId = null
   if (ownerType === 'ORG' && !['ORG', 'ASSIGNED_ORGS', 'PRIVATE'].includes(visibility)) throw errors.badRequest('机构文件仅允许 PRIVATE/ORG/ASSIGNED_ORGS', 'INVALID_ORG_VISIBILITY');
   const orgIds = visibility === 'ASSIGNED_ORGS' ? await validateAudienceOrgIds(audience.orgIds) : [];
   if (ownerType === 'ORG' && visibility === 'ASSIGNED_ORGS' && !orgIds.includes(ownerOrgId)) orgIds.unshift(ownerOrgId);
-  const expiresAt = fields.expiresAt ? new Date(fields.expiresAt).toISOString() : null;
-  if (fields.expiresAt && Number.isNaN(new Date(fields.expiresAt).getTime())) throw errors.badRequest('expiresAt 无效', 'INVALID_EXPIRES_AT');
+  const expiresAt = parseOptionalIsoDate(fields.expiresAt);
 
   const releaseUpload = await reserveUpload({ userId: auth.user.id, orgId: ownerOrgId || `platform:${ownerType}`, bytes: multipart.file?.buffer?.length || 0 });
   let stored;
@@ -547,8 +546,7 @@ export async function handleAdminFileAssets(ctx) {
     const mimeType = body.mimeType ? String(body.mimeType).trim().slice(0, 120) : null;
     const fileSize = body.fileSize == null ? null : integer(body.fileSize, '文件大小', { min: 0, max: 10 * 1024 * 1024 * 1024 });
     const checksum = body.checksum ? String(body.checksum).trim().slice(0, 128) : null;
-    const expiresAt = body.expiresAt ? new Date(body.expiresAt).toISOString() : null;
-    if (body.expiresAt && Number.isNaN(new Date(body.expiresAt).getTime())) throw errors.badRequest('expiresAt 无效', 'INVALID_EXPIRES_AT');
+    const expiresAt = parseOptionalIsoDate(body.expiresAt);
     const metadata = body.metadata && typeof body.metadata === 'object' ? body.metadata : {};
     const fileId = id('file');
     const now = nowIso();
@@ -604,8 +602,7 @@ export async function handleAdminFileAssets(ctx) {
       await aq('UPDATE file_assets SET status=?, updated_at=? WHERE id=?', [status, nowIso(), file.id]);
     }
     if (body.expiresAt !== undefined) {
-      const expiresAt = body.expiresAt ? new Date(body.expiresAt).toISOString() : null;
-      if (body.expiresAt && Number.isNaN(new Date(body.expiresAt).getTime())) throw errors.badRequest('expiresAt 无效', 'INVALID_EXPIRES_AT');
+      const expiresAt = parseOptionalIsoDate(body.expiresAt);
       await aq('UPDATE file_assets SET expires_at=?, updated_at=? WHERE id=?', [expiresAt, nowIso(), file.id]);
     }
     await audit(ctx, 'FILE_ASSET_UPDATE', 'FILE_ASSET', file.id, normalizeFileAsset(file), body);
@@ -654,8 +651,7 @@ export async function handleAdminFileAssets(ctx) {
     const grantedUser = userId ? await arow('SELECT id,org_id FROM users WHERE id=?', [userId]) : null;
     if (userId && !grantedUser) throw errors.badRequest('用户不存在', 'USER_NOT_FOUND');
     if (grantType === 'USER' && orgId && grantedUser.org_id !== orgId) throw errors.badRequest('用户不属于指定机构', 'USER_ORG_MISMATCH');
-    const expiresAt = body.expiresAt ? new Date(body.expiresAt).toISOString() : null;
-    if (body.expiresAt && Number.isNaN(new Date(body.expiresAt).getTime())) throw errors.badRequest('expiresAt 无效', 'INVALID_EXPIRES_AT');
+    const expiresAt = parseOptionalIsoDate(body.expiresAt);
     const grantId = id('fag');
     const now = nowIso();
     await aq('INSERT INTO file_access_grants(id,file_id,grant_type,org_id,user_id,role,permission,granted_by,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [grantId, fileId, grantType, orgId, userId, role, permission, auth.user.id, expiresAt, now]);
@@ -919,8 +915,7 @@ export async function handleOrgFileAssets(ctx) {
     const mimeType = body.mimeType ? String(body.mimeType).trim().slice(0, 120) : null;
     const fileSize = body.fileSize == null ? null : integer(body.fileSize, '文件大小', { min: 0, max: 10 * 1024 * 1024 * 1024 });
     const checksum = body.checksum ? String(body.checksum).trim().slice(0, 128) : null;
-    const expiresAt = body.expiresAt ? new Date(body.expiresAt).toISOString() : null;
-    if (body.expiresAt && Number.isNaN(new Date(body.expiresAt).getTime())) throw errors.badRequest('expiresAt 无效', 'INVALID_EXPIRES_AT');
+    const expiresAt = parseOptionalIsoDate(body.expiresAt);
     const fileId = id('file');
     const now = nowIso();
     await aq(
@@ -974,8 +969,7 @@ export async function handleOrgFileAssets(ctx) {
       await aq('UPDATE file_assets SET status=?, updated_at=? WHERE id=?', [status, nowIso(), file.id]);
     }
     if (body.expiresAt !== undefined) {
-      const expiresAt = body.expiresAt ? new Date(body.expiresAt).toISOString() : null;
-      if (body.expiresAt && Number.isNaN(new Date(body.expiresAt).getTime())) throw errors.badRequest('expiresAt 无效', 'INVALID_EXPIRES_AT');
+      const expiresAt = parseOptionalIsoDate(body.expiresAt);
       await aq('UPDATE file_assets SET expires_at=?, updated_at=? WHERE id=?', [expiresAt, nowIso(), file.id]);
     }
     await audit(ctx, 'FILE_ASSET_UPDATE', 'FILE_ASSET', file.id, normalizeFileAsset(file), body, { orgId: currentOrgId });

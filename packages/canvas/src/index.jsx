@@ -241,7 +241,13 @@ function PromptEditor({ value, refs = [], readOnly = false, placeholder = '', on
 const GENERATION_EXPECTED_SECONDS = { TEXT: 6, IMAGE: 50, VIDEO: 130, MUSIC: 90 };
 function GeneratingState({ className, modality, startedAt }) {
   const expected = GENERATION_EXPECTED_SECONDS[String(modality || '').toUpperCase()] || 45;
-  const start = Number(startedAt) || Date.now();
+  // ⚠️ 2026-09-26 全站审计：原来这里直接在**渲染期**求值 `Number(startedAt) || Date.now()` ——
+  //    从在途任务恢复的框体没有 generationStartedAt（只有 generationStatus），于是每次渲染都拿到
+  //    新的 Date.now()：effect 依赖每渲染变化 → 定时器被反复重建，而且 Date.now() - start 恒为 0，
+  //    进度条永远停在 1%。用 ref 把兜底起点**固定下来**。
+  const startRef = useRef(null);
+  if (startRef.current === null) startRef.current = Number(startedAt) || Date.now();
+  const start = startRef.current;
   const [percent, setPercent] = useState(1);
   useEffect(() => {
     const tick = () => setPercent(Math.max(1, Math.min(95, Math.round(((Date.now() - start) / 1000 / expected) * 100))));
@@ -1374,7 +1380,6 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
       .map((imageNode) => String(imageNode?.data?.assetUrl || imageNode?.data?.previewUrl || '').trim())
       .filter(Boolean);
   }, [edges, nodes]);
-  const getIncomingImageAssetUrl = useCallback((nodeId) => getIncomingImageAssetUrls(nodeId)[0] || '', [getIncomingImageAssetUrls]);
 
   // 全能参考要按类型区分：图片/视频/音频节点连过来的素材各算一类。
   // nodeId = 素材来自哪个节点 —— 面板上的「× 删除这个参考」要靠它找到那条连线。
@@ -1474,8 +1479,11 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   const onDrop = useCallback((event) => {
     event.preventDefault();
     if (readOnly) return;
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const position = screenToFlowPosition({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+    // ⚠️ 2026-09-26 全站审计：`screenToFlowPosition` **内部已经减过一次**容器左上角
+    //    （@xyflow/react 的实现：`clientPosition.x - domNode.getBoundingClientRect().x`），
+    //    这里再减一次 bounds.left/top 就是减两遍 → 拖进来的素材**落点偏左上**
+    //    （学生画布左侧还有 250px 侧栏，偏得更多）。按官方约定：直接交客户端坐标。
+    const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
     // 从桌面拖进来的图片/视频/音频：交给上层（它持有快照，负责先落「上传中」的框体、再上传、
     // 再把同一个节点补成真素材 —— 见 canvasWorkspace.uploadFiles）。
     // ⚠️ 不要在这里 setNodes 落占位框体：那是本组件的局部状态，上层不知道，快照一刷新就把它冲掉了。
@@ -1609,7 +1617,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     ? { ...node, className: `${node.className || ''} is-entering`.trim() }
     : node), [entranceRequest?.id, nodes]);
 
-  return <AssetUrlContext.Provider value={resolveAssetUrl}><CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), removeEdge, removeIncomingRef, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls, getIncomingImageRefs, getIncomingAssetRefs }}>
+  return <AssetUrlContext.Provider value={resolveAssetUrl}><CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), removeEdge, removeIncomingRef, readOnly, enabledCapabilities, getIncomingImageAssetUrls, getIncomingImageRefs, getIncomingAssetRefs }}>
     <div className={`learning-canvas${readOnly ? ' is-readonly' : ''}`} ref={canvasRef}>
       <ReactFlow
         nodes={displayNodes}

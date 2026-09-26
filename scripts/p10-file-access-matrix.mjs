@@ -1,7 +1,10 @@
 import { strict as assert } from 'node:assert';
-import { unlink } from 'node:fs/promises';
-const dbPath = `./.tmp-p10-access-${Date.now()}.db`;
-process.env.PLATFORM_DB_PATH = dbPath;
+import os from 'node:os';
+import path from 'node:path';
+// ⚠️ 2026-09-26 全站审计：这里原来把临时库写进**仓库根目录**（`./.tmp-p10-access-<时间戳>.db`）且从不清理 ——
+//    实测堆了 326 个、约 397MB（`.db` 被 .gitignore 遮住，一直没人发现）。
+//    套件会给每个脚本一份临时 PLATFORM_DB_PATH，直接用；单独跑时退回系统临时目录。
+process.env.PLATFORM_DB_PATH = process.env.PLATFORM_DB_PATH || path.join(os.tmpdir(), `p10-file-access-${Date.now()}.db`);
 const { q, nowIso, aq } = await import('../apps/server/src/lib.js');
 const { authorizeFileAccess } = await import('../apps/server/src/routes/fileAssets.js');
 const now = nowIso();

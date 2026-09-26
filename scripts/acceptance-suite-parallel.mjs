@@ -32,7 +32,7 @@ const flag = (name, fallback = null) => {
   return eq >= 0 ? hit.slice(eq + 1) : true;
 };
 
-const NOT_TESTS = /^scripts\/(dev-bench|page-shot|import-|live-|verify-production|classroom-detail-qa-fixture)/;
+const NOT_TESTS = /^scripts\/(dev-bench|page-shot|import-|remux-imported|randomize-import|live-|verify-production|classroom-detail-qa-fixture)/;   // 与串行套件逐字一致（2026-09-26 审计）
 const HARNESS = new Set([
   'scripts/acceptance-suite.mjs',
   'scripts/acceptance-script-wrapper.mjs',
@@ -42,6 +42,9 @@ const HARNESS = new Set([
   // 切库前的「装得下」检查：**工具**（要显式给 --sqlite= 与 MYSQL_* 才会跑）——
   // 不登记的话会被套件当成一个测试跑，然后因为没有源库而失败。
   'scripts/rds-column-fit.mjs',
+  // ⚠️ 2026-09-26 审计：串行套件里有这条、并行版漏了 → 并行 --mysql 全量时它被当成测试跑（要连 MySQL），
+  //    多出一条必然红、掩盖真回归。两个套件的 HARNESS 必须逐字一致。
+  'scripts/rds-column-headroom.mjs',
   'scripts/acceptance-suite-parallel.mjs',
 ]);
 

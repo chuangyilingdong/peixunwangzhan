@@ -408,9 +408,19 @@ async function occupiedStudentSeats(currentOrgId, packageId, { excludeEnrollment
   return await acount('SELECT COUNT(*) n FROM student_enrollments WHERE ' + where, params);
 }
 
-async function assertEnrollmentSeat(currentOrgId, pkg, options = {}) {
+/**
+ * 开通/恢复/续费开通单前的**机构级**学员席位检查。
+ *
+ * ⚠️ 2026-09-26 审计两处修正：
+ *   ① 判据原先是 `>`，而建号那条（createMember）是 `>=` —— 同一个错误码、同一个计数源，两处结论不同：
+ *      used == seats 时建号被拒、开通单却放行。统一成 `>=`（满了就是满了）。
+ *   ② 原来的 `pkg` / `options` 参数**函数体里根本没用**，调用方传的 `{ excludeEnrollmentId }` 是静默 no-op ——
+ *      看代码的人会以为"本人已占的席位被排除了"。已去掉这两个参数（这里查的是机构级席位，
+ *      与按课包统计的 occupiedStudentSeats 是两件事）。
+ */
+async function assertEnrollmentSeat(currentOrgId) {
   const org = await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
-  if (org.studentUsedSeats > org.studentSeats) throw errors.conflict('机构学生人数已超过上限', 'STUDENT_SEAT_LIMIT');
+  if (org.studentUsedSeats >= org.studentSeats) throw errors.conflict('机构学生人数已达上限', 'STUDENT_SEAT_LIMIT');
   return { limit: org.studentSeats, occupied: org.studentUsedSeats, available: Math.max(0, org.studentSeats - org.studentUsedSeats) };
 }
 

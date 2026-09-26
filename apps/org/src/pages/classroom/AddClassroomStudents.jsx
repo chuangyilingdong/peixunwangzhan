@@ -49,7 +49,9 @@ export function AddClassroomStudents({ api, openId, onBack }) {
   function submitSearch(event) {
     event.preventDefault();
     setKeyword(draftKeyword);
-    if (tab === 'selectable' && draftKeyword) setTab('selectable');
+    // ⚠️ 2026-09-26 全站审计：这里原来有一行 `if (tab === 'selectable' && draftKeyword) setTab('selectable');`
+    //    —— 条件已经要求 tab 就是 selectable，赋值等于没做（死代码）。
+    //    真要"搜索后跳到可添加页签"是产品口径问题，先删掉不留误导。
   }
   function toggle(id) {
     setPicked((old) => old.includes(id) ? old.filter((value) => value !== id) : [...old, id]);

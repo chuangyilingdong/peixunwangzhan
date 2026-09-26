@@ -25,7 +25,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const gate = process.argv.includes('--gate');
+// ⚠️ 2026-09-26 全站审计：默认**就是门禁**（原来只有显式 --gate 才 exit 1，而套件 spawn 时不传参数 → 这条网在套件里永远绿）。
+//    想看明细加 --report（CI 里原来的 --gate 照旧兼容）。
+const gate = !process.argv.includes('--report');
 const onlyFile = (() => { const i = process.argv.indexOf('--file'); return i >= 0 ? process.argv[i + 1] : null; })();
 
 const DB_FUNCS = ['row', 'rows', 'q', 'one', 'count', 'transaction'];
@@ -126,6 +128,9 @@ if (findings.length || awaitedUses.length) {
     for (const f of [...findings, ...awaitedUses].slice(0, 60)) console.log(`    ${f.file}:${f.line}  ${f.text}`);
   }
 }
+// ⚠️ 2026-09-26 全站审计：原来只有 `--gate` 时才 exit 1，而套件 spawn 时**不传任何参数** ——
+//    于是这条门禁在套件里永远绿（判据全在 if(gate) 里），"162 条网"里它那一格是空的。
+//    改成**默认就是门禁**（CI 传的 --gate 照旧兼容），只想看明细时加 --report。
 if (gate) {
   // 门禁只看**应用代码**：schema.js 是这套同步 API 的实现本体（还有导入期建表/回填），
   // 它里面的同步调用是设计的一部分，改了就是自己吃自己。

@@ -1222,7 +1222,9 @@ export async function handleOrg(ctx) {
     // 批次 D：按**课堂**筛（旧参数 classId 保留兼容，但班级退场后它已经没用）
     const sessionFilter = String(ctx.search.get('sessionId') || '').trim();
     const search = String(ctx.search.get('search') || '').trim().slice(0, 100);
-    if (status && !['PENDING', 'APPROVED', 'REJECTED', 'PUBLISHED'].includes(status)) throw errors.badRequest('作品状态筛选无效', 'INVALID_WORK_STATUS_FILTER');
+    // ⚠️ 2026-09-26 审计：白名单漏了 UNPUBLISHED —— 而「已下架」正是机构端自己写出来的状态
+    //    （举报处理下架写 UNPUBLISHED，见下面的 work-reports），机构端却筛不出来。
+    if (status && !['PENDING', 'APPROVED', 'REJECTED', 'PUBLISHED', 'UNPUBLISHED'].includes(status)) throw errors.badRequest('作品状态筛选无效', 'INVALID_WORK_STATUS_FILTER');
     const params = [currentOrgId]; let where = 'work.org_id=?';
     if (status) { where += ' AND work.status=?'; params.push(status); }
     if (sessionFilter) { where += ' AND work.class_session_id=?'; params.push(sessionFilter); }
@@ -1272,8 +1274,12 @@ export async function handleOrg(ctx) {
       classSessionId: submission.class_session_id || null,
       entryFile: submission.entry_file || 'index.html',
       plazaPublished: Number(submission.is_public || 0) === 1,
-      // 这两个字段画布那边有、这里没有：机构精选与举报都只作用于 `works`（口径见上面的注释）
+      // 机构精选与举报都只作用于 `works`（口径见上面的注释）：VibeCoding 没有精选入口（恒 false）、
+      // 举报也不挂它，所以待处理举报恒 0。
+      // ⚠️ 2026-09-26 审计补：`unpublishReason` 原来在这里被漏掉 —— 与 student.js / normalizeSubmission
+      //    两处逐字对齐后，「已下架」才显示得出原因（worksState 判「已下架」要它）。
       featured: false,
+      unpublishReason: submission.unpublish_reason || null,
       pendingReportCount: 0,
       copyrightConfirmedAt: submission.copyright_confirmed_at || null,
     }));

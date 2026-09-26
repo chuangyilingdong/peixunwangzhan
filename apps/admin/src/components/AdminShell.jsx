@@ -5,7 +5,11 @@ import { BrandLogo } from '@platform/shared';
 export function AdminShell({ user, navigation = [], onLogout, children }) {
   const [open, setOpen] = useState(false);
   const location = useLocation();
-  const current = navigation.find((item) => item.to && location.pathname.startsWith(item.to));
+  // ⚠️ 2026-09-26 全站审计：用 find 取"第一个前缀匹配"时，`/compute/names`（页签路由、不在菜单里）
+  //    会落不到任何菜单项 → 顶栏与浏览器标题回落成「管理中心」，与页面自己的标题不一致。取**最长前缀**。
+  const current = navigation
+    .filter((item) => item.to && location.pathname.startsWith(item.to))
+    .sort((a, b) => b.to.length - a.to.length)[0];
   useEffect(() => { setOpen(false); document.title = `${current?.label || '管理中心'} · 灵动ai学院`; }, [location.pathname, current?.label]);
   return <div className="admin-console">
     <a className="admin-skip" href="#admin-content">跳转到主要内容</a>
