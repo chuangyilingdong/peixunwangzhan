@@ -80,6 +80,7 @@ check('② 没有 framer-motion / lucide / tailwind / Google Fonts（代码行�
 check('② 箭头是自绘 SVG（不引图标库）', /\.hp-vid-arrow[\s\S]{0,400}<svg viewBox="0 0 24 24"/.test(site) || /<button type="button" className="hp-vid-arrow is-prev"[\s\S]{0,300}<svg/.test(site));
 check('② 视频只从自家公开口取（组件里没有写死的外站地址）',
   !/https?:\/\/(?!www\.w3\.org)[a-z0-9.-]+\.(mp4|webm|mov)/i.test(siteCode));
+check('② 后台的空状态写明白了（空 = 官网不显示，且必须点发布）—— 运营第一眼就不会以为"没做出来"', admin.includes('这一屏现在是空的') && admin.includes('只保存草稿官网看不到'));
 check('② 视频与封面**不进 CMS JSON**（后台表单里只存 URL；服务端 CMS 有 200KB 上限，塞不下视频）',
   /videoUrl/.test(admin) && /posterUrl/.test(admin) && !/base64/i.test(admin));
 

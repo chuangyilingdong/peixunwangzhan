@@ -354,6 +354,9 @@ export function WebsiteContent({ api }) {
                 视频走平台已有的文件资产接口（category=MEDIA_ASSET + PUBLIC_PLATFORM 才能被公开口读到）。
                 ⚠️ 上传上限 200MB 且要过病毒扫描；官网展示片段建议 ≤10MB。卡片全删 ＝ 官网不显示这一屏。 */}
             <div className="cms-section-heading top-gap"><strong>第二屏 · 视频展示（首页第一屏下方）</strong><span>标题 / 副标题 / 多个视频卡（标签、标题、说明、视频、封面）· 视频全删掉 ＝ 官网不显示这一屏</span></div>
+            {/* 空状态写明白（2026-09-26：这一屏做完上线后运营以为"没做出来" —— 其实是空的时候官网不显示，
+                而且只点「保存草稿」官网也看不到，必须再点「发布」）。 */}
+            {videoItems.length ? null : <Notice tone="warning">这一屏现在是空的，<strong>官网上不会显示</strong>。点下面的「新增视频」上传第一个视频，然后记得点<strong>「发布」</strong>（只保存草稿官网看不到）。</Notice>}
             <div className="form-grid">
               <label>大标题<input value={videosBlock.title || ''} onChange={(event) => updateVideos({ title: event.target.value })} maxLength={60} /></label>
               <label>副标题<input value={videosBlock.lead || ''} onChange={(event) => updateVideos({ lead: event.target.value })} maxLength={160} /></label>
