@@ -17,7 +17,7 @@
 // 仍是外部存储地址（留空就是"资源待配置"）；「全部机构」对所有状态正常的机构开放，
 // 「指定机构」只在服务端向授权机构返回。
 import { useMemo, useState } from 'react';
-import { Empty, ErrorState, formatDate, Loading, ListResultSummary, MetricCard, Notice, PageHeader, Panel, Pagination, Status, useData, errorText } from '@platform/shared';
+import { Empty, ErrorState, formatDate, Loading, ListResultSummary, MetricCard, Notice, PageHeader, Panel, Pagination, Status, useData, errorText, useDebouncedValue } from '@platform/shared';
 
 export const MATERIAL_CATEGORIES = [['GENERAL', '通用'], ['COURSE', '课程'], ['POSTER', '海报'], ['ACTIVITY', '活动'], ['PARTNERSHIP', '合作']];
 const CATEGORY_LABELS = Object.fromEntries(MATERIAL_CATEGORIES);
@@ -160,7 +160,12 @@ export function AdminMaterials({ api }) {
   const [adding, setAdding] = useState(false);
   const [statsFor, setStatsFor] = useState(null);
   const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
-  const query = useMemo(() => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort); return params; }, [filters, page, limit, sort]);
+  // 关键词**防抖**：输入框即时回显、查询等手停下来再发 —— 原来每敲一个字就重取一次（2026-09-26 用户报的卡顿）。
+  // ⚠️ 依赖数组用的是 `JSON.stringify(effectiveFilters)` 而不是 `filters`：敲字过程中它是**不变**的，
+  //    否则 memo 每次按键都会给出一个新的 params 对象，useData 照样会重取（防抖就白做了）。
+  const debouncedSearch = useDebouncedValue(filters.search, 350);
+  const effectiveFilters = { ...filters, search: debouncedSearch };
+  const query = useMemo(() => { const params = new URLSearchParams(Object.entries(effectiveFilters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort); return params; }, [JSON.stringify(effectiveFilters), page, limit, sort]);
   const materials = useData(() => api.get(`admin/materials?${query.toString()}`), [api, query]);
   const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const stats = useData(() => statsFor ? api.get(`admin/materials/${encodeURIComponent(statsFor.id)}/stats`) : Promise.resolve(null), [api, statsFor]);

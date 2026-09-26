@@ -1,18 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData, errorText } from '@platform/shared';
+import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData, useDebouncedValue, errorText } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 
 export function PlatformAudit({ api }) {
   const [filters, setFilters] = useState({ action: '', actorId: '', targetType: '', targetId: '', requestPath: '', from: '', to: '', orgId: '' });
   const [limit, setLimit] = useState(50);
   const [page, setPage] = useState(1);
+  // 关键词 / ID / 路径 / 时间都是**文本输入** —— 防抖：手停下来再查（2026-09-26 用户报的卡顿）。
+  // ⚠️ 这一页每敲一个字原来要打**两个**请求（列表 + 汇总），影响比别处更明显。
+  // ⚠️ 依赖用 `JSON.stringify(debouncedFilters)`：敲字过程中它不变，否则 memo 每次都产出新串、照样重取。
+  const debouncedFilters = useDebouncedValue(filters, 350);
   const auditQuery = useMemo(() => {
     const params = new URLSearchParams();
-    Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); });
+    Object.entries(debouncedFilters).forEach(([key, value]) => { if (value) params.set(key, value); });
     params.set('limit', String(limit)); params.set('page', String(page));
     return params.toString();
-  }, [filters, limit, page]);
+  }, [JSON.stringify(debouncedFilters), limit, page]);
   const [actionFilter, setActionFilter] = useState('');
   const fullQuery = useMemo(() => {
     const params = new URLSearchParams(auditQuery);
@@ -24,7 +28,7 @@ export function PlatformAudit({ api }) {
   const summary = useData(() => api.get(`admin/audit-logs/summary?${fullQuery}`), [api, fullQuery]);
   const [message, setMessage] = useState('');
   useEffect(() => { if (list.data?.totalPages && page > list.data.totalPages) setPage(list.data.totalPages); }, [list.data, page]);
-  useEffect(() => { setPage(1); }, [filters, actionFilter, limit]);
+  useEffect(() => { setPage(1); }, [JSON.stringify(debouncedFilters), actionFilter, limit]); // 跟着**防抖后**的条件回到第 1 页
   const [exporting, setExporting] = useState(false);
   const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   function reset() { setFilters({ action: '', actorId: '', targetType: '', targetId: '', requestPath: '', from: '', to: '', orgId: '' }); setActionFilter(''); setPage(1); setMessage(''); }

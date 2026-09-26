@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatDate, formatYuan, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, Status, useData, writeSession, WorkMediaGallery, resolveWorkMediaUrl, errorText } from '@platform/shared';
+import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatDate, formatYuan, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, useDebouncedValue, Status, useData, writeSession, WorkMediaGallery, resolveWorkMediaUrl, errorText } from '@platform/shared';
 import { StudentGrants } from './pages/StudentGrants.jsx';
 import { AccountSecurity } from './pages/AccountSecurity.jsx';
 import { SeriesOverview } from './pages/SeriesOverview.jsx';
@@ -352,8 +352,12 @@ function nodeLabel(snapshot, nodeId) {
 
 function Works({ api }) {
   const [filters, setFilters] = useState({ search: '', status: '', sessionId: '' });
+  // 关键词**防抖**：输入框即时回显、查询等手停下来再发 —— 原来每敲一个字就重取一次
+  // （这条请求还带 includeSnapshot=true，响应不小），用户看到的就是「每打一个字页面闪一下」。
+  // ⚠️ 只防文本字段；状态 / 课堂是下拉（点一下就变），保持即时。
+  const debouncedSearch = useDebouncedValue(filters.search, 350);
   // 批次 D：作品筛选从「班级」换成「课堂」（班级退场）
-  const query = useMemo(() => { const value = new URLSearchParams(); if (filters.search.trim()) value.set('search', filters.search.trim()); if (filters.status) value.set('status', filters.status); if (filters.sessionId) value.set('sessionId', filters.sessionId); return '?' + value.toString() + '&includeSnapshot=true'; }, [filters]);
+  const query = useMemo(() => { const value = new URLSearchParams(); if (debouncedSearch.trim()) value.set('search', debouncedSearch.trim()); if (filters.status) value.set('status', filters.status); if (filters.sessionId) value.set('sessionId', filters.sessionId); return '?' + value.toString() + '&includeSnapshot=true'; }, [debouncedSearch, filters.status, filters.sessionId]);
   const { loading, error, data, refresh } = useData(() => api.get('org/works' + query), [api, query]);
   const [reportsPage, setReportsPage] = useState(1);
   const reports = useData(() => api.get(`org/work-reports?status=PENDING&page=${reportsPage}`), [api, reportsPage]);
@@ -414,12 +418,14 @@ function Works({ api }) {
 
 
 
-  if (loading) return <Loading />;
+  // ⚠️ 只有**第一次**加载才整页占位：重取（点刷新 / 切状态 / 关键词落定）时保留列表，
+  //    否则每动一下就"整页变 Loading 再变回来"——用户报的「每输入一个字符页面就要自动刷新一次」就是它。
+  if (loading && !data) return <Loading />;
   if (error) return <ErrorState error={error} onRetry={refresh} />;
   return <>
     <PageHeader eyebrow="学习成果" title="作品管理" description="查看学生提交的作业、处理举报，并把优秀作品标为机构精选。作品是否上作品广场由平台决定。" />
     {message && <Notice tone="success">{message}</Notice>}
-    <Panel title="作品列表" actions={<button className="secondary-button" onClick={() => { refresh(); reports.refresh(); }}>刷新</button>}><div className="form-grid"><label>关键词<input value={filters.search} placeholder="作品、学生或课时" onChange={(event) => setFilters({ ...filters, search: event.target.value })} /></label><label>状态<select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">全部状态</option><option value="PENDING">已提交</option><option value="APPROVED">已通过</option><option value="PUBLISHED">已发布到作品广场</option><option value="REJECTED">未通过</option><option value="UNPUBLISHED">已下架</option></select></label></div>
+    <Panel title="作品列表" actions={<div className="row-actions">{loading ? <span className="muted">正在刷新…</span> : null}<button className="secondary-button" onClick={() => { refresh(); reports.refresh(); }}>刷新</button></div>}><div className="form-grid"><label>关键词<input value={filters.search} placeholder="作品、学生或课时" onChange={(event) => setFilters({ ...filters, search: event.target.value })} /></label><label>状态<select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">全部状态</option><option value="PENDING">已提交</option><option value="APPROVED">已通过</option><option value="PUBLISHED">已发布到作品广场</option><option value="REJECTED">未通过</option><option value="UNPUBLISHED">已下架</option></select></label></div>
       {data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生</th><th>提交时间</th><th>状态与授权</th><th>举报</th><th>操作</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.source === 'VIBECODING' ? `VibeCoding 产物${item.entryFile ? '（' + item.entryFile + '）' : ''}` : '画布作品'} · {item.description || '暂无说明'} · {item.seriesTitle || '—'} / {item.courseLessonTitle || '—'}{item.sessionTitle ? ' · 课堂：' + item.sessionTitle : ''}</div></td><td>{item.studentName}</td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} /><div className="muted">{item.copyrightConfirmedAt ? '已确认机构内展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td><div className="row-actions"><button className="text-button" onClick={() => openWork(item)}>查看作品</button>{item.status === 'PUBLISHED' && <button className="text-button" onClick={() => { setFeatureAction(item); setFeatureForm({ featured: !item.featured, reason: item.featuredReason || '' }); }}>{item.featured ? '取消精选' : '设为精选'}</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="尚未收到作品" />}
     </Panel>
     {featureAction && <Panel title={`机构精选 · ${featureAction.title}`}><Notice tone="info">精选作品会在机构作品墙优先展示；取消精选不会下架作品。</Notice><div className="form-grid"><label>精选状态<select value={featureForm.featured ? 'true' : 'false'} onChange={(event) => setFeatureForm({ ...featureForm, featured: event.target.value === 'true' })}><option value="true">设为机构精选</option><option value="false">取消机构精选</option></select></label></div>{featureForm.featured && <label>精选理由（可选）<input value={featureForm.reason} maxLength={500} placeholder="例如：故事结构完整，画面表达清晰。" onChange={(event) => setFeatureForm({ ...featureForm, reason: event.target.value })} /></label>}<div className="row-actions top-gap"><button className="primary-button" disabled={featureBusy} onClick={handleFeature}>{featureBusy ? '处理中…' : '确认精选设置'}</button><button className="secondary-button" disabled={featureBusy} onClick={() => setFeatureAction(null)}>取消</button></div></Panel>}
@@ -646,7 +652,11 @@ function EnrollmentPage({ api, user }) {
 
 function UsagePage({ api }) {
   const [filters, setFilters] = useState({ days: '30', modality: '', status: '', search: '' });
-  const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, value]) => value)), [filters]);
+  // 同作品管理：两个**文本**筛选（关键词 / 能力）防抖；两个下拉保持即时
+  const debouncedSearch = useDebouncedValue(filters.search, 350);
+  const debouncedModality = useDebouncedValue(filters.modality, 350);
+  const effective = { days: filters.days, status: filters.status, search: debouncedSearch, modality: debouncedModality };
+  const query = useMemo(() => new URLSearchParams(Object.entries(effective).filter(([, value]) => value)), [filters.days, filters.status, debouncedSearch, debouncedModality]);
   const overview = useData(() => api.get('org/billing/usage-overview?days=' + encodeURIComponent(filters.days)), [api, filters.days]);
   const records = useData(() => api.get('org/ai-usage?' + query.toString()), [api, query]);
   if (overview.loading) return <Loading />;

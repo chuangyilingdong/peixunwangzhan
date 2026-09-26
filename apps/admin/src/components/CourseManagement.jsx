@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Empty, ErrorState, Icon, ListResultSummary, Loading, MetricCard, Notice, PageHeader, Panel,
-  Pagination, Status, formatDate, materialVisual, useData, errorText } from '@platform/shared';
+  Pagination, Status, formatDate, materialVisual, useData, errorText, useDebouncedValue } from '@platform/shared';
 
 // 可见范围（2026-09-16 用户口径：三值改两值）：**公开** = 官网课程广场 + 授权机构都可以；
 // **私有** = 不对外。机构实际能不能用，仍只看「机构授权」那一栏（发布 ≠ 授权）。
@@ -700,11 +700,16 @@ function CourseList({ api, onOpen }) {
   const [showCreate, setShowCreate] = useState(false);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  // 关键词**防抖**：输入框即时回显、查询等手停下来再发 —— 原来每敲一个字就重取一次（2026-09-26 用户报的卡顿）。
+  // ⚠️ 依赖数组用的是 `JSON.stringify(effectiveFilters)` 而不是 `filters`：敲字过程中它是**不变**的，
+  //    否则 memo 每次按键都会给出一个新的 params 对象，useData 照样会重取（防抖就白做了）。
+  const debouncedSearch = useDebouncedValue(filters.search, 350);
+  const effectiveFilters = { ...filters, search: debouncedSearch };
   const query = useMemo(() => {
-    const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
+    const params = new URLSearchParams(Object.entries(effectiveFilters).filter(([, value]) => value));
     params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort);
     return params.toString();
-  }, [filters, page, limit, sort]);
+  }, [JSON.stringify(effectiveFilters), page, limit, sort]);
   const courses = useData(() => api.get(`admin/course-series?${query}`), [api, query]);
 
   async function changeStatus(course, action) {

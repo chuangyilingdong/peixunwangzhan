@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Empty, ErrorState, formatDate, Loading, Notice, PageHeader, Panel, Pagination, ListResultSummary, useData } from '@platform/shared';
+import { Empty, ErrorState, formatDate, Loading, Notice, PageHeader, Panel, Pagination, ListResultSummary, useData, useDebouncedValue } from '@platform/shared';
 import { downloadCsv } from '../shared.jsx';
 
 const publicationLabels = { SUBMITTED: '已提交待发布', PUBLISHED: '已发布到官网', UNPUBLISHED: '已下架' };
@@ -37,11 +37,16 @@ export function PlatformWorks({ api }) {
   const plazaMap = useData(() => mapOpen ? api.get('admin/plaza-category-map') : Promise.resolve(null), [api, mapOpen]);
   // 拿到接口就铺进草稿一次；之后以草稿为准（别让刷新把管理员正在改的选择冲掉）
   useEffect(() => { if (mapOpen && plazaMap.data && !mapDraft) setMapDraft({ ...plazaMap.data.map }); }, [mapOpen, plazaMap.data, mapDraft]);
+  // 关键词**防抖**：输入框即时回显、查询等手停下来再发 —— 原来每敲一个字就重取一次（2026-09-26 用户报的卡顿）。
+  // ⚠️ 依赖数组用的是 `JSON.stringify(effectiveFilters)` 而不是 `filters`：敲字过程中它是**不变**的，
+  //    否则 memo 每次按键都会给出一个新的 params 对象，useData 照样会重取（防抖就白做了）。
+  const debouncedSearch = useDebouncedValue(filters.search, 350);
+  const effectiveFilters = { ...filters, search: debouncedSearch };
   const query = useMemo(() => {
-    const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
+    const params = new URLSearchParams(Object.entries(effectiveFilters).filter(([, value]) => value));
     params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort);
     return params.toString();
-  }, [filters, page, limit, sort]);
+  }, [JSON.stringify(effectiveFilters), page, limit, sort]);
   const endpoint = kind === 'canvas' ? 'admin/works' : 'admin/vibecoding-works';
   const [revision, setRevision] = useState(0);
   const [result, setResult] = useState({ key: '', loading: true, data: null, error: null });

@@ -8,6 +8,8 @@ export * from './notice.js';
 export * from './worksState.js';
 export * from './worksState.jsx';
 export * from './classroom.jsx';
+// 搜索防抖（自由输入的"查询值"）—— 见该文件头的注释：列表页原来"每敲一个字重取一次"
+export * from './useDebounced.js';
 export * from './canvasWorkspace.jsx';
 // 画布「可提交产出」判定（前端与服务端共用同一套算法，服务端直接 import 这个文件而不是本入口）
 export * from './canvasOutput.js';

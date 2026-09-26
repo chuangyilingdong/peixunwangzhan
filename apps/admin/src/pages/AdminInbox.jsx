@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData, errorText } from '@platform/shared';
+import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData, errorText, useDebouncedValue } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 
 export function AdminInbox({ api }) {
   const [filters, setFilters] = useState({ search: '', status: '' });
   const [page, setPage] = useState(1); const [limit, setLimit] = useState(20); const [sort, setSort] = useState('created');
-  const query = useMemo(() => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort); return params; }, [filters, page, limit, sort]);
+  // 关键词**防抖**：输入框即时回显、查询等手停下来再发 —— 原来每敲一个字就重取一次（2026-09-26 用户报的卡顿）。
+  // ⚠️ 依赖数组用的是 `JSON.stringify(effectiveFilters)` 而不是 `filters`：敲字过程中它是**不变**的，
+  //    否则 memo 每次按键都会给出一个新的 params 对象，useData 照样会重取（防抖就白做了）。
+  const debouncedSearch = useDebouncedValue(filters.search, 350);
+  const effectiveFilters = { ...filters, search: debouncedSearch };
+  const query = useMemo(() => { const params = new URLSearchParams(Object.entries(effectiveFilters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort); return params; }, [JSON.stringify(effectiveFilters), page, limit, sort]);
   const inbox = useData(() => api.get(`admin/inbox?${query.toString()}`), [api, query]);
   const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const templates = useData(() => api.get('admin/notification-templates'), [api]);

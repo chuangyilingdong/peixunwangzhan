@@ -1,18 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData, useDebouncedValue } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 
 export function Dashboard({ api }) {
   const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const [filters, setFilters] = useState({ orgId: '', from: '', to: '' });
+  // 开始/结束是 date 输入：**敲日期**时浏览器会连着给几个中间值，原来每给一次就重取一遍总览。
+  // 防抖一下（下拉 orgId 的 350ms 延迟察觉不到）。见 packages/shared/src/useDebounced.js。
+  const debouncedFilters = useDebouncedValue(filters, 350);
   const query = useMemo(() => {
     const params = new URLSearchParams();
-    if (filters.orgId) params.set('orgId', filters.orgId);
-    if (filters.from) params.set('from', new Date(filters.from).toISOString());
-    if (filters.to) params.set('to', new Date(filters.to).toISOString());
+    if (debouncedFilters.orgId) params.set('orgId', debouncedFilters.orgId);
+    if (debouncedFilters.from) params.set('from', new Date(debouncedFilters.from).toISOString());
+    if (debouncedFilters.to) params.set('to', new Date(debouncedFilters.to).toISOString());
     return params.toString();
-  }, [filters]);
+  }, [JSON.stringify(debouncedFilters)]);
   const { loading, error, data, refresh } = useData(() => api.get(`admin/dashboard/overview${query ? `?${query}` : ''}`), [api, query]);
   const metrics = data?.metrics || {};
   const definitions = data?.meta?.metricDefinitions || {};
