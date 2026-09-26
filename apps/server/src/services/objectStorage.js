@@ -144,7 +144,7 @@ function serverUrl(key, subResources = {}) {
  *   contentDisposition 覆盖响应头 content-disposition（下载用 attachment; filename=…）
  *   cacheControl       覆盖响应头 cache-control
  */
-export function signedUrl(key, { expires = 900, contentDisposition, cacheControl, method = 'GET' } = {}) {
+export function signedUrl(key, { expires = 900, contentDisposition, cacheControl, method = 'GET', imageProcess } = {}) {
   if (!ossConfigured()) throw new Error('OSS 未配置，无法签发 URL');
   const c = cfg();
   const fullKey = withPrefix(key);
@@ -160,6 +160,11 @@ export function signedUrl(key, { expires = 900, contentDisposition, cacheControl
   //      而**预览**走的是"先把对象取到本地再发"（见 fileAssets.js），不经过签名 URL。
   if (contentDisposition) subResources['response-content-disposition'] = contentDisposition;
   if (cacheControl) subResources['response-cache-control'] = cacheControl;
+  // 图片**按需缩放**（2026-09-26）：官网上挂着几张 3MB 的 PNG（CMS 里直接用了上传原图），
+  // 首屏下面几屏一共要拉 6MB。阿里云 OSS 自带 `x-oss-process`，实测同一张图
+  // `image/resize,w_640/format,webp/quality,q_80` → 3.07MB 变 47KB。
+  // ⚠️ 它必须进签名（子资源都要签），所以拼在 subResources 里 —— 别改成"URL 外面再挂一个参数"。
+  if (imageProcess) subResources['x-oss-process'] = imageProcess;
   const signature = signV1({ verb: method, key: fullKey, dateOrExpires: expiresAt, subResources });
   const params = new URLSearchParams({
     OSSAccessKeyId: c.accessKeyId,

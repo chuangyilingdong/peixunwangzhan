@@ -131,6 +131,17 @@ check('有效期可以要求更长（上传大文件用）', () => {
   assert.ok(long - short >= 3500, `差值应接近 3540，实际 ${long - short}`);
 });
 
+// ── 图片**按宽度取**（2026-09-26，用户口径「保证官网的流畅度」）────────────────
+// 官网首页 CMS 里直接引了上传原图（一张 3MB 的 PNG），首屏以下一共要拉 6MB。
+// 修法：下载口支持 `?w=<px>`，用 OSS 的 `x-oss-process` 现算缩略图（实测 3.07MB → 47KB 的 webp）。
+// ⚠️ 这里钉的是**签名必须带上它**：`x-oss-process` 是子资源，不进待签串 OSS 会判签名不匹配
+//    —— 表现出来是 403（像权限问题），而不是"图没缩小"，那种错查半天。
+const plainUrl = signedUrl('a.png', { expires: 60 });
+const resizedUrl = signedUrl('a.png', { expires: 60, imageProcess: 'image/resize,w_900/format,webp/quality,q_80' });
+check('给了 imageProcess → URL 上带 x-oss-process', () => assert.match(resizedUrl, /[?&]x-oss-process=image%2Fresize%2Cw_900/));
+check('★ 带与不带 imageProcess 的签名不同（说明它进了待签串，不会被 OSS 判 403）', () => assert.notEqual(new URL(plainUrl).searchParams.get('Signature'), new URL(resizedUrl).searchParams.get('Signature')));
+check('待签串里是 ?x-oss-process=… 的形式', () => assert.ok(stringToSignV1({ verb: 'GET', key: 'a.png', dateOrExpires: 1, subResources: { 'x-oss-process': 'image/resize,w_900' } }).endsWith('/bucket-a/a.png?x-oss-process=image/resize,w_900')));
+
 console.log('⑤ fail-closed：配置不全时必须退回本地');
 check('FILE_STORAGE=oss 但缺密钥 → 仍然是 local', () => {
   setEnv({ FILE_STORAGE: 'oss', OSS_BUCKET: 'bucket-a', OSS_ENDPOINT: 'oss-cn-guangzhou.aliyuncs.com' });
@@ -155,6 +166,10 @@ check('只有 region 没给 endpoint 也能推出公网端点', () => {
   setEnv({ ...FULL, OSS_ENDPOINT: '', OSS_REGION: 'cn-guangzhou' });
   assert.equal(new URL(signedUrl('a.png')).host, 'bucket-a.oss-cn-guangzhou.aliyuncs.com');
 });
+
+const { imageProcessFor } = await import('../apps/server/src/services/fileStorage.js');
+check('imageProcessFor：宽度夹在 64~2000，并转 webp', () => { assert.equal(imageProcessFor(20), 'image/resize,w_64/format,webp/quality,q_80'); assert.equal(imageProcessFor(9999), 'image/resize,w_2000/format,webp/quality,q_80'); assert.equal(imageProcessFor(900), 'image/resize,w_900/format,webp/quality,q_80'); });
+check('imageProcessFor：非法宽度返回 null（调用方据此退回原图）', () => { assert.equal(imageProcessFor(''), null); assert.equal(imageProcessFor(0), null); assert.equal(imageProcessFor('abc'), null); });
 
 // 还原环境
 setEnv(saved);

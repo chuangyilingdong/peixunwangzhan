@@ -45,13 +45,25 @@ export async function persistUploadBytes({ relativeKey, buffer, mimeType, writeL
  *     （这台机的公网出口只有 5 Mbps，媒体全从它出去会拖慢所有人）
  *   · 本地行 → 返回 null，调用方继续走原来的流式下发
  */
-export function ossRedirectUrl(file, { expires = 900, contentDisposition } = {}) {
+export function ossRedirectUrl(file, { expires = 900, contentDisposition, imageProcess } = {}) {
   if (!file || rowStorageBackend(file) !== 'oss') return null;
   const key = String(file.storage_key || '').replaceAll('\\', '/');
   if (!key) return null;
   if (!ossConfigured()) return null; // 配置被人临时撤掉时退回本地路径，让它照旧报"文件不存在"而不是 500
   // 不传 contentType：阿里云不允许在 URL 上覆盖 content-type（见 objectStorage.signedUrl 的注释）
-  return signedUrl(key, { expires, contentDisposition });
+  return signedUrl(key, { expires, contentDisposition, imageProcess });
+}
+
+/**
+ * 图片**按宽度取**的 OSS 处理串（见 objectStorage.signedUrl 的 imageProcess）。
+ * 只对图片生效：调用方先判 mime；宽度夹在 64~2000（太小看不清、太大等于没缩）。
+ * 顺带转 webp —— 同一张图通常再小一半，而现代浏览器都认。
+ */
+export function imageProcessFor(width, { quality = 80 } = {}) {
+  const w = Math.round(Number(width));
+  if (!Number.isFinite(w) || w <= 0) return null;
+  const clamped = Math.max(64, Math.min(2000, w));
+  return `image/resize,w_${clamped}/format,webp/quality,q_${Math.max(50, Math.min(95, Math.round(Number(quality) || 80)))}`;
 }
 
 /** OSS 上有没有这个对象（回填脚本与巡检用） */

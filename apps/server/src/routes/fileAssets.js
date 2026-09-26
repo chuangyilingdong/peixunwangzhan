@@ -23,7 +23,7 @@ import { assertTransition } from '../services/domainState.js';
 import { maxUploadBytes, parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
 import { ensurePreviewPdf, needsConversion, previewKindFor, verifyPreviewTicket, previewPdfInOss, publishPreviewPdf, canRenderNatively } from '../services/materialPreview.js';
 import { reserveUpload } from '../services/uploadLimits.js';
-import { rowStorageBackend, ossRedirectUrl, materializeObject } from '../services/fileStorage.js';
+import { rowStorageBackend, ossRedirectUrl, materializeObject, imageProcessFor } from '../services/fileStorage.js';
 import { ossConfigured, signedUrl } from '../services/objectStorage.js';
 
 /** 预览 302 到 OSS 的签名有效期（1 小时，与预览票据同量级）。 */
@@ -1067,6 +1067,19 @@ export async function handlePublicFileAssets(ctx) {
     if (file.category === 'TEACHING_ASSET') throw errors.forbidden('教学素材不是公开资源', 'FILE_NOT_PUBLIC');
     if (file.visibility !== 'PUBLIC_PLATFORM' && file.visibility !== 'PUBLIC_RELEASE') {
       throw errors.forbidden('文件不是公开资源', 'FILE_NOT_PUBLIC');
+    }
+    // ⭐ `?w=<px>`：图片**按宽度取缩略图**（2026-09-26，用户口径「保证官网的流畅度」）。
+    // 背景：官网首页 CMS 里有几块配图直接引了上传原图（一张 3MB 的 PNG），首屏以下一共要拉 6MB。
+    // 加 900px 之后同一张图变几十 KB（OSS 的 x-oss-process 现算，不用预先转码）。
+    // ⚠️ 只对**图片**生效；带了这个参数就一定是"展示用"，不再当"下载原件"（缩略图不给 attachment）。
+    const width = Number(ctx.search.get('w') || 0);
+    const isImage = /^image\//.test(String(file.mime_type || ''));
+    if (isImage && Number.isFinite(width) && width > 0) {
+      const url = ossRedirectUrl(file, { expires: 3600, imageProcess: imageProcessFor(width) });
+      if (url) {
+        await audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageBackend: 'oss', imageProcess: imageProcessFor(width) });
+        return { __fileResponse: true, status: 302, headers: { 'cache-control': 'public, max-age=3600' }, redirectUrl: url };
+      }
     }
     return prepareFileDownload(ctx, file);
   }
