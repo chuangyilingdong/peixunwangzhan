@@ -60,3 +60,10 @@ body {
   background: #f6f3ff;
 }
 
+
+/* 机构端「每人均可授权次数」的小数字输入（2026-09-26 体验课包按次授权）。
+   与两侧的 −/＋ 按钮拼成一组，宽度固定住 —— 默认的 number 输入会撑满一行。
+   浏览器自带的上下箭头在这么窄的框里会盖住数字，去掉。 */
+.units-input{width:64px;padding:6px 8px;text-align:center;font-variant-numeric:tabular-nums;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink)}
+.units-input::-webkit-outer-spin-button,.units-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.units-input{-moz-appearance:textfield;appearance:textfield}

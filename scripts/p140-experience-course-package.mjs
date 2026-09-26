@@ -315,10 +315,59 @@ try {
     check('⑩ 普通课包类型默认 NORMAL', seriesRow?.series_type === 'NORMAL', JSON.stringify(seriesRow));
   }
 
+  /* ④′ 每人授权次数（2026-09-26 用户口径：「一次只能授权 1 次，要多次的话就只能一直点击授权」）。
+     这一段**自带一个体验课包**（8 次额度，该包 stockTotal=10），不去碰前面那个只剩几次的包 —— 否则 ⑤~⑨ 的库存断言全乱。 */
+  {
+    const own = await createSeries('P140 体验包·按次授权', 'EXPERIENCE', [lessonBody('第 1 节')]);
+    check('④′ 夹具：新建一个体验包用于按次授权', own.status === 200 && Boolean(own.data?.id), JSON.stringify(own.error || own.data).slice(0, 160));
+    const ownSeriesId = own.data?.id || '';
+    await api(`/api/admin/course-series/${ownSeriesId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
+    const assigned = await api(`/api/admin/course-series/${ownSeriesId}/assignments`, { method: 'POST', token: admin, body: { orgId: seeded.orgId, quotaTotal: 8, ...purchase('exp-units', 8) } });
+    check('④′ 夹具：给机构 8 次额度', assigned.status === 200, JSON.stringify(assigned.error || assigned.data).slice(0, 160));
+    const grant = async (units) => api('/api/org/course-grants', { method: 'POST', token: orgAdmin, body: { seriesId: ownSeriesId, studentIds: [seeded.studentId], units } });
+
+    const multi = await grant(3);
+    check('④′ ⭐ 一次发 3 次（不用点三遍）', multi.status === 200 && multi.data?.granted === 1 && Number(multi.data?.usedUnits) === 3, JSON.stringify(multi.error || multi.data).slice(0, 200));
+    const row = await arow('SELECT granted_units FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [seeded.orgId, seeded.studentId, ownSeriesId]);
+    check('④′ 次数累加 +3（granted_units=3）', Number(row?.granted_units) === 3, JSON.stringify(row));
+    const assignment = await arow('SELECT quota_total, quota_used FROM course_assignments WHERE series_id=? AND org_id=?', [ownSeriesId, seeded.orgId]);
+    check('④′ 机构次数同步扣 3 次', Number(assignment?.quota_used) === 3, JSON.stringify(assignment));
+
+    const tooMany = await grant(900);
+    check('④′ ⭐ 超过课包实际库存被拒（服务端在事务里按真实 quota_used 判，不是前端说了算）',
+      tooMany.status === 409 && tooMany.error?.code === 'COURSE_QUOTA_EXHAUSTED' && /本次需要 900 次/.test(String(tooMany.error?.message || '')),
+      JSON.stringify(tooMany.error || tooMany.data).slice(0, 220));
+
+    const normalAssignment = await arow('SELECT series_id FROM course_assignments WHERE org_id=? AND quota_total>0 AND series_id<>? AND series_id<>? LIMIT 1', [seeded.orgId, experienceSeriesId, ownSeriesId]);
+    const normal = await api('/api/org/course-grants', { method: 'POST', token: orgAdmin, body: { seriesId: normalAssignment?.series_id, studentIds: [seeded.studentId], units: 3 } });
+    check('④′ 普通课包传 units>1 被拒（UNITS_NOT_SUPPORTED，别变成静默只记 1 次）', normal.status === 400 && normal.error?.code === 'UNITS_NOT_SUPPORTED', JSON.stringify(normal.error || normal.data).slice(0, 200));
+  }
+
+  /* ④″ 前端契约（静态）：按次授权的入口与上限必须在界面上（真浏览器那一路由 p111 走机构端页面） */
+  {
+    const grantsPage = fs.readFileSync('apps/org/src/pages/StudentGrants.jsx', 'utf8');
+    const listPage = fs.readFileSync('apps/org/src/pages/classroom/ClassroomList.jsx', 'utf8');
+    check('④″ 体验课包才有「每人授权次数」控件（普通课包不显示 —— 传 units>1 服务端会拒）',
+      /\{isExperience \? <div className="row-actions top-gap">[\s\S]{0,500}每人授权次数/.test(grantsPage));
+    check('④″ 上限 = 剩余次数 ÷ 已选人数，超了就禁用并说明',
+      /const maxUnits = remaining === null \? null : Math\.max\(1, Math\.floor\(remaining \/ Math\.max\(1, picked\.length\)\)\)/.test(grantsPage)
+      && /const overLimit = remaining !== null && needed > remaining;/.test(grantsPage));
+    check('④″ 提交带 units（服务端在事务里再算一次，前端算错也拦得住）',
+      /studentIds: picked\.map\(\(item\) => item\.id\), units, source: 'GRANT_PAGE'/.test(grantsPage));
+    check('④″ 文案跟着次数走：本次将用掉 N 次（X 人 × 每人 Y 次）',
+      /本次将用掉 <strong>\{needed\}<\/strong> 次/.test(grantsPage));
+    check('④″ 机构「课堂总览」的改名 / 去按钮 / 两个新筛选都做到了（用户 2026-09-26 第二条口径）',
+      /isAdmin \? '机构课堂列表' : '我的课堂列表'/.test(listPage)
+      && /actions=\{!isAdmin && onCreate \?/.test(listPage)
+      && /教师名称<input value=\{draft\.teacherName\}/.test(listPage)
+      && /学生名称<input value=\{draft\.studentName\}/.test(listPage));
+  }
+
   console.log(JSON.stringify({ name: 'experience-course-package', pass: failures === 0, failures }, null, 2));
 } catch (error) {
   console.error(serverLog.slice(-3000));
   throw error;
+
 } finally {
   server.kill('SIGTERM');
 }

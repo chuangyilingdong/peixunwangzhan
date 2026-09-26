@@ -24,7 +24,7 @@
 //      —— 原来要等服务端 409 顶回来，提示还是「可用次数不足：授权 2 次，已用 2 次，本次需要 3 次」
 //      这种要自己算的话；
 //   ⑤ 课包次数为 0 时直接说明「平台还没给本机构分配人次」，而不是让人勾完再失败。
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Empty, ErrorState, ListResultSummary, Loading, Notice, PageHeader, Pagination, Panel, formatDate, useData, errorText } from '@platform/shared';
 
 const PAGE_SIZE = 20;
@@ -41,6 +41,7 @@ export function StudentGrants({ api }) {
   const [seriesId, setSeriesId] = useState('');
   // 选中的学员存**对象**（id + 姓名）：跨页之后要能把「我勾了谁」原样列出来
   const [picked, setPicked] = useState([]);
+  const [units, setUnits] = useState(1); // 每人授权次数（体验课包；切课包/改选人时会被夹回上限）
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [hint, setHint] = useState('');
@@ -67,7 +68,16 @@ export function StudentGrants({ api }) {
   const noQuota = Boolean(seriesId) && (!quota || quotaTotal <= 0);
   // remaining = null 表示「拿不到次数口径」，此时不做封顶（交服务端兜底）
   const remaining = noQuota || !quota ? null : Math.max(0, quotaTotal - Number(quota.quotaUsed || 0));
-  const overLimit = remaining !== null && picked.length > remaining;
+  // 每人次数上限 = 剩余次数 ÷ 已选人数（没选人就先按剩余次数本身给个上限）；服务端还会在事务里再算一次
+  const maxUnits = remaining === null ? null : Math.max(1, Math.floor(remaining / Math.max(1, picked.length)));
+  const clampUnits = (value) => {
+    const parsed = Math.floor(Number(value));
+    if (!Number.isFinite(parsed) || parsed < 1) return 1;
+    return maxUnits ? Math.min(parsed, maxUnits) : Math.min(parsed, 999);
+  };
+  const needed = picked.length * units;
+  const overLimit = remaining !== null && needed > remaining;
+  useEffect(() => { setUnits((value) => clampUnits(value)); /* eslint-disable-next-line */ }, [seriesId, picked.length, remaining]);
   const activeStudentIds = new Set((grants.data?.items || []).filter((row) => !row.revokedAt).map((row) => row.studentId));
   // 体验课包（2026-09-24 用户口径）：**可以重复分给同一个学生**、未使用的次数**预先累积** ——
   // 所以「已授权」不再等于"不能再选"，改看这名学生手上还剩几次。
@@ -111,10 +121,10 @@ export function StudentGrants({ api }) {
     if (!seriesId || !picked.length || overLimit) return;
     setBusy(true); setMessage(''); setHint('');
     try {
-      const result = await api.post('org/course-grants', { seriesId, studentIds: picked.map((item) => item.id), source: 'GRANT_PAGE' });
+      const result = await api.post('org/course-grants', { seriesId, studentIds: picked.map((item) => item.id), units, source: 'GRANT_PAGE' });
       const left = result.quotaTotal > 0 ? `本课包已用 ${result.quotaUsed} / ${result.quotaTotal} 次` : '本课包不限次数';
-      setMessage(`已授权 ${result.granted} 名学员${result.skipped ? `（跳过已授权 ${result.skipped} 名）` : ''}；${left}。`);
-      setPicked([]); grants.refresh(); courses.refresh(); students.refresh();
+      setMessage(`已授权 ${result.granted} 名学员${units > 1 ? `（每人 ${units} 次、共 ${result.usedUnits ?? result.granted * units} 次）` : ''}${result.skipped ? `（跳过已授权 ${result.skipped} 名）` : ''}；${left}。`);
+      setPicked([]); setUnits(1); grants.refresh(); courses.refresh(); students.refresh();
     } catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
 
@@ -197,21 +207,39 @@ export function StudentGrants({ api }) {
     </Panel> : null}
 
     {seriesId && !noQuota ? <Panel title={`③ 本次授权（已选 ${picked.length} 人）`}>
-      <div className="row-actions">
-        <span className="muted">本次将用掉 <strong>{picked.length}</strong> 次</span>
+      {/* ⭐ 每人授权次数（2026-09-26 用户口径：「体验课机构为学生授权，一次只能授权 1 次，要多次的话
+          就只能一直点击『授权』——这里添加自定义数量的功能（数字不可超过机构当前课包实际库存数量）」）。
+          普通课包每个学员只能授权 1 次（重复授权本来就跳过），所以这一行只对体验课包出现。
+          上限 = 剩余次数 ÷ 已选人数（选了 3 个人、课包剩 10 次 → 每人最多 3 次），
+          提交时服务端在事务里**按刚读出来的 quota_used 再算一次**，前端算错也拦得住。 */}
+      {isExperience ? <div className="row-actions top-gap">
+        <span className="muted">每人授权次数：</span>
+        <span className="ta-zoom">
+          <button type="button" className="secondary-button" disabled={units <= 1} onClick={() => setUnits((value) => Math.max(1, value - 1))} aria-label="减少">−</button>
+          <input className="units-input" type="number" min="1" max={maxUnits || 999} value={units}
+            onChange={(event) => setUnits(clampUnits(event.target.value))} aria-label="每人授权次数" />
+          <button type="button" className="secondary-button" disabled={!maxUnits || units >= maxUnits} onClick={() => setUnits((value) => Math.min(maxUnits || 999, value + 1))} aria-label="增加">＋</button>
+        </span>
+        <span className="muted">次 / 人{maxUnits ? `（本课包剩余 ${remaining} 次，最多每人 ${maxUnits} 次）` : ''}</span>
+        <button type="button" className="text-button" disabled={!maxUnits || units === maxUnits} onClick={() => setUnits(maxUnits)}>按库存拉满</button>
+      </div> : null}
+      <div className="row-actions top-gap">
+        <span className="muted">本次将用掉 <strong>{needed}</strong> 次{picked.length && units > 1 ? `（${picked.length} 人 × 每人 ${units} 次）` : ''}</span>
         <span className="muted">·</span>
         <span className={overLimit ? 'status danger' : 'muted'}>
-          {overLimit ? `剩余人次不足：本课包只剩 ${remaining} 次，选多了 ${picked.length - remaining} 人` : `授权后本课包剩 ${remaining === null ? '—' : Math.max(0, remaining - picked.length)} 次`}
+          {overLimit ? `剩余人次不足：本课包只剩 ${remaining} 次，本次需要 ${needed} 次` : `授权后本课包剩 ${remaining === null ? '—' : Math.max(0, remaining - needed)} 次`}
         </span>
       </div>
-      {/* 跨页选择要看得见：把勾了谁原样列出来（翻页之后也不丢） */}
+      {/* 跨页选择要看得见：把勾了谁原样列出来（翻页之后也不丢）；每人多次时把 ×N 标出来 */}
       {picked.length ? <div className="row-actions top-gap">
         <span className="muted">将要授权：</span>
-        {picked.map((item) => <span className="pick-tag" key={item.id}>{item.name}</span>)}
+        {picked.map((item) => <span className="pick-tag" key={item.id}>{item.name}{units > 1 ? ` ×${units}` : ''}</span>)}
       </div> : <p className="muted top-gap">还没有选择学员。上面的名单里勾选即可{isExperience ? '（体验课包可以重复分给同一个学员，次数会累加）' : '（已授权的学员不能重复选）'}。</p>}
       <div className="row-actions top-gap">
-        <button className="primary-button" disabled={busy || !picked.length || overLimit} onClick={submit}>{busy ? '授权中…' : `授权给 ${picked.length} 名学员`}</button>
-        {overLimit ? <span className="muted">先去掉几个人，或让平台增购次数。</span> : null}
+        <button className="primary-button" disabled={busy || !picked.length || overLimit} onClick={submit}>
+          {busy ? '授权中…' : (units > 1 ? `授权给 ${picked.length} 名学员（每人 ${units} 次）` : `授权给 ${picked.length} 名学员`)}
+        </button>
+        {overLimit ? <span className="muted">先去掉几个人、把每人次数调小，或让平台增购次数。</span> : null}
       </div>
       <p className="muted">用掉一次后不可撤销（机构侧没有撤销入口）；如果是误授权，请联系平台兜底撤销。{isExperience ? ' 体验课包的次数没被核销掉的（课堂没有有效产出、或课堂被解散），平台撤销时按未消费余额退回。' : ''}</p>
     </Panel> : null}

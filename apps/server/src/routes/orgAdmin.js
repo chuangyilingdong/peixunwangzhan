@@ -877,6 +877,21 @@ export async function handleOrg(ctx) {
     if (seriesId) { baseConditions.push('session.series_id=?'); baseParams.push(seriesId); }
     const search = String(ctx.search.get('search') || '').trim();
     if (search) { baseConditions.push('(session.title LIKE ? OR lesson.title LIKE ?)'); baseParams.push(`%${search}%`, `%${search}%`); }
+    // 教师名称 / 学生名称（2026-09-26 用户口径：机构「课堂总览」的筛选要能按这两样找）
+    //   · 教师：`teacher` 那个 JOIN 上面已经有了，直接按姓名或登录名匹配；
+    //   · 学生：名单在 session_students 里，用 EXISTS 子查询 —— 不要 JOIN，
+    //     否则一个班多个学生命中会把同一条课堂**放大成多行**（分页与总数都会错）。
+    //   两者都同时匹配姓名与登录名：运营手上往往只有账号名。
+    const teacherName = String(ctx.search.get('teacherName') || '').trim();
+    if (teacherName) { baseConditions.push('(teacher.display_name LIKE ? OR teacher.login LIKE ?)'); baseParams.push(`%${teacherName}%`, `%${teacherName}%`); }
+    const studentName = String(ctx.search.get('studentName') || '').trim();
+    if (studentName) {
+      baseConditions.push(`EXISTS (SELECT 1 FROM session_students seat
+        JOIN users student ON student.id = seat.student_id
+        WHERE seat.session_id = session.id AND seat.status <> 'REMOVED'
+          AND (student.display_name LIKE ? OR student.login LIKE ?))`);
+      baseParams.push(`%${studentName}%`, `%${studentName}%`);
+    }
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 90 });
     baseConditions.push('COALESCE(session.created_at, session.started_at) >= ?');
     baseParams.push(new Date(Date.now() - days * 86400000).toISOString());
@@ -1433,10 +1448,22 @@ export async function handleOrg(ctx) {
       ? new Set()
       : new Set((await arows(`SELECT student_id FROM student_course_grants WHERE org_id=? AND series_id=? AND revoked_at IS NULL AND student_id IN (${placeholders})`, [currentOrgId, seriesId, ...studentIds])).map((item) => item.student_id));
     const fresh = studentIds.filter((studentId) => !already.has(studentId));
+    // ⭐ 每人授权次数（2026-09-26 用户口径：「体验课机构为学生授权，一次只能授权 1 次，要多次的话
+    //    就只能一直点击『授权』——这里添加自定义数量的功能（数字不可超过机构当前课包实际库存数量，
+    //    添加过程中需要实际检测这一限制）」）。
+    //    · 只有**体验课包**能按次累加（同一个学生重复分配、次数累计，见上面 2026-09-24 的口径）；
+    //    · 普通课包每个学生只能授权 1 次（重复授权本来就跳过），传 units>1 直接拒 ——
+    //      别让它变成"看起来授权了 3 次、其实只记了 1 次"的静默无效；
+    //    · 上限按**这次真会扣掉的次数**算：本次新增授权数 × 每人次数 ≤ 课包剩余次数。
+    //      这条检查在事务里、拿到的是**刚读出来的** quota_used，所以是"实际检测"而不是前端算的账。
+    const units = integer(ctx.body?.units, '每人授权次数', { min: 1, max: 1000, fallback: 1 });
+    if (units > 1 && !experience) throw errors.badRequest('普通课包每个学员只能授权 1 次；按次累加只适用于体验课包', 'UNITS_NOT_SUPPORTED');
     const quotaTotal = Number(assignment.quota_total || 0);
     const quotaUsed = Number(assignment.quota_used || 0);
-    if (fresh.length && (quotaTotal <= 0 || quotaUsed + fresh.length > quotaTotal)) {
-      throw errors.conflict(`可用次数不足：授权 ${quotaTotal} 次，已用 ${quotaUsed} 次，本次需要 ${fresh.length} 次`, 'COURSE_QUOTA_EXHAUSTED');
+    const needed = fresh.length * units;
+    if (fresh.length && (quotaTotal <= 0 || quotaUsed + needed > quotaTotal)) {
+      const remaining = Math.max(0, quotaTotal - quotaUsed);
+      throw errors.conflict(`可用次数不足：课包共 ${quotaTotal} 次，已用 ${quotaUsed} 次、剩 ${remaining} 次；本次需要 ${needed} 次（${fresh.length} 人 × 每人 ${units} 次）`, 'COURSE_QUOTA_EXHAUSTED');
     }
     const now = nowIso();
     // ⚠️ 并发同一个学生时，两个请求都"查不到 → 一起插"，输的那个会撞唯一索引。
@@ -1454,8 +1481,8 @@ export async function handleOrg(ctx) {
             // 体验课包：次数**累加在同一行**（唯一索引与历史都保住），撤销过就顺手复活。
             // 不走下面那条「上一代必须已冲销」的检查：每一次分配都是独立的一次次数确认收入，
             // 各自带自己的幂等键（见下面 appendLicenseGrantRevenue 的 key）。
-            await aq('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL,granted_at=?,granted_by=?,source_assignment_id=?,granted_units=granted_units+1 WHERE id=?',
-              [now, auth.user.id, assignment.id, grantId]);
+            await aq('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL,granted_at=?,granted_by=?,source_assignment_id=?,granted_units=granted_units+? WHERE id=?',
+              [now, auth.user.id, assignment.id, units, grantId]);
             unitSeq = Number((await arow('SELECT granted_units FROM student_course_grants WHERE id=?', [grantId]))?.granted_units || 1);
           } else {
             const unreversed = await arow(`SELECT event.id FROM license_revenue_events event
@@ -1467,14 +1494,19 @@ export async function handleOrg(ctx) {
         } else {
           grantId = id('coursegrant');
           try {
-            await aq('INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at,granted_units,consumed_units) VALUES (?,?,?,?,?,?,?,?,?)', [grantId, currentOrgId, studentId, seriesId, assignment.id, auth.user.id, now, 1, 0]);
+            await aq('INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at,granted_units,consumed_units) VALUES (?,?,?,?,?,?,?,?,?)', [grantId, currentOrgId, studentId, seriesId, assignment.id, auth.user.id, now, units, 0]);
           } catch (error) {
             if (!isUniqueViolation(error)) throw error;
             raced.push(studentId);
             continue;
           }
         }
-        await appendLicenseGrantRevenue({ assignmentId: assignment.id, orgId: currentOrgId, seriesId, grantId, actorId: auth.user.id, occurredAt: now, idempotencyKey: experience ? `license-grant:${grantId}:${now}:u${unitSeq}` : `license-grant:${grantId}:${now}` });
+        // 每次分配 = 一笔独立收入确认：一人 units 次就记 units 笔（幂等键带 u<seq>），
+        // 体验课包的 unitSeq 是累加后的总序号，所以从 unitSeq-units+1 一路记到 unitSeq。
+        for (let step = 0; step < units; step += 1) {
+          const seq = experience ? unitSeq - units + 1 + step : 1;
+          await appendLicenseGrantRevenue({ assignmentId: assignment.id, orgId: currentOrgId, seriesId, grantId, actorId: auth.user.id, occurredAt: now, idempotencyKey: experience ? `license-grant:${grantId}:${now}:u${seq}` : `license-grant:${grantId}:${now}` });
+        }
       };
       // 授权次数变更流水（P03-04 写入点④ 授权消耗）：只有真的扣了次数才记一笔
       // ——「同一学生同一课包重复授权被跳过」「撤销后重新授权（同一 grant 复活）」两条路径
@@ -1482,8 +1514,9 @@ export async function handleOrg(ctx) {
       // 体验课包的重复分配同样是"真的扣了次数"（每次 +1 人次），所以照样记这一笔。
       // 与 quota_used 的更新在**同一个事务**里（本函数上面就是 atransaction(async () => {...})）。
       const grantedNow = fresh.length - raced.length;
-      if (grantedNow) {
-        await aq('UPDATE course_assignments SET quota_used=quota_used+? WHERE id=?', [grantedNow, assignment.id]);
+      const usedNow = grantedNow * units; // 体验课包：一人可能占多次
+      if (usedNow) {
+        await aq('UPDATE course_assignments SET quota_used=quota_used+? WHERE id=?', [usedNow, assignment.id]);
         await recordQuotaChange({
           orgId: currentOrgId, seriesId, assignmentId: assignment.id,
           changeType: 'GRANT_CONSUME', quotaTotalBefore: quotaTotal, quotaUsedBefore: quotaUsed,
@@ -1492,7 +1525,7 @@ export async function handleOrg(ctx) {
         });
       }
     await audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds: fresh.filter((studentId) => !raced.includes(studentId)), skipped: studentIds.length - grantedNow, racedCount: raced.length, source: grantSource, seriesType: seriesTypeOf(series) }, { orgId: currentOrgId });
-    return { granted: grantedNow, skipped: studentIds.length - grantedNow, quotaTotal, quotaUsed: quotaUsed + grantedNow, seriesType: seriesTypeOf(series) };
+    return { granted: grantedNow, skipped: studentIds.length - grantedNow, units, usedUnits: usedNow, quotaTotal, quotaUsed: quotaUsed + usedNow, remaining: Math.max(0, quotaTotal - (quotaUsed + usedNow)), seriesType: seriesTypeOf(series) };
     });
   }
 

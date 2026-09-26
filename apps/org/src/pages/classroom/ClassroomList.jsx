@@ -10,7 +10,7 @@ import { DELIVERY_LABEL, SESSION_STATE, StateBadge } from './states.jsx';
 
 const DAYS_OPTIONS = [['7', '近 7 天'], ['30', '近 30 天'], ['90', '近 90 天'], ['365', '近 1 年']];
 const TONES = { PENDING: 'orange', ACTIVE: 'teal', ENDED: 'violet', DISSOLVED: 'pink' };
-const emptyFilters = { search: '', status: '', seriesId: '', lessonId: '', days: '90' };
+const emptyFilters = { search: '', status: '', seriesId: '', lessonId: '', teacherName: '', studentName: '', days: '90' };
 
 function statusHint(key, count) {
   if (key === 'PENDING') return count ? `${count} 个待上课课堂` : '当前无待上课课堂';
@@ -38,7 +38,7 @@ export function ClassroomList({ api, isAdmin, onOpen, onCreate }) {
   const seriesItems = series.data?.items || [];
   const query = useMemo(() => {
     const value = new URLSearchParams({ days: applied.days, page: String(page) });
-    for (const key of ['search', 'status', 'seriesId', 'lessonId']) if (applied[key]) value.set(key, applied[key]);
+    for (const key of ['search', 'status', 'seriesId', 'lessonId', 'teacherName', 'studentName']) if (applied[key]) value.set(key, applied[key]);
     return value.toString();
   }, [applied, page]);
   const list = useData(() => api.get('org/sessions?' + query), [api, query]);
@@ -69,11 +69,11 @@ export function ClassroomList({ api, isAdmin, onOpen, onCreate }) {
   }
 
   return <div className="classrooms-page">
-    <PageHeader eyebrow="开课与上课" title="我的课堂列表"
-      description={isAdmin ? '本机构全部课堂；可按课堂名称、状态、课包与课程筛选。' : '仅展示当前登录账号自己创建的课堂。'}
-      actions={onCreate ? <button className="primary-button" disabled={blocking > 0} onClick={onCreate}>创建课堂</button> : null} />
+    <PageHeader eyebrow="开课与上课" title={isAdmin ? '机构课堂列表' : '我的课堂列表'}
+      description={isAdmin ? '本机构全部课堂；可按课堂名称、教师、学生、状态、课包与课程筛选。' : '仅展示当前登录账号自己创建的课堂。'}
+      actions={!isAdmin && onCreate ? <button className="primary-button" disabled={blocking > 0} onClick={onCreate}>创建课堂</button> : null} />
 
-    {blocking > 0 ? <Notice tone="warning">
+    {isAdmin ? null : blocking > 0 ? <Notice tone="warning">
       当前账号已有 {blocking} 个「待上课 / 上课中」课堂，因此不能创建新的课堂。
       <div className="muted">结束或解散当前课堂后，创建课堂按钮会恢复可用。{ongoing ? <> 当前课堂：{ongoing.title}（{SESSION_STATE[ongoing.status]?.label || ongoing.status}）。</> : null}</div>
     </Notice> : <Notice tone="success">
@@ -90,6 +90,10 @@ export function ClassroomList({ api, isAdmin, onOpen, onCreate }) {
     <Panel title="筛选课堂">
       <form className="filter-form" onSubmit={submit}>
         <label>课堂名称<input value={draft.search} placeholder="请输入课堂名称" onChange={(event) => setDraft({ ...draft, search: event.target.value })} /></label>
+        {/* 教师 / 学生筛选（2026-09-26 用户口径：机构「课堂总览」要能按这两样找）。
+            只在机构管理员视角出现 —— 老师本来就只看自己的课堂，按教师筛没意义。 */}
+        {isAdmin ? <label>教师名称<input value={draft.teacherName} placeholder="教师姓名 / 登录账号" onChange={(event) => setDraft({ ...draft, teacherName: event.target.value })} /></label> : null}
+        {isAdmin ? <label>学生名称<input value={draft.studentName} placeholder="学员姓名 / 登录账号" onChange={(event) => setDraft({ ...draft, studentName: event.target.value })} /></label> : null}
         <label>状态<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value })}>
           <option value="">全部状态</option>
           {Object.entries(SESSION_STATE).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}
@@ -108,7 +112,7 @@ export function ClassroomList({ api, isAdmin, onOpen, onCreate }) {
       </form>
     </Panel>
 
-    <Panel title="我的课堂">
+    <Panel title={isAdmin ? '课堂列表' : '我的课堂'}>
       {list.loading ? <Loading label="正在读取课堂…" /> : list.error ? <ErrorState error={list.error} onRetry={list.refresh} /> : sessions.length ? <>
         <div className="table-wrap"><table>
           <thead><tr>

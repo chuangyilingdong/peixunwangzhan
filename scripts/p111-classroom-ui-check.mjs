@@ -700,6 +700,40 @@ try {
     }
   }
 
+  // ── 机构课堂总览按机构口径改过（2026-09-26 用户口径：①标题「我的课堂列表」→「机构课堂列表」
+  //    ②隐藏「创建课堂」按钮 ③筛选新增「学生名称」「教师名称」）
+  await orgPage.goto(base + '/classrooms', { waitUntil: 'domcontentloaded' });
+  await orgSettle();
+  await orgExpect('机构课堂总览', ['机构课堂列表', '教师名称', '学生名称']);
+  {
+    const bodyText = await orgPage.locator('body').innerText();
+    if (bodyText.includes('我的课堂列表')) problems.push('机构课堂总览：还写着「我的课堂列表」（机构视角应为「机构课堂列表」）');
+    const createButton = await orgPage.getByRole('button', { name: '创建课堂' }).count();
+    if (createButton !== 0) problems.push('机构课堂总览：不该有「创建课堂」按钮（实际 ' + createButton + ' 个）');
+    const teacherInput = await orgPage.getByPlaceholder('教师姓名 / 登录账号').count();
+    const studentInput = await orgPage.getByPlaceholder('学员姓名 / 登录账号').count();
+    if (teacherInput !== 1) problems.push('机构课堂总览：「教师名称」筛选框应有 1 个（实际 ' + teacherInput + '）');
+    if (studentInput !== 1) problems.push('机构课堂总览：「学生名称」筛选框应有 1 个（实际 ' + studentInput + '）');
+  }
+  // 真筛一次：按教师名过滤（夹具里的课堂都挂在这位老师名下）→ 还得有结果；乱填一个 → 空
+  {
+    // 夹具里的课堂都是 teacher-1 建的（机构管理员自己不建课），所以按那位老师的名字筛
+    const teacherName = (await arow("SELECT display_name FROM users WHERE login='teacher-1'"))?.display_name || '王老师';
+    await orgPage.getByPlaceholder('教师姓名 / 登录账号').fill(teacherName || 'zzz');
+    await orgPage.getByRole('button', { name: '查询' }).click();
+    await orgPage.waitForTimeout(900);
+    const hit = await orgPage.locator('table tbody tr').count();
+    if (!hit) problems.push('机构课堂总览：按教师名「' + teacherName + '」筛不出任何课堂（教师筛选没生效？）');
+    await orgPage.getByPlaceholder('学员姓名 / 登录账号').fill('这个学生不存在zzz');
+    await orgPage.getByRole('button', { name: '查询' }).click();
+    await orgPage.waitForTimeout(900);
+    const miss = await orgPage.locator('table tbody tr').count();
+    if (miss !== 0) problems.push('机构课堂总览：按不存在的学生名筛出 ' + miss + ' 行（学生筛选没生效？）');
+    await orgPage.getByRole('button', { name: '重置' }).click();
+    await orgPage.waitForTimeout(600);
+  }
+  await orgShot('25-org-classrooms');
+
   // ── 002-01：四个页签都在（机构管理员能看到入口）
   await orgPage.goto(`${base}/series-overview`, { waitUntil: 'domcontentloaded' });
   await orgSettle();
