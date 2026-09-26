@@ -749,11 +749,12 @@ function HomeLanding() {
         放大到铺满整页，**兔子被放大到看不全**（用户报「兔子好像显示不全了」）；顺带首屏也矮了一截
         （原本分给 hero 的那点富余空间被下面那一栏吃掉了）。
         所以：视频只铺第一屏（100vh），hero + 数据区也限定在第一屏里 —— 与加那一栏之前的表现一致。 */}
+    {/* 首屏背景视频 2026-09-26 换新素材：0.87MB / 1080p / 无音轨，比上一版（1.86MB）小一半 ——
+        官网是从这台 5 Mbps 的机器上发的，这一半就是首屏快一秒。文件名带版本（hero-rabbit）
+        是**故意的**：/assets/ 现在有 7 天长缓存，换了素材要改名才会立刻生效。
+        ⚠️ 注释写在 `.hp-first` **外面**：p135 用"hp-first 后面 200 字内出现 hp-bg"判视频在不在
+        第一屏盒子里，注释写在里面会把这个窗口撑爆（第一版就这么把守卫搞红了）。 */}
     <div className="hp-first">
-      {/* 首屏背景视频（2026-09-26 换新素材）：0.87MB / 1080p / 无音轨 ——
-          比上一版（1.86MB）小一半，官网是从这台 5 Mbps 的机器上发的，这一半就是首屏快一秒。
-          文件名带版本（hero-rabbit）是**故意的**：/assets/ 现在有 7 天长缓存，
-          换了素材要改名才会立刻生效（见 nginx-site.conf 的 assets 段）。 */}
       <div className="hp-bg" aria-hidden="true"><video className="hp-video" src="/assets/hero-rabbit.mp4" poster="/assets/hero-rabbit-poster.webp" autoPlay muted loop playsInline preload="auto" /><div className="hp-scrim" /></div>
       <section className="hp-hero">
       {ready && (trustTitle || trustDescription) && <div className="hp-trust"><span className="hp-trust-mark">✦</span><div>{trustTitle ? <strong>{trustTitle}</strong> : null}{trustDescription ? <span>{trustDescription}</span> : null}</div></div>}

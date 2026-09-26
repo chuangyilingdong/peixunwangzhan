@@ -7,7 +7,7 @@ import { materialVisual } from './materialTypes.js';
 import { readSession } from './auth.js';
 import { isErrorText, stripNoticeMark } from './ui.jsx';
 // 品牌标（学生画布左上角）。与 dsh 学生端用的是同一张图，见 deploy/dsh-student/assets/。
-import brandLogo from './assets/lingdong-ai-logo.png';
+import brandLogo from './assets/lingdong-ai-logo.webp';
 import { ErrorState, Loading, Notice, Empty, Panel, PageHeader, Status } from './ui.jsx';
 import { useData } from './classroom.jsx';
 import { errorText } from '@platform/shared';

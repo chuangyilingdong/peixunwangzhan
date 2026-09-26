@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 // 品牌标（「灵动ai」横标，蓝 + 橙）。三端外壳、登录页、官网导航与页脚共用这一张图，
 // 不再各写一份「✦ + 文字」的临时标记 —— 那套符号当初只是占位，logo 到位后就该退休。
 // 深色底（官网黑底首页、官网登录页）由各自的样式表补一层白底药丸，否则蓝色的「灵动」在深色上几乎看不清。
-import brandLogo from './assets/lingdong-ai-logo.png';
+import brandLogo from './assets/lingdong-ai-logo.webp';
 // 提示语的语气标记（`errorText` / `isErrorText` / `stripNoticeMark`）在 `notice.js` 里 ——
 // 放普通 .js 是为了让守卫能真跑那几个纯函数（见 scripts/p126）。
 import { isErrorText, stripNoticeMark } from './notice.js';
