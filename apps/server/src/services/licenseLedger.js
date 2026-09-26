@@ -111,6 +111,45 @@ export async function createLicensePurchaseBatch({ assignmentId, orgId, seriesId
   return purchaseSnapshot(await arow('SELECT * FROM license_purchase_batches WHERE id=?', [batchId]));
 }
 
+/**
+ * 把「授权单上比批次多出来的次数」补记成一笔**平台开通批次**（2026-09-26 生产事故）。
+ *
+ * 事故现场：平台后台「机构与课包人次 → 调整授权次数」把某机构的次数从 0 调到 6 —— 那条路径
+ * **按设计不动财务账**（见 admin/organizations.js 的注释：两者是不同口径，用户未要求联动），
+ * 于是授权单上写着 6 次、批次一条都没有。机构端看得到"剩 6 次"，一点「授权给学员」就
+ * `LICENSE_PURCHASE_BALANCE_EXHAUSTED`「购买批次余额不足，无法确认收入」——
+ * **口径分家的后果最后砸在"把课发给学生"这一步上**（生产上 3 个授权单有这个缺口：0/6、5/10、1/51）。
+ *
+ * 修法：在**真要发给学生**的那一刻（`appendLicenseGrantRevenue`）先补齐 —— 差额记成一笔
+ * `LEGACY_OPENING_BALANCE` 批次（金额 NULL、`payment_status=UNKNOWN`，与切库时那三笔历史开通批次同形状）。
+ * 这样既尊重"平台调整不动财务账"的既有决定（不产生任何收入金额），又保证账实相符；
+ * 幂等：批次总量 ≥ 授权次数时直接返回 null，重复调用不会多记。
+ */
+export async function ensureOpeningBalanceBatch({ assignmentId, orgId, seriesId, actorId = null }) {
+  if (!assignmentId) return null;
+  const assignment = await arow('SELECT id,quota_total FROM course_assignments WHERE id=?', [assignmentId]);
+  if (!assignment) return null;
+  const quotaTotal = Number(assignment.quota_total || 0);
+  if (quotaTotal <= 0) return null;
+  // ⚠️ 覆盖量按**所有状态**的批次算（含已作废的）：作废的采购仍然"解释"了那部分次数从哪来
+  //    （退款/撤销），那种缺口**不该**被补成平台开通批次 —— 否则「作废批次 → 再发授权」
+  //    就绕过了作废（守卫 p85 正是钉这条：作废后确认收入必须失败）。
+  //    而"平台侧调整次数"留下的缺口是**没有任何批次解释**的，那才是要补的。
+  const covered = Number((await arow("SELECT COALESCE(SUM(quantity),0) n FROM license_purchase_batches WHERE assignment_id=?", [assignmentId]))?.n || 0);
+  const gap = quotaTotal - covered;
+  if (gap <= 0) return null;
+  const now = nowIso();
+  const batchId = id('licensepurchase');
+  await aq(`INSERT INTO license_purchase_batches(
+      id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,
+      order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at)
+    VALUES (?,?,?,?,'LEGACY_OPENING_BALANCE',?,NULL,NULL,'UNKNOWN','ACTIVE',NULL,NULL,?,?,?,?)`, [
+    batchId, assignmentId, orgId, seriesId, gap, `opening-balance:${assignmentId}:${covered}`, actorId, now, now,
+  ]);
+  console.warn(`[许可账] 授权单 ${assignmentId} 的 ${gap} 次没有批次覆盖（多半来自平台侧「调整授权次数」）—— 已补记一笔平台开通批次 ${batchId}`);
+  return { id: batchId, quantity: gap, covered };
+}
+
 async function nextFifoUnit(assignmentId) {
   const batches = await arows(`SELECT batch.*,
       COALESCE(SUM(allocation.quantity),0) allocated_quantity,
@@ -140,6 +179,9 @@ export async function appendLicenseGrantRevenue({ assignmentId, orgId, seriesId,
   const key = idempotencyKey || `license-grant:${grantId}:${occurredAt}`;
   const existing = await arow("SELECT * FROM license_revenue_events WHERE idempotency_key=? AND event_type='GRANT'", [key]);
   if (existing) return existing;
+  // ⭐ 先补齐"授权单上有、批次上没有"的那部分（平台侧调整次数不动财务账留下的缺口）——
+  //    否则下一步 FIFO 找不到批次，会直接拦下这次授权（生产事故，见 ensureOpeningBalanceBatch）。
+  await ensureOpeningBalanceBatch({ assignmentId, orgId, seriesId, actorId });
   const { batch, amountMinor } = await nextFifoUnit(assignmentId);
   const now = occurredAt || nowIso();
   const eventId = id('licenserevenue');
