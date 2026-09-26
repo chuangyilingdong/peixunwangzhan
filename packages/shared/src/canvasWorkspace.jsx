@@ -26,6 +26,14 @@ const PROMPT_SLOT_TYPES = ['text', 'prompt', 'image', 'video', 'animation', 'mus
 /** 插入选择框里每个框体右边那行小字的动词（2026-09-25：原来只会写「生图 / 生视频」，音乐框体会被标成「生图」）。 */
 const PROMPT_SLOT_ACTION = { text: '写文字', prompt: '写文字', image: '生图', video: '生视频', animation: '生动画', music: '生音乐', audio: '生音频' };
 
+/**
+ * 作品已发布到作品广场时，学生再点「提交作品」要说的话（2026-09-26）。
+ * 只说"不允许重新提交"等于没说 —— 服务端状态机里 PUBLISHED 要**先下架**（→ UNPUBLISHED）才收新的提交，
+ * 所以这句必须把"下一步找谁做什么"写出来，和 p148 那个「购买批次余额不足」是同一种口径：
+ * 报错要能指着路，不能只挡人。
+ */
+const WORK_PUBLISHED_LOCK_MESSAGE = '这份作品已经发布到作品广场，不能再重新提交了。想接着补充内容：请老师或平台先在作品管理里把它「下架」，下架后这里就能继续提交。';
+
 // Signatures and helpers (原独立学生端逻辑，已并入官网学习页)
 // 快照的「内容」用于判断有没有未保存改动。**必须包含节点位置**：
 // 漏掉位置时，学生把框体挪来挪去不会算成改动 → 不触发自动保存 → 一刷新位置全复原（用户反馈过）。
@@ -202,6 +210,13 @@ export function CanvasWorkspace({ api, ...props }) {
   // 「可提交产出」：相对上一次提交，画布上还有没有**新的产出**（提交按钮的激活判据）。
   // 只有改提示词 / 挪框体 / 连线变化 / 空占位框体都不算（口径见 canvasOutput.js）。
   const hasSubmittableOutput = hasUnsubmittedOutput(draft || canvasSnapshot || project.data?.canvasSnapshot || null, submittedSignature);
+  // ⚠️ 「已发布到作品广场」的作品**不能再重新提交**（2026-09-26 现场：平台端点了「发布到官网」之后，
+  //    学生这边按钮还亮着、点下去只弹一句「当前作品状态不允许重新提交」—— 学生不知道自己在等什么，
+  //    连着点了 6 次）。服务端状态机里 `PUBLISHED → PENDING` 不是合法转换
+  //    （`PENDING / APPROVED / REJECTED / UNPUBLISHED` 都可以），所以这一档得在按钮上就拦住。
+  //    判据直接取项目载荷里的 `workStatus`（`normalizeProject` 一路带着 work.id/status）。
+  //    要接着提交：请老师/平台先在作品管理里把它**下架**（→ UNPUBLISHED，那个状态可以再提交）。
+  const workPublished = String(project.data?.workStatus || '') === 'PUBLISHED';
 
   // 服务端任务（刷新后仍在）：每个框体最多保留最新一条。恢复逻辑与素材面板都要用，所以一并放在 hook 之前。
   const generationJobs = Array.isArray(generations.data?.items) ? generations.data.items : [];
@@ -403,6 +418,8 @@ export function CanvasWorkspace({ api, ...props }) {
   async function submitWork() {
     if (!editable || !draft) return;
     // 按钮已经按它置灰了，这里再挡一次：键盘/脚本触发也走同一条判据。
+    // 「已发布」排在最前：这时"有没有新产出"已经不是重点了，得先说清"为什么这次提交不了"。
+    if (workPublished) { setMessage(WORK_PUBLISHED_LOCK_MESSAGE); return; }
     if (!hasSubmittableOutput) { setMessage('画布上还没有新的作品产出：先完成一张图/一段文字，或上传成品，再提交给老师。'); return; }
     if (!window.confirm('提交给老师前请确认：这是你自己的作品，并同意平台在作品广场展示。')) return;
     setBusy(true);
@@ -742,7 +759,9 @@ export function CanvasWorkspace({ api, ...props }) {
             现在跳**课程中心**（`/learn`，学生端保留的那一版），并跟着改叫「课程中心」，
             和"老师结束课堂后回到课程中心"是同一个落点。 */}
         <button type="button" className="cv-btn" onClick={() => navigate('/learn')}>课程中心</button>
-        <button type="button" className="cv-btn cv-btn--primary" disabled={!editable || busy || !draft || !hasSubmittableOutput} title={hasSubmittableOutput ? '把这次做出来的作品提交给老师' : '画布上还没有作品产出：先生成图片/文字或上传成品，做好后按钮会亮起来'} onClick={submitWork}>{busy ? '提交中…' : '提交作品'}</button>
+        {/* 「已发布」要排在「有没有新产出」前面：否则学生看到的是"按钮亮着、点下去说做完了再说"——
+            这次的问题是反过来的（有产出、但作品已发布），两句话都会把人绕进去。 */}
+        <button type="button" className="cv-btn cv-btn--primary" disabled={!editable || busy || !draft || !hasSubmittableOutput || workPublished} title={workPublished ? WORK_PUBLISHED_LOCK_MESSAGE : hasSubmittableOutput ? '把这次做出来的作品提交给老师' : '画布上还没有作品产出：先生成图片/文字或上传成品，做好后按钮会亮起来'} onClick={submitWork}>{busy ? '提交中…' : '提交作品'}</button>
       </div>
     </header>
     <section className="cv-layout">

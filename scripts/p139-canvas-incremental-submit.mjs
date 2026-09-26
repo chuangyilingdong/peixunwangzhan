@@ -113,6 +113,19 @@ try {
     check('⓪ 提交期间：新保存被冻结、在途旧保存的响应一律失效', gate.frozen === true && gate.isCurrent(inFlight) === false);
     gate.endSubmit();
     check('⓪ 提交结束后放行（下一轮保存用新 token）', gate.frozen === false && gate.isCurrent(gate.currentToken()) === true);
+
+    // ⓪′ 「已发布到作品广场」也必须是提交按钮的禁用条件（2026-09-26 现场：平台端一点「发布到官网」，
+    //     学生这边按钮还亮着、点下去只弹一句「当前作品状态不允许重新提交」，学生连着点了 6 次）。
+    //     源码口径：判据取 `workStatus === 'PUBLISHED'`，并且那句话要写清"先下架"。
+    const canvasSource = fs.readFileSync(path.join(root, 'packages/shared/src/canvasWorkspace.jsx'), 'utf8');
+    check('⓪′ 提交按钮把「作品已发布」也当禁用条件，且话里给出了下一步（下架）',
+      /const workPublished = String\(project\.data\?\.workStatus \|\| ''\) === 'PUBLISHED';/.test(canvasSource)
+      && /disabled=\{[^}]*workPublished[^}]*\}/.test(canvasSource)
+      && /if \(workPublished\) \{ setMessage\(WORK_PUBLISHED_LOCK_MESSAGE\)/.test(canvasSource)
+      && /下架/.test(canvasSource));
+    const studentRouteSource = fs.readFileSync(path.join(root, 'apps/server/src/routes/student.js'), 'utf8');
+    check('⓪′ 服务端那条 message 也分档（页面是发布前打开的，这时学生只看得到它）',
+      /priorWork\.status === 'PUBLISHED'/.test(studentRouteSource) && /下架/.test(studentRouteSource));
   }
 
   // 课时里配一个生图框体（后面用它真生成一次，拿"新产出"）
@@ -211,6 +224,24 @@ try {
     JSON.stringify({ rounds: (submissions.data?.items || []).map((row) => row.round), current: submissions.data?.submissionRound }).slice(0, 200));
   const worksRows = Number((await arow('SELECT COUNT(*) n FROM works WHERE project_id=?', [projectId]))?.n || 0);
   check('④ 反复提交始终是同一条作品记录（不新开作品）', worksRows === 1, `works 行数=${worksRows}`);
+
+  /* ④′ 「已发布到作品广场」的作品不能再重新提交（2026-09-26 现场，真接口）：
+        状态机里 PUBLISHED → PENDING 不是合法转换，**要先下架**（→ UNPUBLISHED）才收新提交。
+        这条同时钉住"报错要指着路"：message 里必须出现「已发布」与「下架」。 */
+  await aq("UPDATE works SET status='PUBLISHED',is_public=1,reviewed_at=? WHERE id=?", [new Date().toISOString(), workId]);
+  const fourthSnapshot = snapshotOf(outputNode('a', firstAsset), outputNode('b', '/api/student/file-assets/p139-fourth/download'));
+  const publishedSubmit = await submit(fourthSnapshot);
+  check('④′ 作品已发布时提交被拒，且话说清"先下架" ★',
+    publishedSubmit.status === 409 && publishedSubmit.code === 'INVALID_WORK_TRANSITION'
+    && /已发布/.test(publishedSubmit.error?.message || '') && /下架/.test(publishedSubmit.error?.message || ''),
+    `HTTP ${publishedSubmit.status} code=${publishedSubmit.code} msg=${publishedSubmit.error?.message}`);
+  const worksStillOne = Number((await arow('SELECT COUNT(*) n FROM works WHERE project_id=?', [projectId]))?.n || 0);
+  check('④′ 被拒的这次没有留下半条作品/轮次（事务没被写坏）', worksStillOne === 1, `works 行数=${worksStillOne}`);
+  await aq("UPDATE works SET status='UNPUBLISHED',is_public=0,unpublish_reason=? WHERE id=?", ['P139 夹具：下架后再提交', workId]);
+  const afterUnpublish = await submit(fourthSnapshot);
+  check('④′ 下架之后同一份产出就能继续提交（这就是给学生指的那条路）★',
+    afterUnpublish.status === 200, `HTTP ${afterUnpublish.status} ${JSON.stringify(afterUnpublish.error).slice(0, 200)}`);
+  await aq("UPDATE works SET status='PENDING',is_public=0,unpublish_reason=NULL WHERE id=?", [workId]);
 
   /* ⑤ 课堂结束 → 这一套立刻结束（提交 / 保存 / 生成都被课堂门禁拦住） */
   await api(`/api/org/sessions/${sessionId}/end`, { method: 'POST', token: orgAdmin, body: {} });

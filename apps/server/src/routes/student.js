@@ -840,7 +840,13 @@ export async function handleStudent(ctx) {
     const priorWork = await arow('SELECT * FROM works WHERE project_id=? AND student_id=? AND org_id=?', [project.id, auth.user.id, auth.user.orgId]);
     if (priorWork) await assertTransition(ctx, 'work', priorWork.status, 'PENDING', {
       targetType: 'WORK', targetId: priorWork.id, before: await normalizeWork(priorWork), code: 'INVALID_WORK_TRANSITION',
-      message: '当前作品状态不允许重新提交', details: { action: 'resubmit' },
+      // 2026-09-26：`PUBLISHED` 这一档单独给话术 —— 学生那边的按钮现在也会拦（前台判 workStatus），
+      // 但页面可能是发布前打开的（载荷里的 workStatus 还没刷新），这时这句话就是他唯一能看到的东西。
+      // 只说"状态不允许"等于没说：状态机里要**先下架**（→ UNPUBLISHED）才收新的提交。
+      message: priorWork.status === 'PUBLISHED'
+        ? '这份作品已发布到作品广场，不能重新提交。想接着补充内容：请老师或平台先在作品管理里把它「下架」，下架后就能继续提交。'
+        : '当前作品状态不允许重新提交',
+      details: { action: 'resubmit' },
       // ⭐ 增量提交：作品还挂在 PENDING（老师没审过）时也可以再提交一轮 ——
       //    没有这条，学生提交过一次就再也提交不了（PENDING→PENDING 原本不是合法转换），
       //    而这正是"提交后再做出新产出还要能提交"的主路径。
