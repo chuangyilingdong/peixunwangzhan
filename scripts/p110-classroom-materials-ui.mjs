@@ -137,9 +137,15 @@ check('④ 左上角换成品牌 logo + 下面显示学生账号名',
   && /className="cv-brand__name"/.test(workspaceCode)
   && /readSession\(\)/.test(workspaceCode)
   && !/AI 魔法学院/.test(workspaceCode));
-check('④ logo 是打进产物的静态资源（不是运行时拼的路径）',
-  /import brandLogo from '\.\/assets\/lingdong-ai-logo\.png';/.test(workspace)
-  && fs.existsSync(path.join(root, 'packages/shared/src/assets/lingdong-ai-logo.png')));
+// ⚠️ 判据是"**打进产物的静态资源**"（vite 能把它当模块 import 进来），不是某个固定格式 ——
+//    2026-09-26 为了官网首屏瘦身把品牌 logo 从 png 换成了 webp（82KB → 20KB，两处引用各一份），
+//    钉死 ".png" 会把那次优化判成违规。
+{
+  const logoImport = workspace.match(/import brandLogo from '\.\/assets\/(lingdong-ai-logo\.[a-z0-9]+)';/);
+  check('④ logo 是打进产物的静态资源（不是运行时拼的路径）',
+    Boolean(logoImport) && fs.existsSync(path.join(root, 'packages/shared/src/assets', logoImport[1])),
+    logoImport ? logoImport[1] : '没有 import brandLogo 那一行');
+}
 check('④ 学生名读的是登录会话（读不到时退回占位，不能让顶栏空着）',
   /session\?\.user\?\.displayName \|\| session\?\.user\?\.login/.test(workspace) && /'同学'/.test(workspace));
 

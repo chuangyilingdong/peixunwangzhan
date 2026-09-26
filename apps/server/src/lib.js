@@ -212,6 +212,29 @@ export function securityHeaders(extra = {}) {
   };
 }
 
+/**
+ * LIKE 的**转义子句**：两种方言写法不同，这是"SQLite 容忍、MySQL 严格"的又一例。
+ *
+ *   · SQLite 的字符串里反斜杠不是转义符 → 写 `ESCAPE '\'` 就是"用反斜杠转义"（一个字符）✓
+ *   · MySQL 默认把反斜杠当转义符 → `'\'` 会被读成**没结束的字符串**，整条 SQL 直接
+ *     `ER_PARSE_ERROR`（2026-09-26 生产实测：平台端/机构端/学生端**只要带关键字搜索就 500**，
+ *     而本地 SQLite 套件一路绿 —— 曲线来自 p13 那条"间歇飘"，根因就是它）。
+ *     要在 MySQL 里表达同一个意思得写成 `ESCAPE '\\'`（SQL 文本里两个反斜杠）。
+ *
+ * 所以**别在 SQL 里手写 ESCAPE**：一律用这个函数 + likeKeyword()。
+ */
+export function likeEscapeClause() {
+  // ⚠️ 两个分支的**反斜杠个数不一样**，别"顺手统一"：
+  //   MySQL 分支的 JS 字面量是 "…ESCAPE '\\\\'" → 落到 SQL 文本是 ESCAPE '\\'（两个反斜杠 = 一个字符）
+  //   SQLite 分支的 JS 字面量是 "…ESCAPE '\\'"   → 落到 SQL 文本是 ESCAPE '\'（一个反斜杠）
+  return isMysql ? "ESCAPE '\\\\'" : "ESCAPE '\\'";
+}
+
+/** LIKE 的**关键字**（把用户输入里的 % _ \ 转义掉，再用 % 包起来）—— 配套 likeEscapeClause()。 */
+export function likeKeyword(search) {
+  return `%${String(search == null ? '' : search).replace(/[%_\\]/g, (char) => `\\${char}`)}%`;
+}
+
 export function corsHeaders(req, extra = {}) {
   const origin = String(req?.headers?.origin || '').trim();
   const headers = {

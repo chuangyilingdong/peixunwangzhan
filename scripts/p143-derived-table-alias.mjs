@@ -121,6 +121,28 @@ for (const file of files) {
 check('② 生产代码里没有"派生表没别名"（MySQL 会 500，SQLite 不会）',
   problems.length === 0, problems.join(' ｜ '));
 
+
+console.log('③ LIKE 的 ESCAPE 子句不许手写（MySQL 会 ER_PARSE_ERROR，SQLite 容忍 —— 2026-09-26 生产事故）');
+{
+  // 事故：`... LIKE ? ESCAPE '\'` 在 MySQL 上是**没结束的字符串**（反斜杠把引号转义了）→ 整条 SQL
+  // 报 ER_PARSE_ERROR；SQLite 不把反斜杠当转义符，所以本地全量一路绿 —— 生产上"只要带关键字搜索就 500"，
+  // 三端都中（平台端作品库 / 机构端作品 / 学生端我的作品），p13 那条"间歇飘"的根因就是它。
+  // 判据：SQL 里不许出现手写的 ESCAPE 字面量，一律走 lib.js 的 likeEscapeClause()（按方言选写法）。
+  const files = ['apps/server/src/routes/orgAdmin.js', 'apps/server/src/routes/admin/helpers.js', 'apps/server/src/routes/student.js', 'apps/server/src/lib.js'];
+  const offenders = [];
+  for (const file of files) {
+    const text = fs.readFileSync(file, 'utf8');
+    for (const line of text.split(/\r?\n/)) {
+      if (!/ESCAPE/.test(line)) continue;
+      if (file.endsWith('lib.js')) continue;                    // helper 自己就住在这儿
+      offenders.push(`${file}: ${line.trim().slice(0, 80)}`);
+    }
+  }
+  check('③ 生产代码里没有手写的 LIKE ... ESCAPE（都得用 likeEscapeClause()）', offenders.length === 0, offenders.join(' | '));
+  const lib = fs.readFileSync('apps/server/src/lib.js', 'utf8');
+  check('③ likeKeyword 会把 % _ 转义掉（否则用户搜 % 就等于匹配全部）', lib.includes('export function likeKeyword(search)') && lib.includes('[%_') && lib.includes(']/g'));
+}
+
 if (failures) {
   console.error(JSON.stringify({ name: 'p143-derived-table-alias', pass: false, failed: failures }, null, 1));
   process.exit(1);

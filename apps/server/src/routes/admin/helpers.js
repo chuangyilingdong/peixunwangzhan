@@ -1,9 +1,8 @@
-import {
+import { 
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeLesson, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, orgSeriesAccessSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
-  normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE, normalizeSeriesVisibility, LOGIN_PATTERN, aq, arow, arows, acount, atransaction, amap,
-} from '../../lib.js';
+  normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE, normalizeSeriesVisibility, LOGIN_PATTERN, aq, arow, arows, acount, atransaction, amap, likeKeyword, likeEscapeClause } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
@@ -963,7 +962,7 @@ function platformWorkFilters(ctx, kind = 'canvas') {
   const value = (key) => String(ctx.search.get(key) || '').trim();
   const keyword = (text) => '%' + text.replace(/[\\%_]/g, '\\$&') + '%';
   const like = (columns, text) => {
-    conditions.push('(' + columns.map((column) => `${column} LIKE ? ESCAPE '\\'`).join(' OR ') + ')');
+    conditions.push('(' + columns.map((column) => `${column} LIKE ? ${likeEscapeClause()}`).join(' OR ') + ')');
     params.push(...columns.map(() => keyword(text)));
   };
   const status = value('status');
@@ -975,11 +974,11 @@ function platformWorkFilters(ctx, kind = 'canvas') {
   if (value('student')) like(['student.display_name', 'student.login'], value('student'));
   if (value('search')) like([`${alias}.title`, 'student.display_name', 'student.login', 'organization.name'], value('search'));
   if (value('packageName')) {
-    conditions.push(`EXISTS (SELECT 1 FROM course_lessons filter_lesson JOIN course_series filter_series ON filter_series.id=filter_lesson.series_id WHERE filter_lesson.id=${alias}.${lessonColumn} AND filter_series.title LIKE ? ESCAPE '\\')`);
+    conditions.push(`EXISTS (SELECT 1 FROM course_lessons filter_lesson JOIN course_series filter_series ON filter_series.id=filter_lesson.series_id WHERE filter_lesson.id=${alias}.${lessonColumn} AND filter_series.title LIKE ? ${likeEscapeClause()})`);
     params.push(keyword(value('packageName')));
   }
   if (value('lesson')) {
-    conditions.push(`EXISTS (SELECT 1 FROM course_lessons filter_lesson WHERE filter_lesson.id=${alias}.${lessonColumn} AND filter_lesson.title LIKE ? ESCAPE '\\')`);
+    conditions.push(`EXISTS (SELECT 1 FROM course_lessons filter_lesson WHERE filter_lesson.id=${alias}.${lessonColumn} AND filter_lesson.title LIKE ? ${likeEscapeClause()})`);
     params.push(keyword(value('lesson')));
   }
   return { where: conditions.length ? ' WHERE ' + conditions.join(' AND ') : '', params, publicationStateSql };

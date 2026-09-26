@@ -1,4 +1,4 @@
-import { asPositiveInteger, audit, clearAuthCookies, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap } from '../lib.js';
+import { asPositiveInteger, audit, clearAuthCookies, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, likeKeyword, likeEscapeClause } from '../lib.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
@@ -480,7 +480,7 @@ export async function handleStudent(ctx) {
 
     const keyword = String(ctx.search.get('search') || '').trim().slice(0, 100);
     if (keyword) {
-      where += " AND (project.title LIKE ? ESCAPE '\\' OR lesson.title LIKE ? ESCAPE '\\' OR series.title LIKE ? ESCAPE '\\')";
+      where += ` AND (project.title LIKE ? ${likeEscapeClause()} OR lesson.title LIKE ? ${likeEscapeClause()} OR series.title LIKE ? ${likeEscapeClause()})`;
       const escaped = '%' + keyword.replace(/[\\%_]/g, (char) => '\\' + char) + '%';
       params.push(escaped, escaped, escaped);
     }
@@ -1079,8 +1079,8 @@ export async function handleStudent(ctx) {
     if (classId) conditions.push('work.class_id=?'), params.push(classId);
     if (lessonId) conditions.push('work.course_lesson_id=?'), params.push(lessonId);
     if (search) {
-      const keyword = '%' + search.replace(new RegExp(`[%\\_]`, 'g'), (char) => '\\' + char) + '%';
-      conditions.push("work.title LIKE ? ESCAPE '\\' OR work.description LIKE ? ESCAPE '\\' OR lesson.title LIKE ? ESCAPE '\\'"); params.push(keyword, keyword, keyword);
+      const keyword = likeKeyword(search);
+      conditions.push(`work.title LIKE ? ${likeEscapeClause()} OR work.description LIKE ? ${likeEscapeClause()} OR lesson.title LIKE ? ${likeEscapeClause()}`); params.push(keyword, keyword, keyword);
     }
     const publicName = (value, anonymous) => {
       const name = String(value || '').trim();

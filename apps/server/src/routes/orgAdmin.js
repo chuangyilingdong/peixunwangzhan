@@ -1,4 +1,4 @@
-import { audit, clearAuthCookies, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arows, arow, aq, acount, atransaction, amap } from '../lib.js';
+import { audit, clearAuthCookies, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arows, arow, aq, acount, atransaction, amap, likeKeyword, likeEscapeClause } from '../lib.js';
 import { normalizeLesson, canvasMediaFrom } from '../lib.js';
 import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
 import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from './fileAssets.js';
@@ -1227,8 +1227,8 @@ export async function handleOrg(ctx) {
     if (status) { where += ' AND work.status=?'; params.push(status); }
     if (sessionFilter) { where += ' AND work.class_session_id=?'; params.push(sessionFilter); }
     if (search) {
-      const keyword = '%' + search.replace(new RegExp(`[%\\_]`, 'g'), (char) => '\\' + char) + '%';
-      where += " AND (work.title LIKE ? ESCAPE '\\' OR student.display_name LIKE ? ESCAPE '\\' OR lesson.title LIKE ? ESCAPE '\\')";
+      const keyword = likeKeyword(search);
+      where += ` AND (work.title LIKE ? ${likeEscapeClause()} OR student.display_name LIKE ? ${likeEscapeClause()} OR lesson.title LIKE ? ${likeEscapeClause()})`;
       params.push(keyword, keyword, keyword);
     }
     // 教师范围：作品挂在我创建的课堂（班级退场后不再按 class 圈定）
@@ -1252,8 +1252,8 @@ export async function handleOrg(ctx) {
       // 与上面画布那条**逐字同一套转义**（LIKE 的通配符要转义掉，否则用户输入 % 会把整表搜出来）。
       // ⚠️ 这两行的反斜杠别用脚本往里写：脚本会吃掉一层、写成 `'\'` 就是语法错误，
       //    而且**只有服务端跑起来才炸**（前端构建拦不到）。
-      const keyword = '%' + search.replace(new RegExp(`[%\\_]`, 'g'), (char) => '\\' + char) + '%';
-      vibeWhere += " AND (submission.title LIKE ? ESCAPE '\\' OR student.display_name LIKE ? ESCAPE '\\' OR lesson.title LIKE ? ESCAPE '\\')";
+      const keyword = likeKeyword(search);
+      vibeWhere += ` AND (submission.title LIKE ? ${likeEscapeClause()} OR student.display_name LIKE ? ${likeEscapeClause()} OR lesson.title LIKE ? ${likeEscapeClause()})`;
       vibeParams.push(keyword, keyword, keyword);
     }
     vibeWhere += sessionOwnedByTeacherExists('(SELECT class_session_id FROM vibecoding_conversations conv WHERE conv.id=submission.conversation_id)', auth, vibeParams, { orgColumn: 'submission.org_id' });
