@@ -703,7 +703,25 @@ function HomeVideos({ block }) {
       else { video.pause?.(); }
     }
   }, [shown, activeIndex, items.length]);
+  // 弹层（2026-09-26 用户口径：「点开看大图/全屏播放的弹层，点击可弹窗查看」）：
+  // 点**当前那张**打开；点别的卡仍然只是把它滚到中间（避免误触弹窗）。
+  const [opened, setOpened] = useState(-1);
+  const close = () => setOpened(-1);
+  useEffect(() => {
+    if (opened < 0) return undefined;
+    const onKey = (event) => {
+      if (event.key === 'Escape') close();
+      if (event.key === 'ArrowRight' && opened < items.length - 1) setOpened(opened + 1);
+      if (event.key === 'ArrowLeft' && opened > 0) setOpened(opened - 1);
+    };
+    document.addEventListener('keydown', onKey);
+    // 弹层开着时锁住页面滚动（否则滚轮会把底下的首页一起滚）
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = previous; };
+  }, [opened, items.length]);
   if (!items.length) return null;
+  const openedItem = opened >= 0 ? items[opened] : null;
   const go = (step) => scrollToIndex(Math.max(0, Math.min(items.length - 1, activeIndex + step)));
   return <section className={'hp-vid' + (shown ? ' is-in' : '')} ref={ref} aria-label="视频展示">
     <div className="hp-vid-inner">
@@ -719,15 +737,21 @@ function HomeVideos({ block }) {
           {items.map((item, index) => <article key={index}
             className={'hp-vid-card' + (index === activeIndex ? ' is-on' : '')}
             ref={(node) => { if (node) cardRefs.current.set(index, node); else cardRefs.current.delete(index); }}
-            onClick={() => scrollToIndex(index)}>
+            onClick={() => (index === activeIndex ? setOpened(index) : scrollToIndex(index))}>
             <div className="hp-vid-frame">
               <video ref={(node) => { if (node) videoRefs.current.set(index, node); else videoRefs.current.delete(index); }}
                 src={item.videoUrl || undefined}
                 poster={item.posterUrl || undefined}
                 preload="none" muted loop playsInline
-                onClick={(event) => { event.stopPropagation(); const video = event.currentTarget; if (video.paused) video.play?.().catch(() => {}); else video.pause?.(); }}
+                // ⚠️ **不要在 <video> 上挂 onClick**：它铺满整张卡，会把点击吃掉 → 弹层永远打不开
+                //    （第一版就是这么错的，真浏览器一验 `open:false`）。卡片的播放/暂停交给
+                //    "是不是当前那张"（当前那张自动播），要看大图/听声音就点开弹层。
               />
-              {item.tag ? <span className="hp-vid-tag">{item.tag}</span> : null}
+              {/* ⚠️ 卡片上**不挂角标**（2026-09-26 用户口径「图1 角标不需要」）——
+                  原来那枚 `tag` 角标会压在视频画面上；字段保留在数据里不显示，后台表单里也不再给这个输入框。 */}
+              <span className="hp-vid-open" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
+              </span>
             </div>
             {(item.title || item.desc) && <div className="hp-vid-body">
               {item.title ? <h3>{item.title}</h3> : null}
@@ -744,6 +768,25 @@ function HomeVideos({ block }) {
           className={index === activeIndex ? 'on' : ''} onClick={() => scrollToIndex(index)} />)}
       </div> : null}
     </div>
+    {/* 弹层：点当前那张打开（也可以键盘 ← → 换下一条，Esc 关）。
+        ⚠️ 弹层里的 <video> 用 preload="metadata" + controls + **不静音**（卡片上是静音自动播，
+        这里既然是人主动点开的，就该有声音、可以拖进度）。打开才创建 DOM，关掉即卸载 = 不预加载。 */}
+    {openedItem ? <div className="hp-vid-modal" role="dialog" aria-modal="true" aria-label={openedItem.title || '视频播放'} onClick={close}>
+      <div className="hp-vid-modal-box" onClick={(event) => event.stopPropagation()}>
+        <button type="button" className="hp-vid-modal-close" onClick={close} aria-label="关闭">×</button>
+        <video className="hp-vid-modal-video" src={openedItem.videoUrl || undefined} poster={openedItem.posterUrl || undefined}
+          controls autoPlay playsInline preload="metadata" />
+        {(openedItem.title || openedItem.desc) && <div className="hp-vid-modal-meta">
+          {openedItem.title ? <h3>{openedItem.title}</h3> : null}
+          {openedItem.desc ? <p>{openedItem.desc}</p> : null}
+        </div>}
+        {items.length > 1 ? <div className="hp-vid-modal-nav">
+          <button type="button" onClick={() => setOpened(Math.max(0, opened - 1))} disabled={opened === 0} aria-label="上一个视频">‹ 上一个</button>
+          <span>{opened + 1} / {items.length}</span>
+          <button type="button" onClick={() => setOpened(Math.min(items.length - 1, opened + 1))} disabled={opened >= items.length - 1} aria-label="下一个视频">下一个 ›</button>
+        </div> : null}
+      </div>
+    </div> : null}
   </section>;
 }
 

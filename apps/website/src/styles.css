@@ -1050,7 +1050,9 @@ background:radial-gradient(120% 80% at 50% 0%,rgb(255 60 90 / 26%),transparent 6
 .hp-vid-card.is-on{transform:scale(1);opacity:1;border-color:#ff6b8a;box-shadow:0 18px 44px rgb(255 60 90 / 22%)}
 .hp-vid-frame{position:relative;aspect-ratio:16 / 9;background:#000}
 .hp-vid-frame video{display:block;width:100%;height:100%;object-fit:cover;background:#000}
-.hp-vid-tag{position:absolute;left:10px;top:10px;padding:3px 9px;border-radius:999px;background:rgb(10 4 8 / 72%);border:1px solid rgb(255 255 255 / 14%);color:#ffd9e1;font-size:11px;letter-spacing:.04em;backdrop-filter:blur(6px)}
+/* 角标已撤（用户 2026-09-26「图1角标不需要」）；改成右上角的"点开看大图"提示，只在当前那张上出现 */
+.hp-vid-open{position:absolute;right:10px;top:10px;display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:rgb(10 4 8 / 62%);border:1px solid rgb(255 255 255 / 14%);color:#fff;opacity:0;transition:opacity .25s ease-out;pointer-events:none;backdrop-filter:blur(6px)}
+.hp-vid-card.is-on .hp-vid-open{opacity:.92}
 .hp-vid-body{padding:14px 16px 16px}
 .hp-vid-body h3{margin:0;color:#fff;font-size:15px;font-weight:700;line-height:1.4}
 .hp-vid-body p{margin:8px 0 0;color:#d9bcc3;font-size:13px;line-height:1.65;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
@@ -1065,3 +1067,20 @@ background:radial-gradient(120% 80% at 50% 0%,rgb(255 60 90 / 26%),transparent 6
 .hp-vid-dots button.on{width:24px;background:#ff6b8a}
 @media(max-width:700px){.hp-vid-arrow{display:none}}
 @media(prefers-reduced-motion:reduce){.hp-vid-track{scroll-behavior:auto}.hp-vid-card{transition:none}}
+/* 弹层（用户 2026-09-26：「点开看大图/全屏播放的弹层，点击可弹窗查看」）
+   点当前那张卡打开；背景压暗 + 视频居中放大、原生 controls（有声音、可拖进度）。
+   ⚠️ 弹层里的 <video> 打开才创建（关掉即卸载）—— 不在首屏预加载任何东西。 */
+.hp-vid-modal{position:fixed;inset:0;z-index:70;display:grid;place-items:center;padding:clamp(14px,3vw,40px);background:rgb(8 3 6 / 88%);backdrop-filter:blur(6px);animation:hp-vid-fade .22s ease-out}
+@keyframes hp-vid-fade{from{opacity:0}to{opacity:1}}
+.hp-vid-modal-box{position:relative;width:min(1080px,96vw);max-height:92vh;display:flex;flex-direction:column;gap:12px;padding:14px;border-radius:18px;background:#140a10;border:1px solid rgb(255 255 255 / 12%);box-shadow:0 30px 80px rgb(0 0 0 / 60%)}
+.hp-vid-modal-video{display:block;width:100%;max-height:74vh;border-radius:12px;background:#000}
+.hp-vid-modal-meta{padding:0 4px;color:#e9d3d9}
+.hp-vid-modal-meta h3{margin:0;color:#fff;font-size:clamp(15px,1.7vw,19px);font-weight:700}
+.hp-vid-modal-meta p{margin:6px 0 0;font-size:13.5px;line-height:1.7}
+.hp-vid-modal-close{position:absolute;right:-6px;top:-14px;width:36px;height:36px;border-radius:999px;border:1px solid rgb(255 255 255 / 18%);background:#1d0f16;color:#fff;font-size:20px;line-height:1;cursor:pointer}
+.hp-vid-modal-close:hover{border-color:#ff6b8a}
+.hp-vid-modal-nav{display:flex;align-items:center;justify-content:center;gap:14px;color:#e9d3d9;font-size:13px}
+.hp-vid-modal-nav button{padding:6px 14px;border-radius:999px;border:1px solid rgb(255 255 255 / 16%);background:#1d0f16;color:#f0dbe1;font-size:13px;cursor:pointer}
+.hp-vid-modal-nav button:hover:not(:disabled){border-color:#ff6b8a;color:#fff}
+.hp-vid-modal-nav button:disabled{opacity:.35;cursor:default}
+@media(max-width:700px){.hp-vid-modal-box{padding:10px}.hp-vid-modal-close{right:2px;top:-12px}}

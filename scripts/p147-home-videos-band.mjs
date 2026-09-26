@@ -81,6 +81,8 @@ check('② 箭头是自绘 SVG（不引图标库）', /\.hp-vid-arrow[\s\S]{0,40
 check('② 视频只从自家公开口取（组件里没有写死的外站地址）',
   !/https?:\/\/(?!www\.w3\.org)[a-z0-9.-]+\.(mp4|webm|mov)/i.test(siteCode));
 check('② 后台的空状态写明白了（空 = 官网不显示，且必须点发布）—— 运营第一眼就不会以为"没做出来"', admin.includes('这一屏现在是空的') && admin.includes('只保存草稿官网看不到'));
+check('② 卡片上**不许再有角标**（用户 2026-09-26「图1 角标不需要」）',
+  !/hp-vid-tag/.test(site) && !/hp-vid-tag/.test(css) && !/角标<input/.test(admin));
 check('② 视频与封面**不进 CMS JSON**（后台表单里只存 URL；服务端 CMS 有 200KB 上限，塞不下视频）',
   /videoUrl/.test(admin) && /posterUrl/.test(admin) && !/base64/i.test(admin));
 
@@ -104,6 +106,13 @@ check('④ 卡片 <video> 一律 preload="none"（不点开不下载）', /prelo
 check('④ ⭐ 只有**当前那张**在播、其余暂停，离开视口全停',
   /if \(shown && index === activeIndex\) video\.play\?\.\(\)\.catch\(\(\) => \{\}\);\s*\n\s*else \{ video\.pause\?\.\(\); \}/.test(site));
 check('④ 卡片视频是 muted + loop + playsInline（浏览器才允许自动播）', /muted loop playsInline/.test(site));
+check('④ ⭐ 卡片上的 <video> 不许自己吃掉点击（它铺满整张卡，挂了 onClick 弹层就永远打不开 —— 第一版就是这么错的）',
+  !/const video = event.currentTarget/.test(site) && site.includes('不要在 <video> 上挂 onClick'));
+check('④ **点击弹层**：只有当前那张能打开，Esc/背景可关，键盘 ← → 换下一条',
+  site.includes("onClick={() => (index === activeIndex ? setOpened(index) : scrollToIndex(index))}") && site.includes("if (event.key === 'Escape') close();") && site.includes("onClick={close}"));
+check('④ 弹层里的视频才 preload="metadata"、带 controls、不静音（人主动点开的就该有声音）',
+  /className="hp-vid-modal-video"[^]{0,160}controls autoPlay playsInline preload="metadata"/.test(site));
+check('④ 弹层打开时锁住页面滚动（不然滚轮会把底下的首页一起滚）', /document.body.style.overflow = 'hidden'/.test(site));
 check('④ 封面若是站内 file-asset 自动加 ?w=960（运营传的原图常有几 MB）',
   /function coverThumb\(url\)/.test(site) && /return `\$\{value\}\?w=960`;/.test(site));
 check('④ 滚到哪张激活哪张（scroll-snap + 中心距离判定），箭头/圆点共用同一个 scrollToIndex',
@@ -138,8 +147,8 @@ try {
     title: 'P147 视频屏标题',
     lead: 'P147 视频屏副标题',
     items: [
-      { tag: '第 1 课', title: 'P147 第一个视频', desc: '说明一', videoUrl: '/api/public/file-assets/file_p147a/download', posterUrl: '/api/public/file-assets/file_p147b/download' },
-      { tag: '第 2 课', title: 'P147 第二个视频', desc: '说明二', videoUrl: '/api/public/file-assets/file_p147c/download', posterUrl: '' },
+      { title: 'P147 第一个视频', desc: '说明一', videoUrl: '/api/public/file-assets/file_p147a/download', posterUrl: '/api/public/file-assets/file_p147b/download' },
+      { title: 'P147 第二个视频', desc: '说明二', videoUrl: '/api/public/file-assets/file_p147c/download', posterUrl: '' },
     ],
   };
   const content = { ...(before?.content || {}), videos: nextVideos };
@@ -153,9 +162,9 @@ try {
   const publicAfterPublish = (await api('/api/public/website-content/HOME')).payload?.data;
   const live = publicAfterPublish?.content?.videos;
   check('⑤ ★ 公开端读到后台写的标题与副标题', live?.title === nextVideos.title && live?.lead === nextVideos.lead, String(JSON.stringify(live)).slice(0, 140));
-  check('⑤ ★ 公开端读到**两个视频**（标签 / 标题 / 说明 / 视频地址 / 封面都逐条落库）',
+  check('⑤ ★ 公开端读到**两个视频**（标题 / 说明 / 视频地址 / 封面都逐条落库）',
     Array.isArray(live?.items) && live.items.length === 2
-    && live.items[0].videoUrl === nextVideos.items[0].videoUrl && live.items[1].tag === '第 2 课' && live.items[0].desc === '说明一',
+    && live.items[0].videoUrl === nextVideos.items[0].videoUrl && live.items[1].title === 'P147 第二个视频' && live.items[0].desc === '说明一',
     String(JSON.stringify(live?.items || [])).slice(0, 200));
 } finally {
   server.kill();

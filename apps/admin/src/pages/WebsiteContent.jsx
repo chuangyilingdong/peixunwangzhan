@@ -363,10 +363,7 @@ export function WebsiteContent({ api }) {
             </div>
             <div className="cms-faq-list">{videoItems.map((item, index) => <div className="cms-faq-item" key={`hp-vid-${index}`}>
               <div className="cms-faq-heading"><strong>第 {index + 1} 个视频</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveSectionList('videos', 'items', index, -1)} aria-label={`第 ${index + 1} 个上移`}>↑</button><button type="button" className="text-button" disabled={index === videoItems.length - 1} onClick={() => moveSectionList('videos', 'items', index, 1)} aria-label={`第 ${index + 1} 个下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeVideo(index)}>删除</button></div></div>
-              <div className="form-grid">
-                <label>角标<input value={item.tag || ''} onChange={(event) => updateVideo(index, { tag: event.target.value })} maxLength={16} placeholder="例如：第 1 课 / 3 分钟" /></label>
-                <label>标题<input value={item.title || ''} onChange={(event) => updateVideo(index, { title: event.target.value })} maxLength={40} /></label>
-              </div>
+              <label>标题<input value={item.title || ''} onChange={(event) => updateVideo(index, { title: event.target.value })} maxLength={40} /></label>
               <label>说明<textarea value={item.desc || ''} onChange={(event) => updateVideo(index, { desc: event.target.value })} maxLength={200} rows={2} /></label>
               <div className="form-grid">
                 <label>视频地址<input value={item.videoUrl || ''} onChange={(event) => updateVideo(index, { videoUrl: event.target.value })} placeholder="/api/public/file-assets/<id>/download" /></label>
