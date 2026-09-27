@@ -187,7 +187,10 @@ console.log('\n== 开始删除（一个事务，出错整体回滚）==');
 await atransaction(async () => {
   for (const item of PLAN) {
     const result = await aq(`DELETE FROM \`${item.table}\` WHERE ${item.cond.sql}`, item.cond.params);
-    console.log(`  删 ${item.table.padEnd(38)} ${String(Number(result?.affectedRows ?? 0)).padStart(5)} 行`);
+    // ⚠️ `aq()` 返回的是 **node:sqlite 那套形状** `{changes, lastInsertRowid}`（对齐 `.run()`），
+    //    **不是** mysql2 的 `affectedRows` —— 读错就是"删了 641 行、却一路打印 0 行"
+    //    （2026-09-28 第一次真删就是这样，差点让人以为没删掉）。
+    console.log(`  删 ${item.table.padEnd(38)} ${String(Number(result?.changes ?? 0)).padStart(5)} 行`);
   }
 });
 
