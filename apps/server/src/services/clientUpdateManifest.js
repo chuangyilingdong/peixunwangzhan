@@ -87,9 +87,21 @@ function booleanValue(value, fallback) {
  */
 export const CLIENT_PLATFORMS = ['win-x64', 'mac-arm64']
 
-/** 文件名里那个版本（清单顶层 `version` 是"这次发布的版本"；两者不一致 = 这个平台的文件是旧的）。 */
+/**
+ * 文件名里那个版本（清单顶层 `version` 是"这次发布的版本"；两者不一致 = 这个平台的文件是旧的）。
+ *
+ * ⚠️ 这里**故意比上传口宽松**（上传口 `parseClientInstallerName` 是严格契约，只认
+ *    `lingdong-client-<版本>-win-x64.exe` / `-mac-arm64.dmg`）。为什么读视图要松：
+ *    生产上现网那只 Windows 包叫 `lingdong-client-0.1.7-alpha.2.3-win-x64-unsigned.exe`
+ *    （客户端仓的脚本发的，带 `-unsigned` 后缀）—— 严格规则认不出来，
+ *    于是"版本对不对得上"这件事就**静默失效**（stale 永远为空 = 危险状态看不出来）。
+ *    取不到就返回空串（不抛错）：读视图不能因为一个怪名字就 500。
+ */
+const LOOSE_INSTALLER = /^lingdong-client-(.+?)-(win-x64|mac-arm64)(?:-[0-9A-Za-z.]+)*\.(exe|dmg)$/
 function installerVersion(name) {
-  try { return parseClientInstallerName(name).version } catch { return '' }
+  const match = LOOSE_INSTALLER.exec(String(name || ''))
+  if (!match) return ''
+  return VERSION_PATTERN.test(match[1]) ? match[1] : ''
 }
 
 /** 把清单里一个平台条目读成视图；没有 / 没名字 → null。 */

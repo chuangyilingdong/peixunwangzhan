@@ -71,6 +71,33 @@ try {
     assert.equal(readClientUpdateManifest(env).files['mac-arm64'], null)
   })
 
+  check('⭐ 现网那种带后缀的名字也要能取出版本（-unsigned 是真实形状）', () => {
+    // 生产清单里那只 Windows 包就是这个名字（客户端仓脚本发的）——
+    // 严格契约（上传口）认不出它，但"版本对不对得上"必须看得出来，否则 stale 静默失效。
+    writeFileSync(manifest, JSON.stringify({
+      version: '0.1.7-alpha.2.3',
+      channel: 'stable',
+      files: {
+        'win-x64': { name: 'lingdong-client-0.1.7-alpha.2.3-win-x64-unsigned.exe', size: 395987312, sha256: 'a'.repeat(64) },
+        'mac-arm64': { name: 'lingdong-client-0.1.7-alpha.2.2-mac-arm64.dmg', size: 1, sha256: 'b'.repeat(64) },
+      },
+    }, null, 2))
+    const value = readClientUpdateManifest(env)
+    assert.equal(value.files['win-x64'].version, '0.1.7-alpha.2.3', '带 -unsigned 的现网名字取不出 win 版本')
+    assert.equal(value.files['mac-arm64'].version, '0.1.7-alpha.2.2')
+    assert.deepEqual(value.stale, ['mac-arm64'], 'mac 落后一个版本却没被标出来')
+    // ⚠️ 复原成文件开头那份夹具：后面的断言还在用它（这一条把清单改成了"现网形状"）
+    writeFileSync(manifest, JSON.stringify({
+      version: '0.1.7',
+      channel: 'stable',
+      enabled: true,
+      mandatory: false,
+      minVersion: '',
+      note: '旧说明',
+      files: { 'win-x64': { name: 'lingdong-client-0.1.7-win-x64.exe', size: 123, sha256: 'a'.repeat(64) }, 'mac-arm64': null },
+    }, null, 2))
+  })
+
   check('后台只改策略并保留安装包身份', () => {
     const value = updateClientUpdateManifest({ enabled: true, mandatory: true, minVersion: '0.1.6-alpha.2', note: '修复课堂工作区', channel: 'stable' }, env)
     assert.equal(value.mandatory, true)
