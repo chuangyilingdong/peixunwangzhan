@@ -150,6 +150,10 @@ try {
     written.version === '9.9.9' && written.files['win-x64'].name === name
     && written.files['win-x64'].size === payload.length && written.files['win-x64'].sha256 === digest,
     JSON.stringify(written.files?.['win-x64'] || {}).slice(0, 200));
+  // 条目里也要带**这个平台自己的版本**：客户端读 `files[target].version ?? manifest.version`，
+  // 有了它，将来只发一个平台时另一个平台的老客户端不会被顶层 version 误判成"有新版本"。
+  check('③ ⭐ 条目里带自己那个平台的版本（客户端 2026-09-28 给的形状）',
+    written.files['win-x64'].version === '9.9.9', JSON.stringify(written.files['win-x64']).slice(0, 200));
   check('③ sha256 与独立算的一致', written.files['win-x64'].sha256 === digest);
   check('③ 发布时间写上了（客户端与后台都要看）', Boolean(written.publishedAt) && Boolean(written.updatedAt), String(written.publishedAt));
   check('④ ⭐ 后台配过的策略字段没被这一写抹掉（enabled/mandatory/minVersion/note/channel）',
@@ -171,7 +175,8 @@ try {
   const afterMac = JSON.parse(fs.readFileSync(manifest, 'utf8'));
   check('⑥ mac-arm64 条目四项齐全（版本 / 文件名 / 字节数 / sha256）',
     afterMac.files['mac-arm64'].name === macName && afterMac.files['mac-arm64'].size === macPayload.length
-    && afterMac.files['mac-arm64'].sha256 === macDigest, JSON.stringify(afterMac.files['mac-arm64']).slice(0, 200));
+    && afterMac.files['mac-arm64'].sha256 === macDigest && afterMac.files['mac-arm64'].version === '9.9.9',
+    JSON.stringify(afterMac.files['mac-arm64']).slice(0, 200));
   check('⑥ 这次反过来：win 的条目一个字节都不许动',
     afterMac.files['win-x64'].name === name && afterMac.files['win-x64'].sha256 === digest,
     JSON.stringify(afterMac.files['win-x64']).slice(0, 200));

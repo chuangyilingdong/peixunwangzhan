@@ -1389,14 +1389,16 @@ function Download() {
         <Icon name="windows" size={30} />
         <h3>Windows 版</h3>
         {windows
-          ? <><p>版本 {manifest.version} · {mb(windows.size)}</p><a className="button" href={'/downloads/' + windows.name}>下载安装包</a>
+          ? <><p>版本 {windows.version || manifest.version} · {mb(windows.size)}</p><a className="button" href={'/downloads/' + windows.name}>下载安装包</a>
             <small>下载后双击安装；首次打开若提示「未知发布者」，选择「仍要运行」即可（我们正在办理代码签名证书）。</small></>
           : <><p>{error ? '安装包暂时取不到（' + error + '）' : '正在读取安装包信息…'}</p><small>稍后再试，或联系我们获取安装包。</small></>}
       </article>
       <article className="dl-card">
         <Icon name="apple" size={30} />
         <h3>Mac 版（Apple 芯片）</h3>
-        {mac ? <><p>版本 {manifest.version} · {mb(mac.size)}</p><a className="button" href={'/downloads/' + mac.name}>下载安装包</a></> : <><p>正在准备中</p><small>需要 macOS 12 以上、Apple 芯片（M 系列）。做好会在这一页放出。</small></>}
+        {/* 版本号优先用**这个平台自己**的（清单里每条都带 version）；没有才回落到顶层 version。
+            ⚠️ 这样即使哪天只发了一个平台，这一页也不会把另一个平台的版本号写错。 */}
+        {mac ? <><p>版本 {mac.version || manifest.version} · {mb(mac.size)}</p><a className="button" href={'/downloads/' + mac.name}>下载安装包</a></> : <><p>正在准备中</p><small>需要 macOS 12 以上、Apple 芯片（M 系列）。做好会在这一页放出。</small></>}
       </article>
     </section>
   </main>;

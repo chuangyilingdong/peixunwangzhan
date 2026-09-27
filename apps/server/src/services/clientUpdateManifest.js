@@ -213,7 +213,14 @@ export function publishClientInstaller({ fileName, size, sha256, env = process.e
     channel: typeof value.channel === 'string' && value.channel ? value.channel : 'stable',
     publishedAt: stamp,
     updatedAt: stamp,
-    files: { ...files, [platform]: { name: String(fileName), size: Number(size), sha256: digest } },
+    files: {
+      ...files,
+      // ⚠️ 条目里**带上这个平台自己的版本**（客户端读 `files[target].version ?? manifest.version`，
+      //    客户端团队 2026-09-28 给的形状）。今天两端同版本，它是冗余的；但一旦哪天只发了一个平台，
+      //    另一个平台的老客户端比的是**自己那条**版本 → 不会被顶层 version 误判成"有新版本"。
+      //    ⚠️ 别的平台的条目照旧一个字节都不动（没写过 version 的老条目就让它缺着，客户端会回落顶层）。
+      [platform]: { name: String(fileName), size: Number(size), sha256: digest, version },
+    },
   }
   // 策略字段以"后台存过的那份"为准（客户端的发布脚本也是这个口径，见 applyStoredPolicy）
   const policy = readStoredPolicy(env)
