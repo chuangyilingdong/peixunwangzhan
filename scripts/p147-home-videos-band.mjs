@@ -101,14 +101,21 @@ check('③ 这一栏末色 = 三步一栏首色（下行接得住，不留缝）
   vidStops[vidStops.length - 1] === stepsStops[0], `栏末色=${vidStops[vidStops.length - 1]} 三步首色=${stepsStops[0]}`);
 check('③ 空即隐藏：items 为空时组件直接不渲染（return null）', /if \(!items\.length\) return null;/.test(site));
 
-console.log('④ 性能（这台机 5 Mbps，一屏不能同时拉多个视频）');
-check('④ 卡片 <video> 一律 preload="none"（不点开不下载）', /preload="none"/.test(site));
-check('④ ⭐ 只有**当前那张**在播、其余暂停，离开视口全停',
-  /if \(shown && index === activeIndex\) video\.play\?\.\(\)\.catch\(\(\) => \{\}\);\s*\n\s*else \{ video\.pause\?\.\(\); \}/.test(site));
-check('④ 卡片视频是 muted + loop + playsInline（浏览器才允许自动播）', /muted loop playsInline/.test(site));
+console.log('④ 性能与"静帧"（这台机 5 Mbps；卡片只出静帧，真播放只在弹层里）');
+// ⚠️ 2026-09-27 用户口径变更（**不是测试漂移**）：「首页不要自动播放，提供个播放按钮，点击打开播放」+
+//    「第二个视频预览图是空白」。原来卡片是"当前那张静音自动播"（preload="none"），没在播的那张
+//    自然是一片空白；现在卡片一律不播，改成**静帧**：有封面用封面，没配封面就用视频自己的首帧
+//    （`#t=0.5` 媒体片段 —— 运营没传封面时也不会再是空白）。带宽反而更省（只取 metadata + 一帧）。
+check('④ 卡片**不自动播**（整段 play/pause 逻辑已删，源码里没有 video.play 的调用）',
+  !/video\.play\?\./.test(site) && site.includes('首页不要自动播放'));
+check('④ 卡片 <video> 用 preload="metadata" + 没封面时 `#t=0.5` 首帧静帧（第二个视频不再空白）',
+  /preload="metadata" muted loop playsInline/.test(site) && /#t=0\.5/.test(site));
+check('④ ⭐ 有播放按钮（点它打开弹层播放），且它在卡片里是独立按钮（不吃掉整卡的点击）',
+  /className="hp-vid-play"/.test(site) && /onClick=\{\(event\) => \{ event\.stopPropagation\(\); setOpened\(index\); \}\}/.test(site) && /\.hp-vid-play\{/.test(css));
+check('④ 卡片视频是 muted + loop + playsInline（静帧也要能解码，且不许出声）', /muted loop playsInline/.test(site));
 check('④ ⭐ 卡片上的 <video> 不许自己吃掉点击（它铺满整张卡，挂了 onClick 弹层就永远打不开 —— 第一版就是这么错的）',
   !/const video = event.currentTarget/.test(site) && site.includes('不要在 <video> 上挂 onClick'));
-check('④ **点击弹层**：只有当前那张能打开，Esc/背景可关，键盘 ← → 换下一条',
+check('④ **点击弹层**：点当前那张能打开、点别的卡先滚过去，Esc/背景可关，键盘 ← → 换下一条',
   site.includes("onClick={() => (index === activeIndex ? setOpened(index) : scrollToIndex(index))}") && site.includes("if (event.key === 'Escape') close();") && site.includes("onClick={close}"));
 check('④ 弹层里的视频才 preload="metadata"、带 controls、不静音（人主动点开的就该有声音）',
   /className="hp-vid-modal-video"[^]{0,160}controls autoPlay playsInline preload="metadata"/.test(site));

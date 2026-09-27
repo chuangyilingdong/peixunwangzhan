@@ -1,15 +1,9 @@
 // 官网 - 我的作品
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Pagination, workPlazaLabel } from '@platform/shared';
+import { Pagination, readSession, workPlazaLabel } from '@platform/shared';
 
 // 状态话术统一走 @platform/shared 的 worksState（两条链路一套词，这里不再自己维护一份）
-
-function formatDate(value) {
-  if (!value) return '—';
-  const d = new Date(value);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
 
 // 作品类型只看服务端给的产物线索：VibeCoding 的看产物文件名，画布的就是画布作品。
 // 不做「猜内容」的花活 —— 猜错比不显示更糟。
@@ -90,13 +84,25 @@ function WorkCover({ work, type }) {
   </svg>;
 }
 
+/**
+ * 学生端「我的作品」——**个人主页 + 卡片网格**的展示形式（2026-09-27 用户口径）。
+ *
+ * 用户原话：「图2 是手机页面打开『我的作品』的展示样式，能否做成像图3 这样的样式……当然图2 有些
+ * 没用的可以不要，我说的是整体展示形式。也可以有头像这些在。」（图3 是社区类 App 的个人主页）
+ *
+ * 于是这一版：
+ *   · 顶部换成**头像 + 名字 + 一行统计**（N 个作品 / 已上广场 M），不再是孤零零一行大标题；
+ *   · 主体是**封面优先的两列网格**（手机两列，宽屏三到四列），整张卡可点开；
+ *   · 砍掉三个下拉筛选（课包 / 课程 / 类型）与卡上「来自：… / 创建时间 …」这类次要信息；
+ *     搜索保留（作品一多就得靠它，而且它只筛当前页、不假装跨页）。
+ *   ⚠️ 这几条**不能动**（守卫 `p115` 钉着）：每张卡必有封面（`student-work-card__art` /
+ *      `student-work-card__cover img` 二者之一）、类型标签 `student-work-card__type`、
+ *      以及「下架原因」那段（`data-testid="unpublish-reason"`，`p63`/`p152` 钉着）。
+ */
 export function MyWorksPage({ api }) {
   const [page, setPage] = useState(1);
   const [state, setState] = useState({ loading: true, error: null, items: [], summary: null, page: 1, totalPages: 1 });
   const [search, setSearch] = useState('');
-  const [courseFilter, setCourseFilter] = useState('');
-  const [lessonFilter, setLessonFilter] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');
 
   useEffect(() => {
     let live = true;
@@ -109,38 +115,32 @@ export function MyWorksPage({ api }) {
 
   const items = state.items;
   const summary = state.summary || { total: items.length, published: items.filter((item) => item.plazaPublished).length };
+  const total = Number(summary.total ?? items.length) || 0;
+  const published = Number(summary.published ?? 0) || 0;
 
-  // 筛选在**当前这一页**上做：分页由服务端管，这里只是把这一页看窄一点，不假装能跨页筛。
-  const courses = useMemo(() => [...new Set(items.map((item) => item.seriesTitle).filter(Boolean))], [items]);
-  const lessons = useMemo(() => [...new Set(items.filter((item) => !courseFilter || item.seriesTitle === courseFilter).map((item) => item.courseLessonTitle).filter(Boolean))], [items, courseFilter]);
-  const types = useMemo(() => [...new Set(items.map((item) => workType(item).label))], [items]);
-  const visible = items.filter((work) => {
-    const keyword = search.trim().toLowerCase();
-    if (keyword && !`${work.title || ''} ${work.courseLessonTitle || ''} ${work.sessionTitle || ''}`.toLowerCase().includes(keyword)) return false;
-    if (courseFilter && work.seriesTitle !== courseFilter) return false;
-    if (lessonFilter && work.courseLessonTitle !== lessonFilter) return false;
-    if (typeFilter && workType(work).label !== typeFilter) return false;
-    return true;
-  });
+  // 筛选只在**当前这一页**上做（分页由服务端管）：原来那三个下拉也守这条规矩，现在只留搜索。
+  const keyword = search.trim().toLowerCase();
+  const visible = items.filter((work) => !keyword
+    || `${work.title || ''} ${work.courseLessonTitle || ''} ${work.sessionTitle || ''}`.toLowerCase().includes(keyword));
 
-  return <div className="student-page">
-    <header className="student-page-head">
-      <h1>我的作品</h1>
-      <p>查看你在课程中生成与归档的作品。</p>
+  // 头像与名字取当前登录会话（学生端与官网共用一份 session —— 见 ⭐1 的 cookie 口径）。
+  // 还没有头像图（`avatarKey` 目前没有任何界面在渲染），所以按惯例用**首字圆形头像**。
+  const session = readSession();
+  const displayName = session?.user?.displayName || session?.user?.login || '我的作品';
+  const initial = String(displayName).trim().charAt(0) || '我';
+
+  return <div className="student-page student-works-page">
+    <header className="sw-profile">
+      <div className="sw-avatar" aria-hidden="true">{initial}</div>
+      <div className="sw-profile-main">
+        <h1>{displayName}</h1>
+        <p className="sw-stats"><span><strong>{total}</strong> 个作品</span><span><strong>{published}</strong> 已上广场</span></p>
+        <p className="sw-bio">查看你在课程中生成与归档的作品。</p>
+      </div>
     </header>
 
-    <div className="student-work-toolbar">
+    <div className="sw-toolbar">
       <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} aria-label="搜索作品" placeholder="搜索作品名称、关键词（如：海报、代码、视频…）" />
-      <select value={courseFilter} onChange={(event) => { setCourseFilter(event.target.value); setLessonFilter(''); }} aria-label="按课包筛选">
-        <option value="">全部课包</option>{courses.map((name) => <option key={name} value={name}>{name}</option>)}
-      </select>
-      <select value={lessonFilter} onChange={(event) => setLessonFilter(event.target.value)} aria-label="按课程筛选">
-        <option value="">全部课程</option>{lessons.map((name) => <option key={name} value={name}>{name}</option>)}
-      </select>
-      <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} aria-label="按作品类型筛选">
-        <option value="">全部作品类型</option>{types.map((name) => <option key={name} value={name}>{name}</option>)}
-      </select>
-      <span className="student-work-toolbar__count"><strong>{summary.total}</strong>个作品 · 已上广场 {summary.published}</span>
     </div>
 
     {state.loading ? <div className="student-page-state">正在加载作品…</div> : null}
@@ -151,33 +151,25 @@ export function MyWorksPage({ api }) {
       <div className="student-page-actions"><Link className="button" to="/learn">进入学习 <b>↗</b></Link></div>
     </div> : null}
 
-    {items.length && !visible.length ? <div className="student-page-state">这一页里没有符合条件的作品。换一个关键词，或清空筛选。</div> : null}
+    {items.length && !visible.length ? <div className="student-page-state">这一页里没有符合条件的作品。换一个关键词试试。</div> : null}
 
-    {visible.length ? <div className="student-card-grid">{visible.map((work) => {
+    {visible.length ? <div className="student-card-grid sw-grid">{visible.map((work) => {
       const type = workType(work);
-      return <article className="student-card" key={work.id}>
-        <div className="student-work-card__cover">
-          <WorkCover work={work} type={type} />
-          <span className="student-work-card__type">{type.label}</span>
-        </div>
-        <div className="student-card__head">
-          <h3>{work.title}</h3>
-          <span className={`student-badge ${work.plazaPublished ? 'is-ok' : ''}`}>{workPlazaLabel(work)}</span>
-        </div>
-        <p className="student-work-card__source">来自：{work.seriesTitle || '未绑定课包'} › {work.courseLessonTitle || '未绑定课程'}</p>
-        {work.description ? <p className="student-card__desc">{work.description}</p> : null}
-        {/* ⚠️ 2026-09-26 全站审计：原来只认旧枚举 REJECTED，而 C2 起下架写的是 UNPUBLISHED —— */}
-        {/*    新下架的作品徽标显示「已下架」、原因却看不到（学生申诉就靠这句）。改按"有原因且当前不在广场上"。 */}
-{work.unpublishReason && !work.plazaPublished ? <p className="student-card__desc" data-testid="unpublish-reason"><strong>下架原因：</strong>{work.unpublishReason}</p> : null}
-        <div className="student-work-card__foot">
-          <span>创建时间 {formatDate(work.submittedAt)}</span>
-          {/* ⭐ 每件作品都要能打开看（用户口径 2026-09-20：「我的作品要实际能用」）。
-              原来这里只在**已上广场**时才给「查看 →」，其余写「平台发布后可查看」= 学生做完的东西自己看不到。
-              现在统一进学生自己的作品页 /my-works/:source/:id —— 那条接口只校验「是不是你自己的」，
-              不看发布状态；作品上了广场，详情页里另给「在作品广场看」。
-              （广场页的直链收进详情页是有意的：页脚那个胶囊一多就糊成一片。） */}
-          <Link to={`/my-works/${work.source || 'CANVAS'}/${encodeURIComponent(work.id)}`}>打开作品 →</Link>
-        </div>
+      return <article className="student-card sw-card" key={work.id}>
+        <Link className="sw-card__link" to={`/my-works/${work.source || 'CANVAS'}/${encodeURIComponent(work.id)}`}>
+          <div className="student-work-card__cover">
+            <WorkCover work={work} type={type} />
+            <span className="student-work-card__type">{type.label}</span>
+          </div>
+          <h3 className="sw-card__title">{work.title}</h3>
+          <div className="sw-card__foot">
+            <span className={`student-badge ${work.plazaPublished ? 'is-ok' : ''}`}>{workPlazaLabel(work)}</span>
+            <span className="sw-card__from">{work.seriesTitle || '未绑定课包'}</span>
+          </div>
+        </Link>
+        {/* ⚠️ 2026-09-26 全站审计：原来只认旧枚举 REJECTED，而 C2 起下架写的是 UNPUBLISHED ——
+            新下架的作品徽标显示「已下架」、原因却看不到（学生申诉就靠这句）。改按"有原因且当前不在广场上"。 */}
+        {work.unpublishReason && !work.plazaPublished ? <p className="student-card__desc" data-testid="unpublish-reason"><strong>下架原因：</strong>{work.unpublishReason}</p> : null}
       </article>;
     })}</div> : null}
 

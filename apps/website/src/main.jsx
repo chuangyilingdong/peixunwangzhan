@@ -664,7 +664,8 @@ function HomeVideos({ block }) {
   const [ref, shown] = useRevealOnce();
   const trackRef = useRef(null);
   const cardRefs = useRef(new Map());
-  const videoRefs = useRef(new Map());
+  // （原来还有一个 videoRefs：卡片静音自动播的那套逻辑靠它 play/pause。2026-09-27 用户口径
+  //   「不要自动播放」之后卡片不再播放，这个 Map 与那段 effect 一起删掉了。）
   const [activeIndex, setActiveIndex] = useState(0);
   const items = (Array.isArray(block?.items) ? block.items : [])
     .filter((item) => item && (item.videoUrl || item.posterUrl))
@@ -693,16 +694,13 @@ function HomeVideos({ block }) {
     }
     setActiveIndex((old) => (old === best ? old : best));
   };
-  // ② 只有激活那张在播；离开视口（或还没滚到）一律暂停 —— 省带宽也省电
-  useEffect(() => {
-    for (const [index, video] of videoRefs.current) {
-      if (!video) continue;
-      if (shown && index === activeIndex) video.play?.().catch(() => {});
-      else { video.pause?.(); }
-    }
-  }, [shown, activeIndex, items.length]);
+  // ② ⭐ 2026-09-27 用户口径：「首页不要自动播放，提供个播放按钮，点击打开播放」。
+  //    卡片**一律不播** —— 原来那段"当前那张静音自动播、其余 pause"的逻辑整段删掉了。
+  //    卡片现在只是一张**静帧**：有封面用封面；没封面就用视频自己的首帧（见下面 `#t=0.5`）。
+  //    真播放只在弹层里发生（人主动点 ▶ 才建 DOM、才拉完整视频）。
+  //    带宽：静帧只取 metadata + 一帧，比原来"一屏里那张在真播"更省。
   // 弹层（2026-09-26 用户口径：「点开看大图/全屏播放的弹层，点击可弹窗查看」）：
-  // 点**当前那张**打开；点别的卡仍然只是把它滚到中间（避免误触弹窗）。
+  // 点 ▶ 直接打开；点别的卡仍然只是把它滚到中间（避免误触弹窗）；点当前那张也是打开。
   const [opened, setOpened] = useState(-1);
   const close = () => setOpened(-1);
   useEffect(() => {
@@ -737,19 +735,23 @@ function HomeVideos({ block }) {
             ref={(node) => { if (node) cardRefs.current.set(index, node); else cardRefs.current.delete(index); }}
             onClick={() => (index === activeIndex ? setOpened(index) : scrollToIndex(index))}>
             <div className="hp-vid-frame">
-              <video ref={(node) => { if (node) videoRefs.current.set(index, node); else videoRefs.current.delete(index); }}
-                src={item.videoUrl || undefined}
+              {/* 卡片上的 <video> 只负责**一张静帧**：没配封面时用 `#t=0.5` 让浏览器把 0.5 秒那帧画出来
+                  （站内公开口与 OSS 都支持 Range 请求），这样"第二个视频预览图是空白"就不会再出现。
+                  ⚠️ **不要在 <video> 上挂 onClick**：它铺满整张卡，会把点击吃掉 → 弹层永远打不开
+                  （第一版就是这么错的，真浏览器一验 `open:false`）。播放交给中间的 ▶。 */}
+              <video
+                src={!item.posterUrl && shown && item.videoUrl ? `${item.videoUrl}#t=0.5` : undefined}
                 poster={item.posterUrl || undefined}
-                preload="none" muted loop playsInline
-                // ⚠️ **不要在 <video> 上挂 onClick**：它铺满整张卡，会把点击吃掉 → 弹层永远打不开
-                //    （第一版就是这么错的，真浏览器一验 `open:false`）。卡片的播放/暂停交给
-                //    "是不是当前那张"（当前那张自动播），要看大图/听声音就点开弹层。
+                preload="metadata" muted loop playsInline
               />
-              {/* ⚠️ 卡片上**不挂角标**（2026-09-26 用户口径「图1 角标不需要」）——
-                  原来那枚 `tag` 角标会压在视频画面上；字段保留在数据里不显示，后台表单里也不再给这个输入框。 */}
-              <span className="hp-vid-open" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
-              </span>
+              {/* ⭐ 播放按钮（用户 2026-09-27：「提供个播放按钮，点击打开播放」）。
+                  原来这里是一枚右上角的"放大"角标（`hp-vid-open`），现在换成中间这枚 ▶ ——
+                  它才是"点开就播"的那一下。 */}
+              <button type="button" className="hp-vid-play"
+                aria-label={item.title ? `播放：${item.title}` : '播放视频'}
+                onClick={(event) => { event.stopPropagation(); setOpened(index); }}>
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M8 5.2v13.6L19 12 8 5.2Z" /></svg>
+              </button>
             </div>
             {(item.title || item.desc) && <div className="hp-vid-body">
               {item.title ? <h3>{item.title}</h3> : null}

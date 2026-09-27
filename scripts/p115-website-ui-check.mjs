@@ -883,7 +883,41 @@ try {
   if (coverState.art + coverState.images !== coverState.cards) problems.push(`我的作品：每张卡片都要有封面（自动 ${coverState.art} + 真 ${coverState.images} ≠ 卡片 ${coverState.cards}）`);
   if (coverState.legacyIcons) problems.push(`我的作品：不该再有旧的 emoji 占位图标（${coverState.legacyIcons} 个）`);
   if (!coverState.chips.includes('VibeCoding · 网页应用')) problems.push(`我的作品：夹具里有件网页作品，卡片类型标签应当出现「VibeCoding · 网页应用」（实际 ${JSON.stringify(coverState.chips)}）`);
+  // ⭐ 2026-09-27 用户口径：「图2 是手机页面打开『我的作品』的展示样式，能否做成像图3 这样的样式……
+  //    有些没用的可以不要，我说的是整体展示形式。也可以有头像这些在。」
+  //    → 顶部换成个人主页式的「头像 + 名字 + 统计」，主体是封面优先的多列网格（手机两列），
+  //      三个下拉筛选按"没用的可以不要"删掉（搜索留着）。这一节就钉这四件事。
+  const profileState = await page.evaluate(() => ({
+    avatars: document.querySelectorAll('.sw-avatar').length,
+    name: (document.querySelector('.sw-profile-main h1')?.textContent || '').trim(),
+    stats: Array.from(document.querySelectorAll('.sw-stats strong')).map((node) => node.textContent.trim()),
+    columns: (getComputedStyle(document.querySelector('.sw-grid') || document.body).gridTemplateColumns || '').split(' ').filter(Boolean).length,
+    selects: document.querySelectorAll('.sw-toolbar select, .student-work-toolbar select').length,
+    links: document.querySelectorAll('.sw-card__link').length,
+  }));
+  console.log(`  · 我的作品（主页式）：头像 ${profileState.avatars} 个、名字「${profileState.name}」、统计 ${JSON.stringify(profileState.stats)}、网格 ${profileState.columns} 列、可点卡片 ${profileState.links} 条`);
+  if (!profileState.avatars) problems.push('我的作品：顶部应当有头像（用户 2026-09-27 口径「也可以有头像这些在」）');
+  if (!profileState.name) problems.push('我的作品：顶部应当显示学生名字（或登录名）');
+  if (profileState.stats.length < 2) problems.push(`我的作品：统计行应当有「作品数 / 已上广场」两项（实际 ${JSON.stringify(profileState.stats)}）`);
+  if (profileState.columns < 2) problems.push(`我的作品：应当是**多列**网格（手机上两列），实际 ${profileState.columns} 列`);
+  if (profileState.selects) problems.push(`我的作品：三个下拉筛选已按用户口径删掉，实际还剩 ${profileState.selects} 个 select`);
+  if (profileState.links !== coverState.cards) problems.push(`我的作品：每张卡都要能整卡点开（卡片 ${coverState.cards} 张 / 可点链接 ${profileState.links} 条）`);
   await shot('19-my-works-covers');
+  // 手机视口再看一眼（用户给的图就是手机截的）：网格应恰好**两列**、头像/统计还在、不横向溢出。
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settle();
+  const mobileState = await page.evaluate(() => ({
+    columns: (getComputedStyle(document.querySelector('.sw-grid') || document.body).gridTemplateColumns || '').split(' ').filter(Boolean).length,
+    overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    avatars: document.querySelectorAll('.sw-avatar').length,
+  }));
+  console.log(`  · 我的作品（390px 手机视口）：网格 ${mobileState.columns} 列、横向溢出 ${mobileState.overflow}px、头像 ${mobileState.avatars} 个`);
+  if (mobileState.columns !== 2) problems.push(`我的作品：手机视口下应当是两列网格（实际 ${mobileState.columns} 列）`);
+  if (mobileState.overflow > 2) problems.push(`我的作品：手机视口下横向溢出了 ${mobileState.overflow}px`);
+  if (!mobileState.avatars) problems.push('我的作品：手机视口下头像不见了');
+  await shot('19b-my-works-mobile');
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await settle();
 
   // ── ⑤g 学生自己的**网页作品**点开：要能玩，且**内层不能出现滚动条**（口径㉕，用户报的
   //    「作品预览里出现滚动条」）。做法是"内层按不小于 640×768 的逻辑视口渲染、再整体等比缩放到
