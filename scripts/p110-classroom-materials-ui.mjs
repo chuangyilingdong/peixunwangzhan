@@ -126,7 +126,9 @@ const sharedCssCode = stripComments(sharedCssNow);
 check('①「已经在画布上了，已为你定位」那句提示没了（定位本身就是反馈）',
   !/已经在画布上了/.test(workspaceCode));
 check('② 底部提示条学生侧不再渲染（那句话还写着已取消的「素材」面板，留着也是错的）',
-  /\{allowNodeCreation \? <div className="learning-canvas__tip">/.test(canvasCode)
+  // ⚠️ 2026-09-27 追加 `&& !readOnly`：只读查看（公开页/自己详情/平台与机构预览）里拖不动框体、
+  //    也没有 ＋ 可拖，那句"拖动卡片排布…"只会让人以为能编辑。这条断言本来钉的就是"编辑态才有提示条"。
+  /\{allowNodeCreation && !readOnly \? <div className="learning-canvas__tip">/.test(canvasCode)
   && !/从左侧「素材」面板添加框体/.test(canvasCode));
 check('②+③ 那条「标题 + 作品名 + 已保存」的横条整条去掉了（腾出一行给画布）',
   !/cv-heading/.test(workspaceCode) && !/\.cv-heading/.test(sharedCssCode));
