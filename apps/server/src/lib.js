@@ -92,6 +92,52 @@ export function id(prefix) {
   return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
 }
 
+// 学生个人主页的 token（2026-09-27）。形状照 `wst_`（作品）/ `vbt_`（VibeCoding 提交）那两套来，
+// 前缀换成 `ust_`（user share token）。
+export function newHomeToken() {
+  return `ust_${randomUUID().replaceAll('-', '').slice(0, 24)}`;
+}
+
+/** 摇一个当前没被占用的主页 token（先查一次只是省一次异常；真撞了由唯一索引兜底）。 */
+export async function generateHomeToken() {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const token = newHomeToken();
+    if (!await arow('SELECT id FROM users WHERE home_token=?', [token])) return token;
+  }
+  throw new Error('生成个人主页链接失败：连着 5 次都撞上了已占用的 token');
+}
+
+/**
+ * 取学生的个人主页 token，没有就现在生成一个（幂等）。
+ *
+ * ⚠️ 为什么要"没有就生成"这一层：这个功能上线前建的存量学生（导入的、更早机构端建的）
+ * 全都 `home_token IS NULL`，只在建号路径里生成的话他们永远没有主页链接。
+ * 见到就补 = 他们第一次访问自己的主页相关页面时自动补上，不需要一次性脚本兜底
+ * （一次性回填脚本仍然值得跑，见 deploy/production/migrate/20-backfill-home-tokens.mjs
+ * —— 目的是让链接**稳定**，而不是"访问过一次才生成"）。
+ *
+ * 只传 userId：调用方手里往往只有 session 里的 id，不必先把整行读出来。
+ */
+export async function ensureHomeToken(userId) {
+  const key = String(userId || '');
+  if (!key) return null;
+  const current = await arow('SELECT id, home_token FROM users WHERE id=?', [key]);
+  if (!current) return null;
+  if (current.home_token) return current.home_token;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const token = newHomeToken();
+    try {
+      if (await arow('SELECT id FROM users WHERE home_token=?', [token])) continue;
+      await aq('UPDATE users SET home_token=?, updated_at=? WHERE id=?', [token, nowIso(), key]);
+      return token;
+    } catch (error) {
+      // 并发下两个请求可能同时摇到同一个（极小概率）—— 被唯一索引拒了就重摇，别把 500 抛给学生。
+      if (attempt === 4) throw error;
+    }
+  }
+  throw new Error('生成个人主页链接失败：连着 5 次都撞上了已占用的 token');
+}
+
 export function nowIso() {
   return new Date().toISOString();
 }
@@ -438,6 +484,10 @@ export function normalizeUser(value, { includeAuthMeta = false } = {}) {
     // 2026-09-13（P4 删积分）：月度额度 / 魔法石 / 个人积分 / 成员 AI 上限都不再对外返回。
     // 库里那几列保留给历史数据（删代码不删表的惯例），代码不再读写。
     avatarKey: value.avatar_key || null,
+    // 学生个人主页的专属 token（2026-09-27）：公开地址是 `/u/<token>`。
+    // ⚠️ 它是**公开 token**（和 works.share_token 一个性质），不是秘密 —— 泄漏不等于泄漏数据，
+    //    能看到什么由服务端那条公开接口按"已公开的作品"过滤。NULL = 还没生成（见 ensureHomeToken）。
+    homeToken: value.home_token || null,
     guardian: value.guardian_name == null && value.guardian_phone == null && value.guardian_relationship == null ? null : {
       name: value.guardian_name || null,
       phone: value.guardian_phone || null,

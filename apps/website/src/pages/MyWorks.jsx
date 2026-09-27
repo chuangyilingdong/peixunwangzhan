@@ -1,108 +1,36 @@
-// 官网 - 我的作品
+// 官网 - 我的作品（**个人主页的控制台**）
+//
+// ⚠️ 2026-09-27 口径：这一页从"作品列表"变成**主页概念**（用户原话「现在需要把『我的作品』改成主页的
+//    的概念。对外公开并且可以分享。头像修改要加上。」）：
+//      · 顶部那块（头像 + 名字 + 统计）就是主页的抬头，头像**可点开改**（8 个预设头像）；
+//      · 多一条「我的主页」入口 —— 对外公开的专属链接 `/u/<token>`（每个学生一个，建号时就有）；
+//      · 主页设置面板里可以切"对外匿名"（默认匿名，沿用既有的隐私默认值）；
+//      · 「分享主页」把那条链接复制走。
+//    作品网格、封面、类型标签、下架原因这些都**没动**。
+//
+// ⚠️ 这几条**不能动**（守卫 `p115` 钉着）：每张卡必有封面（`student-work-card__art` /
+//    `student-work-card__cover img` 二者之一）、类型标签 `student-work-card__type`、
+//    `.sw-avatar` ≥1、`.sw-profile-main h1` 非空、`.sw-stats strong` ≥2 项、`.sw-grid` 手机上恰好两列、
+//    以及「下架原因」那段（`data-testid="unpublish-reason"`，`p63`/`p152` 钉着）。
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Pagination, readSession, workPlazaBadge } from '@platform/shared';
+import { AVATAR_KEYS, Pagination, avatarGlyph, readSession, workPlazaBadge } from '@platform/shared';
+// 类型判定与自动封面（2026-09-27 从本文件搬去 components/workCard.jsx —— 对外公开的学生主页
+// `/u/<token>` 要用**同一套**封面与类型标签，抄一份出去就会漂移）
+import { WorkCover, workType } from '../components/workCard.jsx';
+import { absoluteUrl, copyToClipboard } from '../components/clipboard.js';
 
 // 状态话术统一走 @platform/shared 的 worksState（两条链路一套词，这里不再自己维护一份）
 
-// 作品类型只看服务端给的产物线索：VibeCoding 的看产物文件名，画布的就是画布作品。
-// 不做「猜内容」的花活 —— 猜错比不显示更糟。
-// `hue` / `art` 是给下面的自动封面用的：类型决定配色家族与插画，所以一排作品看着是一套。
-function workType(work) {
-  const name = String(work.entryFile || '').toLowerCase();
-  if (name) {
-    if (/\.pptx?$/.test(name)) return { key: 'DECK', label: 'VibeCoding · 演示文稿', icon: '📊', hue: 28, art: 'deck' };
-    if (/\.docx?$/.test(name)) return { key: 'DOC', label: 'VibeCoding · 文档', icon: '📄', hue: 168, art: 'doc' };
-    if (/\.xlsx?$/.test(name)) return { key: 'SHEET', label: 'VibeCoding · 表格', icon: '📈', hue: 212, art: 'sheet' };
-    return { key: 'WEB', label: 'VibeCoding · 网页应用', icon: '💻', hue: 262, art: 'web' };
-  }
-  return { key: 'CANVAS', label: '画布作品', icon: '🎨', hue: 322, art: 'canvas' };
-}
-
-/**
- * **作品封面**（用户口径 2026-09-20：「学生发布的作品应该自动生成个封面」）。
- *
- * 学生不会自己传封面，所以封面必须**自己长出来**。两层：
- *   ① 服务端给了真封面（`coverUrl`，将来是作品的截图）→ 直接用它；
- *   ② 没有 → 用作品自身的信息**当场画一张**：类型定色系与插画，标题哈希做小幅色相偏移
- *      （同一类型的几个作品互相区分得开），标题首字当水印。
- * 刻意不引入任何图片资源：SVG 是内联的，不占带宽、不产生 404，也不依赖服务端。
- *
- * ⚠️ 为什么不用"猜内容"的花活（比如按标题选吉祥物）：猜错比留个中性的封面更糟。
- */
-function coverSeed(work) {
-  const text = String(work.id || work.title || '');
-  let hash = 0;
-  for (let index = 0; index < text.length; index += 1) hash = (hash * 31 + text.charCodeAt(index)) % 100003;
-  return hash;
-}
-
-function CoverArt({ art }) {
-  switch (art) {
-    case 'web': return <g><rect x="0" y="0" width="30" height="21" rx="3" /><rect x="11" y="23" width="8" height="3" rx="1.5" /><rect x="6" y="27" width="18" height="2.4" rx="1.2" /></g>;
-    case 'deck': return <g><rect x="0" y="1" width="30" height="19" rx="3" /><rect x="5" y="6" width="12" height="2.6" rx="1.3" /><rect x="5" y="11" width="18" height="2.6" rx="1.3" /><rect x="5" y="16" width="8" height="2.6" rx="1.3" /></g>;
-    case 'doc': return <g><rect x="1" y="0" width="26" height="30" rx="3" /><rect x="6" y="7" width="16" height="2.4" rx="1.2" /><rect x="6" y="13" width="16" height="2.4" rx="1.2" /><rect x="6" y="19" width="10" height="2.4" rx="1.2" /></g>;
-    case 'sheet': return <g><rect x="0" y="2" width="30" height="26" rx="3" /><rect x="0" y="10" width="30" height="2" /><rect x="0" y="18" width="30" height="2" /><rect x="15" y="2" width="2" height="26" /></g>;
-    case 'canvas': return <g><circle cx="15" cy="15" r="14" /><circle cx="10" cy="11" r="2.6" fill="#00000055" /><circle cx="20" cy="11" r="2.6" fill="#00000055" /><circle cx="10" cy="20" r="2.6" fill="#00000055" /><circle cx="20" cy="20" r="2.6" fill="#00000055" /></g>;
-    default: return null;
-  }
-}
-
-function WorkCover({ work, type }) {
-  if (work.coverUrl) return <img src={work.coverUrl} alt="" loading="lazy" />;
-  const seed = coverSeed(work);
-  // ⚠️ 色相要**拉得开**：第一版只抖 ±12°，一排作品全是同一个粉色，等于还是"一个样"
-  //    （实测 15 张画布作品的封面几乎分不出来）。现在在类型色系左右各 45° 里取，
-  //    既看得出是同一类、又能一眼区分 — 同一份种子还决定下面用哪种构图。
-  const hue = ((type.hue + (seed % 91) - 45) % 360 + 360) % 360;
-  const gradientId = `workcover-${String(work.id || 'x').replace(/[^A-Za-z0-9_-]/g, '')}`;
-  const mark = String(work.title || '作').trim().charAt(0) || '作';
-  const layout = seed % 3;
-  return <svg className="student-work-card__art" viewBox="0 0 320 150" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-    <defs>
-      <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stopColor={`hsl(${hue} 56% ${50 + (seed % 9)}%)`} />
-        <stop offset="1" stopColor={`hsl(${(hue + 26) % 360} 70% ${70 + (seed % 7)}%)`} />
-      </linearGradient>
-    </defs>
-    <rect width="320" height="150" fill={`url(#${gradientId})`} />
-    {/* 三种构图轮着来：圆环 / 斜带 / 点阵 —— 同一份种子决定，所以同一件作品永远同一张 */}
-    {layout === 0 ? <g fill="#ffffff" opacity="0.12">
-      <circle cx={276} cy={22} r={62} />
-      <circle cx={30} cy={140} r={48} />
-    </g> : null}
-    {layout === 1 ? <g fill="#ffffff" opacity="0.10" transform="rotate(-18 160 75)">
-      <rect x={-40} y={22} width={420} height={26} rx={13} />
-      <rect x={-40} y={72} width={420} height={14} rx={7} />
-      <rect x={-40} y={104} width={420} height={20} rx={10} />
-    </g> : null}
-    {layout === 2 ? <g fill="#ffffff" opacity="0.13">
-      {[0, 1, 2, 3].map((row) => [0, 1, 2, 3, 4].map((col) => <circle key={`${row}-${col}`} cx={252 + col * 18} cy={28 + row * 18} r={3.4} />))}
-    </g> : null}
-    <text x="22" y="128" fill="#ffffff" opacity="0.22" fontSize={96 + (seed % 18)} fontWeight="900" fontFamily="inherit">{mark}</text>
-    <g transform="translate(266,86) scale(1.7)" fill="#ffffff" opacity="0.92"><CoverArt art={type.art} /></g>
-  </svg>;
-}
-
-/**
- * 学生端「我的作品」——**个人主页 + 卡片网格**的展示形式（2026-09-27 用户口径）。
- *
- * 用户原话：「图2 是手机页面打开『我的作品』的展示样式，能否做成像图3 这样的样式……当然图2 有些
- * 没用的可以不要，我说的是整体展示形式。也可以有头像这些在。」（图3 是社区类 App 的个人主页）
- *
- * 于是这一版：
- *   · 顶部换成**头像 + 名字 + 一行统计**（N 个作品 / 已上广场 M），不再是孤零零一行大标题；
- *   · 主体是**封面优先的两列网格**（手机两列，宽屏三到四列），整张卡可点开；
- *   · 砍掉三个下拉筛选（课包 / 课程 / 类型）与卡上「来自：… / 创建时间 …」这类次要信息；
- *     搜索保留（作品一多就得靠它，而且它只筛当前页、不假装跨页）。
- *   ⚠️ 这几条**不能动**（守卫 `p115` 钉着）：每张卡必有封面（`student-work-card__art` /
- *      `student-work-card__cover img` 二者之一）、类型标签 `student-work-card__type`、
- *      以及「下架原因」那段（`data-testid="unpublish-reason"`，`p63`/`p152` 钉着）。
- */
 export function MyWorksPage({ api }) {
   const [page, setPage] = useState(1);
   const [state, setState] = useState({ loading: true, error: null, items: [], summary: null, page: 1, totalPages: 1 });
   const [search, setSearch] = useState('');
+  // 主页设置（头像 / 匿名开关 / 主页链接）。`null` = 还没取到（此时头像退回"首字圆形"，与旧版一致）。
+  const [home, setHome] = useState(null);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [homeBusy, setHomeBusy] = useState(false);
+  const [homeNotice, setHomeNotice] = useState('');
 
   useEffect(() => {
     let live = true;
@@ -112,6 +40,16 @@ export function MyWorksPage({ api }) {
       .catch((error) => { if (live) setState({ loading: false, error: error.message, items: [], summary: null, page: 1, totalPages: 1 }); });
     return () => { live = false; };
   }, [api, page]);
+
+  // 主页设置只在进页面时取一次（分页变化不重取）。
+  useEffect(() => {
+    let live = true;
+    api.get('student/home')
+      .then((payload) => { if (live) setHome(payload || null); })
+      // 取不到就静静地退回旧样子（首字头像、不显示主页链接）—— 别因为一个附加功能把整页搞成错误态。
+      .catch(() => { if (live) setHome(null); });
+    return () => { live = false; };
+  }, [api]);
 
   const items = state.items;
   const summary = state.summary || { total: items.length, published: items.filter((item) => item.plazaPublished).length };
@@ -123,21 +61,107 @@ export function MyWorksPage({ api }) {
   const visible = items.filter((work) => !keyword
     || `${work.title || ''} ${work.courseLessonTitle || ''} ${work.sessionTitle || ''}`.toLowerCase().includes(keyword));
 
-  // 头像与名字取当前登录会话（学生端与官网共用一份 session —— 见 ⭐1 的 cookie 口径）。
-  // 还没有头像图（`avatarKey` 目前没有任何界面在渲染），所以按惯例用**首字圆形头像**。
+  // 名字取当前登录会话（学生端与官网共用一份 session —— 见 ⭐1 的 cookie 口径）。
+  // 头像优先用学生自己选的预设（`avatarKey`），没选就还是"首字圆形"。
   const session = readSession();
   const displayName = session?.user?.displayName || session?.user?.login || '我的作品';
   const initial = String(displayName).trim().charAt(0) || '我';
+  const glyph = avatarGlyph(home?.avatarKey);
+  const homeHref = home?.homeUrl ? absoluteUrl(home.homeUrl) : '';
+  // 对外显示成什么：匿名 → 「小创作者」；非匿名 → 首字 + 同学（与服务端**同一套**规则，别在这里另写一份）
+  const publicName = home?.anonymous === false ? `${initial}同学` : '小创作者';
+
+  async function saveHome(patch) {
+    if (homeBusy) return;
+    setHomeBusy(true);
+    setHomeNotice('');
+    try {
+      const saved = await api.put('student/home', patch);
+      setHome((current) => ({ ...(current || {}), ...saved }));
+      setHomeNotice('已保存');
+    } catch (error) {
+      setHomeNotice(`没保存成功：${error.message}`);
+    } finally {
+      setHomeBusy(false);
+    }
+  }
+
+  async function shareHome() {
+    if (!homeHref) { setHomeNotice('主页链接还没准备好，稍后再试。'); return; }
+    const copied = await copyToClipboard(homeHref);
+    setHomeNotice(copied ? `主页链接已复制：${homeHref}` : `请手动复制这个地址：${homeHref}`);
+  }
 
   return <div className="student-page student-works-page">
     <header className="sw-profile">
-      <div className="sw-avatar" aria-hidden="true">{initial}</div>
+      {/* 头像可点：点开主页设置（改头像 / 切匿名 / 复制主页链接）。 */}
+      <button type="button" className="sw-avatar" data-testid="home-avatar" onClick={() => setPanelOpen((open) => !open)} aria-expanded={panelOpen} aria-label="主页设置（改头像）">
+        {glyph || initial}
+      </button>
       <div className="sw-profile-main">
         <h1>{displayName}</h1>
         <p className="sw-stats"><span><strong>{total}</strong> 个作品</span><span><strong>{published}</strong> 已上广场</span></p>
         <p className="sw-bio">查看你在课程中生成与归档的作品。</p>
+        {home?.homeUrl ? <p className="sw-home-actions">
+          <a className="button soft" href={home.homeUrl} target="_blank" rel="noreferrer" data-testid="open-home">我的主页 <b>↗</b></a>
+          <button type="button" className="button soft" data-testid="share-home" onClick={shareHome}>分享主页</button>
+        </p> : null}
       </div>
     </header>
+
+    {panelOpen ? <section className="sw-home-panel" data-testid="home-panel">
+      <div className="sw-home-panel__head">
+        <strong>主页设置</strong>
+        <button type="button" className="text-button" onClick={() => setPanelOpen(false)}>收起</button>
+      </div>
+      <p className="sw-home-panel__hint">你的主页是公开的：<strong>只有你已公开的作品</strong>会出现在上面，没公开的作品任何人都看不到。</p>
+
+      <div className="sw-home-panel__block">
+        <span className="sw-home-panel__label">头像</span>
+        <div className="sw-avatar-picker" role="radiogroup" aria-label="选择头像">
+          {AVATAR_KEYS.map((key) => <button
+            key={key}
+            type="button"
+            role="radio"
+            aria-checked={home?.avatarKey === key}
+            aria-label={`头像 ${key}`}
+            data-testid={`avatar-${key}`}
+            className={`sw-avatar-option${home?.avatarKey === key ? ' is-active' : ''}`}
+            disabled={homeBusy}
+            onClick={() => saveHome({ avatarKey: key })}
+          >{avatarGlyph(key)}</button>)}
+          <button
+            type="button"
+            role="radio"
+            aria-checked={!home?.avatarKey}
+            aria-label="不用头像，用名字首字"
+            data-testid="avatar-none"
+            className={`sw-avatar-option sw-avatar-option--none${!home?.avatarKey ? ' is-active' : ''}`}
+            disabled={homeBusy}
+            onClick={() => saveHome({ avatarKey: null })}
+          >首字</button>
+        </div>
+      </div>
+
+      <div className="sw-home-panel__block">
+        <label className="sw-home-panel__switch">
+          {/* ⚠️ 这个复选框**不加 `disabled={homeBusy}`**：受控 + 保存期间禁用，会让控件在保存那一瞬间
+              自己闪一下（点了没反应像坏了）。重复提交由 saveHome 里的 `if (homeBusy) return` 挡。 */}
+          <input type="checkbox" checked={home?.anonymous !== false} data-testid="anonymous-switch" onChange={(event) => saveHome({ showcaseAnonymous: event.target.checked })} />
+          <span>对外匿名显示（当前显示为「{publicName}」）</span>
+        </label>
+        <p className="sw-home-panel__hint">默认是匿名的：作品广场和你主页上只显示「小创作者」。关掉之后会显示成「{initial}同学」——对外**不会**出现完整姓名。</p>
+      </div>
+
+      <div className="sw-home-panel__block">
+        <span className="sw-home-panel__label">主页链接</span>
+        <p className="sw-home-panel__link">
+          <code data-testid="home-url">{homeHref || '（还没生成）'}</code>
+          <button type="button" className="text-button" data-testid="copy-home" disabled={!homeHref} onClick={shareHome}>复制</button>
+        </p>
+      </div>
+      {homeNotice ? <p className="sw-home-panel__notice" data-testid="home-notice">{homeNotice}</p> : null}
+    </section> : null}
 
     <div className="sw-toolbar">
       <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} aria-label="搜索作品" placeholder="搜索作品名称、关键词（如：海报、代码、视频…）" />

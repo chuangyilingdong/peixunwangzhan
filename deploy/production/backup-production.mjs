@@ -36,9 +36,13 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { DatabaseSync } from 'node:sqlite';
 
+// ⚠️ 两种写法都认：`--name value` 与 `--name=value`。
+//    只认前者的话，报错里那句「请显式 --driver=sqlite」照着敲反而会被当成"没给参数"（2026-09-27 修）。
 function arg(name, fallback = '') {
   const index = process.argv.indexOf(name);
-  return index >= 0 ? (process.argv[index + 1] || fallback) : fallback;
+  if (index >= 0) return process.argv[index + 1] || fallback;
+  const inline = process.argv.find((item) => item.startsWith(`${name}=`));
+  return inline ? inline.slice(name.length + 1) : fallback;
 }
 // 流式算摘要：库会长（SQLite 那份已 23MB，MySQL 转储解压后几十 MB），别整个读进内存。
 function sha256(file) {

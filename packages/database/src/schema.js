@@ -114,6 +114,9 @@ CREATE TABLE IF NOT EXISTS users (
   period_reset_at TEXT,
   magic_stones INTEGER NOT NULL DEFAULT 0,
   avatar_key TEXT CHECK (avatar_key IS NULL OR avatar_key IN ('star','rocket','cat','fox','robot','panda','owl','whale')),
+  -- 个人主页的专属 token（2026-09-27）：每个学生一个，公开主页地址 /u/<home_token> 用它。
+  -- 建号时生成，存量学生由一次性回填补上（见 ensureHomeToken）；NULL 表示还没生成。
+  home_token TEXT,
   guardian_name TEXT,
   guardian_phone TEXT,
   guardian_relationship TEXT CHECK (guardian_relationship IS NULL OR guardian_relationship IN ('PARENT','GRANDPARENT','OTHER_GUARDIAN')),
@@ -1628,6 +1631,7 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_projects_student_deleted ON student_proj
 //    纯复制粘贴残留，两段一改一漏就是隐性地基，删掉后一份。
 for (const statement of [
   'ALTER TABLE users ADD COLUMN avatar_key TEXT',
+  'ALTER TABLE users ADD COLUMN home_token TEXT',
   'ALTER TABLE users ADD COLUMN guardian_name TEXT',
   'ALTER TABLE users ADD COLUMN guardian_phone TEXT',
   'ALTER TABLE users ADD COLUMN guardian_relationship TEXT',
@@ -1638,6 +1642,15 @@ for (const statement of [
   try { db.exec(statement); }
   catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 }
+// ⚠️⭐ 学生个人主页 token 的唯一索引：**故意写成普通 UNIQUE 索引，不写 `WHERE home_token IS NOT NULL`**。
+//   ① 两种引擎对 UNIQUE 索引里的 NULL 都视为"互不相同" → 与部分索引完全等价
+//      （同 13-partial-indexes-mysql.sql 的 B 组结论：`UNIQUE + 只有 IS NOT NULL` ⇒ 普通 UNIQUE 即可）；
+//   ② ⭐ 更要紧：12 号生成器（12-sqlite-to-mysql-ddl.mjs）**会把带 WHERE 的部分索引整个跳过**
+//      （`if (/\bWHERE\b/i.test(sql)) { partialIndexes.push(ix); continue; }`），那样它就不知道这列
+//      被索引了 → 把这列判成 MEDIUMTEXT → 到 MySQL 上建索引直接失败
+//      （`BLOB/TEXT column used in key specification without a key length`，§四十四 挖的就是这个形状）。
+//      写成普通索引，生成器才看得见它、把列留成 VARCHAR。
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_home_token ON users(home_token)');
 db.exec(`INSERT OR IGNORE INTO platform_settings(id, created_at, updated_at) VALUES (1, '${new Date().toISOString()}', '${new Date().toISOString()}')`);
 for (const statement of ['ALTER TABLE course_series ADD COLUMN cu_limit INTEGER', 'ALTER TABLE course_lessons ADD COLUMN cu_limit INTEGER', 'ALTER TABLE generation_jobs ADD COLUMN cu_reservation_id TEXT']) {
   try { db.exec(statement); } catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }

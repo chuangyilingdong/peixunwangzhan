@@ -7,6 +7,8 @@ export * from './siteDefaults.js';
 export * from './notice.js';
 export * from './worksState.js';
 export * from './worksState.jsx';
+// 头像的 8 个预设键 + 显示字符（2026-09-27）。服务端直接 import 那个文件去校验白名单，前端用这里这份渲染。
+export * from './avatars.js';
 export * from './classroom.jsx';
 // 搜索防抖（自由输入的"查询值"）—— 见该文件头的注释：列表页原来"每敲一个字重取一次"
 export * from './useDebounced.js';

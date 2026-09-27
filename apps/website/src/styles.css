@@ -1120,3 +1120,28 @@ background:radial-gradient(120% 80% at 50% 0%,rgb(255 60 90 / 26%),transparent 6
 .contact-qr__empty{display:grid;place-items:center;width:min(260px,100%);aspect-ratio:1;border-radius:10px;background:#fff;color:var(--muted);font-size:13px}
 .contact-qr small{color:var(--muted);font-size:12px}
 .contact-note{margin:0;font-size:13px;line-height:1.7}
+
+/* ── 学生个人主页（2026-09-27 用户口径：「学生创建了账号应该就有个主页的专属链接。现在需要把
+   『我的作品』改成主页的概念。对外公开并且可以分享。头像修改要加上。」）─────────────
+   这一组被两处用：`pages/MyWorks.jsx`（学生自己的主页控制台）与 `pages/CreatorHome.jsx`（公开主页）。
+   公开那一页只是把头像换回 `<div>`（只读展示），所以按钮相关的重置写成 `button.sw-avatar`。 */
+button.sw-avatar{border:0;padding:0;font-family:inherit;cursor:pointer}
+button.sw-avatar:hover{filter:brightness(1.04)}
+button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2px}
+.sw-home-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 0}
+.sw-home-panel{margin:0 0 18px;padding:18px;border:1px solid var(--line);border-radius:15px;background:#faf9ff}
+.sw-home-panel__head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.sw-home-panel__head strong{font-size:15px;color:var(--ink)}
+.sw-home-panel__hint{margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.7}
+.sw-home-panel__block{padding-top:14px;margin-top:14px;border-top:1px solid var(--line)}
+.sw-home-panel__label{display:block;margin-bottom:8px;color:#5e5870;font-size:12px;font-weight:800}
+.sw-home-panel__switch{display:flex;gap:9px;align-items:flex-start;font-size:13px;color:var(--ink)}
+.sw-home-panel__switch input{margin-top:3px}
+.sw-home-panel__link{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:0}
+.sw-home-panel__link code{flex:1;min-width:0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:#5b4d99;font-size:12px;overflow-wrap:anywhere}
+.sw-home-panel__notice{margin:12px 0 0;color:#2f7d5c;font-size:12px;overflow-wrap:anywhere}
+.sw-avatar-picker{display:flex;flex-wrap:wrap;gap:8px}
+.sw-avatar-option{display:grid;place-items:center;width:46px;height:46px;border:2px solid transparent;border-radius:50%;background:#fff;box-shadow:0 3px 10px #40307110;font-size:22px;cursor:pointer}
+.sw-avatar-option.is-active{border-color:var(--purple)}
+.sw-avatar-option--none{color:#5e5870;font-size:13px;font-weight:900}
+.sw-avatar-option:disabled{opacity:.5;cursor:default}

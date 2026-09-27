@@ -9,6 +9,8 @@ import { MyWorksPage } from './pages/MyWorks.jsx';
 import { StudentAccountPage } from './pages/AccountSecurity.jsx';
 import { MyWorkDetailPage } from './pages/MyWorkDetail.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
+// 学生个人主页（对外公开，路由 /u/:token）—— 用户口径 2026-09-27：「学生创建了账号应该就有个主页的专属链接」
+import { CreatorHomePage } from './pages/CreatorHome.jsx';
 // 首页按钮用 React Bits 的 SpecularButton（WebGL 镜面高光），见组件文件顶部的来源与注意事项
 import SpecularButton from './components/SpecularButton.jsx';
 
@@ -1649,10 +1651,11 @@ export function App(){
       '/my-works': '我的作品 · ' + BRAND_NAME,
       '/learn/canvas': '画布上课 · ' + BRAND_NAME,
     };
-    // 动态路由（课程/作品详情）按前缀回落：否则它们会退到首页标题，浏览器标签上看着不像同一个站。
+    // 动态路由（课程/作品详情/学生主页）按前缀回落：否则它们会退到首页标题，浏览器标签上看着不像同一个站。
     const title = titles[loc.pathname]
       || (loc.pathname.startsWith('/marketplace/') ? '课程详情 · ' + BRAND_NAME : '')
       || (loc.pathname.startsWith('/works/') ? '作品详情 · ' + BRAND_NAME : '')
+      || (loc.pathname.startsWith('/u/') ? '学生主页 · ' + BRAND_NAME : '')
       || titles['/'];
     document.title = title;
     const robots = document.querySelector('meta[name=robots]');
@@ -1756,6 +1759,11 @@ export function App(){
         <Route path='/works' element={<Works/>}/>
         <Route path='/works/shared/:token' element={<WorkDetailPage api={publicApi}/>}/>
         <Route path='/works/:token' element={<WorkDetailPage api={publicApi}/>}/>
+        {/* 学生个人主页（公开，不需要登录）：`/u/<home_token>`，一个学生一个链接（建号时生成）。
+            只显示 TA **已公开**的作品；名字是服务端脱敏后的（匿名 →「小创作者」）。
+            ⚠️ 不放进 sitemap（见 apps/server/src/index.js 的 PUBLIC_ROUTES）—— 这是学生的个人页面，
+               分享靠直接给链接，不该被搜索引擎收录索引。 */}
+        <Route path='/u/:token' element={<CreatorHomePage api={publicApi}/>}/>
         <Route path='/handbook' element={<Handbook/>}/>
         {/* 2026-09-19 用户口径：灵动介绍这一页**整个删掉**（页面 / 导航 / 页脚入口一起）。
             留一条重定向，老链接与老书签不会 404（与 /my-courses → /learn 同一套做法）。 */}

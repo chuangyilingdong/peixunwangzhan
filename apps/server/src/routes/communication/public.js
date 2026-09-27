@@ -235,6 +235,74 @@ export async function handlePublicCommunication(ctx) {
     return await publicVibeCodingWorkRow(work, { includeFiles: true });
   }
 
+  // ⭐ 2026-09-27：学生**个人主页**（用户口径「学生创建了账号应该就有个主页的专属链接。现在需要把
+  //    『我的作品』改成主页的概念。对外公开并且可以分享」）。前端公开页 `/u/<token>` 用它。
+  //   · **只回已公开的作品**，判据与广场那两条列表**逐字同一套**：
+  //     画布 = `is_public=1 AND status='PUBLISHED' AND share_token IS NOT NULL AND copyright_confirmed_at IS NOT NULL`；
+  //     VibeCoding = `is_public=1 AND share_token IS NOT NULL AND copyright_confirmed_at IS NOT NULL`。
+  //     没公开的作品**一条都不出现** —— 个人主页不该把学生的对外可见面变大。
+  //     ⚠️ 这两段 WHERE 是**故意各抄一遍**而不是抽公共函数：广场那两条各自贴着自己那段注释与字段，
+  //        抽出来会让"改一处忘一处"变隐蔽。护栏在守卫里（直接对比三处的 WHERE 片段）。
+  //   · ⚠️ 名字**沿用广场那套脱敏**（匿名 → 「小创作者」；非匿名 → 首字 + 同学），不在这里放宽：
+  //     对外可见的信息量与广场保持一致，是刻意的隐私口径（未成年人平台）。
+  //   · 只认 STUDENT + 未注销 —— 这是"学生主页"，教师/管理员不该有对外页面。
+  const creatorMatch = pathname.match(/^\/api\/public\/creators\/([\w-]+)$/);
+  if (creatorMatch && method === 'GET') {
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 60 });
+    const creator = await arow(`
+      SELECT id, display_name, avatar_key, privacy_showcase_anonymous, created_at
+      FROM users WHERE home_token=? AND role='STUDENT' AND deleted_at IS NULL
+    `, [creatorMatch[1]]);
+    if (!creator) throw errors.notFound('个人主页不存在', 'PUBLIC_CREATOR_NOT_FOUND');
+    const canvasItems = await amap((await arows(`
+      SELECT work.id, work.title, work.description, work.canvas_snapshot,
+             work.featured_at, work.submitted_at, work.share_token,
+             user.display_name AS student_name,
+             user.privacy_showcase_anonymous AS student_anon,
+             organization.name AS org_name
+      FROM works work
+      JOIN users user ON user.id=work.student_id
+      LEFT JOIN organizations organization ON organization.id=work.org_id
+      WHERE work.student_id=? AND work.is_public=1 AND work.status='PUBLISHED'
+        AND work.share_token IS NOT NULL AND work.copyright_confirmed_at IS NOT NULL
+      ORDER BY work.featured_at DESC NULLS LAST, work.submitted_at DESC
+      LIMIT ?
+    `, [creator.id, limit])), async (row) => await publicWorkRow(row));
+    const vibeItems = await amap((await arows(`
+      SELECT submission.id, submission.title, submission.description, submission.entry_file, submission.files, submission.artifacts,
+             submission.featured_at, submission.submitted_at, submission.share_token,
+             user.display_name AS student_name, user.privacy_showcase_anonymous AS student_anon,
+             organization.name AS org_name
+      FROM vibecoding_submissions submission
+      JOIN users user ON user.id=submission.student_id
+      LEFT JOIN organizations organization ON organization.id=submission.org_id
+      WHERE submission.student_id=? AND submission.is_public=1 AND submission.share_token IS NOT NULL
+        AND submission.copyright_confirmed_at IS NOT NULL
+      ORDER BY submission.featured_at DESC NULLS LAST, submission.submitted_at DESC
+      LIMIT ?
+    `, [creator.id, limit])), async (item) => await publicVibeCodingWorkRow(item));
+    // 两条链路合并后**精选优先、再按提交时间倒序**（与广场列表的排序口径一致）
+    const items = [...canvasItems, ...vibeItems].sort((a, b) => {
+      if (Boolean(a.featured) !== Boolean(b.featured)) return a.featured ? -1 : 1;
+      return String(b.submittedAt || '').localeCompare(String(a.submittedAt || ''));
+    });
+    let name = '小创作者';
+    if (!creator.privacy_showcase_anonymous && creator.display_name) {
+      const trimmed = String(creator.display_name).trim();
+      if (trimmed) name = trimmed.charAt(0) + '同学';
+    }
+    return {
+      name,
+      avatarKey: creator.avatar_key || null,
+      // 前端要能显示"当前是匿名状态"，但**不返回** display_name 原文（那是对外页面，只能给脱敏后的）
+      anonymous: Boolean(creator.privacy_showcase_anonymous),
+      joinedAt: creator.created_at || null,
+      workCount: items.length,
+      featuredCount: items.filter((item) => item.featured).length,
+      items,
+    };
+  }
+
   // 已发布作品里的文档产物（PPT / Word / Excel）。
   // 两种存法在这里分道扬镳，**都要能下**：
   //   · 规格文本（平台内沙箱那条老链路）：当场从提交快照渲染成真文件再发；

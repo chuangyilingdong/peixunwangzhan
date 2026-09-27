@@ -2,7 +2,7 @@ import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeLesson, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, orgSeriesAccessSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
-  normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE, normalizeSeriesVisibility, LOGIN_PATTERN, aq, arow, arows, acount, atransaction, amap, likeKeyword, likeEscapeClause, inProgressClassroomSql, vibecodingSessionIdExpr } from '../../lib.js';
+  normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE, normalizeSeriesVisibility, LOGIN_PATTERN, aq, arow, arows, acount, atransaction, amap, likeKeyword, likeEscapeClause, inProgressClassroomSql, vibecodingSessionIdExpr, generateHomeToken } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
@@ -479,7 +479,12 @@ async function createMember(currentOrgId, value) {
   if (value.role === 'TEACHER' && org.teacherUsedSeats >= org.teacherSeats) throw errors.conflict('教师席位不足', 'TEACHER_SEAT_LIMIT');
   const now = nowIso(); const userId = id('user');
   // 2026-09-13（P4 删积分）：建号不再写 monthly_credit_allowance / ai_credit_limit（积分已废弃）
-  await aq('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,phone,status,expires_at,student_usage_scope,billing_package_id,period_start_at,period_reset_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [userId, currentOrgId, value.login, value.displayName, value.role, json(value.permissions), hashPassword(value.password), value.phone, 'ACTIVE', value.expiresAt, value.studentUsageScope, value.billingPackageId, now, new Date(Date.now() + 30 * 86400000).toISOString(), now, now]);
+  // 2026-09-27：这里**同时给个人主页 token**（用户口径「学生创建了账号应该就有个主页的专属链接」）——
+  //    全仓只有这一处建学生（机构端 POST /api/org/users），所以这是"建号就有主页"的唯一落点。
+  //    ⚠️ 只有**学生**生成：createMember 也用来建教师，而公开主页接口只认 role='STUDENT'
+  //    （教师拿到一个打不开的链接没有意义）。存量学生靠 ensureHomeToken（见到就补）+ 20 号回填脚本。
+  const homeToken = value.role === 'STUDENT' ? await generateHomeToken() : null;
+  await aq('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,phone,status,expires_at,student_usage_scope,billing_package_id,period_start_at,period_reset_at,created_at,updated_at,home_token) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [userId, currentOrgId, value.login, value.displayName, value.role, json(value.permissions), hashPassword(value.password), value.phone, 'ACTIVE', value.expiresAt, value.studentUsageScope, value.billingPackageId, now, new Date(Date.now() + 30 * 86400000).toISOString(), now, now, homeToken]);
   // 批次 D（班级退场）：不再往 class_members 写归属 —— 那是历史表，且「进哪个班」已经没有意义。
   // 学生进课堂改在机构端「课堂」页做（POST /api/org/sessions/:id/students）。
   return await arow('SELECT * FROM users WHERE id=?', [userId]);

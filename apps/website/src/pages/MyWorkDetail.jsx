@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
 import { buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayPanel, ReplayPreview, ReplayShell, WorkMediaGallery, artifactGroup, formatDate, workPlazaBadge } from '@platform/shared';
+import { absoluteUrl, copyToClipboard } from '../components/clipboard.js';
 
 /** 快照里的私有素材地址 → fileId（服务端拼的 imageUrls 用的就是这个地址）。 */
 function fileIdOfAssetUrl(value) {
@@ -82,28 +83,15 @@ export function MyWorkDetailPage({ api }) {
   //     前端不去猜，直接把服务端那句话原样显示出来。
   const [share, setShare] = useState({ busy: false, ask: false, message: null, tone: 'ok' });
 
+  // 复制那段 2026-09-27 抽去 `components/clipboard.js`（「我的主页」也要复制链接，
+  // 再抄一份就是第四份了）；这里只负责把结果说给学生听。
   async function copyPublicLink(path) {
-    const url = new URL(path, window.location.origin).href;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(url);
-      } else {
-        // 退路：非安全上下文（http）里 navigator.clipboard 是 undefined。
-        const scratch = document.createElement('textarea');
-        scratch.value = url;
-        scratch.setAttribute('readonly', '');
-        scratch.style.position = 'fixed';
-        scratch.style.opacity = '0';
-        document.body.appendChild(scratch);
-        scratch.select();
-        document.execCommand('copy');
-        document.body.removeChild(scratch);
-      }
-      setShare({ busy: false, ask: false, message: `链接已复制：${url}`, tone: 'ok' });
-    } catch {
+    const url = absoluteUrl(path);
+    const copied = await copyToClipboard(url);
+    setShare(copied
+      ? { busy: false, ask: false, message: `链接已复制：${url}`, tone: 'ok' }
       // 复制失败也要把地址露出来，别让人干瞪眼。
-      setShare({ busy: false, ask: false, message: `请手动复制这个地址：${url}`, tone: 'warn' });
-    }
+      : { busy: false, ask: false, message: `请手动复制这个地址：${url}`, tone: 'warn' });
   }
 
   function onShareClick() {

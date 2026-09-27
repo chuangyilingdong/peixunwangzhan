@@ -958,6 +958,92 @@ try {
   await page.setViewportSize({ width: 1440, height: 960 });
   await settle();
 
+  // ── ⑤f⁗ ⭐ 2026-09-27 用户口径：「学生创建了账号应该就有个主页的专属链接。现在需要把『我的作品』
+  //    改成主页的概念。对外公开并且可以分享。头像修改要加上。」
+  //    这一节验**「我的作品」作为主页控制台**：点头像开设置 → 选头像真的存下来 → 拿到专属链接 →
+  //    打开那个公开主页 → 只看到已公开的作品 → 关掉匿名后名字变得和广场同一套脱敏。
+  const homeUrlText = async () => (await page.locator('[data-testid="home-url"]').first().innerText()).trim();
+  const panelOpenCount = await page.locator('[data-testid="home-panel"]').count();
+  console.log(`  · 主页设置面板：初始${panelOpenCount ? '已展开' : '收起'}（点头像才展开）`);
+  if (panelOpenCount) problems.push('我的作品：主页设置面板初始不该展开（用户没说要看设置）');
+  await page.locator('[data-testid="home-avatar"]').first().click();
+  await settle();
+  const panelState = await page.evaluate(() => ({
+    panel: document.querySelectorAll('[data-testid="home-panel"]').length,
+    avatars: document.querySelectorAll('[data-testid^="avatar-"]').length,
+    hasNone: document.querySelectorAll('[data-testid="avatar-none"]').length,
+    hasSwitch: document.querySelectorAll('[data-testid="anonymous-switch"]').length,
+    url: (document.querySelector('[data-testid="home-url"]')?.textContent || '').trim(),
+  }));
+  console.log(`  · 主页设置：面板 ${panelState.panel} 个、头像选项 ${panelState.avatars} 个（含"首字" ${panelState.hasNone}）、匿名开关 ${panelState.hasSwitch} 个、链接「${panelState.url}」`);
+  if (!panelState.panel) problems.push('我的作品：点头像应当展开主页设置面板');
+  if (panelState.avatars !== 9) problems.push(`我的作品：头像应当是 8 个预设 + 1 个"首字"（实际 ${panelState.avatars}）`);
+  if (!panelState.hasSwitch) problems.push('我的作品：设置面板里应当有"对外匿名"开关');
+  if (!/^https?:\/\/.+\/u\/ust_[0-9a-f]{24}$/.test(panelState.url)) problems.push(`我的作品：主页链接形状不对（实际「${panelState.url}」）`);
+
+  // 选一个预设头像：存下来 + 头像位立刻变
+  await page.locator('[data-testid="avatar-fox"]').first().click();
+  await settle();
+  const avatarAfter = await page.evaluate(() => ({
+    glyph: (document.querySelector('[data-testid="home-avatar"]')?.textContent || '').trim(),
+    notice: (document.querySelector('[data-testid="home-notice"]')?.textContent || '').trim(),
+    active: document.querySelectorAll('[data-testid="avatar-fox"].is-active').length,
+  }));
+  console.log(`  · 选了狐狸头像：头像位「${avatarAfter.glyph}」、选中态 ${avatarAfter.active} 个、提示「${avatarAfter.notice}」`);
+  if (avatarAfter.glyph !== '🦊') problems.push(`我的作品：选了狐狸头像后头像位应当变成 🦊（实际「${avatarAfter.glyph}」）`);
+  if (!avatarAfter.active) problems.push('我的作品：选中的头像该有选中态（.is-active）');
+  if (!avatarAfter.notice.includes('已保存')) problems.push(`我的作品：保存后应当有「已保存」提示（实际「${avatarAfter.notice}」）`);
+
+  const creatorUrl = await homeUrlText();
+  await page.goto(creatorUrl, { waitUntil: 'domcontentloaded' });
+  await settle();
+  const creatorState = await page.evaluate(() => ({
+    name: (document.querySelector('[data-testid="home-name"]')?.textContent || '').trim(),
+    cards: document.querySelectorAll('.sw-card__link').length,
+    titles: Array.from(document.querySelectorAll('.sw-card__title')).map((node) => node.textContent.trim()),
+    avatar: (document.querySelector('[data-testid="home-avatar-readonly"]')?.textContent || '').trim(),
+    hasShare: document.querySelectorAll('[data-testid="share-home-public"]').length,
+    stats: Array.from(document.querySelectorAll('.sw-stats strong')).map((node) => node.textContent.trim()),
+  }));
+  console.log(`  · 公开主页：名字「${creatorState.name}」、头像「${creatorState.avatar}」、卡 ${creatorState.cards} 张、统计 ${JSON.stringify(creatorState.stats)}、分享按钮 ${creatorState.hasShare} 个`);
+  if (creatorState.avatar !== '🦊') problems.push(`公开主页：头像应当跟着学生选的那个（实际「${creatorState.avatar}」）`);
+  if (!creatorState.hasShare) problems.push('公开主页：应当有"分享这个主页"按钮');
+  if (!creatorState.cards) problems.push('公开主页：夹具里学生有已公开的作品，卡片不该是 0 张');
+  // ⭐ 最要紧的一条：**没公开的作品一条都不能出现**（夹具里「宽画布样例」是 is_public=0）
+  if (creatorState.titles.includes('宽画布样例')) problems.push('公开主页：出现了**没公开**的作品（宽画布样例）—— 个人主页不该把学生的可见面变大');
+  if (!creatorState.name) problems.push('公开主页：应当显示名字（匿名时是「小创作者」）');
+  await shot('19f-creator-home-public');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settle();
+  const creatorMobile = await page.evaluate(() => ({
+    columns: (getComputedStyle(document.querySelector('.sw-grid') || document.body).gridTemplateColumns || '').split(' ').filter(Boolean).length,
+    overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  }));
+  console.log(`  · 公开主页（390px）：网格 ${creatorMobile.columns} 列、横向溢出 ${creatorMobile.overflow}px`);
+  if (creatorMobile.overflow > 2) problems.push(`公开主页：手机视口下横向溢出了 ${creatorMobile.overflow}px`);
+  await shot('19g-creator-home-mobile');
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await settle();
+  // 回到「我的作品」，把匿名开关关掉 → 公开主页上的名字要变成「首字 + 同学」（和广场同一套脱敏）
+  await page.goto(`${base}/my-works`, { waitUntil: 'domcontentloaded' });
+  await settle();
+  await page.locator('[data-testid="home-avatar"]').first().click();
+  await settle();
+  await page.locator('[data-testid="anonymous-switch"]').first().click();
+  await settle();
+  await page.goto(creatorUrl, { waitUntil: 'domcontentloaded' });
+  await settle();
+  const namedState = await page.evaluate(() => (document.querySelector('[data-testid="home-name"]')?.textContent || '').trim());
+  console.log(`  · 关掉匿名后公开主页的名字：「${namedState}」（应当是「小同学」——首字 + 同学，不是完整姓名）`);
+  if (namedState !== '小同学') problems.push(`公开主页：关掉匿名后应当显示「小同学」（实际「${namedState}」）`);
+  // 复原成匿名（夹具状态别留给后面几节）
+  await page.goto(`${base}/my-works`, { waitUntil: 'domcontentloaded' });
+  await settle();
+  await page.locator('[data-testid="home-avatar"]').first().click();
+  await settle();
+  await page.locator('[data-testid="anonymous-switch"]').first().click();
+  await settle();
+
   // ── ⑤f″ ⭐ 2026-09-27 用户报的图1：**只读查看的画布要按容器适配**，不能照搬快照里存的视角。
   //    夹具 `work_guard_wide`：节点横向铺到 x≈1250、viewport 是桌面形状（x:-120,y:-80,zoom:0.72）
   //    且**不公开**。390px 下如果照搬那个视角，节点会大片跑出容器 —— 用户看到的就是

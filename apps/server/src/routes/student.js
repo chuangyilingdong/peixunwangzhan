@@ -1,10 +1,12 @@
-import { asPositiveInteger, audit, clearAuthCookies, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, workCoverFromSnapshot, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, likeKeyword, likeEscapeClause } from '../lib.js';
+import { asPositiveInteger, audit, clearAuthCookies, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, workCoverFromSnapshot, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, likeKeyword, likeEscapeClause, ensureHomeToken } from '../lib.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
 import { assertTransition } from '../services/domainState.js';
 // 画布「可提交产出」的唯一判定口径（与前端同一份文件，见 packages/shared/src/canvasOutput.js）
 import { canvasOutputSignature, hasUnsubmittedOutput, isCanvasEditableProjectStatus, newCanvasOutputKeys } from '../../../../packages/shared/src/canvasOutput.js';
+// 头像白名单与显示字符（与前端同一份，见 packages/shared/src/avatars.js 头注释：预设键，不是上传图片）
+import { isAvatarKey } from '../../../../packages/shared/src/avatars.js';
 import { computePoolSummary } from '../services/computePool.js';
 // 「我的作品」点开一件要读 VibeCoding 产物的快照（产物清单 / 图片 fileId / 正文），
 // 与 org 端「课堂作品」同一套解析函数 —— 两处口径必须一致，别再抄一份。
@@ -351,6 +353,28 @@ async function refreshStudentAccount(ctx, userId, orgId) {
   return await studentAccountOverview({ ...ctx, auth: { ...ctx.auth, rawUser } });
 }
 
+/**
+ * 个人主页设置（学生自己看的那一份）：主页链接 + 头像 + 匿名开关。
+ *
+ * ⚠️ `anonymous` 用既有列 `users.privacy_showcase_anonymous`（**默认 1 = 匿名**，见 schema.js）——
+ *    那是给未成年人设计的隐私默认值，这里**只把它读出来交给界面**，不替用户改默认。
+ *    对外显示成什么（「小创作者」还是「X同学」）由公开接口按同一个字段算，前端不算。
+ * ⚠️ `patch` 是给 PUT 用的：刚写完库时 `auth.user` 还是旧值，不覆盖一下就会把旧值回给前端
+ *    （界面就会出现"改了但没变"）。
+ */
+async function studentHomeSettings(auth, patch = {}) {
+  const homeToken = await ensureHomeToken(auth.user.id);
+  return {
+    homeToken: homeToken || null,
+    homeUrl: homeToken ? `/u/${homeToken}` : null,
+    avatarKey: patch.avatarKey !== undefined ? patch.avatarKey : (auth.user.avatarKey || null),
+    // 语义：true = **对外匿名**（显示为「小创作者」）。前端那个开关按这个语义标注，
+    // 别做成"显示我的名字"再反转一次 —— 反转错一次就是隐私事故（默认必须是匿名）。
+    anonymous: patch.anonymous !== undefined ? patch.anonymous : Boolean(auth.user.privacy?.showcaseAnonymous),
+    displayName: auth.user.displayName || auth.user.login || '',
+  };
+}
+
 export async function handleStudent(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/student')) return null;
@@ -445,6 +469,41 @@ export async function handleStudent(ctx) {
     await audit(ctx, 'STUDENT_PASSWORD_CHANGE', 'USER', auth.user.id, null, { sessionsRevoked });
     ctx.setCookie = clearAuthCookies();
     return { passwordChanged: true, sessionsRevoked, reloginRequired: true };
+  }
+
+  // ⭐ 2026-09-27：**个人主页设置**（用户口径「学生创建了账号应该就有个主页的专属链接。现在需要把
+  //    『我的作品』改成主页的概念。对外公开并且可以分享」+「头像修改要加上」）。
+  // GET 顺手 ensureHomeToken：存量学生（建号时还没有这一列）第一次打开就补上，
+  // 不必等一次性回填脚本（脚本仍然要跑，目的是让链接**稳定**，不是"访问过才生成"）。
+  if (part === '/home' && method === 'GET') return await studentHomeSettings(auth);
+  if (part === '/home' && method === 'PUT') {
+    // 这里**只允许改两样**：头像、要不要在对外页面显示名字（匿名开关）。
+    // ⚠️ 名字本身（display_name）不在这里改 —— 那是机构端口径（同机构内不能重名），
+    //    与"对外显示成什么"是两件事，别混。
+    // ⚠️ 想清零头像就传 `avatarKey: null`（不是空串）。
+    const body = ctx.body || {};
+    const hasAvatar = Object.hasOwn(body, 'avatarKey');
+    const hasAnon = Object.hasOwn(body, 'showcaseAnonymous');
+    if (!hasAvatar && !hasAnon) throw errors.badRequest('没有要改的内容', 'NOTHING_TO_UPDATE');
+    if (hasAvatar && body.avatarKey !== null && !isAvatarKey(body.avatarKey)) {
+      throw errors.badRequest('头像只能从预设里选', 'INVALID_AVATAR_KEY');
+    }
+    if (hasAnon && typeof body.showcaseAnonymous !== 'boolean') {
+      throw errors.badRequest('showcaseAnonymous 必须是布尔值', 'INVALID_SHOWCASE_ANONYMOUS');
+    }
+    // 列名是这里写死的字面量、值走占位符（不拼用户输入）
+    const sets = [];
+    const params = [];
+    if (hasAvatar) { sets.push('avatar_key=?'); params.push(body.avatarKey); }
+    if (hasAnon) { sets.push('privacy_showcase_anonymous=?'); params.push(body.showcaseAnonymous ? 1 : 0); }
+    params.push(nowIso(), auth.user.id);
+    await aq(`UPDATE users SET ${sets.join(', ')}, updated_at=? WHERE id=?`, params);
+    await audit(ctx, 'STUDENT_HOME_PROFILE_UPDATE', 'USER', auth.user.id, null,
+      { avatarKey: hasAvatar ? body.avatarKey : undefined, showcaseAnonymous: hasAnon ? body.showcaseAnonymous : undefined });
+    return await studentHomeSettings(auth, {
+      ...(hasAvatar ? { avatarKey: body.avatarKey } : {}),
+      ...(hasAnon ? { anonymous: body.showcaseAnonymous } : {}),
+    });
   }
 
   const sessionMatch = part.match(/^\/account\/sessions\/([^/]+)\/revoke$/);
