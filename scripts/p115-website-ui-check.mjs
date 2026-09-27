@@ -717,12 +717,26 @@ try {
   await settle();
   if (await page.locator('.page-title').count()) problems.push('灵动作品：页头（学员作品 / 孩子们的灵感…）应已删除');
 
-  // ① 分类只有两个
-  const pills = await page.locator('.pl-types .pl-type').evaluateAll((els) => els.map((el) => ({ type: el.getAttribute('data-type'), text: el.textContent.replace(/\s+/g, ' ').trim(), pressed: el.getAttribute('aria-pressed') })));
-  console.log(`  · 灵动作品分类：[${pills.map((p) => p.text).join(' / ')}]`);
-  const pillTypes = pills.map((p) => p.type);
-  if (pillTypes.join('|') !== 'all|CANVAS|VIBECODING') problems.push(`灵动作品：分类应当只有 全部 / 画布作品 / VibeCoding作品（实际 [${pillTypes.join(', ')}]）`);
-  if (pills[0]?.pressed !== 'true') problems.push('灵动作品：默认应当选中「全部」');
+  // ① ⚠️ 2026-09-27 用户口径变更（**不是测试漂移**）：「课堂作品这里为什么还有下拉框呢？
+  //    这里的展示应该是**大的作品预览**啊。类似于图3，不可能存在下拉框的说法啊。」
+  //    → 类型筛选那排胶囊**已删除**，列表改成**一列大预览**。这条断言现在**反过来**钉它不该回来。
+  const pillCount = await page.locator('.pl-types .pl-type').count();
+  console.log(`  · 类型筛选胶囊：${pillCount} 个（用户口径已删除，应为 0）`);
+  if (pillCount) problems.push('灵动作品：类型筛选胶囊已按用户口径删除，不该再出现');
+  if (!await page.locator('.works-search input').count()) problems.push('灵动作品：搜索框应当保留（它是输入框、不是筛选器）');
+  const listGeo = await page.evaluate(() => {
+    const grid = document.querySelector('.works.all');
+    const card = document.querySelector('.pl-card');
+    const cover = card?.querySelector('.pl-cover');
+    return {
+      columns: grid ? (getComputedStyle(grid).gridTemplateColumns || '').split(' ').filter(Boolean).length : 0,
+      coverWidth: cover ? Math.round(cover.getBoundingClientRect().width) : 0,
+      viewport: document.documentElement.clientWidth,
+    };
+  });
+  console.log(`  · 列表布局：${listGeo.columns} 列、封面宽 ${listGeo.coverWidth}px（视口 ${listGeo.viewport}px）`);
+  if (listGeo.columns !== 1) problems.push(`灵动作品：用户要「大的作品预览」，列表应当是一列（实际 ${listGeo.columns} 列）`);
+  if (listGeo.coverWidth < Math.min(600, listGeo.viewport * 0.6)) problems.push(`灵动作品：封面只有 ${listGeo.coverWidth}px 宽，不像"大预览"`);
 
   // ② 每页 12 件 + 翻页（fixture 造了 15 件：12 + 3）
   const pageOne = await page.locator('.pl-card').count();
@@ -742,19 +756,14 @@ try {
     await settle();
   }
 
-  // ③ 两个分类各自只显示自己的那一类
-  for (const [type, label] of [['CANVAS', '画布作品'], ['VIBECODING', 'VibeCoding作品']]) {
-    await page.locator(`.pl-types .pl-type[data-type="${type}"]`).click();
-    await settle();
-    // ⚠️ 判的是卡片的 **data-category**（分类），不是 data-type（类型角标）：一件导入件
-    //    类型可能是「图片」，但按后台映射它属于「画布作品」这一类 —— 两者不是一回事。
-    const shown = await page.locator('.pl-card').evaluateAll((els) => els.map((el) => el.getAttribute('data-category')));
-    console.log(`  · 点「${label}」：${shown.length} 张（类型：${[...new Set(shown)].join(', ')}）`);
-    if (!shown.length) problems.push(`灵动作品：分类「${label}」下一件都没有（fixture 里应当有）`);
-    if (shown.some((key) => key !== type)) problems.push(`灵动作品：分类「${label}」里混进了别的类：${[...new Set(shown)].join(', ')}`);
-    await page.locator(`.pl-types .pl-type[data-type="${type}"]`).click();
-    await settle();
-  }
+  // ③ 搜索（删掉类型胶囊之后**唯一**的筛选手段）：搜一个只属于某件作品的关键词 → 只剩它
+  await page.locator('.works-search input').fill('样例作品 13');
+  await settle();
+  const searchHits = await page.locator('.pl-card').evaluateAll((els) => els.map((el) => (el.querySelector('.pl-title')?.textContent || '').trim()));
+  console.log(`  · 搜索「样例作品 13」：${searchHits.length} 张 [${searchHits.join(', ')}]`);
+  if (searchHits.length !== 1 || !searchHits[0].includes('样例作品 13')) problems.push(`灵动作品：搜索应当只剩匹配的那一件（实际 ${searchHits.length} 张）`);
+  await page.locator('.works-search input').fill('');
+  await settle();
   await shot('13-works-category');
 
   // ④ 卡片构成：白卡 20px、封面 14px 圆角、类型角标、日期、作者、**右下角机构名**
@@ -783,7 +792,8 @@ try {
   console.log(`  · 卡片：圆角 ${cardGeo?.cardRadius}px、封面 ${cardGeo?.coverRatio}:1 圆角 ${cardGeo?.coverRadius}px、角标「${cardGeo?.badge}」、有日期=${cardGeo?.hasDate}、作者行「${cardGeo?.author}」`);
   if (!cardGeo) problems.push('灵动作品：取不到卡片几何');
   else {
-    if (cardGeo.cardRadius !== 20) problems.push(`灵动作品：卡片圆角应为 20px（实际 ${cardGeo.cardRadius}px）`);
+    // ⚠️ 2026-09-27：课堂作品改成"一列大预览"之后卡片圆角从 20 提到 24（见 styles.css 的 .works.all）
+    if (cardGeo.cardRadius !== 24) problems.push(`灵动作品：卡片圆角应为 24px（实际 ${cardGeo.cardRadius}px）`);
     if (cardGeo.cardBg !== 'rgb(255, 255, 255)') problems.push(`灵动作品：卡片应为白底（实际 ${cardGeo.cardBg}）`);
     if (cardGeo.coverRadius !== 14) problems.push(`灵动作品：封面圆角应为 14px（实际 ${cardGeo.coverRadius}px）`);
     if (cardGeo.coverRatio == null || cardGeo.coverRatio < 1.4) problems.push(`灵动作品：封面应当接近 16:9（实测 ${cardGeo.coverRatio}:1）`);
