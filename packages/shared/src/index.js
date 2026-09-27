@@ -18,6 +18,9 @@ export { materialVisual, materialToneClass } from './materialTypes.js';
 export * from './markdown.jsx';
 export * from './vibecodingProject.js';
 export * from './workMedia.jsx';
+// 二维码（零依赖自实现，2026-09-27 官网首页要用）：矩阵在 qr.js，SVG 组件在 qr.jsx
+export * from './qr.js';
+export * from './qr.jsx';
 // 控制台设计系统（含 CSS）。组件会被 tree-shake，但 CSS 是副作用导入会留在包里，
 // 所以没用到控制台的那一端会多背约 8.5KB gzip 的样式——换来的是不用谁单独记着引 CSS。
 export * from './console/index.js';

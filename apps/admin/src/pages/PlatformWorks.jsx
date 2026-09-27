@@ -192,10 +192,11 @@ export function PlatformWorks({ api }) {
       </> : <Empty title="没有符合条件的作品" body="可调整筛选条件，或切换作品类型。" />}
     </Panel>
     {/* 作品预览（两类共用）：**弹窗**，不再渲染在表格下面（用户 2026-09-27：
-        「不要拉到下面才能看，只有操作那给个预览按钮，弹窗查看就行了」）。 */}
+        「不要拉到下面才能看，只有操作那给个预览按钮，弹窗查看就行了」）。
+        ⚠️ 这里**只能有一处**渲染：2026-09-27 那天留了旧的 second 渲染（没有 `kind` → 默认按 VibeCoding 取数），
+        点画布作品的预览会**同时弹出两个窗**，上面那个报「VibeCoding 作品不存在」。
+        守卫 `p154` 现在数这个出现次数（必须 = 1）。 */}
     {previewItem ? <WorkPreview api={api} kind={kind} workId={previewItem.id} title={previewItem.title} onClose={() => setPreviewItem(null)} /> : null}
-    {/* 作品预览（VibeCoding 产物）：网页在不带 allow-same-origin 的沙箱里真跑，文档给服务端转的 PDF */}
-    {previewItem ? <WorkPreview api={api} workId={previewItem.id} title={previewItem.title} onClose={() => setPreviewItem(null)} /> : null}
     <details onToggle={(event) => setMapOpen(event.currentTarget.open)}><summary>作品广场分类映射（改完即时生效，不用发版）</summary>
       {mapOpen && <Panel title="类型 → 分类">
         {plazaMap.loading ? <Loading /> : plazaMap.error ? <ErrorState error={plazaMap.error} onRetry={plazaMap.refresh} /> : plazaMap.data && mapDraft ? <>

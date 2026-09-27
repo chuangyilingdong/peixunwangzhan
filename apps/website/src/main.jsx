@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, Icon, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, Icon, QrCode, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { StudentAccountPage } from './pages/AccountSecurity.jsx';
 import { MyWorkDetailPage } from './pages/MyWorkDetail.jsx';
@@ -935,7 +935,35 @@ function HomeLanding() {
         整块没配用内置默认，运营把 cards 删空就是不要这一栏（不回退）。
         ⚠️ 同样在 `.hp-first` **外面**：加它不许改变第一屏（含背景视频）的取景。 */}
     {ready ? <HomeCompare block={content.compare === undefined || content.compare === null ? HOME_COMPARE_DEFAULT : content.compare} /> : null}
+    {/* ⭐ 二维码一栏（用户口径 2026-09-27：「官网首页做个二维码出来，微信扫码可以打开官网首页」）——
+        编的是**当前站点首页**（`window.location.origin`，换域名/预发环境自动跟着走），所以不需要后台配。
+        排在对比栏之后、页脚之前：最后一屏，不打扰首屏取景（p135/p147 那几条"第一屏取景"的约束照旧）。
+        二维码是自己画的（`packages/shared/src/qr.js`，零依赖、无外站素材）；守卫 p155 钉着它。 */}
+    {ready ? <HomeQr /> : null}
   </main>;
+}
+/**
+ * 首页最后一栏：微信扫码打开官网。
+ *
+ * 为什么自己生成而不是用二维码服务：仓库纪律是**不引依赖、不引外站素材**（p147 那条同样写过），
+ * 二维码服务会把站址发给第三方；而我们的内容很短，自实现一个够用的编码器更干净。
+ * ⚠️ 编的地址取 `window.location.origin` —— 这样生产/预发/本地都指向**当前这台**首页，不会写死。
+ */
+function HomeQr() {
+  const url = typeof window === 'undefined' ? '' : `${window.location.origin}/`;
+  return <section className="hp-qr" aria-label="扫码访问官网">
+    <div className="hp-qr-inner">
+      <div className="hp-qr-copy">
+        <p className="hp-qr-kicker">手机访问</p>
+        <h2>微信扫一扫<br />在手机上打开官网</h2>
+        <p className="hp-qr-note">学生端、课堂作品、机构方案都在同一个站点里。</p>
+      </div>
+      <div className="hp-qr-code">
+        {url ? <QrCode value={url} size={172} label={`扫码打开：${url}`} /> : null}
+        <span>{url.replace(/^https?:\/\//, '')}</span>
+      </div>
+    </div>
+  </section>;
 }
 function Home(_props) { return <HomeLanding />; }
 function CTA(){return <section className="cta"><div><Kicker>准备好把 AI 课开起来了吗？</Kicker><h2>让每个孩子<br/><em>用 AI 做出自己的作品</em></h2><p>获取演示账号与示范课包清单。</p></div><Button>联系我们</Button></section>}

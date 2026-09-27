@@ -384,7 +384,47 @@ try {
     }
   }
 
-  // ── ② 接口回来前不渲染文案（口径②）：定向延迟 CMS 响应，看首帧
+  // ── ①c 首页最后的「扫码访问」二维码（用户 2026-09-27：「官网首页做个二维码出来，微信扫码可以打开官网首页」）
+  //    这里验的是**渲染出来的点阵**：把 SVG path 里的黑格还原出来，和共享编码器对**当前站点地址**
+  //    算出来的矩阵逐格比。这样既证明"编的是当前 origin 而不是写死的域名"，也证明组件没把矩阵画歪。
+  //    （"扫得出来"由 `p155` 钉着：矩阵指纹是**用 jsQR 真解码验证过**的，见 §四十二。）
+  {
+    const { qrMatrix } = await import('../packages/shared/src/qr.js');
+    const expectedUrl = `${new URL(base).origin}/`;
+    const expected = qrMatrix(expectedUrl, { ec: 'M' });
+    const rendered = await page.evaluate(() => {
+      const band = document.querySelector('.hp-qr');
+      const svg = band ? band.querySelector('svg') : null;
+      const path = svg ? svg.querySelector('path') : null;
+      const d = path ? path.getAttribute('d') : '';
+      const cells = new Set();
+      for (const m of String(d).matchAll(/M(-?\d+)\s+(-?\d+)h1v1h-1z/g)) cells.add(`${m[1]},${m[2]}`);
+      return {
+        hasBand: Boolean(band),
+        text: band ? band.innerText.replace(/\s+/g, ' ') : '',
+        viewBox: svg ? svg.getAttribute('viewBox') : '',
+        cells: [...cells],
+      };
+    });
+    if (!rendered.hasBand) problems.push('首页：找不到「扫码访问」那一栏（.hp-qr）—— 用户 2026-09-27 要的二维码没渲染出来');
+    else {
+      if (!rendered.text.includes('微信扫一扫')) problems.push(`首页扫码栏：文案里没有「微信扫一扫」（实际：${rendered.text.slice(0, 60)}）`);
+      if (rendered.viewBox !== `0 0 ${expected.size} ${expected.size}`) {
+        problems.push(`首页扫码栏：二维码尺寸不对（viewBox ${rendered.viewBox}，按当前地址应 ${expected.size}×${expected.size}）—— 是不是编错了内容？`);
+      }
+      const expectedCells = new Set();
+      for (let y = 0; y < expected.size; y += 1) for (let x = 0; x < expected.size; x += 1) if (expected.modules[y][x]) expectedCells.add(`${x},${y}`);
+      const drawn = new Set(rendered.cells);
+      const missing = [...expectedCells].filter((cell) => !drawn.has(cell));
+      const extra = [...drawn].filter((cell) => !expectedCells.has(cell));
+      if (missing.length || extra.length) {
+        problems.push(`首页扫码栏：画出来的点阵与编码器不一致（少 ${missing.length} 格 / 多 ${extra.length} 格）—— 扫出来会不是首页地址`);
+      }
+    }
+    console.log(`  · 首页扫码栏：${rendered.hasBand ? `viewBox=${rendered.viewBox} 点阵 ${rendered.cells.length} 格（期望 ${expectedUrl} → ${expected.size}×${expected.size}）` : '未渲染'}`);
+    await shot('02b-home-qr');
+  }
+
   await page.route(CMS_HOME_URL, async (route) => { await new Promise((r) => setTimeout(r, 1800)); await route.continue(); });
   await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(700);
