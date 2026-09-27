@@ -761,10 +761,24 @@ try {
   }
   await orgShot('26-org-works-search');
 
-  // ── 002-01：四个页签都在（机构管理员能看到入口）
+  // ── 002-01：库存列表 + **四个只读页签**（写操作「添加课包」不再占页签 —— 2026-09-26 用户口径改弹窗）
   await orgPage.goto(`${base}/series-overview`, { waitUntil: 'domcontentloaded' });
   await orgSettle();
   await orgExpect('002-01 库存列表', ['机构课包库存', '课包库存', '学生授权中心', '采购与开通记录', '为学生添加课包']);
+  const tabLabels = (await orgPage.locator('.tabs .tab').allInnerTexts()).map((text) => text.trim());
+  for (const label of ['课包库存', '学生授权中心', '学生授权记录', '采购与开通记录']) {
+    if (!tabLabels.includes(label)) problems.push(`002-01：页签「${label}」不见了（现有页签：${tabLabels.join('、')}）`);
+  }
+  if (tabLabels.some((label) => label.includes('添加课包'))) {
+    problems.push(`002-01：「添加课包」又回到页签里了（用户 2026-09-26 口径：写操作走弹窗，页签只留只读视角）—— 现有页签：${tabLabels.join('、')}`);
+  }
+  // ⭐ 2026-09-26 用户口径（图1）：机构端 / 老师端的侧栏要显示**机构名字**
+  //    —— 原来只有「机构管理员 / 授课教师」那个角色胶囊，看不出是哪一家机构。
+  const orgNameInDb = (await arow("SELECT name FROM organizations WHERE id=(SELECT org_id FROM users WHERE login='org-admin')"))?.name || '';
+  const orgNameOnPage = (await orgPage.locator('.org-name').first().innerText().catch(() => '')).trim();
+  if (!orgNameInDb) problems.push('机构名夹具异常：库里查不到 org-admin 所属机构的名字');
+  else if (orgNameOnPage !== orgNameInDb) problems.push(`机构名没显示对：侧栏「${orgNameOnPage}」≠ 库里「${orgNameInDb}」`);
+  console.log(`机构端侧栏机构名：${orgNameOnPage}`);
   await orgShot('20-org-series-overview');
 
   // ── 002-03 学生授权中心：4 张卡必须**按真实数据算**
@@ -775,6 +789,8 @@ try {
     '学生总数', '已有课包学生', '暂无课包学生', '本月新增授权',
     '账号状态', '授权情况', '授权概览', '查看授权',
     '学生', '登录账号', '已授权课包数', '最近授权时间',
+    // ⭐ 2026-09-26 用户口径：体验课包可以重复授权给同一账号 → 这一列必须看得见授权次数
+    '体验课包授权次数',
   ]);
   const totalStudents = await cardValue('学生总数');
   const withGrants = await cardValue('已有课包学生');
@@ -782,6 +798,39 @@ try {
   if (withGrants !== grantedIds.length) problems.push(`002-03：「已有课包学生」期望 ${grantedIds.length}（夹具里正好这么多人有许可），实际 ${withGrants} —— 卡片像是写死的`);
   if (typeof totalStudents === 'number' && withGrants + withoutGrants !== totalStudents) problems.push(`002-03：卡片算术对不上（总数 ${totalStudents} ≠ 已有 ${withGrants} + 暂无 ${withoutGrants}）`);
   await orgShot('21-org-student-grant-center');
+
+  // ── 「添加课包」弹窗**从列表进**的那条路（用户 2026-09-26 口径的主路径：为谁添加 → 添加什么课包）。
+  //    与 002-04 那条（学生固定）不同：这条路要先在弹窗里**选学生**（服务端搜索 + 350ms 防抖），
+  //    再按这名学生拉候选课包（普通课包要排除他已持有的、体验课包不排除）。
+  //    ⚠️ 只打开 / 选人 / 选包 / 关掉，**绝不点确认授权** —— 那会写库，把 002-03 / 002-06 的数字改掉。
+  await orgPage.getByRole('button', { name: '添加课包', exact: true }).first().click();
+  await orgPage.waitForTimeout(600);
+  const listDialog = orgPage.locator('dialog.classroom-dialog', { hasText: '添加课包' }).first();
+  await orgExpect('添加课包弹窗（从列表进）', ['① 为谁添加', '搜索学生', '先选学生', '取消']);
+  const studentButtons = listDialog.locator('.card-list button');
+  const studentOptionCount = await studentButtons.count();
+  if (!studentOptionCount) problems.push('添加课包（从列表进）：弹窗里一个可选学生都没有 —— 夹具里有学生，候选名单不该是空的');
+  let listModalOptions = [];
+  for (let i = 0; i < Math.min(3, studentOptionCount); i += 1) {
+    if (i > 0) { await listDialog.getByRole('button', { name: '重选' }).click(); await orgPage.waitForTimeout(300); }
+    await listDialog.locator('.card-list button').nth(i).click();
+    await orgPage.waitForTimeout(400);
+    listModalOptions = (await listDialog.locator('select option').allInnerTexts())
+      .map((text) => text.trim()).filter((text) => text && !text.startsWith('选择课包'));
+    if (listModalOptions.length) break;
+  }
+  if (studentOptionCount && !listModalOptions.length) {
+    problems.push('添加课包（从列表进）：连试 3 个学生，候选课包都是空的 —— 夹具里有可授权课包，不该全空');
+  }
+  if (listModalOptions.length) {
+    await listDialog.locator('select').first().selectOption({ label: listModalOptions[0] });
+    await orgPage.waitForTimeout(400);
+    await orgExpect('添加课包（从列表进）· 确认那一步', ['③ 确认', '确认授权']);
+  }
+  console.log(`添加课包（从列表进）：${studentOptionCount} 名学生可选，候选课包 ${listModalOptions.length} 个：${listModalOptions.join('、')}`);
+  await orgShot('30-org-add-grant-modal-from-list');
+  await listDialog.getByRole('button', { name: '取消', exact: true }).click();
+  await orgPage.waitForTimeout(400);
 
   // ── 002-04 学生授权详情（按线框图第 1 张重排）：从有许可的学生那一行下钻。
   // 入口做在**课包名**上（线框图表只有 4 列、没有「操作」列），所以这里点行内那个 text-button。
@@ -808,32 +857,41 @@ try {
   }
   await orgShot('22-org-student-grant-detail');
 
-  // ── 002-04A「添加课包」抽屉（线框图右栏）：候选规则、仅单选、授权后预览。
-  // ⚠️ 只打开 + 选中 + 关掉，**绝不点「确认授权」** —— 那会写库，把后面 002-03 / 002-06 的数字改掉。
-  // ⚠️ 必须 exact —— getByRole 的 name 默认是**子串**匹配，「添加课包」会命中页签「为学生添加课包」，
-  //    于是点去了学员许可页、抽屉压根没开（第一版就这么踩的，截图拍到的是错页面）。
+  // ── 「添加课包」弹窗（2026-09-26 用户口径：原来的 002-04A 抽屉改成弹窗；从学生详情进来时学生是固定的）。
+  // ⚠️ 只打开 + 选课包 + 关掉，**绝不点「确认授权」** —— 那会写库，把后面 002-03 / 002-06 的数字改掉。
+  // ⚠️ 必须 exact —— getByRole 的 name 默认是**子串**匹配，否则会命中「为学生添加课包」那个按钮。
   await orgPage.getByRole('button', { name: '添加课包', exact: true }).first().click();
   await orgPage.waitForTimeout(700);
-  await orgExpect('002-04A 添加课包', ['002-04A', '添加课包', '当前学生', '候选课包规则', '可授权课包', '搜索课包', '总人次', '已分配', '剩余']);
-  const candidate = orgPage.locator('.drawer-panel input[type=radio]').first();
-  if (await candidate.count()) {
-    await candidate.click();
-    await orgPage.waitForTimeout(500);
-    await orgExpect('002-04A 授权预览', ['本次授权预览', '授权后状态', '待激活', '剩余人次', '总人次', '确认授权后', '取消', '确认授权']);
-    if (await orgPage.locator('.drawer-panel').getByRole('button', { name: /取消授权|取消资格|撤销授权/ }).count()) {
-      problems.push('002-04A：抽屉里出现了取消类按钮（机构端没有取消权限）');
-    }
-    // 候选池规则要**真的生效**：这名学生已经持有的课包不能出现在候选里
-    const candidateTitles = (await orgPage.locator('.drawer-panel .item-card label').allInnerTexts()).map((text) => text.trim().replace(/\s+/g, ' '));
-    if (grantedSeriesTitle && candidateTitles.some((title) => title.includes(grantedSeriesTitle))) {
-      problems.push(`002-04A：候选里出现了该学生已持有的课包「${grantedSeriesTitle}」——候选规则没生效（候选：${candidateTitles.join('、')}）`);
-    }
-    console.log(`002-04A 候选课包（${candidateTitles.length} 个）：${candidateTitles.join('、')}`);
-  } else {
-    problems.push('002-04A：一个候选课包都没有 —— 夹具里有可授权的课包，候选池不该是空的');
+  await orgExpect('添加课包弹窗', ['添加课包', '① 为谁添加', '② 添加什么课包']);
+  const grantDialog = orgPage.locator('dialog.classroom-dialog', { hasText: '添加课包' }).first();
+  if (!(await grantDialog.count())) problems.push('添加课包：没有弹出对话框 —— 用户 2026-09-26 口径是**弹窗**，不是跳转到录入页');
+  if (!(await grantDialog.innerText()).includes(grantedName)) {
+    problems.push(`添加课包：弹窗里没带出当前学生「${grantedName}」—— 从学生详情进来时学生该是固定的`);
   }
-  await orgShot('26-org-add-grant-drawer');
-  await orgPage.locator('.drawer-panel').getByRole('button', { name: '取消', exact: true }).click();
+  const candidateTexts = (await grantDialog.locator('select option').allInnerTexts())
+    .map((text) => text.trim()).filter((text) => text && !text.startsWith('选择课包'));
+  if (!candidateTexts.length) problems.push('添加课包：候选课包是空的 —— 夹具里有可授权课包，候选池不该是空的');
+  if (grantedSeriesTitle && candidateTexts.some((text) => text.includes(grantedSeriesTitle))) {
+    problems.push(`添加课包：候选里出现了该学生已持有的课包「${grantedSeriesTitle}」—— 候选规则没生效（候选：${candidateTexts.join('、')}）`);
+  }
+  if (candidateTexts.length) {
+    const firstOption = grantDialog.locator('select option').filter({ hasText: candidateTexts[0] }).first();
+    await grantDialog.locator('select').first().selectOption(await firstOption.getAttribute('value'));
+    await orgPage.waitForTimeout(400);
+    await orgExpect('添加课包 · 确认那一步', ['③ 确认', '确认授权', '取消']);
+    // 次数输入是**体验课包专属**：选项文案里带「体验课包」的才有，普通课包不该有
+    // （服务端对普通课包 units>1 直接 400，界面上给个输入框等于骗用户）。
+    const isTrial = candidateTexts[0].includes('体验课包');
+    const unitsInput = await grantDialog.locator('input.units-input').count();
+    if (isTrial && !unitsInput) problems.push(`添加课包：体验课包（${candidateTexts[0]}）没有「授权次数」输入 —— 用户口径是体验课包要填次数`);
+    if (!isTrial && unitsInput) problems.push(`添加课包：普通课包（${candidateTexts[0]}）出现了「授权次数」输入 —— 次数只属于体验课包`);
+    if (await grantDialog.getByRole('button', { name: /取消授权|取消资格|撤销授权/ }).count()) {
+      problems.push('添加课包：弹窗里出现了取消类按钮（机构端没有取消权限）');
+    }
+  }
+  console.log(`添加课包弹窗候选（${candidateTexts.length} 个）：${candidateTexts.join('、')}`);
+  await orgShot('26-org-add-grant-modal');
+  await grantDialog.getByRole('button', { name: '取消', exact: true }).click();
   await orgPage.waitForTimeout(400);
 
   // ── 002-04B 单授权详情抽屉（入口是行内的课包名按钮）
@@ -978,11 +1036,13 @@ try {
   if (!(revokedThisMonth >= 1)) problems.push(`002-05：「本月取消」至少该是 1（刚撤销过一次），实际 ${revokedThisMonth}`);
   await orgShot('29-org-grant-records-revoke');
 
-  // ── 「为学生添加课包」里「勾选要授权的学员」这一块（2026-09-18 用户反馈「布局和逻辑很不舒服」后重做）。
+  // ── 「学员许可」（/grants）里「勾选要授权的学员」这一块（2026-09-18 用户反馈「布局和逻辑很不舒服」后重做）。
   // 这一屏以前**没有守卫**，所以它烂在那儿没人发现：`checkbox-option` 这个类**只在平台端 admin.css 里有定义**
   // （`.admin-console .checkbox-option`），机构端引不到它 → 落到全局 `label{display:grid;gap:6px;margin:12px 0}`
   // 上：姓名和复选框被拆成两行、每行还撑到上百像素高（用户截图里复选框飘在名字右边很远处）。
-  await orgPage.locator('.tab', { hasText: '为学生添加课包' }).click();
+  // ⚠️ 2026-09-26 用户口径：它不再占「课包库存与学生授权」的页签（那条路收进「添加课包」弹窗里的一条链接），
+  //    所以这里**直接按路由打开**，继续守这一屏的布局与逻辑。
+  await orgPage.goto(`${base}/grants`, { waitUntil: 'domcontentloaded' });
   await orgSettle();
   await orgExpect('学员许可（选课包前）', ['① 选课包', '课包', '可用次数']);
   await orgPage.locator('.form-grid select').first().selectOption('series-ui-materials');

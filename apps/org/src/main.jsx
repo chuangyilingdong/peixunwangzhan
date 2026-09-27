@@ -229,28 +229,12 @@ function Members({ api, user }) {
   const [form, setForm] = useState({ role: 'STUDENT', login: '', displayName: '', password: '', phone: '' });
   // 「创建账号」是个**按钮 + 弹窗**（用户 2026-09-21 口径）：表单不再常驻占着半屏。
   const [createOpen, setCreateOpen] = useState(false);
-  const [importText, setImportText] = useState('');
-  const [importPreview, setImportPreview] = useState(null);
   const [editing, setEditing] = useState('');
   const [editDraft, setEditDraft] = useState(null);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const items = members.data?.items || [];
 
-  function parseImport() {
-    const lines = importText.trim().split(/\r?\n/).filter(Boolean);
-    if (!lines.length) throw new Error('请先粘贴批量导入内容');
-    const delimiter = lines[0].includes('\t') ? '\t' : ',';
-    const headers = lines[0].split(delimiter).map((item) => item.trim());
-    const required = ['login', 'displayName', 'role', 'password'];
-    if (required.some((key) => !headers.includes(key))) throw new Error('首行必须包含 login、displayName、role、password 列');
-    return lines.slice(1).map((line) => {
-      const values = line.split(delimiter).map((item) => item.trim());
-      const item = Object.fromEntries(headers.map((header, index) => [header, values[index] || '']));
-      // 批次 D：不再解析 classIds（班级退场）—— 学员进课堂改在「课堂」页做。
-      return item;
-    });
-  }
   async function create(event) {
     event.preventDefault(); setBusy(true); setMessage('');
     try {
@@ -281,16 +265,6 @@ function Members({ api, user }) {
     try { await api.put(`org/users/${item.id}/password`, { password }); setMessage('密码已重置，原有登录会话已失效'); }
     catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
-  async function previewImport() {
-    setBusy(true); setMessage('');
-    try { const preview = await api.post('org/users/import/preview', { items: parseImport() }); setImportPreview(preview); setMessage(`预览完成：${preview.validCount} 条可导入，${preview.invalidCount} 条失败`); }
-    catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
-  }
-  async function commitImport() {
-    setBusy(true); setMessage('');
-    try { const result = await api.post('org/users/import/commit', { items: parseImport() }); setImportPreview(null); setImportText(''); setMessage(`批量导入完成：${result.total} 个账号已创建`); await members.refresh(); }
-    catch (error) { const rollback = error.details?.items ? `（${error.details.invalidCount} 条失败，已全部回滚）` : ''; setMessage(errorText(String(error.message || error) + rollback)); } finally { setBusy(false); }
-  }
   const visibleItems = items.filter((item) => (!roleFilter || item.role === roleFilter) && (!search.trim() || [item.login, item.displayName, item.phone].some((value) => String(value || '').toLowerCase().includes(search.trim().toLowerCase()))));
   if (members.loading) return <Loading />;
   if (members.error) return <ErrorState error={members.error} onRetry={members.refresh} />;
@@ -303,7 +277,7 @@ function Members({ api, user }) {
       actions={<div className="row-actions">{isAdmin ? <button className="primary-button" onClick={() => { setMessage(''); setCreateOpen(true); }}>创建账号</button> : null}<button className="secondary-button" onClick={members.refresh}>刷新</button></div>}
     />
     {/* B3（2026-09-13）：机构端有三套容易混的东西，这里把边界一次说清（界面上的「我该去哪」） */}
-    <p className="muted">这里管的是<strong>账号本身</strong>（角色、启停）。学员的<strong>席位与有效期</strong>在「学员开通」，<strong>课包分给谁</strong>在「学员许可」。学员看不到课包时，先确认后两处。</p>
+    <p className="muted">这里管的是<strong>账号本身</strong>（角色、启停）。学员的<strong>席位与有效期</strong>在「学员开通」，<strong>课包分给谁</strong>在「课包库存与学生授权 → 学生授权中心」（那里点「添加课包」直接弹窗分配）。学员看不到课包时，先确认后两处。</p>
     {message && <Notice tone="success">{message}</Notice>}
     {/* 「创建账号」= 按钮 + 弹窗（用户 2026-09-21 口径）。字段顺序也按用户口径：
         角色 → **姓名**（按角色叫「学生姓名 / 老师姓名」）→ **登录账号** → **登录密码**（两者挨着）→ 手机号。 */}
@@ -321,13 +295,10 @@ function Members({ api, user }) {
         <label>手机号（可选）<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
       </form>
     </Modal> : null}
-    {isAdmin && <div className="split">
-      <Panel title="批量导入">
-        <textarea value={importText} rows="7" placeholder={'login,displayName,role,password,phone\nstudent-02,小明,STUDENT,student123,13800000001'} onChange={(event) => setImportText(event.target.value)} />
-        <div className="row-actions"><button className="secondary-button" type="button" disabled={busy} onClick={previewImport}>预览导入</button>{importPreview?.invalidCount === 0 && <button className="primary-button" type="button" disabled={busy} onClick={commitImport}>确认整批导入</button>}</div>
-        {importPreview && <div className="card-list"><Notice tone={importPreview.invalidCount ? 'danger' : 'success'}>共 {importPreview.total} 条，可导入 {importPreview.validCount} 条，失败 {importPreview.invalidCount} 条。</Notice>{importPreview.items.filter((item) => !item.valid).map((item) => <p className="muted" key={item.index}>第 {item.index} 行：{item.errors.join('；')}</p>)}</div>}
-      </Panel>
-    </div>}
+    {/* ⚠️ 2026-09-26 用户口径（图3）：「批量导入这块直接删除」—— 原来这里有一个
+        粘贴 CSV → 预览 → 整批导入的面板，已连同它的状态与两个函数一起删掉。
+        服务端的 org/users/import/preview|commit 两个接口**保留**（`p4-o14` 还在按真接口验
+        账号唯一性/席位/回滚那套语义）；这里只是不再给它界面入口。 */}
     <Panel title="成员列表">
       <div className="row-actions"><input placeholder="搜索姓名、登录名或手机号" value={search} onChange={(event) => setSearch(event.target.value)} /><select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}><option value="">全部角色</option><option value="TEACHER">教师</option><option value="STUDENT">学生</option></select></div>
       {visibleItems.length ? <div className="table-wrap"><table><thead><tr><th>姓名</th><th>角色</th><th>登录名</th><th>额度</th><th>状态</th><th>操作</th></tr></thead><tbody>{visibleItems.map((item) => {
@@ -737,6 +708,6 @@ export function App() {
   const visibleNavigation = session.user.role === 'TEACHER' ? [{ to: '/dashboard', icon: '◈', label: '教师工作台' }, { to: '/courses', icon: '◇', label: '课程备课' }, { to: '/classrooms', icon: '▦', label: '我的课堂' }, { to: '/works', icon: '✦', label: '学生学习结果与作品' }, { to: '/account', icon: '🔑', label: '账号安全' }] : navigation;
   // 改密成功后所有会话都失效（服务端撤销），所以这里只能清本地会话回登录页 —— 不装还在登录。
   const signedOutByPasswordChange = () => { clearSession(); setSession(null); navigate('/login'); };
-  return <AppShell product="灵动ai学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout} onChangePassword={() => navigate('/account')}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/account" element={<AccountSecurity api={api} user={session.user} onSignedOut={signedOutByPasswordChange} />} /><Route path="/classrooms" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId/students/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/members" element={session.user.role === 'ORG_ADMIN' ? <Members api={api} user={session.user} /> : <Navigate to="/classrooms" replace />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={session.user.role === 'ORG_ADMIN' ? <SeriesOverview api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={session.user.role === 'ORG_ADMIN' ? <EnrollmentPage api={api} user={session.user} /> : <Navigate to="/series-overview" replace />} /><Route path="/usage" element={session.user.role === 'ORG_ADMIN' ? <UsagePage api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/grants" element={session.user.role === 'ORG_ADMIN' ? <StudentGrants api={api} /> : <Navigate to="/series-overview" replace />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="灵动ai学院" orgName={session.organization?.name || session.organization?.shortName || ''} roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout} onChangePassword={() => navigate('/account')}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/account" element={<AccountSecurity api={api} user={session.user} onSignedOut={signedOutByPasswordChange} />} /><Route path="/classrooms" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId/students/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/members" element={session.user.role === 'ORG_ADMIN' ? <Members api={api} user={session.user} /> : <Navigate to="/classrooms" replace />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={session.user.role === 'ORG_ADMIN' ? <SeriesOverview api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={session.user.role === 'ORG_ADMIN' ? <EnrollmentPage api={api} user={session.user} /> : <Navigate to="/series-overview" replace />} /><Route path="/usage" element={session.user.role === 'ORG_ADMIN' ? <UsagePage api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/grants" element={session.user.role === 'ORG_ADMIN' ? <StudentGrants api={api} /> : <Navigate to="/series-overview" replace />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);

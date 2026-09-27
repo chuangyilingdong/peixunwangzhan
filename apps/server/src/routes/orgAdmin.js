@@ -11,7 +11,7 @@ import {
   sessionCandidates, sessionScope, sessionStudentCounts, settleSessionStudents,
 } from '../services/classroomSessions.js';
 // 体验课包（2026-09-24 用户口径）：课包类型 + 次数账（剩余次数、按有效产出核销）
-import { experienceBalanceByStudent, grantUnitsOf, isExperienceSeries, seriesTypeOf } from '../services/courseGrants.js';
+import { experienceBalanceByStudent, grantUnitsOf, isExperienceSeries, seriesTypeOf, EXPERIENCE_SERIES_TYPE } from '../services/courseGrants.js';
 import { computePoolSummary, salePriceFenSuccessSql } from '../services/computePool.js';
 import { appendLicenseGrantRevenue } from '../services/licenseLedger.js';
 import { COURSE_QUOTA_SOURCES, recordQuotaChange } from '../services/courseQuotaLedger.js';
@@ -1344,7 +1344,7 @@ export async function handleOrg(ctx) {
     const since = new Date(Date.now() - days * 86400000).toISOString();
     const until = nowIso();
     const series = await arows(`SELECT series.id, series.title, series.cover_image_url, series.sort, series.version,
-        series.difficulty_level, series.age_range_min, series.age_range_max,
+        series.difficulty_level, series.age_range_min, series.age_range_max, series.series_type,
         COALESCE(assignment.quota_total, 0) quota_total, COALESCE(assignment.quota_used, 0) quota_used,
         assignment.status assignment_status, assignment.assigned_at assignment_assigned_at
       FROM course_series series
@@ -1379,6 +1379,10 @@ export async function handleOrg(ctx) {
       const quotaUsed = Number(row0.quota_used || 0);
       return {
         seriesId: row0.id, title: row0.title, coverImageUrl: row0.cover_image_url || null,
+        // 2026-09-26：课包类型（NORMAL / EXPERIENCE）跟着库存一起给 —— 「添加课包」弹窗要靠它决定
+        // 要不要让用户填**次数**（体验课包可重复分配、次数累加；普通课包每人只能一次）。
+        // 类型是 course_series 上的独立字段，前端不许按标题/标签猜（见 services/courseGrants.js 的口径）。
+        seriesType: seriesTypeOf({ series_type: row0.series_type }),
         // 2026-09-17（002-01/002-02 线框图）：库存列表与单课包详情要「当前版本 / 开通时间 / 权益状态」，
         // 这三个都在 course_series 与 course_assignments 上，直接带出来，不再让前端去别处拼。
         version: row0.version || null,
@@ -1601,26 +1605,46 @@ export async function handleOrg(ctx) {
       ${fromSql}
       ORDER BY last_granted_at IS NULL, last_granted_at DESC, student.created_at DESC
       LIMIT ? OFFSET ?`, [...params, limit, offset]);
-    // 当前页学生的课包名（只为「授权概览」这一格）
+    // 当前页学生的课包（只为「授权概览」这一格）—— 每个课包带上**次数账**。
+    // ⭐ 2026-09-26 用户口径：「学生被体验课包授权次数是没有展示的……应该要看到他这个账号体验课包的授权次数」。
+    //    体验课包可重复分给同一账号、次数累积在**同一行**上，所以次数必须从 granted_units 读，
+    //    不能按许可行数数；普通课包这两列恒为 1 / 0。
     const seriesByStudent = new Map();
     if (listRows.length) {
       const placeholders = listRows.map(() => '?').join(',');
-      for (const item of await arows(`SELECT grant.student_id, series.id series_id, series.title
+      for (const item of await arows(`SELECT grant.student_id, series.id series_id, series.title, series.series_type,
+          grant.granted_units, grant.consumed_units
         FROM student_course_grants AS \`grant\` JOIN course_series series ON series.id=grant.series_id
         WHERE grant.org_id=? AND grant.revoked_at IS NULL AND grant.student_id IN (${placeholders})
         ORDER BY grant.granted_at DESC`, [currentOrgId, ...listRows.map((item) => item.id)])) {
         if (!seriesByStudent.has(item.student_id)) seriesByStudent.set(item.student_id, []);
-        seriesByStudent.get(item.student_id).push({ seriesId: item.series_id, title: item.title });
+        const units = grantUnitsOf(item);
+        seriesByStudent.get(item.student_id).push({
+          seriesId: item.series_id, title: item.title,
+          seriesType: seriesTypeOf({ series_type: item.series_type }),
+          grantedUnits: units.granted, consumedUnits: units.consumed, remainingUnits: units.remaining,
+        });
       }
     }
-    const items = listRows.map((item) => ({
-      studentId: item.id, displayName: item.display_name, login: item.login, phone: item.phone || null, status: item.status,
-      grantedCount: Number(item.active_count || 0),
-      // 有效许可上还剩多少次（体验课包用；普通课包恒等于课包数）
-      remainingUnits: Number(item.remaining_units || 0),
-      lastGrantedAt: item.last_granted_at || null,
-      grantedSeries: seriesByStudent.get(item.id) || [],
-    }));
+    const items = listRows.map((item) => {
+      const grantedSeries = seriesByStudent.get(item.id) || [];
+      // 「体验课包的授权次数」只数**还算数**的许可（撤销过的许可不在这一份里 ——
+      // 平台撤销时未消费的次数会退回机构，见 §体验课包口径），与同行的「有效课包数」同一口径。
+      const experience = grantedSeries.filter((row) => row.seriesType === EXPERIENCE_SERIES_TYPE);
+      return {
+        studentId: item.id, displayName: item.display_name, login: item.login, phone: item.phone || null, status: item.status,
+        grantedCount: Number(item.active_count || 0),
+        // 有效许可上还剩多少次（体验课包用；普通课包恒等于课包数）
+        remainingUnits: Number(item.remaining_units || 0),
+        lastGrantedAt: item.last_granted_at || null,
+        grantedSeries,
+        // 这个账号的体验课包账：授权次数 / 已核销 / 还剩（没有体验包时全 0，前端显示「—」）
+        experienceSeriesCount: experience.length,
+        experienceGrantedUnits: experience.reduce((total, row) => total + row.grantedUnits, 0),
+        experienceConsumedUnits: experience.reduce((total, row) => total + row.consumedUnits, 0),
+        experienceRemainingUnits: experience.reduce((total, row) => total + row.remainingUnits, 0),
+      };
+    });
     return { ...pageResult(items, { page, limit, total }), totals };
   }
 
