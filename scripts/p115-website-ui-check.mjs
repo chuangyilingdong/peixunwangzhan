@@ -156,7 +156,7 @@ assert.ok(homeRow, 'fixture: seed 之后 HOME 应该已在 website_contents 里'
   const entry = '打地鼠.html';
   const page = [
     '<!doctype html><html><head><meta charset="utf-8"><title>守卫用高页面</title></head>',
-    '<body style="margin:0"><div style="height:1400px;background:linear-gradient(#34b981,#0f6b4a);color:#fff;font:700 28px sans-serif;padding:24px">守卫用高页面：1400px（比逻辑视口 768 高 → 框必须跟着长，否则内层会出现滚动条）</div></body></html>',
+    '<body style="margin:0"><div style="height:1400px;background:linear-gradient(#34b981,#0f6b4a);color:#fff;font:700 28px sans-serif;padding:24px">守卫用高页面：1400px（比逻辑视口 768 高 → 整幅得缩放进舞台，内层不许出现滚动条）</div></body></html>',
   ].join('');
   // ⚠️ 这两条**不用** `INSERT OR IGNORE`：第一版把 conversations.status 写成 'ACTIVE'（有 CHECK 只允许
   //    DRAFT/SUBMITTED/ARCHIVED），OR IGNORE 把这一行**静默吞了**，直到下面的外键才报错 ——
