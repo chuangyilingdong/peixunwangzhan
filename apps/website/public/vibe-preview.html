@@ -25,6 +25,12 @@
         try { parent.postMessage(payload, '*'); } catch (error) { /* 忽略 */ }
         return;
       }
+      // 学生页面自报的高度（见 vibecodingProject.js 的 PREVIEW_HEIGHT_BRIDGE）：同样原样转发，
+      // 主站拿它把预览框长到内容那么高 —— 内层就不会出现滚动条了（2026-09-27）。
+      if (payload.source === 'vibecoding-preview-height') {
+        try { parent.postMessage(payload, '*'); } catch (error) { /* 忽略 */ }
+        return;
+      }
       if (payload.source === 'vibecoding-preview' && typeof payload.html === 'string') {
         stage.srcdoc = payload.html;
       }

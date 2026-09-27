@@ -102,6 +102,35 @@ export const CONSOLE_BRIDGE = `<script>(function(){
   window.addEventListener('unhandledrejection',function(event){send('error',['未处理的异步错误：'+(event.reason&&event.reason.message?event.reason.message:event.reason)]);});
 })();</script>`;
 
+/**
+ * 「这份文档有多高」的上报桥（2026-09-27）。
+ *
+ * 为什么需要它：查看层把学生页放在一个**逻辑视口**里再整体缩放（口径㉕，见 PreviewFrame）。
+ * 那个逻辑视口高度是写死的 768 —— 学生作品一旦比它高（例如一个 12 页的 PPT 式网页，
+ * 某几页内容更高），**内层文档就自己滚起来**，右侧冒出一根滚动条。
+ * 用户 2026-09-27 报的就是这个：「点下一页 2/12 这里出现（滚动条）」。
+ *
+ * 而外层**量不到**内层高度 —— 内层 iframe 是不带 `allow-same-origin` 的沙箱（opaque origin），
+ * 所以只能让内层**自己报**：与控制台桥完全同一条路（parent.postMessage → 外壳转发 → 主站）。
+ * 上层拿到高度后把框长到那么高 → 内层再也没有滚动条，外层页面滚（这才是"大的作品预览"）。
+ *
+ * ⚠️ 只报数、不做限制：上限、收敛保护都在 PreviewFrame 那边（改这里会把策略散到两处）。
+ */
+export const PREVIEW_HEIGHT_BRIDGE = `<script>(function(){
+  var last=0;
+  var report=function(){try{
+    var doc=document.documentElement;var body=document.body;
+    var h=Math.max(doc?doc.scrollHeight:0,doc?doc.offsetHeight:0,body?body.scrollHeight:0);
+    if(!h||Math.abs(h-last)<2)return;
+    last=h;
+    parent.postMessage({source:'vibecoding-preview-height',height:h},'*');
+  }catch(error){}};
+  if(window.ResizeObserver){try{new ResizeObserver(report).observe(document.documentElement);}catch(error){}}
+  window.addEventListener('load',report);
+  window.addEventListener('resize',report);
+  setTimeout(report,0);setTimeout(report,300);setTimeout(report,1200);
+})();</script>`;
+
 function svgDataUrl(content) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(String(content || ''))}`;
 }
@@ -145,8 +174,8 @@ export function buildPreviewDocument(files, entryFile) {
     });
   const embedded = embedLocalAssets(html, files);
   // 存储替身与桥都必须装在学生脚本**之前**：前者要抢在那行顶层 localStorage 之前，
-  // 后者要抢在 head 里的早期 console/error 调用之前。顺序：存储替身 → 控制台桥 → 学生脚本。
-  const preamble = `${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}`;
+  // 后者要抢在 head 里的早期 console/error 调用之前。顺序：存储替身 → 控制台桥 → 高度上报 → 学生脚本。
+  const preamble = `${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}${PREVIEW_HEIGHT_BRIDGE}`;
   if (/<head[^>]*>/i.test(embedded)) return embedded.replace(/<head[^>]*>/i, (match) => `${match}${preamble}`);
   if (/<body[^>]*>/i.test(embedded)) return embedded.replace(/<body[^>]*>/i, (match) => `${match}${preamble}`);
   return preamble + embedded;

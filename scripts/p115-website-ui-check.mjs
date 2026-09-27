@@ -145,8 +145,10 @@ assert.ok(homeRow, 'fixture: seed 之后 HOME 应该已在 website_contents 里'
 // ── 学生「我的作品」的 VibeCoding 网页作品夹具（2026-09-20）────────────────────
 // 为什么必须造：种子里学生的作品**全是画布**，于是"VibeCoding · 网页应用"那条卡片分支、
 // 以及"学生自己的网页作品点开能不能玩"这条路径，守卫里都没被走到过。
-// 页面高度特意做成 **700px**：旧的预览框体写死 62vh（720 视口下约 446px）→ 会滚起来；
-// 口径㉕ 的逻辑视口下界是 768 → 装得下、不该出现内层滚动条。
+//
+// ⚠️ 2026-09-27 把页面从 **700px 加高到 1400px**（用户报的图：一个 12 页的 PPT 式网页，
+// 点「下一页 2/12」右侧就冒出一根滚动条）。700px 比逻辑视口下界 768 **矮**，
+// 所以"内层滚动条"这条路根本走不到 —— 加高之后才测得到下面那条 `layoutH >= 内容高度` 的断言。
 {
   const nowIso = new Date().toISOString();
   const owner = await arow("SELECT id, org_id FROM users WHERE login='student-1'");
@@ -154,14 +156,14 @@ assert.ok(homeRow, 'fixture: seed 之后 HOME 应该已在 website_contents 里'
   const entry = '打地鼠.html';
   const page = [
     '<!doctype html><html><head><meta charset="utf-8"><title>守卫用高页面</title></head>',
-    '<body style="margin:0"><div style="height:700px;background:linear-gradient(#34b981,#0f6b4a);color:#fff;font:700 28px sans-serif;padding:24px">守卫用高页面：700px</div></body></html>',
+    '<body style="margin:0"><div style="height:1400px;background:linear-gradient(#34b981,#0f6b4a);color:#fff;font:700 28px sans-serif;padding:24px">守卫用高页面：1400px（比逻辑视口 768 高 → 框必须跟着长，否则内层会出现滚动条）</div></body></html>',
   ].join('');
   // ⚠️ 这两条**不用** `INSERT OR IGNORE`：第一版把 conversations.status 写成 'ACTIVE'（有 CHECK 只允许
   //    DRAFT/SUBMITTED/ARCHIVED），OR IGNORE 把这一行**静默吞了**，直到下面的外键才报错 ——
   //    临时库每次都是新的，不需要幂等，让它错就当场炸。
   await aq("INSERT INTO vibecoding_conversations(id,org_id,student_id,title,model,files,entry_file,status,created_at,updated_at) VALUES ('conversation_guard_web',?,?,'守卫用网页作品','local-mock','{}',?,'DRAFT',?,?)", [owner.org_id, owner.id, entry, nowIso, nowIso]);
   await aq("INSERT INTO vibecoding_submissions(id,conversation_id,student_id,org_id,title,files,round,status,submitted_at,created_at,updated_at,entry_file,artifacts,is_public) VALUES ('vibesub_guard_web','conversation_guard_web',?,?,'守卫用网页作品',?,1,'PENDING',?,?,?,?,?,0)", [owner.id, owner.org_id, JSON.stringify({ [entry]: page }), nowIso, nowIso, nowIso, entry, JSON.stringify([{ name: entry, kind: 'html', bytes: page.length }])]);
-  console.log('VibeCoding 网页作品夹具：student-1 一件（页面 700px 高，入口 打地鼠.html）');
+  console.log('VibeCoding 网页作品夹具：student-1 一件（页面 1400px 高 —— 故意比逻辑视口 768 高，入口 打地鼠.html）');
 }
 
 const cmsHome = JSON.parse(homeRow.published_content);
@@ -1218,35 +1220,99 @@ try {
   await page.setViewportSize({ width: 1440, height: 960 });
   await settle();
 
+  // 静态钉子：两处"对外看作品"的详情页都要开着 `growToContent`（预览框跟着内容长，
+  // 内层才不会出现滚动条 —— 用户 2026-09-27 报的那根「点下一页 2/12 出现的滚动条」）。
+  for (const file of ['apps/website/src/pages/WorkDetail.jsx', 'apps/website/src/pages/MyWorkDetail.jsx']) {
+    if (!/<ReplayPreview[^>]*growToContent/.test(fs.readFileSync(path.join(root, file), 'utf8'))) {
+      problems.push(`${file}：作品预览应当开着 growToContent（否则比逻辑视口高的作品内层会出现滚动条）`);
+    }
+  }
+
   // ── ⑤g 学生自己的**网页作品**点开：要能玩，且**内层不能出现滚动条**（口径㉕，用户报的
   //    「作品预览里出现滚动条」）。做法是"内层按不小于 640×768 的逻辑视口渲染、再整体等比缩放到
   //    可用空间"，所以这里断言的是**结构**：iframe 的布局尺寸 ≥640×768、带一个 ≤1 的 scale、
   //    外面套着裁剪的舞台。内层文档自己的滚动条在外层读不到（沙箱是 opaque origin），
   //    所以另存截图 20-work-preview 供人眼复核。
+  // ⭐ 2026-09-27 新增：把**内层自报的内容高度**记下来（见 vibecodingProject.js 的 PREVIEW_HEIGHT_BRIDGE）。
+  //    为什么要它：内层是 opaque origin 的沙箱，外层**读不到**内层文档，所以"内层会不会出现滚动条"
+  //    只能靠"内层视口高度 ≥ 内容高度"这条不变式来判 —— 而内容高度只有内层自己知道。
+  await page.addInitScript(() => {
+    window.__previewHeights = [];
+    window.addEventListener('message', (event) => {
+      if (event?.data?.source === 'vibecoding-preview-height') window.__previewHeights.push(Number(event.data.height) || 0);
+    });
+  });
   await page.goto(`${base}/my-home/VIBECODING/vibesub_guard_web`, { waitUntil: 'domcontentloaded' });
   await settle();
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(900);
   const viewer = await page.evaluate(() => {
     const stage = document.querySelector('.c-replay__stage');
     const frame = stage ? stage.querySelector('iframe') : document.querySelector('.c-replay__frame');
     if (!frame) return { found: false };
     const style = frame.style || {};
     const box = frame.getBoundingClientRect();
+    const transform = style.transform || getComputedStyle(frame).transform;
     return {
       found: true,
       hasStage: Boolean(stage),
       stageOverflow: stage ? getComputedStyle(stage).overflow : null,
+      stageH: stage ? Math.round(stage.getBoundingClientRect().height) : 0,
       layoutW: Math.round(parseFloat(style.width) || box.width),
       layoutH: Math.round(parseFloat(style.height) || box.height),
-      transform: style.transform || getComputedStyle(frame).transform,
+      scale: Number((/scale\(([\d.]+)\)/.exec(String(transform)) || [])[1]) || 1,
+      transform,
       sandbox: frame.getAttribute('sandbox') || '',
+      reportedHeight: Math.max(0, ...(window.__previewHeights || [0])),
     };
   });
-  console.log(`  · 作品预览：舞台=${viewer.hasStage} 逻辑视口=${viewer.layoutW}×${viewer.layoutH} transform=${String(viewer.transform).slice(0, 42)}`);
+  console.log(`  · 作品预览：舞台=${viewer.hasStage}（高 ${viewer.stageH}px）逻辑视口=${viewer.layoutW}×${viewer.layoutH} scale=${viewer.scale} 内层自报内容高=${viewer.reportedHeight}`);
   if (!viewer.found) problems.push('作品详情：找不到作品预览的 iframe');
   else {
-    if (viewer.layoutH < 768 || viewer.layoutW < 640) problems.push(`作品预览：内层逻辑视口必须 ≥ 640×768（实际 ${viewer.layoutW}×${viewer.layoutH}）—— 否则学生页会在框内滚起来`);
+    if (viewer.layoutW < 640) problems.push(`作品预览：内层逻辑视口宽度必须 ≥ 640（实际 ${viewer.layoutW}）`);
+    if (viewer.layoutH < 768) problems.push(`作品预览：内层逻辑视口高度必须 ≥ 768（实际 ${viewer.layoutH}）`);
     if (!/scale\(/.test(String(viewer.transform))) problems.push(`作品预览：应当整体等比缩放（transform 实际「${viewer.transform}」）`);
+    // ⭐⭐ 用户 2026-09-27 报的那根滚动条，就是这条不变式被破坏：
+    //    内层视口比内容矮 → 内层文档自己滚起来 → 右侧出现滚动条。
+    if (!viewer.reportedHeight) problems.push('作品预览：内层没有自报高度（PREVIEW_HEIGHT_BRIDGE 没装上？）');
+    else if (viewer.layoutH + 1 < viewer.reportedHeight) {
+      problems.push(`作品预览：⭐ 内层视口 ${viewer.layoutH} 比内容 ${viewer.reportedHeight} 矮 —— 内层会出现滚动条（用户 2026-09-27 报的那根）`);
+    }
+    // 舞台高度必须**正好**是缩放后的框高（框是绝对定位、scale 又不影响布局盒，写错了就会留白或裁掉）
+    const expectedStage = Math.round(viewer.layoutH * viewer.scale);
+    if (Math.abs(viewer.stageH - expectedStage) > 2) problems.push(`作品预览：舞台高度应为缩放后的框高 ${expectedStage}px（实际 ${viewer.stageH}px）`);
+    if (!/allow-scripts/.test(viewer.sandbox) || /allow-same-origin/.test(viewer.sandbox)) problems.push(`作品预览：沙箱属性不对（${viewer.sandbox}）`);
+    // 顺手量一下右上角那排按钮：`.c-page__actions` 是 `flex:none` **不换行**，按钮一多就会挤到一起
+    // （2026-09-27 在截图里看到「分享」和「← 返回我的主页」叠在一起）。
+    const actionsGeo = await page.evaluate(() => {
+      const row = document.querySelector('.c-page__actions');
+      if (!row) return { found: false };
+      const rowBox = row.getBoundingClientRect();
+      return {
+        found: true,
+        rowLeft: Math.round(rowBox.left),
+        rowRight: Math.round(rowBox.right),
+        items: Array.from(row.children).map((el) => {
+          const r = el.getBoundingClientRect();
+          const cs = getComputedStyle(el);
+          return { text: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 14), left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), bottom: Math.round(r.bottom), box: `${el.tagName.toLowerCase()}.${el.className}`, flex: cs.flex, padding: cs.padding, width: cs.width };
+        }),
+      };
+    });
+    if (actionsGeo.found) {
+      console.log(`  · 详情页动作区：[${actionsGeo.items.map((i) => `${i.text}(${i.left}~${i.right})`).join(' | ')}]`);
+      for (const i of actionsGeo.items) console.log(`      · ${i.box} flex=${i.flex} padding=${i.padding} width=${i.width}`);
+      for (let i = 0; i + 1 < actionsGeo.items.length; i += 1) {
+        const a = actionsGeo.items[i]; const b = actionsGeo.items[i + 1];
+        const sameLine = a.top < b.bottom && b.top < a.bottom;
+        if (sameLine && a.right > b.left + 2) problems.push(`作品详情：动作区按钮重叠 —— 「${a.text}」与「${b.text}」（${a.right} > ${b.left}）`);
+      }
+      const outside = actionsGeo.items.filter((i) => i.left < actionsGeo.rowLeft - 2 || i.right > actionsGeo.rowRight + 2);
+      if (outside.length) problems.push(`作品详情：动作区按钮溢出了那一行：[${outside.map((i) => i.text).join(', ')}]`);
+      // ⚠️ 挤扁：flex 默认会收缩，短按钮会被压成一条缝（padding 没了，看着像半个按钮）。
+      //    实测过「分享」被压到 27px —— 那时候两个按钮并不重叠，所以上面那条重叠断言抓不到它。
+      const squashed = actionsGeo.items.filter((i) => i.right - i.left < 40);
+      if (squashed.length) problems.push(`作品详情：动作区按钮被挤扁了：[${squashed.map((i) => `${i.text}(${i.right - i.left}px)`).join(', ')}]`);
+    }
     if (Number((String(viewer.transform).match(/scale\(([\d.]+)\)/) || [])[1] || 0) > 1) problems.push('作品预览：有空间时缩放不该放大（scale 要封顶 1）');
     if (viewer.stageOverflow !== 'hidden') problems.push(`作品预览：舞台应当裁剪溢出（overflow 实际 ${viewer.stageOverflow}）`);
     if (/allow-same-origin/.test(viewer.sandbox)) problems.push('作品预览：沙箱不许带 allow-same-origin（口径⑧）');

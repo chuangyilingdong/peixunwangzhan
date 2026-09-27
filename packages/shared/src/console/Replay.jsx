@@ -58,7 +58,7 @@ export function ReplayFilePreview({ url, name = '' }) {
 }
 
 /** 作品预览：真的能玩（沙箱 iframe 里跑学生的 HTML） */
-export function ReplayPreview({ html, title = '作品预览', height = '62vh' }) {
+export function ReplayPreview({ html, title = '作品预览', height = '62vh', growToContent = false }) {
   const [reloadKey, setReloadKey] = useState(0);
   return (
     <ReplayPanel
@@ -67,8 +67,11 @@ export function ReplayPreview({ html, title = '作品预览', height = '62vh' })
       className="c-replay__preview"
       actions={<IconButton icon="refresh" size={14} label="重新运行" small onClick={() => setReloadKey((value) => value + 1)} />}
     >
-      {/* ⭐ 查看层要「零滚动条」：内层按逻辑视口渲染再整体缩放（口径㉕，见 PreviewFrame） */}
-      <PreviewFrame className="c-replay__frame" html={html} reloadKey={reloadKey} title={title} fitToLogical stageClassName="c-replay__stage" />
+      {/* ⭐ 查看层要「零滚动条」：内层按逻辑视口渲染再整体缩放（口径㉕，见 PreviewFrame）。
+          `growToContent`：按内层**自报的内容高度**把框长到那么高（2026-09-27 用户口径「这里的展示
+          应该是大的作品预览」，且学生作品比自己高的那几页原来会把内层滚动条挤出来）。
+          ⚠️ 只在"对外看作品"的页面开；工作台/控制台那种固定面板里不开（会长得比面板还高）。 */}
+      <PreviewFrame className="c-replay__frame" html={html} reloadKey={reloadKey} title={title} fitToLogical growToContent={growToContent} stageClassName="c-replay__stage" />
     </ReplayPanel>
   );
 }

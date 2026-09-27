@@ -259,7 +259,7 @@ export function MyWorkDetailPage({ api }) {
       {shareNotice}
       {viewTabs}
       <div className="mw-stage">
-        {currentView === 'web' && webArtifact ? <ReplayPreview html={webHtml} title={work.title || '未命名作品'} />
+        {currentView === 'web' && webArtifact ? <ReplayPreview html={webHtml} title={work.title || '未命名作品'} growToContent />
           : currentView === 'images' ? (media.length
             ? <WorkMediaGallery media={media} assets={work?.assets} resolveSrc={resolveMediaSrc} />
             : <ImageGallery list={images} src={resolveImageSrc} />)

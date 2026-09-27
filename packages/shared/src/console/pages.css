@@ -230,3 +230,10 @@
 .step-chip.is-ok .step-chip__state { background: rgba(34,197,94,.18); color: #7ee2a8; }
 .step-chip.is-warn .step-chip__state { background: rgba(245,158,11,.18); color: #ffd08a; }
 .step-section { scroll-margin-top: 76px; }
+
+/* 详情页右上角那排动作按钮：`.c-page__actions` 原来是 `flex:none` 且**不换行**，
+   里面的按钮按 flex 默认会**收缩** —— 按钮一多（例如「分享」+「← 返回我的主页」），
+   短的那个会被挤成一条 27px 的缝（padding 被压没，看着像半个按钮，2026-09-27 在截图里发现的）。
+   让按钮保持自然宽度、窄了就换行。 */
+.c-page__actions { flex-wrap: wrap; }
+.c-page__actions > * { flex: none; }

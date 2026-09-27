@@ -27,7 +27,13 @@
   letter-spacing: inherit;
   margin: 0;
 }
-[data-console] :where(button) { border: 0; background: none; cursor: pointer; padding: 0; }
+/* ⚠️ 2026-09-27 补一条例外：`:not(.button)`。
+   `.button` 是**浅色站点**那颗按钮类（padding:14px 20px），而它在 `[data-console]` 里也会被用到
+   （官网的作品详情页把控制台外壳套在自己身上，右上角那排「分享 / 返回」就是 `.button`）。
+   元素重置与 `.button` 的特异度同为 (0,1,0)，而 kit.css 加载在浅色样式**之后** → 重置赢 →
+   padding 被清零：同排的 `<a class="button">` 正常、`<button class="button">` 被压成一条 27px 的缝
+   （看着像半个按钮，2026-09-27 在截图里发现并定位到这条）。加上 `:not(.button)` 就各归各的。 */
+[data-console] :where(button:not(.button)) { border: 0; background: none; cursor: pointer; padding: 0; }
 [data-console] :where(button:disabled) { cursor: not-allowed; }
 [data-console] :where(p, h1, h2, h3, h4, ul, ol, figure, blockquote) { margin: 0; padding: 0; }
 [data-console] :where(ul, ol) { list-style: none; }
