@@ -206,9 +206,12 @@ export const WEBSITE_CONTENT_DEFAULTS = {
   },
   BRAND: { name: '灵动ai学院', tagline: '青少年 AI 创作开课平台', contactEmail: 'hello@aimagc.cn' },
   // 「联系我们」（/demo）页上的联系方式（2026-09-27 用户口径：「直接显示姓名电话微信二维码，后台可配置」）——
-  // 原来那一页是个**表单**（填机构 / 联系人 / 电话 → 提交线索），现在改成直接展示这三个字段。
+  // 原来那一页是个**表单**（填机构 / 联系人 / 电话 → 提交线索），现在改成直接展示。
+  // 2026-09-28 用户口径（第二轮）：这一页**只留卡片**（页头大标题与「你将获得」清单整块删掉），
+  // 而且卡片要能**在后台加**（一页放好几张）→ `contacts` 数组；老形状四个扁平字段仍然认（见下面共享的那份注释）。
   // ⚠️ 与 `packages/shared/src/siteDefaults.js` 的 `CONTACT_DEFAULT` **逐字一致**（守卫 p156 钉着）。
   CONTACT: {
+    contacts: [],
     name: '',
     phone: '',
     wechatQrUrl: '',

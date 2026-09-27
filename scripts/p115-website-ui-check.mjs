@@ -447,22 +447,29 @@ try {
   if (learnRedirect !== '/login?as=student') problems.push(`未登录访问学生页面应当带去学生登录（/login?as=student），实际 ${learnRedirect}`);
   await expectText('学生登录页', ['学生登录']);
 
-  // ── 「联系我们」（/demo）改成联系方式展示（2026-09-27 用户口径：
-  //    「联系我们的页面重做，直接显示姓名电话微信二维码。后台可配置」）────────────
+  // ── 「联系我们」（/demo）：2026-09-27 改成联系方式展示；**2026-09-28 二轮口径**
+  //    「图1和图2区域全部删除」「电话应该就是数字就好了啊」「这个卡片后台支持增加」──────
   await page.goto(`${base}/demo`, { waitUntil: 'domcontentloaded' });
   await settle();
-  await expectText('联系我们页', ['联系我们 · 开通试用', '把 AI 课开起来', '商务联系', '联系人', '电话', '微信扫码加好友']);
+  await expectText('联系我们页', ['商务联系', '联系人', '电话', '微信扫码加好友']);
   {
+    const body = await bodyText();
+    // 二轮删掉的两块，一个都不许回来（用户说的图1 = 页头大标题，图2 = 「你将获得」清单）
+    for (const gone of ['联系我们 · 开通试用', '把 AI 课开起来', '你将获得']) {
+      if (body.includes(gone)) problems.push(`联系我们页：已删除的区块又出现了「${gone}」（2026-09-28 用户口径：图1/图2 区域全部删除）`);
+    }
     const state = await page.evaluate(() => ({
       card: document.querySelectorAll('.contact-card').length,
       qr: document.querySelectorAll('.contact-qr').length,
       forms: document.querySelectorAll('form').length,
       tel: Array.from(document.querySelectorAll('.contact-card a[href^="tel:"]')).length,
+      phone: (document.querySelector('.contact-phone')?.innerText || '').trim(),
       placeholder: (document.querySelector('.contact-qr')?.innerText || '').includes('待上传'),
     }));
-    console.log(`  · 联系我们页：联系卡 ${state.card} 张、二维码区 ${state.qr} 个、表单 ${state.forms} 个、tel 链接 ${state.tel} 个`);
+    console.log(`  · 联系我们页：联系卡 ${state.card} 张、二维码区 ${state.qr} 个、表单 ${state.forms} 个、tel 链接 ${state.tel} 个、电话「${state.phone}」`);
     if (!state.card || !state.qr) problems.push('联系我们页：联系信息卡没渲染出来（.contact-card / .contact-qr）');
     if (state.forms) problems.push(`联系我们页：还留着 ${state.forms} 个表单 —— 用户口径是**直接显示**姓名/电话/二维码，不再让访客填表`);
+    if (state.tel) problems.push(`联系我们页：电话还是可点的链接（${state.tel} 个 tel:）—— 用户口径「应该就是数字就好了啊」`);
   }
   await shot('21-contact-us');
 

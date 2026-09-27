@@ -227,6 +227,26 @@ export function WebsiteContent({ api }) {
   }
   function addCourse() { updateStructured({ courses: [...(Array.isArray(structured?.courses) ? structured.courses : []), { icon: '✨', title: '', category: '', lessonCount: 8, ageRange: '8–16 岁', summary: '', lessons: [] }] }); }
   function removeCourse(index) { updateStructured({ courses: (structured?.courses || []).filter((_, itemIndex) => itemIndex !== index) }); }
+  // ── 「联系我们」的联系卡片（2026-09-28 用户口径：「这里这个卡片后台支持增加」，一页可放好几张）──
+  // 老内容（2026-09-28 之前发布的 `CONTACT` 是 name/phone/wechatQrUrl/note 四个扁平字段）
+  // 第一次进这个表单时显示成**一张卡**；只要动一下就写成新的 `contacts` 数组、
+  // 并把那四个老字段清空 —— 留着两份迟早没人知道哪份算数（官网优先认 contacts，见 main.jsx 的 contactCardsOf）。
+  const contactCards = cmsListOf(structured?.contacts).length
+    ? cmsListOf(structured?.contacts)
+    : ((structured?.name || structured?.phone || structured?.wechatQrUrl)
+      ? [{ name: structured?.name || '', phone: structured?.phone || '', wechatQrUrl: structured?.wechatQrUrl || '', note: structured?.note || '' }]
+      : []);
+  function writeContacts(next) { updateStructured({ contacts: next, name: '', phone: '', wechatQrUrl: '', note: '' }); }
+  function addContact() { writeContacts([...contactCards, { name: '', phone: '', wechatQrUrl: '', note: '' }]); }
+  function removeContact(index) { writeContacts(contactCards.filter((_, itemIndex) => itemIndex !== index)); }
+  function moveContact(index, direction) {
+    const next = [...contactCards];
+    const target = index + direction;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    writeContacts(next);
+  }
+  function updateContact(index, patch) { writeContacts(contactCards.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item))); }
   // ── 列表字段的通用增删改 ──────────────────────────────────────────────
   // 首页的 stats（以及历史上机构手册的 cards）都是「数组里放对象」，
   // 一份代码管多种字段，免得每加一个区块就把同样的四个函数再抄一遍。
@@ -362,12 +382,12 @@ export function WebsiteContent({ api }) {
               <label>副标题<input value={videosBlock.lead || ''} onChange={(event) => updateVideos({ lead: event.target.value })} maxLength={160} /></label>
             </div>
             <div className="cms-faq-list">{videoItems.map((item, index) => <div className="cms-faq-item" key={`hp-vid-${index}`}>
-              <div className="cms-faq-heading"><strong>第 {index + 1} 个视频</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveSectionList('videos', 'items', index, -1)} aria-label={`第 ${index + 1} 个上移`}>↑</button><button type="button" className="text-button" disabled={index === videoItems.length - 1} onClick={() => moveSectionList('videos', 'items', index, 1)} aria-label={`第 ${index + 1} 个下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeVideo(index)}>删除</button></div></div>
+              <div className="cms-faq-heading"><strong>第 {index + 1} 个视频</strong>{item.posterUrl ? null : <span>⚠️ 还没配封面，手机上是黑块</span>}<div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveSectionList('videos', 'items', index, -1)} aria-label={`第 ${index + 1} 个上移`}>↑</button><button type="button" className="text-button" disabled={index === videoItems.length - 1} onClick={() => moveSectionList('videos', 'items', index, 1)} aria-label={`第 ${index + 1} 个下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeVideo(index)}>删除</button></div></div>
               <label>标题<input value={item.title || ''} onChange={(event) => updateVideo(index, { title: event.target.value })} maxLength={40} /></label>
               <label>说明<textarea value={item.desc || ''} onChange={(event) => updateVideo(index, { desc: event.target.value })} maxLength={200} rows={2} /></label>
               <div className="form-grid">
                 <label>视频地址<input value={item.videoUrl || ''} onChange={(event) => updateVideo(index, { videoUrl: event.target.value })} placeholder="/api/public/file-assets/<id>/download" /></label>
-                <label>封面地址<input value={item.posterUrl || ''} onChange={(event) => updateVideo(index, { posterUrl: event.target.value })} placeholder="留空则视频第一帧出来前是黑底" /></label>
+                <label>封面地址<input value={item.posterUrl || ''} onChange={(event) => updateVideo(index, { posterUrl: event.target.value })} placeholder="必填：留空在手机上就是一块黑（iOS 不会预加载视频，出不来第一帧）" /></label>
               </div>
               <div className="row-actions top-gap">
                 <label className="inline-file-upload">{uploading === `hp-vid-${index}` ? '上传中…' : '上传视频'}<input type="file" accept="video/mp4,video/webm" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadVideo(file, (url) => updateVideo(index, { videoUrl: url }), `hp-vid-${index}`); }} /></label>
@@ -423,20 +443,28 @@ export function WebsiteContent({ api }) {
             <label>副标题<textarea value={structured?.lead || ''} onChange={(event) => updateStructured({ lead: event.target.value })} maxLength={400} /></label>
             <p className="muted">这里只改「灵动课程」页头这两句。课包本身（价格、封面、难度、适学年龄、课时、上下架）在「课包与课程编排」里维护 —— 官网列表读的就是那些字段。</p>
           </div>}
-          {/* ⭐ 「联系我们」（/demo）页的联系方式（2026-09-27 用户口径：「联系我们的页面重做，
-              直接显示姓名电话微信二维码。后台可配置。」）——
-              官网那一页原先是表单，现在是**直接展示**这三项；二维码可以直接在这里传图
-              （与机构手册同一条上传路：传完把公开地址写回字段）。 */}
+          {/* ⭐ 「联系我们」（/demo）页的联系卡片。
+              2026-09-27 口径：官网那一页从**表单**改成**直接展示**（姓名 / 电话 / 微信二维码），后台可配。
+              2026-09-28 口径（第二轮，见交接文档 §五十）：
+                · 官网那一页**只剩卡片** —— 页头大标题与「你将获得」清单都删了，别照截图再加回来；
+                · 卡片**可以有多张**（一页放几个联系人）→ 这里是增 / 删 / 上移 / 下移；
+                · 电话在官网上是**纯文本、不点击拨打**（用户原话「应该就是数字就好了啊」），
+                  所以提示里不要再写"可点击拨打"。
+              ⚠️ 老内容（四个扁平字段）第一次进来显示成一张卡；一改就写成 `contacts` 数组并清空老字段。 */}
           {selectedKey === 'CONTACT' && <div className="cms-form">
-            <div className="cms-section-heading"><strong>联系方式</strong><span>官网「联系我们」页直接展示这三项；留空的项在官网上显示「待配置」</span></div>
-            <div className="form-grid">
-              <label>联系人姓名<input value={structured?.name || ''} onChange={(event) => updateStructured({ name: event.target.value })} maxLength={40} placeholder="例如：王老师" /></label>
-              <label>联系电话<input value={structured?.phone || ''} onChange={(event) => updateStructured({ phone: event.target.value })} maxLength={30} placeholder="例如：13800000000（官网上可点击拨打）" /></label>
-            </div>
-            <label>微信二维码图片地址<input value={structured?.wechatQrUrl || ''} onChange={(event) => updateStructured({ wechatQrUrl: event.target.value })} placeholder="点下面的「上传二维码」也可以直接传图" /></label>
-            <div className="row-actions"><label className="inline-file-upload">{uploading === 'contact-qr' ? '上传中…' : '上传二维码'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url) => updateStructured({ wechatQrUrl: url }), 'contact-qr'); }} /></label>
-              {structured?.wechatQrUrl ? <img src={structured.wechatQrUrl} alt="微信二维码预览" style={{ width: 96, height: 96, objectFit: 'contain', border: '1px solid #eee', borderRadius: 8 }} /> : null}</div>
-            <label>二维码下面那行小字<textarea value={structured?.note || ''} onChange={(event) => updateStructured({ note: event.target.value })} maxLength={200} placeholder="例如：加微信时请备注机构名称" /></label>
+            <div className="cms-section-heading"><strong>商务联系卡片</strong><span>官网「联系我们」页按这个顺序一人一张卡；留空的项在官网上显示「待配置」。电话在官网上是纯文本（不点击拨打）。</span></div>
+            <div className="cms-faq-list">{contactCards.map((card, index) => <div className="cms-faq-item" key={`contact-${index}`}>
+              <div className="cms-faq-heading"><strong>卡片 {index + 1}</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveContact(index, -1)} aria-label={`卡片 ${index + 1} 上移`}>↑</button><button type="button" className="text-button" disabled={index === contactCards.length - 1} onClick={() => moveContact(index, 1)} aria-label={`卡片 ${index + 1} 下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeContact(index)}>删除</button></div></div>
+              <div className="form-grid">
+                <label>联系人姓名<input value={card.name || ''} onChange={(event) => updateContact(index, { name: event.target.value })} maxLength={40} placeholder="例如：王老师" /></label>
+                <label>联系电话<input value={card.phone || ''} onChange={(event) => updateContact(index, { phone: event.target.value })} maxLength={30} placeholder="例如：13800000000" /></label>
+              </div>
+              <label>微信二维码图片地址<input value={card.wechatQrUrl || ''} onChange={(event) => updateContact(index, { wechatQrUrl: event.target.value })} placeholder="点下面的「上传二维码」也可以直接传图" /></label>
+              <div className="row-actions"><label className="inline-file-upload">{uploading === `contact-qr-${index}` ? '上传中…' : '上传二维码'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url) => updateContact(index, { wechatQrUrl: url }), `contact-qr-${index}`); }} /></label>
+                {card.wechatQrUrl ? <img src={card.wechatQrUrl} alt={`卡片 ${index + 1} 微信二维码预览`} style={{ width: 96, height: 96, objectFit: 'contain', border: '1px solid #eee', borderRadius: 8 }} /> : null}</div>
+              <label>二维码下面那行小字<textarea value={card.note || ''} onChange={(event) => updateContact(index, { note: event.target.value })} maxLength={200} placeholder="例如：加微信时请备注机构名称" /></label>
+            </div>)}</div>
+            <button type="button" className="secondary-button top-gap" onClick={addContact}>新增联系卡片</button>
           </div>}
           {selectedKey === 'HANDBOOK' && <div className="cms-form">
             {/* 2026-09-19 按用户给的设计稿（design (1).zip）重做：整页换成

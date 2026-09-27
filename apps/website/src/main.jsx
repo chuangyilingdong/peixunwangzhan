@@ -1449,34 +1449,55 @@ function LegalPage({ type }){
 /**
  * 「联系我们」（/demo）。
  *
- * ⚠️ 2026-09-27 用户口径（图2）：「联系我们的页面重做，直接显示姓名电话微信二维码。后台可配置。」
- *    原来这一页是一张**表单**（机构名 / 联系人 / 电话 / 意向 / 补充说明 → POST /api/public/contact 收线索）。
- *    现在改成**直接展示联系方式**：联系人姓名、电话（`tel:` 可点）、微信二维码（可长按/扫码保存）。
- *    三个字段都来自 CMS 的 `CONTACT` 区块（后台「官网内容 → 联系我们」可改可传图），
- *    公开接口不通时用 `CONTACT_DEFAULT` 兜底（与后台预填同源，见 siteDefaults 的注释）。
- *    ⚠️ 后端 `POST /api/public/contact` 那条接口**没删**（线索入表与法务版本留痕的逻辑还在），
- *       只是官网上不再有表单入口 —— 哪天要加回来，照 git 历史里这一版之前的实现接即可。
+ * 这一页的来路：原来是**表单**（机构名 / 联系人 / 电话 / 意向 → POST /api/public/contact 收线索）；
+ * 2026-09-27 改成**直接展示**联系方式；2026-09-28 又按用户口径收了口（原话见交接文档 §五十）：
+ *   · **页头那块大标题**（眉题「联系我们 · 开通试用」+ 大标题「把 AI 课开起来」）
+ *     与 **「联系我们后，你将获得」那三行清单**：整块删除 —— 这一页只剩卡片
+ *     （用户原话「图1和图2区域全部删除」）。⚠️ 别加回来。
+ *     一级标题仍留一个 `.sr-only` 的：这一页没有 h1 对读屏与搜索都不好（视觉上不占位）。
+ *   · 卡片里的电话**不做成链接**：原来写的是 `<a href="tel:…">`，用户说「电话还能点击，
+ *     应该就是数字就好了啊」。现在就渲染成一段文本（要拨号自己复制）。
+ *   · 卡片**可以有多张**：后台「官网内容 → 联系我们」里能加 / 删 / 排序，有几张渲染几张。
+ *   字段都来自 CMS 的 `CONTACT` 区块；公开接口不通时用 `CONTACT_DEFAULT` 兜底
+ *   （与后台预填同源，见 siteDefaults 的注释）。
+ * ⚠️ 后端 `POST /api/public/contact` 那条接口**没删**（线索入表与法务版本留痕的逻辑还在），
+ *    只是官网上不再有表单入口 —— 哪天要加回来，照 git 历史里这一版之前的实现接即可。
  */
+// 卡片归一：新形状 `contacts[]` 与**老形状**（四个扁平字段 name/phone/wechatQrUrl/note）收成同一个数组。
+// ⚠️ 老形状必须继续认 —— 线上已发布的 `CONTACT` 内容就是那四个字段，不认它这一页会直接变空白。
+// ⚠️ **一张都没配也返回一张空卡**（卡里各项显示「待配置」）：与改造前的行为一致，
+//    也让"这一页的骨架还在"这件事在浏览器里看得见（p115 就是量 .contact-card 张数），
+//    别改成"啥都没有"——那会让人以为页面坏了。
+function contactCardsOf(contact){
+  const normalize = (item) => ({
+    name: String(item?.name || '').trim(),
+    phone: String(item?.phone || '').trim(),
+    wechatQrUrl: String(item?.wechatQrUrl || '').trim(),
+    note: String(item?.note || '').trim(),
+  });
+  const cards = (Array.isArray(contact?.contacts) ? contact.contacts : [])
+    .map(normalize)
+    .filter((card) => card.name || card.phone || card.wechatQrUrl);
+  if (cards.length) return cards;
+  return [normalize(contact)];
+}
 function Demo(){
   const cms = useWebsiteContent('CONTACT');
-  const contact = { ...CONTACT_DEFAULT, ...(cms.data || {}) };
-  const phone = String(contact.phone || '').trim();
-  const name = String(contact.name || '').trim();
-  const qr = String(contact.wechatQrUrl || '').trim();
-  const gained = ['产品演示与开课流程讲解', '标准课包与课件清单', '体验课包与演示账号'];
-  return <><Title eyebrow="联系我们 · 开通试用" title={<>把 AI 课开起来</>} desc="欢迎教培机构、学校与区域合作伙伴联系，获取演示账号与课包清单。"/><main className="inner"><section className="demo">
-    <div><h2>联系我们后，你将获得</h2>{gained.map((x,i)=><p key={x}><b>0{i+1}</b>{x}</p>)}</div>
-    <div className="contact-card">
-      <h3>商务联系</h3>
-      <p className="contact-line"><span>联系人</span>{name ? <strong>{name}</strong> : <em className="muted">待配置（后台「官网内容 → 联系我们」）</em>}</p>
-      <p className="contact-line"><span>电话</span>{phone ? <a href={`tel:${phone}`}>{phone}</a> : <em className="muted">待配置</em>}</p>
+  const cards = contactCardsOf({ ...CONTACT_DEFAULT, ...(cms.data || {}) });
+  return <><main className="inner contact-page">
+    <h1 className="sr-only">联系我们</h1>
+    <div className="contact-cards">{cards.map((card, index) => <section className="contact-card" key={`${card.name}|${card.phone}|${index}`}>
+      <h2>商务联系</h2>
+      <p className="contact-line"><span>联系人</span>{card.name ? <strong>{card.name}</strong> : <em className="muted">待配置</em>}</p>
+      {/* 电话是**纯文本**（用户口径「应该就是数字就好了啊」）：别加 tel: 链接、也别做成按钮 */}
+      <p className="contact-line"><span>电话</span>{card.phone ? <strong className="contact-phone">{card.phone}</strong> : <em className="muted">待配置</em>}</p>
       <div className="contact-qr">
-        {qr ? <img src={qr} alt={`${name || '商务'}微信二维码`} loading="lazy"/> : <span className="contact-qr__empty">微信二维码待上传</span>}
+        {card.wechatQrUrl ? <img src={card.wechatQrUrl} alt={`${card.name || '商务'}微信二维码`} loading="lazy"/> : <span className="contact-qr__empty">微信二维码待上传</span>}
         <small>微信扫码加好友</small>
       </div>
-      {contact.note ? <p className="muted contact-note">{contact.note}</p> : null}
-    </div>
-  </section></main></>;
+      {card.note ? <p className="muted contact-note">{card.note}</p> : null}
+    </section>)}</div>
+  </main></>;
 }
 
 // ---- Marketplace ----
