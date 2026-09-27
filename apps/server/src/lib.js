@@ -1313,6 +1313,30 @@ export function canvasMediaFrom(canvasSnapshot) {
   return out;
 }
 
+/**
+ * 作品封面：**自动**从画布快照里挑一张真图当封面（2026-09-27 用户口径）。
+ *
+ * 用户原话：「课堂作品页面和我的作品应该自动会有实际的封面，而不是这种填充的。」
+ * 病根：works 表没有封面列，站内作品只能由前端按类型**画一张渐变插图**占位 —— 一屏作品
+ * 全是同款填充图，看不出是哪件作品。画布作品其实**自己就带图**（快照里的生成产物）。
+ *
+ * 规则（保守、不猜）：
+ *   · 只认快照里真的出现过的素材（复用 `canvasMediaFrom` 那三个字段，与作品页的媒体清单同源）；
+ *   · **优先 IMAGE**，一张图都没有才退到 VIDEO（视频首帧当封面也说得过去）；
+ *   · 必须是**我们自己的下载口**（有 fileId）—— 上游临时外链会过期，拿它当封面以后就是破图；
+ *   · 一个都没有 → null，前端继续用那张自动插图（VibeCoding 作品、纯文字画布就是这种）。
+ *
+ * `urlFor(fileId)` 由调用方给：三个端各有自己的同源代理地址（公开口 / 学生口 / 平台口）。
+ */
+export function workCoverFromSnapshot(canvasSnapshot, urlFor) {
+  const media = canvasMediaFrom(canvasSnapshot);
+  const pick = media.find((item) => item.modality === 'IMAGE' && item.fileId)
+    || media.find((item) => item.modality === 'VIDEO' && item.fileId);
+  if (!pick) return null;
+  const url = urlFor ? urlFor(pick.fileId) : null;
+  return url || null;
+}
+
 export async function normalizeWork(value, { includeSnapshot = false } = {}) {
   if (!value) return null;
   const result = {

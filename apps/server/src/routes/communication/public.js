@@ -17,7 +17,7 @@ import {
   row,
   rows,
   seriesDeliveryModesOf,
-  transaction, canvasMediaFrom, arows, arow, aq, amap, likeKeyword, likeEscapeClause } from '../../lib.js';
+  transaction, canvasMediaFrom, workCoverFromSnapshot, arows, arow, aq, amap, likeKeyword, likeEscapeClause } from '../../lib.js';
 import { hostname } from 'node:os';
 import { Readable } from 'node:stream';
 import { assertTransition } from '../../services/domainState.js';
@@ -536,7 +536,11 @@ async function publicWorkRow(row) {
     plazaCategoryLabel: await plazaCategoryLabelOf({ imported, workType: imported?.workType, type: row.type }),
     workType: imported?.workType || null,
     workTypeLabel: imported?.workTypeLabel || null,
-    coverUrl: imported?.coverUrl || null,
+    // ⭐ 2026-09-27 用户口径：站内**画布作品自动用快照里第一张真图当封面**（原来是 null，
+    //    前端只能画一张同款渐变插图，一屏作品看着全像"填充的"）。导入件保留它们自己的封面。
+    coverUrl: imported?.coverUrl || workCoverFromSnapshot(canvas, (fileId) => (row.share_token
+      ? `/api/public/works/${encodeURIComponent(row.share_token)}/images/${encodeURIComponent(fileId)}`
+      : null)),
     contentUrls: Array.isArray(imported?.contentUrls) ? imported.contentUrls : [],
     externalUrl: imported?.externalUrl || null,
     // ⭐ 托管在**我们自己** `/media/` 下的可运行网页作品（2026-09-19 从 aimagc.cn 抓的那 9 件，

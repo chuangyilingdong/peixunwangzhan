@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 //    所以先钉死驱动再取 helper：**要的是"这段 SQL 在 SQLite 上跑得对"**，
 //    MySQL 侧那套由 p149（真请求）与套件的 `--mysql` 兜。
 process.env.DB_DRIVER = 'sqlite';
-const { likeEscapeClause, likeKeyword, inProgressClassroomSql, vibecodingSessionIdExpr } = await import('../apps/server/src/lib.js');
+const { likeEscapeClause, likeKeyword, inProgressClassroomSql, vibecodingSessionIdExpr, canvasMediaFrom, workCoverFromSnapshot, parseJson } = await import('../apps/server/src/lib.js');
 
 const helperSource = fs.readFileSync(new URL('../apps/server/src/routes/admin/helpers.js', import.meta.url), 'utf8');
 const routeSource = fs.readFileSync(new URL('../apps/server/src/routes/admin/works.js', import.meta.url), 'utf8');
@@ -70,8 +70,10 @@ const atransaction = async (fn) => { db.exec('BEGIN IMMEDIATE'); try { const res
 const requireRole = (ctx) => assert.equal(ctx.role, 'SUPER_ADMIN');
 const normalize = (value) => ({ id: value.id, title: value.title });
 const integer = (value, label, opts) => value ? Number(value) : opts.fallback;
-const route = new Function('platformWorkFilters', 'rows', 'row', 'arow', 'arows', 'aq', 'atransaction', 'amap', 'requireRole', 'integer', 'normalizeWork', 'normalizeSubmission', 'csvDocument', 'csvFileName', 'audit', 'likeEscapeClause', 'likeKeyword', 'inProgressClassroomSql', 'vibecodingSessionIdExpr', routeSource.slice(routeSource.indexOf('export async function handleWorks')).replace('export async function', 'async function') + '; return handleWorks;')(
+const route = new Function('platformWorkFilters', 'rows', 'row', 'arow', 'arows', 'aq', 'atransaction', 'amap', 'requireRole', 'integer', 'normalizeWork', 'normalizeSubmission', 'csvDocument', 'csvFileName', 'audit', 'likeEscapeClause', 'likeKeyword', 'inProgressClassroomSql', 'vibecodingSessionIdExpr', 'parseJson', 'canvasMediaFrom', 'workCoverFromSnapshot', routeSource.slice(routeSource.indexOf('export async function handleWorks')).replace('export async function', 'async function') + '; return handleWorks;')(
   platformWorkFilters, rows, row, arow, arows, aq, atransaction, amap, requireRole, integer, normalize, normalize, (headers, items) => JSON.stringify(items), () => 'works.csv', () => {}, likeEscapeClause, likeKeyword, inProgressClassroomSql, vibecodingSessionIdExpr,
+  // 2026-09-27：列表要给"自动封面"（画布快照第一张真图），所以桩里补上这三个（与真实模块同语义）。
+  parseJson, canvasMediaFrom, workCoverFromSnapshot,
 );
 const query = (path, filters = {}, role = 'SUPER_ADMIN') => route({ search: new URLSearchParams(filters), role }, path, 'GET');
 for (const path of ['/works', '/vibecoding-works']) {

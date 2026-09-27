@@ -3,6 +3,7 @@ import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, inProgressClassroomSql,
+  canvasMediaFrom, workCoverFromSnapshot,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -135,7 +136,15 @@ export async function handleWorks(ctx, part, method) {
     const items = await amap((await arows(
       `SELECT work.*,student.login student_login,series.title package_name,session.title session_title,${publicationStateSql} publication_state,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by LEFT JOIN course_series series ON series.id=lesson.series_id LEFT JOIN class_sessions session ON session.id=work.class_session_id${where} ORDER BY ${sortSql} LIMIT ? OFFSET ?`,
       [...params, limit, (page - 1) * limit],
-    )), async (work) => ({ ...await normalizeWork(work), studentLogin: work.student_login, packageName: work.package_name, sessionTitle: work.session_title, publicationState: work.publication_state, organizationName: work.organization_name || null, pendingReportCount: Number(work.pending_report_count || 0) }));
+    )), async (work) => ({
+      ...await normalizeWork(work),
+      studentLogin: work.student_login, packageName: work.package_name, sessionTitle: work.session_title,
+      publicationState: work.publication_state, organizationName: work.organization_name || null,
+      pendingReportCount: Number(work.pending_report_count || 0),
+      // ⭐ 2026-09-27 用户口径：「平台端看不到学生的作品预览」→ 列表也带上**自动封面**
+      //    （画布快照里的第一张真图，经平台侧的同源图片口），前端在「作品」那一格显示缩略图。
+      coverUrl: workCoverFromSnapshot(parseJson(work.canvas_snapshot, {}), (fileId) => `/api/admin/works/${encodeURIComponent(work.id)}/images/${encodeURIComponent(fileId)}`),
+    }));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   // 作品广场的分类映射（2026-09-19 用户口径：「分类目前就 2 个…并且分类在后台可以配置」）。
@@ -209,6 +218,31 @@ export async function handleWorks(ctx, part, method) {
     await audit(ctx, 'PLATFORM_WORK_DELETE', 'WORK', work.id, before, { deleted: true, reason, media }, { orgId: work.org_id });
     return { deleted: true, id: work.id, title: before.title, media };
   }
+  // ⭐ 2026-09-27 用户口径：「平台端看不到学生的作品预览」。画布作品的图/视频原来**没有平台侧的取用口**，
+  //    后台只能看标题 + 一段 JSON 快照。这条与机构端 `/api/org/works/:source/:id/images/:fileId`
+  //    **同一套准入判据**：清单 = 画布上挂的站内素材 ∪ 生成产物归档件（后者不在画布上也属于这件作品）；
+  //    文件必须是 INTERNAL_PROXY + ACTIVE + 允许的媒体类型 + 属于这个学生（或已公开）+ 没过期。
+  let workImageMatch = part.match(/^\/works\/([^/]+)\/images\/([^/]+)$/);
+  if (workImageMatch && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const work = await arow('SELECT * FROM works WHERE id=?', [workImageMatch[1]]);
+    if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
+    const canvasSnapshot = (await normalizeWork(work, { includeSnapshot: true })).canvasSnapshot;
+    const allowed = new Set([
+      ...canvasMediaFrom(canvasSnapshot).map((item) => item.fileId).filter(Boolean),
+      ...(await arows('SELECT asset_url FROM media_assets WHERE project_id=?', [work.project_id]))
+        .map((asset) => String(asset.asset_url || '').match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1]).filter(Boolean),
+    ]);
+    if (!allowed.has(workImageMatch[2])) throw errors.notFound('图片不属于此作品', 'WORK_IMAGE_NOT_FOUND');
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [workImageMatch[2]]);
+    const mime = String(file?.mime_type || '').toLowerCase();
+    if (!file || file.storage_kind !== 'INTERNAL_PROXY' || file.status !== 'ACTIVE'
+      || !['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4', 'video/mp4', 'video/webm'].includes(mime)
+      || (file.owner_user_id !== work.student_id && !['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility))
+      || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品图片不可用', 'WORK_IMAGE_NOT_FOUND');
+    return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFileDownload(ctx, file);
+  }
+
   // 平台端看**作品内容**（2026-09-20 用户口径：「平台能看到作品，但是也要能预览吧。现在只有个标题」）。
   // 列表那条只给标题/状态，所以预览要另取一次详情：把 files / entryFile / artifacts 一起带上，
   // 前端就能用与机构端同一套 Replay* 组件渲染（网页能玩、文档给服务端转的 PDF）。
@@ -473,8 +507,17 @@ export async function handleWorks(ctx, part, method) {
       [workId],
     );
 
+    // ⭐ 2026-09-27：预览要看的"做出来的东西"在这里 —— 媒体清单 + 平台侧同源图片口 + 自动封面。
+    //    前端与机构端共用 `WorkMediaGallery`（点开看大图/播放），画布仍可切过去看过程。
+    //    （`normalizeWork` 只调一次：它会把快照深拷一份，调四遍纯属白烧。）
+    const detailNormalized = await normalizeWork(workRow, { includeSnapshot: true });
+    const detailMedia = canvasMediaFrom(detailNormalized.canvasSnapshot);
+    const detailImageUrl = (fileId) => `/api/admin/works/${encodeURIComponent(workId)}/images/${encodeURIComponent(fileId)}`;
     return {
-      ...await normalizeWork(workRow, { includeSnapshot: true }),
+      ...detailNormalized,
+      media: detailMedia,
+      imageUrls: Object.fromEntries(detailMedia.filter((item) => item.fileId).map((item) => [item.fileId, detailImageUrl(item.fileId)])),
+      coverUrl: workCoverFromSnapshot(detailNormalized.canvasSnapshot, detailImageUrl),
       studentLogin: workRow.student_login,
       studentAllowFeature: Boolean(workRow.student_allow_feature),
       studentShowcaseAnonymous: Boolean(workRow.student_showcase_anonymous),

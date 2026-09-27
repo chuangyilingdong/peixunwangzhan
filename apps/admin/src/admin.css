@@ -778,3 +778,14 @@ body {
 .material-summary > div{display:flex;gap:12px}
 .material-summary dt{min-width:76px;color:#8b85a0;font-size:12px}
 .material-summary dd{margin:0;font-size:13px}
+
+/* 平台端作品列表：封面缩略图 + 标题（2026-09-27 用户口径「平台端看不到学生的作品预览」） */
+.work-cell{display:flex;gap:10px;align-items:flex-start}
+.work-cell__thumb{flex:none;width:64px;height:44px;border-radius:8px;object-fit:cover;background:#f1eefb;border:1px solid #e8e3f2}
+.work-cell__thumb.is-empty{display:grid;place-items:center;color:#b6aede;font-size:14px}
+.work-cell__text{min-width:0}
+/* 「作品内容 / 创作画布」两档（与官网作品页同一套切法） */
+.work-detail__views{display:flex;gap:8px;margin:10px 0 12px}
+.work-detail__views .text-button{padding:4px 10px;border-radius:99px;background:#f1eefb}
+.work-detail__views .text-button.is-on{color:#fff;background:var(--purple,#7058d5)}
+.work-detail__canvas{max-height:520px;overflow:auto;border:1px solid #e8e3f2;border-radius:12px}

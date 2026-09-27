@@ -1,4 +1,4 @@
-import { asPositiveInteger, audit, clearAuthCookies, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, likeKeyword, likeEscapeClause } from '../lib.js';
+import { asPositiveInteger, audit, clearAuthCookies, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, workCoverFromSnapshot, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, likeKeyword, likeEscapeClause } from '../lib.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
@@ -1260,6 +1260,10 @@ export async function handleStudent(ctx) {
         source: 'CANVAS',
         seriesTitle: work.series_title || null,
         entryFile: null,
+        // ⭐ 2026-09-27 用户口径：「我的作品应该自动会有实际的封面，而不是这种填充的」——
+        //    画布作品自动用它快照里的第一张真图当封面（学生域地址，`<img>` 带 cookie 能取）；
+        //    没有真图（纯文字画布）→ null，前端继续用那张自动生成的插图。
+        coverUrl: workCoverFromSnapshot(parseJson(work.canvas_snapshot, {}), (fileId) => `/api/student/file-assets/${encodeURIComponent(fileId)}/download`),
         submissionRound,
         submissions,
         publishRequests,

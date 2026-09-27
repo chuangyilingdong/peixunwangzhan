@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { artifactGroup, buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayFiles, ReplayPanel, ReplayPreview, ReplayShell, WorkMediaGallery } from '@platform/shared';
+import { artifactGroup, buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayPanel, ReplayPreview, ReplayShell, WorkMediaGallery, resolveWorkMediaUrl } from '@platform/shared';
 
 function formatDate(value) {
   if (!value) return '';
@@ -58,6 +58,18 @@ export function WorkDetailPage({ api }) {
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [api, work]);
+  // 媒体网格的地址解析表（2026-09-27 修「图片已失效」）：
+  //   公开作品的 `media` 里，服务端**已经把站内素材换成了这份作品专属的公开代理地址**
+  //   （见 routes/communication/public.js），但这里原来只认 `imageUrls` 那份映射 ——
+  //   公开接口根本不返回 imageUrls → 每张图都解析成空串 → 整片「图片已失效」（用户 2026-09-27 报的图1）。
+  //   现在交给共享的 `resolveWorkMediaUrl`：只有**学生域**地址才需要映射（映射不到返回 null，
+  //   画廊显示占位），公开代理 / 同源相对地址 / https 外链一律原样放行。
+  //   ⚠️ `imageData`（老的学生域→data: 那条路）放最后：它要是真有值，说明字节已经拿在手上，优先用它。
+  const mediaImageUrls = useMemo(() => {
+    const map = { ...(work?.imageUrls || {}) };
+    for (const item of work?.media || []) if (item?.fileId && item.url) map[item.fileId] = item.url;
+    return { ...map, ...imageData };
+  }, [work, imageData]);
   const isVibeCoding = work?.type === 'VIBECODING';
   // 「创作画布」那一档也要把快照里的地址换掉，否则访客看到的是**整屏破图**：
   // 快照里存的是学生域地址 `/api/student/file-assets/<id>/download`，访客没登录、那条路必然 401
@@ -87,8 +99,8 @@ export function WorkDetailPage({ api }) {
       || null,
     [views, activeName, work],
   );
-  // 「它是怎么写出来的」默认停在主产物上（老记录没有产物清单 → 退回入口文件）
-  const sourceDefault = current?.name || work?.preview?.name || work?.entryFile;
+  // （原来这里还有一个 `sourceDefault`：「它是怎么写出来的」那个源码清单默认停在哪个文件。
+  //   2026-09-27 用户口径把那块删掉之后它没有调用方了，一并删。）
 
   if (isVibeToken) {
     const label = current?.document ? artifactGroup(current.kind).label : '互动网页';
@@ -163,10 +175,11 @@ export function WorkDetailPage({ api }) {
               )}
             </div>
           </div>
-          {Object.keys(files).length ? <details className="mw-source">
-            <summary>它是怎么写出来的（{Object.keys(files).length} 个文件）</summary>
-            <ReplayFiles files={files} entryFile={sourceDefault} />
-          </details> : null}
+          {/* ⚠️ 2026-09-27 用户口径：「代码作品这里是无限延长的，很难看，这块直接删除」——
+              原来这里是一个 `<details>它是怎么写出来的（N 个文件）</details>` 的**源码清单**
+              （`ReplayFiles` 把每个文件的正文整段铺开，一个 HTML 就是几屏）。
+              成品预览（上面那个 iframe / PDF）与「下载《文件名》」都还在，改代码想看正文就下载。
+              `ReplayFiles` 这个组件本身还给别处用（机构端/学生端），没删。 */}
           <div className="c-replay__actions">
             {current?.downloadUrl ? (
               <button type="button" className="button soft" onClick={() => window.location.assign(current.downloadUrl)}>
@@ -206,7 +219,7 @@ export function WorkDetailPage({ api }) {
       </div>
       {view === 'canvas'
         ? <div className="work-detail__canvas"><CanvasEditor key={work.id} initialSnapshot={work.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={canvasImage} /></div>
-        : <WorkMediaGallery media={work.media} assets={work.assets} resolveSrc={(item) => (item?.fileId ? imageData[item.fileId] || work.imageUrls?.[item.fileId] || '' : '')} />}
+        : <WorkMediaGallery media={work.media} assets={work.assets} resolveSrc={(item) => resolveWorkMediaUrl(item?.url, mediaImageUrls) || ''} />}
       <div className="work-detail__foot"><Link className="button soft" to="/works">看看更多作品</Link></div>
     </> : null}
   </main>;
