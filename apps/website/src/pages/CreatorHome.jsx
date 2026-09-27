@@ -195,6 +195,7 @@ export function CreatorHomePage({ api, studentApi = null }) {
           </div>
         </button>
         {isOwner && !work.isPublic && (work.source || 'CANVAS') === 'CANVAS' ? <button type="button" className="text-button" data-testid="publish-work" disabled={busy} onClick={() => publishWork(work)}>公开到广场</button> : null}
+        {work.unpublishReason && !work.isPublic ? <p className="student-card__desc" data-testid="unpublish-reason"><strong>下架原因：</strong>{work.unpublishReason}</p> : null}
       </article>;
     })}</div> : <div className="student-page-state">
       ✦ 这个主页上还没有作品。<br />学生提交作品之后就会出现在这里。

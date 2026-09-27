@@ -209,8 +209,8 @@ try {
     /const pick = media\.find\(\(item\) => item\.modality === 'IMAGE' && item\.fileId\)/.test(lib));
   check('⑥ VibeCoding 作品也用页面里的真图当封面（没有图才回落到自动插图）',
     /coverUrl: \(\(\) => \{[\s\S]{0,400}snapshotImageFileIds\(row\)/.test(read('apps/server/src/routes/communication/public.js')));
-  check('⑥ ⭐ 学生端自己的作品详情页也不再铺源码清单（用户 2026-09-27：「也要删」）',
-    !/<summary>它是怎么写出来的/.test(read('apps/website/src/pages/MyWorkDetail.jsx')));
+  // ⚠️ 2026-09-27：学生自己那页（MyWorkDetail）**已删**（用户口径：不需要 my-home 了），
+  //    学生看自己的作品现在走主页里那个弹窗/公开详情页 —— 源码清单那条口径由上面那条公开页的断言守。
   // ⭐ 「给机构加次数」只会有一个入口（用户 2026-09-27：「很多重复的逻辑和操作，能合并就合并」）：
   //    课包页（授权与人次流水）不再有追加/开通表单；采购字段在机构页的「调整授权次数」抽屉里。
   const authorizations = read('apps/admin/src/pages/Organizations.jsx');

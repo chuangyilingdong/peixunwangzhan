@@ -144,7 +144,7 @@ try {
       && /<video src=\{displaySrc\} controls/.test(gallery)
       && /import \{ AudioPlayer \} from '@platform\/canvas'/.test(gallery)
       && /<AudioPlayer className="work-media__player"/.test(gallery)
-      && ['apps/website/src/pages/WorkDetail.jsx', 'apps/website/src/pages/MyWorkDetail.jsx', 'apps/org/src/main.jsx', 'apps/org/src/pages/classroom/ClassroomWork.jsx']
+      && ['apps/website/src/pages/WorkDetail.jsx', 'apps/org/src/main.jsx', 'apps/org/src/pages/classroom/ClassroomWork.jsx']
         .every((file) => read(file).includes('WorkMediaGallery')));
     check('② 广场与老师端**默认**看媒体，画布退到一个「创作画布」标签里',
       /useState\('media'\)/.test(read('apps/website/src/pages/WorkDetail.jsx'))

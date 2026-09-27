@@ -99,7 +99,9 @@ console.log('④ 静态：前端词表与死代码');
   check('④ 机构端作品列表用 shared 的 WorkPlazaStatus（不再是英文枚举 + 猜色）',
     /<WorkPlazaStatus item=\{item\} \/>/.test(orgMain));
   check('④ 学生端「我的作品」的下架原因不再只认旧枚举 REJECTED',
-    /work\.unpublishReason && !work\.plazaPublished \?/.test(read('apps/website/src/pages/MyWorks.jsx')));
+    // ⚠️ 2026-09-27：那页（MyWorks.jsx）已删、并进对外主页（CreatorHome.jsx）—— 断言跟着换家。
+    //    字段名也跟着换：主页那份数据（公开口）给的是 `isPublic`，旧页面是 `plazaPublished`，同一意图。
+    /work\.unpublishReason && !work\.(plazaPublished|isPublic) \?/.test(read('apps/website/src/pages/CreatorHome.jsx')));
   check('④ 商机页不再猜消息里的字决定红绿',
     !/tone=\{\/失败\|不能\|无效\|不存在\|没有权限\//.test(read('apps/admin/src/pages/Leads.jsx')));
   check('④ 审核页不再自写一份 CSV 下载', !/new Blob\(\[result\.content\]/.test(read('apps/admin/src/pages/PlatformAudit.jsx')));
