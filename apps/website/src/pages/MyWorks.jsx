@@ -1,7 +1,7 @@
 // 官网 - 我的作品
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Pagination, readSession, workPlazaLabel } from '@platform/shared';
+import { Pagination, readSession, workPlazaBadge } from '@platform/shared';
 
 // 状态话术统一走 @platform/shared 的 worksState（两条链路一套词，这里不再自己维护一份）
 
@@ -155,6 +155,7 @@ export function MyWorksPage({ api }) {
 
     {visible.length ? <div className="student-card-grid sw-grid">{visible.map((work) => {
       const type = workType(work);
+      const badge = workPlazaBadge(work);
       return <article className="student-card sw-card" key={work.id}>
         <Link className="sw-card__link" to={`/my-works/${work.source || 'CANVAS'}/${encodeURIComponent(work.id)}`}>
           <div className="student-work-card__cover">
@@ -163,7 +164,9 @@ export function MyWorksPage({ api }) {
           </div>
           <h3 className="sw-card__title">{work.title}</h3>
           <div className="sw-card__foot">
-            <span className={`student-badge ${work.plazaPublished ? 'is-ok' : ''}`}>{workPlazaLabel(work)}</span>
+            {/* 「已提交待发布」这一档不渲染徽标（用户 2026-09-27 口径，规则在 workPlazaBadge 里）——
+                整只 span 一起不渲染；留个空 span 会变成一个空的灰底胶囊。 */}
+            {badge ? <span className={`student-badge ${work.plazaPublished ? 'is-ok' : ''}`} data-testid="plaza-badge">{badge.text}</span> : null}
             <span className="sw-card__from">{work.seriesTitle || '未绑定课包'}</span>
           </div>
         </Link>

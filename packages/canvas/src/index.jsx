@@ -1122,11 +1122,21 @@ const DOCK_GAP = 14;
 // 初始视野 / 「适配视图」用的分边留白：下边固定留出面板的位置（面板最高约 320px），
 // 其余三边给一点点边距。必须写成 px——ReactFlow 把数字当「比例」解析，不是像素。
 const CANVAS_FIT_PADDING = { top: '24px', right: '40px', bottom: '320px', left: '40px' };
+// 只读查看用的分边留白：**不留底部那 320px** —— 那块输入面板只在可编辑态渲染（见本文件下面 `!readOnly &&`）。
+// 只读态（公开作品页 / 学生自己的作品详情 / 平台端与机构端预览 / 老师课堂看学生作品）的目标是
+// **整幅作品看得见**，四面留一点点边距就够；照抄编辑态那份会让内容被挤到上半截、手机上更明显。
+const CANVAS_READONLY_FIT_PADDING = { top: '20px', right: '20px', bottom: '20px', left: '20px' };
 // 画布缩放范围。**上限必须是 8（800%）**：学生要看清楚素材细节（用户 2026-09-17 报
 // 「放大最多就放大这么多了」，并给了别的平台能放到 800% 的对照）。
 // 以前是 1.8 —— 连一张 1k 图的像素都到不了，等于看不清自己生成的东西。
 const CANVAS_MAX_ZOOM = 8;
 const CANVAS_MIN_ZOOM = 0.35;
+// 只读查看的下限要**更低**：适配视野那一步会被 minZoom 夹住（`setViewport` 里
+// `scaleExtent([minZoom,maxZoom])` 会再夹一次，光给 fitView 传 minZoom 没用 —— 2026-09-27 查过源码）。
+// 一张横向铺开的画布（真实快照常见，如 x 到 1400+）在 390px 的手机上需要 ~0.24 才能整幅装下，
+// 卡在 0.35 就永远露一截 —— 那正是用户报的「没法看」。只读态放宽到 10%，编辑态仍是 0.35
+// （编辑态的下限是给学生"别把自己绕丢"用的，只读查看没这个顾虑）。
+const CANVAS_READONLY_MIN_ZOOM = 0.1;
 // 缩放档位（菜单里的快捷值，与对照平台的 50% / 100% / 800% 一致）
 const CANVAS_ZOOM_STEPS = [0.5, 1, 8];
 
@@ -1327,6 +1337,46 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     };
     return () => { placementRef.current = null; };
   }, [getViewport, placementRef, screenToFlowPosition]);
+  // 只读查看：**按容器适配视野**，而不是照搬快照里存的那个视角。
+  // 为什么（2026-09-27 用户报「网页端学生看『我的作品』画布没法看」，手机上截图为证）：
+  //   快照里的 viewport 是**当时那台设备**的 {x,y,zoom}（多半是桌面大屏录的）。照搬到手机上等于
+  //   "从一个桌面坐标的窗口往里看" —— 屏幕中部一大块深色，内容只在右边露出一条。原来 `fitView` 又
+  //   只在"这份快照没存过视角"时才跑，而真实快照都存过 → 这条路上**永远不适配**。
+  // 两条纪律：
+  //   · **编辑态不动**（学生平移/缩放后的视角不能被刷新冲掉，那是 2026-09-17 的既有口径）；
+  //   · 只读态里**用户自己拖过/缩放过之后就不再抢**（换屏/转屏才需要重新适配），
+  //     判据用真实手势事件（wheel / pointerdown），不去猜 ReactFlow 的 onMoveStart（程序化移动也会触发它）。
+  useEffect(() => {
+    if (!readOnly) return undefined;
+    const element = canvasRef.current;
+    if (!element) return undefined;
+    let touched = false;
+    const markTouched = () => { touched = true; };
+    const refit = () => {
+      if (touched) return;
+      const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) return; // 还没布局出尺寸就先不动（否则会算出个畸形视野）
+      fitView({ padding: CANVAS_READONLY_FIT_PADDING, duration: 0, maxZoom: 1.2 });
+    };
+    // 下一帧再适配：容器宽度得等布局落定（手机上地址栏伸缩也会走这里）。
+    const frame = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(refit) : null;
+    element.addEventListener('wheel', markTouched, { passive: true });
+    element.addEventListener('pointerdown', markTouched);
+    let observer = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(refit);
+      observer.observe(element);
+    } else {
+      window.addEventListener('resize', refit);
+    }
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      element.removeEventListener('wheel', markTouched);
+      element.removeEventListener('pointerdown', markTouched);
+      if (observer) observer.disconnect();
+      else window.removeEventListener('resize', refit);
+    };
+  }, [readOnly, fitView]);
   const historyRef = useRef({ past: [], future: [] });
   const clipboardRef = useRef([]);
   const restoringHistoryRef = useRef(false);
@@ -1643,14 +1693,17 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         onDragOver={(event) => event.preventDefault()}
         onMoveStart={() => setViewportBusy(true)}
         onMoveEnd={() => { setViewport(getViewport()); setViewportBusy(false); }}
-        // 只有「这份快照还没存过视角」时才自动适配视野；存过就用存下来的视角。
+        // 编辑态：只有「这份快照还没存过视角」时才自动适配视野；存过就用存下来的视角。
         // 原来无条件写 fitView，于是每次刷新都会重新适配 —— 学生平移/缩放后的视角全丢（用户反馈「刷新全复原」）。
-        fitView={!hasStoredViewport}
+        // 只读态：**一律适配**（存过也适配）—— 见上面那个 refit effect 里的口径注释，
+        // 照搬桌面录的视角正是"手机上没法看"的根因。
+        fitView={readOnly ? true : !hasStoredViewport}
         // 初始视野：内容靠上、下面留出输入面板的位置。
         // fitView 默认把内容**垂直居中**，而面板贴在被选中框体下方、高 160~320px，
         // 居中时框体下面最多只有 (画布高 - 框体高)/2 的空间——框体长一点面板就必然压住它。
         // 分边 padding 用 px（数字会被当成比例，不是像素），下边固定留 320px。
-        fitViewOptions={{ padding: CANVAS_FIT_PADDING, maxZoom: 1.2 }}
+        // 只读态没有那块面板，所以换成四边 20px 的那份（CANVAS_READONLY_FIT_PADDING）。
+        fitViewOptions={{ padding: readOnly ? CANVAS_READONLY_FIT_PADDING : CANVAS_FIT_PADDING, maxZoom: 1.2 }}
         nodesDraggable={!readOnly}
         nodesConnectable={!readOnly}
         elementsSelectable={!readOnly}
@@ -1670,13 +1723,15 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
             edges: (deletingEdges || []).filter((edge) => !protectedIds.has(edge.source) && !protectedIds.has(edge.target)),
           };
         }}
-        minZoom={CANVAS_MIN_ZOOM}
+        minZoom={readOnly ? CANVAS_READONLY_MIN_ZOOM : CANVAS_MIN_ZOOM}
         maxZoom={CANVAS_MAX_ZOOM}
         defaultViewport={initial.viewport}
       >
         <Background color="#7e8ed8" gap={24} size={1} />
         <MiniMap pannable zoomable className="learning-canvas__minimap" />
-        <Controls showInteractive={false} />
+        {/* ReactFlow 自带的这个「适合屏幕」按钮：只读态也要用**不含底部面板留白**的那份 padding，
+            否则等于把内容压进上半截（那个 320px 是给编辑态输入面板留的）。 */}
+        <Controls showInteractive={false} fitViewOptions={{ padding: readOnly ? CANVAS_READONLY_FIT_PADDING : CANVAS_FIT_PADDING, maxZoom: 1.2 }} />
       </ReactFlow>
       {!readOnly && activeNode ? <CanvasDockPanel node={activeNode} containerRef={canvasRef} viewportBusy={viewportBusy} onRequestRoom={requestRoom} onRequestMaterials={onRequestMaterials} boxModalities={boxModalities} /> : null}
       {!readOnly && <div className="learning-canvas__toolbar">

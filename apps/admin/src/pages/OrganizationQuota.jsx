@@ -154,8 +154,12 @@ function AdjustQuotaDrawer({ api, orgId = '', assignment = null, assignments = [
   const [value, setValue] = useState('');
   // ⭐ 2026-09-27（合并重复入口）：加次数只有这一个地方。原来「是不是采购」要换一个页面填
   //    （「授权与人次流水」的追加次数表单）—— 用户口径「很多重复的逻辑和操作，能合并就合并」，
-  //    于是把成交/收款字段搬进来：平台调整（不记钱）与机构采购（记批次+收入台账）在这里二选一。
-  const [recordMode, setRecordMode] = useState('ADJUST');
+  //    于是把成交/收款字段搬进来。
+  // ⭐ 2026-09-27 晚（用户口径：「图2 调整授权次数这平台调整（不记钱）删除掉」）：
+  //    **增加不再有"不记钱"这一档** —— 加次数一律走「机构采购」（写许可批次 + 收入台账），
+  //    所以原来那个二选一的单选组删掉了，`isPurchase` 直接由方向决定。
+  //    ⚠️ 后端那条 adjust 接口**必须保留**：减少仍走它（delta 为负），
+  //       p148 / p86 也是直接打接口的（不读前端），删了它们会红。
   const [purchase, setPurchase] = useState({ amount: '', currency: 'CNY', paymentStatus: 'PAID', orderNo: '', contractNo: '' });
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
@@ -173,7 +177,8 @@ function AdjustQuotaDrawer({ api, orgId = '', assignment = null, assignments = [
   const nextTotal = total + delta;
   const belowUsed = nextTotal < used;
   const reasonValid = reason.trim().length > 0 && reason.trim().length <= 200;
-  const isPurchase = direction === 'ADD' && recordMode === 'PURCHASE';
+  // 「增加」一律要记账（原来还能选"平台调整（不记钱）"，2026-09-27 用户口径删掉那一档）。
+  const isPurchase = direction === 'ADD';
   const purchaseValid = !isPurchase || Number(purchase.amount) > 0;
 
   async function submit() {
@@ -234,17 +239,10 @@ function AdjustQuotaDrawer({ api, orgId = '', assignment = null, assignments = [
               <label className="checkbox-option"><input type="radio" name="quota-direction" checked={direction === 'REDUCE'} onChange={() => { setDirection('REDUCE'); setError(''); }} />减少</label>
             </div>
           </div>
-          {/* ⭐ 2026-09-27 用户口径（合并重复入口）：「很多重复的逻辑和操作。梳理下能合并就合并」——
-              原来「机构真的付了钱」要去另一个页面（授权与人次流水 → 追加次数）填成交/收款，
-              这里只能"不记钱地调整"。现在两条路都收在这一个抽屉里，按「这次增加怎么记」二选一；
-              各自记的东西不变：平台调整补 0 金额平台批次（保证机构能发课），机构采购写许可批次 + 收入台账。 */}
-          {direction === 'ADD' ? <div>
-            <span className="org-field-label">这次增加怎么记</span>
-            <div className="row-actions">
-              <label className="checkbox-option"><input type="radio" name="quota-record-mode" checked={recordMode === 'ADJUST'} onChange={() => { setRecordMode('ADJUST'); setError(''); }} />平台调整（不记钱）</label>
-              <label className="checkbox-option"><input type="radio" name="quota-record-mode" checked={recordMode === 'PURCHASE'} onChange={() => { setRecordMode('PURCHASE'); setError(''); }} />机构采购（记成交与收款）</label>
-            </div>
-          </div> : null}
+          {/* ⭐ 2026-09-27 用户口径：「调整授权次数这平台调整（不记钱）删除掉」。
+              原来这里有一组「这次增加怎么记」的单选（平台调整 / 机构采购）——
+              **增加不再有"不记钱"这一档**：加次数一律记一笔许可批次 + 收入台账（下面的成交/收款字段）。
+              减少仍然只改「能发多少次课」、不动财务账（后端那条 adjust 接口保留）。 */}
           <label>调整数值（次）*<input type="number" min="1" step="1" value={value} onChange={(event) => { setValue(event.target.value); setError(''); }} placeholder="如：50" /><small className="muted">单位：次，必须是大于 0 的整数；{direction === 'ADD' ? '增加' : '减少'} {amountValid ? amount : 0} 次</small></label>
           {isPurchase ? <div>
             <span className="org-field-label">采购与收款（机构真的付了钱才填）</span>
@@ -256,12 +254,12 @@ function AdjustQuotaDrawer({ api, orgId = '', assignment = null, assignments = [
               <label>合同号（可选）<input value={purchase.contractNo} onChange={(event) => setPurchase({ ...purchase, contractNo: event.target.value })} /></label>
             </div>
           </div> : null}
-          <label>调整原因（必填，不超过 200 字）*<textarea rows={3} maxLength={200} value={reason} onChange={(event) => { setReason(event.target.value); setError(''); }} placeholder={isPurchase ? '如：机构追加采购 50 次（合同 SO-…）' : '如：平台补偿 50 次'} /><small className="muted">{reason.length}/200</small></label>
+          <label>调整原因（必填，不超过 200 字）*<textarea rows={3} maxLength={200} value={reason} onChange={(event) => { setReason(event.target.value); setError(''); }} placeholder={isPurchase ? '如：机构采购 50 次（合同 SO-…）' : '如：机构退回 50 次'} /><small className="muted">{reason.length}/200</small></label>
           <Notice tone="warning">调整后总授权次数不能少于当前已授权次数（{used} 次）。{amountValid ? <> 本次调整后总授权次数为 <strong>{nextTotal}</strong> 次，已授权 {used} 次、剩余 {Math.max(0, nextTotal - used)} 次。</> : null}</Notice>
           <Notice tone="info">
             {isPurchase
-              ? <><strong>机构采购</strong>：增加 {amountValid ? amount : 0} 次，并记一笔<strong>许可批次 + 收入台账</strong>（机构端「采购与开通记录」里看得到）。</>
-              : <><strong>平台调整</strong>：只改「能发多少次课」，不记钱 —— 增加时服务端会自动补一笔 <strong>0 金额的平台批次</strong>（保证机构能正常发课），减少不动财务账。机构真的付了钱就选上面的「机构采购」。</>}
+              ? <><strong>增加</strong>：{amountValid ? amount : 0} 次，并记一笔<strong>许可批次 + 收入台账</strong>（机构端「采购与开通记录」里看得到）。</>
+              : <><strong>减少</strong>：只改「能发多少次课」，不动财务账。</>}
           </Notice>
         </section>
         {error ? <Notice tone="danger">{error}</Notice> : null}

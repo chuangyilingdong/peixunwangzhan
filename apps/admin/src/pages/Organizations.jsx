@@ -334,8 +334,8 @@ export function Authorizations({ api }) {
               本页是**课包视角**（库存总次数 + 各机构分到多少），给机构开通/追加/调整在机构页那一个抽屉里。 */}
           <Panel title="给这家机构加次数">
             <p className="muted">加次数现在只有<strong>一个入口</strong>：进这家机构的「机构课包与授权次数」页——
-              那里能看到它的全部课包与次数台账，<strong>机构采购</strong>（记成交金额与收款）与
-              <strong>平台调整</strong>（只改次数、不记钱）在同一个抽屉里二选一。</p>
+              那里能看到它的全部课包与次数台账；<strong>增加</strong>要记一笔采购与收款（成交额 / 收款状态），
+              <strong>减少</strong>只改次数、不动财务账。</p>
             <p className="muted">这一页负责的是<strong>课包自己的库存池</strong>（上面那个「调整库存总次数」）与各机构已分到多少。</p>
             <Link className="primary-button" to={`/organizations/${encodeURIComponent(orgId)}/quota`}>去「{selectedOrg.name}」的机构页加次数 →</Link>
           </Panel>

@@ -217,10 +217,14 @@ try {
   const quotaPage = read('apps/admin/src/pages/OrganizationQuota.jsx');
   check('⑥ 课包页不再有「追加次数 / 首次授权」表单（那条路已合并到机构页）',
     !/license-purchases\/append/.test(authorizations) && !/Panel title="追加次数"/.test(authorizations));
-  check('⑥ 机构页的「调整授权次数」抽屉同时支持平台调整与机构采购（同一抽屉二选一，各记各的账）',
+  check('⑥ 机构页的「调整授权次数」抽屉：增加走采购记账、减少走 adjust（两条都在，各记各的账）',
     /admin\/license-purchases\/append/.test(quotaPage)
-    && /course-quotas\/\$\{encodeURIComponent\(current\.seriesId\)\}\/adjust/.test(quotaPage)
-    && /机构采购（记成交与收款）/.test(quotaPage) && /平台调整（不记钱）/.test(quotaPage));
+    && /course-quotas\/\$\{encodeURIComponent\(current\.seriesId\)\}\/adjust/.test(quotaPage));
+  // ⚠️ 2026-09-27 晚口径变更（**不是测试漂移**）：用户口径「图2 调整授权次数这平台调整（不记钱）删除掉」——
+  //    增加不再有"不记钱"这一档，那组「这次增加怎么记」的单选整组删掉了。
+  //    断言改看**渲染出来的那两处**（radio 的 name 与 label 文案），不看注释里的历史说明。
+  check('⑥ 那组「平台调整（不记钱）／机构采购」单选已删除（用户 2026-09-27：「删除掉」）',
+    !/name="quota-record-mode"/.test(quotaPage) && !/>平台调整（不记钱）<\/label>/.test(quotaPage));
 }
 
 if (failures) {

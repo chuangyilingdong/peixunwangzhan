@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayPanel, ReplayPreview, ReplayShell, WorkMediaGallery, artifactGroup, formatDate, workPlazaLabel } from '@platform/shared';
+import { buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayPanel, ReplayPreview, ReplayShell, WorkMediaGallery, artifactGroup, formatDate, workPlazaBadge } from '@platform/shared';
 
 /** 快照里的私有素材地址 → fileId（服务端拼的 imageUrls 用的就是这个地址）。 */
 function fileIdOfAssetUrl(value) {
@@ -71,6 +71,61 @@ export function MyWorkDetailPage({ api }) {
   }, [api, workSource, id]);
 
   const work = state.work;
+
+  // ── 「分享」按钮（2026-09-27 用户口径：「我的作品是不是该有个分享按钮可以分享」）─────────────
+  // 分享出去的就是**公开作品页**那条链接（`/works/<share_token>`），和作品广场看到的是同一个地址。
+  // 两条纪律：
+  //   · 作品**还没公开**时不偷偷替学生公开 —— 那是孩子的作品，公开与否要学生/家长自己点一下确认
+  //     （所以第一次点只弹确认，第二次点才真的公开 + 复制链接）；
+  //   · 公开有门槛，门槛在**服务端**（要审核通过 + 已确认展示授权，见 student.js 的
+  //     `WORK_NOT_APPROVED_FOR_PUBLIC` / `WORK_COPYRIGHT_CONFIRMATION_REQUIRED`）——
+  //     前端不去猜，直接把服务端那句话原样显示出来。
+  const [share, setShare] = useState({ busy: false, ask: false, message: null, tone: 'ok' });
+
+  async function copyPublicLink(path) {
+    const url = new URL(path, window.location.origin).href;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        // 退路：非安全上下文（http）里 navigator.clipboard 是 undefined。
+        const scratch = document.createElement('textarea');
+        scratch.value = url;
+        scratch.setAttribute('readonly', '');
+        scratch.style.position = 'fixed';
+        scratch.style.opacity = '0';
+        document.body.appendChild(scratch);
+        scratch.select();
+        document.execCommand('copy');
+        document.body.removeChild(scratch);
+      }
+      setShare({ busy: false, ask: false, message: `链接已复制：${url}`, tone: 'ok' });
+    } catch {
+      // 复制失败也要把地址露出来，别让人干瞪眼。
+      setShare({ busy: false, ask: false, message: `请手动复制这个地址：${url}`, tone: 'warn' });
+    }
+  }
+
+  function onShareClick() {
+    if (share.busy) return;
+    if (work?.publicUrl) { copyPublicLink(work.publicUrl); return; }
+    setShare({ busy: false, ask: true, message: null, tone: 'ok' });
+  }
+
+  async function confirmPublishAndShare() {
+    setShare({ busy: true, ask: true, message: null, tone: 'ok' });
+    try {
+      const saved = await api.put(`student/works/${encodeURIComponent(id)}/public`, { isPublic: true });
+      const token = saved?.shareToken;
+      if (!token) throw new Error('公开成功了，但没有拿到分享链接。');
+      const path = `/works/${token}`;
+      // 本地先跟上（徽标从「无」变成「已发布到作品广场」、按钮不用刷新页面）
+      setState((prev) => ({ ...prev, work: { ...prev.work, plazaPublished: true, publicUrl: path } }));
+      await copyPublicLink(path);
+    } catch (error) {
+      setShare({ busy: false, ask: false, message: error.message, tone: 'danger' });
+    }
+  }
 
   // 受鉴权保护的素材统一转 data:（见共享 api 的 fetchDataUrl：<img> 发不出 Authorization 头；
   // 生产的 connect-src 也拦 blob:，沙箱 iframe 更拿不到父页面的 blob:）。
@@ -146,7 +201,17 @@ export function MyWorkDetailPage({ api }) {
 
   const back = <Link className="button soft" to="/my-works">← 返回我的作品</Link>;
   const plazaLink = work?.publicUrl ? <Link className="button soft" to={work.publicUrl}>在作品广场看 <ConsoleIcon name="external" size={14} /></Link> : null;
-  const status = work ? <span className={`student-badge ${work.plazaPublished ? 'is-ok' : ''}`}>{workPlazaLabel(work)}</span> : null;
+  // 「分享」按钮：把公开作品页那条链接复制走（学生发给家长/同学用）。
+  const shareAction = work ? <button type="button" className="button soft" data-testid="share-work" disabled={share.busy} onClick={onShareClick}>{share.busy ? '处理中…' : '分享'}</button> : null;
+  const shareNotice = share.ask
+    ? <div className="note">✦ <p>这部作品还没公开到作品广场。<strong>公开之后，任何拿到链接的人都能看到它</strong>，现在公开并复制链接吗？</p>
+      <button type="button" className="button" data-testid="share-confirm" disabled={share.busy} onClick={confirmPublishAndShare}>{share.busy ? '处理中…' : '公开并复制链接'}</button>
+      <button type="button" className="button soft" disabled={share.busy} onClick={() => setShare({ busy: false, ask: false, message: null, tone: 'ok' })}>先不公开</button>
+    </div>
+    : (share.message ? <div className="note">✦ <p data-testid="share-message">{share.message}</p></div> : null);
+  // 「已提交待发布」这一档不渲染徽标（用户 2026-09-27 口径，规则在 workPlazaBadge 里）。
+  const plazaBadge = work ? workPlazaBadge(work) : null;
+  const status = plazaBadge ? <span className={`student-badge ${work.plazaPublished ? 'is-ok' : ''}`} data-testid="plaza-badge">{plazaBadge.text}</span> : null;
   // 「哪门课包的哪一节」——学生要一眼看出来（用户口径 2026-09-20）
   const provenance = work
     ? `${work.seriesTitle || '未绑定课包'} › ${work.courseLessonTitle || '未绑定课时'}`
@@ -171,7 +236,7 @@ export function MyWorkDetailPage({ api }) {
 
   if (workSource === 'CANVAS') {
     return <main className="inner work-detail">
-      <div className="work-detail__bar">{back}{plazaLink}</div>
+      <div className="work-detail__bar">{back}{shareAction}{plazaLink}</div>
       <header className="work-detail__head">
         <p className="work-detail__eyebrow">我的作品 · 画布作品</p>
         <h1>{work.title}</h1>
@@ -179,12 +244,13 @@ export function MyWorkDetailPage({ api }) {
         <p className="work-detail__meta">{status}<span className="mw-provenance">{provenance}</span>{work.submittedAt ? <span>提交于 {formatDate(work.submittedAt)}</span> : null}</p>
       </header>
       {notice}
+      {shareNotice}
       {viewTabs}
       {currentView === 'images' ? (media.length
         ? <WorkMediaGallery media={media} assets={work?.assets} resolveSrc={resolveMediaSrc} />
         : <ImageGallery list={images} src={resolveImageSrc} />)
         : <div className="work-detail__canvas"><CanvasEditor key={work.id} initialSnapshot={work.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={resolveAssetUrl} /></div>}
-      <div className="work-detail__foot">{plazaLink}{back}</div>
+      <div className="work-detail__foot">{shareAction}{plazaLink}{back}</div>
     </main>;
   }
 
@@ -198,10 +264,11 @@ export function MyWorkDetailPage({ api }) {
         <span className="mw-provenance">{provenance}</span>
         {work.submittedAt ? <span>提交于 {formatDate(work.submittedAt)}</span> : null}
       </>}
-      actions={<>{plazaLink}{back}</>}
+      actions={<>{shareAction}{plazaLink}{back}</>}
     >
       {work.description ? <p className="c-page__sub">{work.description}</p> : null}
       {notice}
+      {shareNotice}
       {viewTabs}
       <div className="mw-stage">
         {currentView === 'web' && webArtifact ? <ReplayPreview html={webHtml} title={work.title || '我的作品'} />

@@ -48,6 +48,23 @@ export function workPlazaLabel(item) {
   return LABELS[workPlazaState(item)] || LABELS.SUBMITTED;
 }
 
+/**
+ * 徽标要不要显示（学生端两处用它，别再各写一份判断）。
+ *
+ * ⚠️ 2026-09-27 用户口径：「"已提交待发布"文案删除」—— 那一档**不渲染徽标**（返回 null）。
+ *    为什么删：对学生来说那句只是"提交了、还没被平台发布到广场"，没有任何下一步动作可做，
+ *    挂在每张作品卡上纯属噪音（其余四档「已发布到作品广场/精选/未通过/已下架」都带信息量）。
+ *    ⚠️ 别改成"文案换空串但 span 照旧渲染" —— 会留下一个空的灰底胶囊（`.student-badge` 自带
+ *      padding + 灰底，见 apps/website/src/styles.css）。要塌就整只 span 一起不渲染。
+ *    ⚠️ 平台端那列**不跟着删**：那边「发布状态」是运营的判断依据（这行还等着我发布），
+ *      受众和语义都不同，见 apps/admin/src/pages/PlatformWorks.jsx 的 publicationLabels。
+ */
+export function workPlazaBadge(item) {
+  const state = workPlazaState(item);
+  if (state === 'SUBMITTED') return null;
+  return { state, text: LABELS[state] || LABELS.SUBMITTED, tone: TONES[state] || 'muted' };
+}
+
 export function workPlazaTone(item) {
   return TONES[workPlazaState(item)] || 'muted';
 }

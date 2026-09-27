@@ -107,6 +107,26 @@ assert.ok(homeRow, 'fixture: seed 之后 HOME 应该已在 website_contents 里'
   // 另加一条**我们自己的公开画布作品**：广场要同时显示两类，且筛选（类型胶囊）得有两种类型才测得出来
   await aq("INSERT OR IGNORE INTO student_projects (id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at) VALUES ('project_guard_canvas',?,?,'站内画布样例','SUBMITTED','{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}',1,?,?,?)", [owner.id, owner.org_id, nowIso, nowIso, nowIso]);
   await aq("INSERT OR IGNORE INTO works (id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at) VALUES ('work_guard_canvas','project_guard_canvas',?,?,'站内画布样例','','{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}','PUBLISHED',?,1,'guardcanvas1',?)", [owner.id, owner.org_id, nowIso, nowIso]);
+  // ⭐ 2026-09-27（用户报的图1：「网页端学生看『我的作品』画布，没法看」）：
+  //    专门造一条**「横向铺开 + 存着桌面视角」**的画布作品 —— 只读查看必须**按容器适配**，
+  //    照搬快照里那个视角在手机上就是"从桌面坐标的窗口往里看"（一大块深色、内容只在边上露一条）。
+  //    ⚠️ 上面那些夹具的 viewport 都是 {0,0,1} 且节点为空 —— **照搬视角也看不出毛病**，
+  //       所以这条不是可有可无：横向铺到 x≈1250、viewport 记成桌面形状（x:-120,y:-80,zoom:0.72），
+  //       390px 下若不按容器适配，节点必然大片跑出容器。
+  //    ⚠️ 它**不公开**（is_public=0）：一是别去动「作品广场每页 12 件」那条翻页断言，
+  //       二是正好用它验「未公开作品的分享按钮要先弹确认，不许偷偷替学生公开」。
+  const wideSnapshot = JSON.stringify({
+    nodes: [0, 1, 2].map((index) => ({
+      id: `node_guard_wide_${index}`,
+      type: 'prompt',
+      position: { x: 120 + index * 560, y: 140 + index * 80 },
+      data: { title: `宽画布样例 ${index + 1}`, slotType: 'text', generatedText: `第 ${index + 1} 段文字产出` },
+    })),
+    edges: [],
+    viewport: { x: -120, y: -80, zoom: 0.72 },
+  });
+  await aq("INSERT OR IGNORE INTO student_projects (id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at) VALUES ('project_guard_wide',?,?,'宽画布样例','SUBMITTED',?,1,?,?,?)", [owner.id, owner.org_id, wideSnapshot, nowIso, nowIso, nowIso]);
+  await aq("INSERT OR IGNORE INTO works (id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at) VALUES ('work_guard_wide','project_guard_wide',?,?,'宽画布样例','',?,'PUBLISHED',?,0,NULL,?)", [owner.id, owner.org_id, wideSnapshot, nowIso, nowIso]);
   // 再补 13 件（凑到 15 件 = 12 + 3）——**翻页这条必须超过 12 件才测得出来**。
   // 其中第 13 件是网页类型（按映射表算 VibeCoding 分类），让两个分类都有内容可测。
   for (let index = 1; index <= 13; index += 1) {
@@ -935,6 +955,88 @@ try {
   if (mobileState.overflow > 2) problems.push(`我的作品：手机视口下横向溢出了 ${mobileState.overflow}px`);
   if (!mobileState.avatars) problems.push('我的作品：手机视口下头像不见了');
   await shot('19b-my-works-mobile');
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await settle();
+
+  // ── ⑤f″ ⭐ 2026-09-27 用户报的图1：**只读查看的画布要按容器适配**，不能照搬快照里存的视角。
+  //    夹具 `work_guard_wide`：节点横向铺到 x≈1250、viewport 是桌面形状（x:-120,y:-80,zoom:0.72）
+  //    且**不公开**。390px 下如果照搬那个视角，节点会大片跑出容器 —— 用户看到的就是
+  //    「一大块深色、内容只在右边露一条」。这条同时覆盖**学生自己那页**与**公开页**（用户给的就是公开页）。
+  const measureCanvasFit = async () => page.evaluate(() => {
+    const box = document.querySelector('.learning-canvas');
+    if (!box) return { missing: true };
+    const outer = box.getBoundingClientRect();
+    const rects = Array.from(document.querySelectorAll('.learning-canvas .react-flow__node')).map((node) => node.getBoundingClientRect());
+    const union = rects.reduce((acc, rect) => ({
+      left: Math.min(acc.left, rect.left), right: Math.max(acc.right, rect.right),
+      top: Math.min(acc.top, rect.top), bottom: Math.max(acc.bottom, rect.bottom),
+    }), { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity });
+    return {
+      missing: false,
+      nodes: rects.length,
+      outside: rects.filter((rect) => rect.left < outer.left - 2 || rect.right > outer.right + 2 || rect.top < outer.top - 2 || rect.bottom > outer.bottom + 2).length,
+      coverW: rects.length ? Number(((union.right - union.left) / (outer.width || 1)).toFixed(2)) : 0,
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    };
+  });
+  const checkCanvasFit = async (label, shotName) => {
+    const fit = await measureCanvasFit();
+    console.log(`  · ${label}：节点 ${fit.nodes ?? 0} 个、跑出容器 ${fit.outside ?? '-'} 个、内容占容器宽 ${fit.coverW ?? '-'}、页面横向溢出 ${fit.overflow ?? '-'}px`);
+    if (fit.missing) { problems.push(`${label}：找不到 .learning-canvas`); return; }
+    if (fit.nodes < 3) problems.push(`${label}：只读画布上应当渲染出 3 个节点（实际 ${fit.nodes}）`);
+    if (fit.outside) problems.push(`${label}：有 ${fit.outside} 个节点跑出画布容器 —— 只读查看应当按容器适配（用户 2026-09-27 图1）`);
+    if (fit.coverW < 0.5) problems.push(`${label}：适配后内容只占容器宽的 ${fit.coverW}，不像"整幅装下"`);
+    if (fit.overflow > 2) problems.push(`${label}：页面横向溢出了 ${fit.overflow}px`);
+    if (shotName) await shot(shotName);
+  };
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${base}/my-works/CANVAS/work_guard_wide`, { waitUntil: 'domcontentloaded' });
+  await settle();
+  const wideCanvasTab = page.locator('.mw-views button', { hasText: '画布' });
+  if (await wideCanvasTab.count()) { await wideCanvasTab.first().click(); await settle(); }
+  await page.waitForSelector('.learning-canvas .react-flow__node', { timeout: 20000 }).catch(() => {});
+  await page.waitForTimeout(800); // 「下一帧再适配」那一步落定 + 容器宽度定下来
+  await checkCanvasFit('宽画布（390px 学生自己那页）', '19c-wide-canvas-mobile');
+
+  // 分享按钮：**未公开的作品先弹确认**（不许偷偷替学生公开 —— 那是孩子的作品）。
+  const shareBefore = await page.locator('[data-testid="share-work"]').count();
+  const publicLinkBefore = await page.locator('text=在作品广场看').count();
+  console.log(`  · 分享按钮：${shareBefore} 个；点击前「在作品广场看」链接 ${publicLinkBefore} 个`);
+  if (!shareBefore) problems.push('分享：学生自己那页应当有「分享」按钮（用户 2026-09-27 口径）');
+  if (publicLinkBefore) problems.push('分享：夹具里这件作品本来没公开，点之前不该有「在作品广场看」链接');
+  await page.locator('[data-testid="share-work"]').first().click();
+  await settle();
+  const askShown = await page.locator('[data-testid="share-confirm"]').count();
+  const stillPrivate = await page.locator('text=在作品广场看').count();
+  console.log(`  · 分享：确认弹条 ${askShown ? '出现' : '没出现'}；此时仍非公开 ${stillPrivate ? '否（被偷偷公开了！）' : '是'}`);
+  if (!askShown) problems.push('分享：未公开的作品点「分享」应当先弹确认（.note + share-confirm）');
+  if (stillPrivate) problems.push('分享：还没点确认就把作品公开了 —— 不许偷偷替学生公开');
+  await shot('19d-share-confirm-mobile');
+  await page.locator('[data-testid="share-confirm"]').first().click();
+  await settle();
+  await page.waitForTimeout(400);
+  const publicLinkAfter = await page.locator('text=在作品广场看').count();
+  const badgeAfter = await page.locator('[data-testid="plaza-badge"]').first().innerText().catch(() => '');
+  console.log(`  · 分享：确认后「在作品广场看」链接 ${publicLinkAfter} 个、徽标「${badgeAfter.trim()}」`);
+  if (!publicLinkAfter) problems.push('分享：确认之后应当出现「在作品广场看」链接（说明真的公开了）');
+  if (!badgeAfter.includes('已发布到作品广场')) problems.push(`分享：公开后徽标应当是「已发布到作品广场」（实际「${badgeAfter.trim()}」）`);
+
+  // 公开页（用户图1 那一页）：同一个快照，也要整幅看得见。
+  const publicHref = await page.locator('a:has-text("在作品广场看")').first().getAttribute('href').catch(() => null);
+  if (!publicHref) problems.push('分享：拿不到公开页地址，下面那条公开页的画布适配没法验');
+  else {
+    await page.goto(new URL(publicHref, base).href, { waitUntil: 'domcontentloaded' });
+    await settle();
+    // ⚠️ 公开页默认停在「作品内容」（2026-09-21 口径：先给人看做出来的东西，画布只是过程），
+    //    画布要点「创作画布」那一档才渲染 —— 用户给的图1 就是切到画布那一档之后的样子。
+    const publicCanvasTab = page.locator('.work-detail__tab', { hasText: '创作画布' });
+    if (await publicCanvasTab.count()) { await publicCanvasTab.first().click(); await settle(); }
+    else problems.push('宽画布（公开页）：找不到「创作画布」这一档（用户的图1 就是它）');
+    await page.waitForSelector('.learning-canvas .react-flow__node', { timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(800);
+    await checkCanvasFit('宽画布（390px 公开页）', '19e-wide-canvas-public-mobile');
+  }
   await page.setViewportSize({ width: 1440, height: 960 });
   await settle();
 

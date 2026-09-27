@@ -41,8 +41,19 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
 /* ── ① 状态推导（纯函数，不需要服务） ── */
-const { workPlazaState, workPlazaLabel } = await import('../packages/shared/src/worksState.js');
+const { workPlazaState, workPlazaLabel, workPlazaBadge } = await import('../packages/shared/src/worksState.js');
 check('没提交过（不在广场、没下架原因、没精选）→ 已提交待发布', workPlazaState({}) === 'SUBMITTED', workPlazaState({}));
+/* ⚠️ 2026-09-27 用户口径：「"已提交待发布"文案删除」—— 那一档**不渲染徽标**（学生端两处都走 workPlazaBadge）。
+   为什么删：对学生来说那句只是"提交了、还没被平台发布到广场"，没有下一步动作可做，挂在每张卡上纯属噪音。
+   这里钉两头：① SUBMITTED 给 null（**整只 span 不渲染**，别改成空串留一个空的灰底胶囊）；
+   ② 其余四档照旧要有字（别为了删一句把徽标一起删没了）。
+   平台端那一列**不跟着删**（那边是运营的判断依据，受众与语义不同），所以不在本断言范围内。 */
+check('⭐ SUBMITTED 档不渲染徽标（返回 null，不是空字符串）', workPlazaBadge({}) === null, String(workPlazaBadge({})));
+check('其余四档照旧有徽标文案（删一句不能把徽标删没了）',
+  workPlazaBadge({ plazaPublished: true })?.text === '已发布到作品广场'
+  && workPlazaBadge({ plazaPublished: true, featured: true })?.text === '精选'
+  && workPlazaBadge({ status: 'REJECTED' })?.text === '未通过'
+  && workPlazaBadge({ status: 'UNPUBLISHED', unpublishReason: '涉及版权' })?.text === '已下架');
 check('画布链路在广场（plazaPublished）→ 已发布到作品广场', workPlazaState({ plazaPublished: true }) === 'PLAZA');
 check('VibeCoding 链路在广场（isPublic）→ 同一句话', workPlazaState({ isPublic: true }) === 'PLAZA');
 check('精选优先于「在广场」（精选作品本来就在广场上）', workPlazaState({ plazaPublished: true, featured: true }) === 'FEATURED');
