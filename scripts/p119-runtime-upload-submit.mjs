@@ -159,6 +159,50 @@ try {
     assert.ok(JSON.stringify(listed.data).includes('我做的网页'), JSON.stringify(listed.data).slice(0, 200));
   });
 
+  // ── ⭐ 客户端截的封面（2026-09-27 加：纯代码作品也要有真封面）────────────────────
+  //    形状：`cover: { content: '<base64 png>' }` —— 名字由服务端固定成 `cover.png`，
+  //    存好后在快照里标 `coverFileId`（各端算封面时优先用它，见 public.js 的 VibeCoding 封面）。
+  //    ⚠️ 封面**永远不拦提交**：太大 / 重名只是忽略它 + 回一条 warning（封面是锦上添花）。
+  const coverOf = async (id) => {
+    const row = await arow('SELECT artifacts FROM vibecoding_submissions WHERE id=?', [id]);
+    return JSON.parse(row?.artifacts || '[]').map((item) => item.coverFileId).find(Boolean) || null;
+  };
+  await check('带封面提交：快照里记下 coverFileId，那张图也真的存成了 file_assets', async () => {
+    const withCover = await upload({
+      name: 'index.html', title: '带封面的作品', copyrightConfirmed: true,
+      cover: { content: png.toString('base64') },
+      files: [{ name: 'index.html', content: html, binary: false }],
+    });
+    assert.equal(withCover.status, 200, JSON.stringify(withCover.data).slice(0, 300));
+    const coverId = await coverOf(withCover.data.id);
+    assert.ok(coverId, '产物清单里没有 coverFileId');
+    const file = await arow('SELECT file_name, mime_type, file_size FROM file_assets WHERE id=?', [coverId]);
+    assert.equal(file?.file_name, 'cover.png');
+    assert.equal(String(file?.mime_type), 'image/png');
+    assert.equal(Number(file?.file_size), png.length);
+  });
+  await check('封面太大：作品**照样交得上**，只是这次没带封面（给一条 warning）', async () => {
+    const big = Buffer.concat([png, Buffer.alloc(2 * 1024 * 1024)]);   // 超过 1.5MB 的封面上限
+    const result = await upload({
+      name: 'index.html', title: '封面太大的作品', copyrightConfirmed: true,
+      cover: { content: big.toString('base64') },
+      files: [{ name: 'index.html', content: html, binary: false }],
+    });
+    assert.equal(result.status, 200, JSON.stringify(result.data).slice(0, 200));
+    assert.ok((result.data?.warnings || []).some((text) => text.includes('封面')), JSON.stringify(result.data?.warnings));
+    assert.equal(await coverOf(result.data.id), null, '超限的封面不该被存下来');
+  });
+  await check('作品里本来就有个 cover.png：忽略上传的封面（不覆盖学生的文件）', async () => {
+    const collide = await upload({
+      name: 'index.html', title: '重名封面', copyrightConfirmed: true,
+      cover: { content: png.toString('base64') },
+      files: [{ name: 'index.html', content: html, binary: false }, { name: 'cover.png', content: png.toString('base64'), binary: true }],
+    });
+    assert.equal(collide.status, 200, JSON.stringify(collide.data).slice(0, 200));
+    assert.ok((collide.data?.warnings || []).some((text) => text.includes('重名')), JSON.stringify(collide.data?.warnings));
+    assert.equal(await coverOf(collide.data.id), null);
+  });
+
   // ── 准入：形状不对一律说清是哪一条，别让学生对着 500 猜 ──────────────────────
   const bad = async (patch) => (await upload({ name: 'index.html', copyrightConfirmed: true, files: [{ name: 'index.html', content: html }], ...patch })).data;
   await check('没确认版权 → 400 WORK_COPYRIGHT_CONFIRMATION_REQUIRED',

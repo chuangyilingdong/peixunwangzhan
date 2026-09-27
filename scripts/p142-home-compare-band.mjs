@@ -100,16 +100,15 @@ check('③ 首色 = 三步一栏的末色（上行接得住）',
   cmpStops[0] === stepsStops[stepsStops.length - 1], `栏首色=${cmpStops[0]} 三步末色=${stepsStops[stepsStops.length - 1]}`);
 check('③ 末色 = 页脚的首色（下行接得住，不许留深色缝）',
   cmpStops[cmpStops.length - 1] === footerStops[0], `栏末色=${cmpStops[cmpStops.length - 1]} 页脚首色=${footerStops[0]}`);
-// ⚠️ 2026-09-28 口径变更（**不是测试漂移**）：用户口径「官网首页做个二维码出来」——这一栏后面
-//    多了一栏「扫码访问」（`<HomeQr />`，守卫 p155 钉着）。所以从"它是最后一段"改成
-//    "它后面**只允许**再跟着扫码那一栏"（顺序仍是：三步一栏 → 对比栏 → 扫码 → 页脚）。
+// 「它是页面最后一段」改成**数版块**（比"到 </main> 不超过 200 字"稳：中间可以有注释）。
+// 2026-09-28：中间曾短暂加过一栏「扫码访问」二维码（用户当天就撤了），现在只允许有它自己。
 {
   const afterCompare = site.slice(site.indexOf('<HomeCompare'));
   const sectionsAfter = [...afterCompare.matchAll(/<Home(Steps|Compare|Videos|Qr)\b/g)].map((match) => match[1]);
-  check('③ 这一栏排在「三步一栏」之后、页脚之前（它后面只允许再跟着「扫码访问」那一栏）',
+  check('③ 这一栏排在「三步一栏」之后、页脚之前（= 页面最后一段）',
     site.indexOf('<HomeCompare') > site.indexOf('<HomeSteps')
-    && sectionsAfter[0] === 'Compare' && sectionsAfter.slice(1).every((name) => name === 'Qr'),
-    `它之后出现的版块：${sectionsAfter.join(' → ')}`);
+    && sectionsAfter.length === 1 && sectionsAfter[0] === 'Compare',
+    `它之后出现的版块：${sectionsAfter.join(' → ') || '（无）'}`);
 }
 check('③ 它在 `.hp-first` 外面（加它不许改变第一屏含背景视频的取景）', site.indexOf('<HomeCompare') > site.indexOf('</div>\n    {/* 三步一栏'), '检查 HomeCompare 与 .hp-first 的先后');
 

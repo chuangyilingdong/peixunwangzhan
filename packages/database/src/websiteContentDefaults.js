@@ -204,5 +204,14 @@ export const WEBSITE_CONTENT_DEFAULTS = {
     title: '灵动Ai学院课包展示',
     lead: '灵动Ai坚持自研国内精品Ai课程，持续探索适合青少年Ai培训体系。',
   },
-  BRAND: { name: '灵动ai学院', tagline: '青少年 AI 创作开课平台', contactEmail: 'hello@aimagc.cn' }
+  BRAND: { name: '灵动ai学院', tagline: '青少年 AI 创作开课平台', contactEmail: 'hello@aimagc.cn' },
+  // 「联系我们」（/demo）页上的联系方式（2026-09-27 用户口径：「直接显示姓名电话微信二维码，后台可配置」）——
+  // 原来那一页是个**表单**（填机构 / 联系人 / 电话 → 提交线索），现在改成直接展示这三个字段。
+  // ⚠️ 与 `packages/shared/src/siteDefaults.js` 的 `CONTACT_DEFAULT` **逐字一致**（守卫 p156 钉着）。
+  CONTACT: {
+    name: '',
+    phone: '',
+    wechatQrUrl: '',
+    note: '加微信时请备注机构名称，我们会尽快安排演示与资料。',
+  }
 };

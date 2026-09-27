@@ -376,6 +376,11 @@ const MAX_UPLOAD_FILES = 60;
  */
 const MAX_UPLOAD_BYTES = 16 * 1024 * 1024;
 
+/** 封面的固定文件名（客户端截图上传时用这个名字，服务端靠它认封面）。 */
+const COVER_FILE_NAME = 'cover.png';
+/** 封面图上限：截图（1280×720 PNG）通常 100~400KB，给到 1.5MB 足够、也不至于让整包变胖。 */
+const MAX_COVER_BYTES = Math.floor(1.5 * 1024 * 1024);
+
 /**
  * 把客户端传上来的产物整理成与 `collectStudentDeliverable()` **同形**的一份。
  *
@@ -383,7 +388,7 @@ const MAX_UPLOAD_BYTES = 16 * 1024 * 1024;
  * 文件名要平铺（`safeArtifactName` 是**拒绝**带路径的名字，不是悄悄改名，所以借 `../`
  * 写到别处这条路根本走不通）、主产物必须在清单里、总量要有上限。
  * 形状不对一律 400 并说清是哪一条，别让学生对着一个 500 猜。
- * @param body - `{ name, files: [{ name, content, binary }] }`；`binary` 为真时 `content` 是 base64。
+ * @param body - `{ name, files: [{ name, content, binary }], cover?: { content } }`；`binary` 为真时 `content` 是 base64。
  */
 function collectUploadedArtifacts(body) {
   const rawName = String(body?.name || '').trim();
@@ -397,6 +402,7 @@ function collectUploadedArtifacts(body) {
   }
 
   const files = [];
+  const warnings = [];
   const seen = new Set();
   let total = 0;
   for (const item of raw) {
@@ -416,8 +422,33 @@ function collectUploadedArtifacts(body) {
   if (!seen.has(entryName)) {
     throw errors.badRequest('主产物不在文件清单里', 'RUNTIME_UPLOAD_ENTRY_MISSING');
   }
+  // ⭐ **可选封面**（2026-09-27 加，用户口径：「纯代码的小作品也得有真封面」）：
+  //    客户端在提交时截一张图（浏览器里跑出来的那一屏）随同上传，广场/我的作品就有一张**真封面**，
+  //    而不是那张按类型画的占位插图。形状与 files 里的一项一致（base64），名字**固定** `cover.png`
+  //    —— 服务端靠这个名字认封面（存好后在快照里标 `coverFileId`，各端取封面时优先用它）。
+  //    ⚠️ 三条纪律：① **不拦提交**（封面是锦上添花，坏了只记一条 warning，别让学生交不上作品）；
+  //    ② 名字撞主产物/已有文件就忽略封面；③ 大小计入总上限，另有自己的上限（MAX_COVER_BYTES）。
+  let coverName = null;
+  const coverContent = String(body?.cover && typeof body.cover === 'object' ? (body.cover.content || '') : '');
+  if (coverContent) {
+    if (seen.has(COVER_FILE_NAME)) {
+      warnings.push(`封面文件名 ${COVER_FILE_NAME} 与作品里的文件重名，这次没带上封面`);
+    } else {
+      const coverBytes = Buffer.byteLength(coverContent, 'base64');
+      if (coverBytes > MAX_COVER_BYTES) {
+        warnings.push(`封面图太大（${Math.round(coverBytes / 1024)}KB，上限 ${Math.floor(MAX_COVER_BYTES / 1024)}KB），这次没带上封面`);
+      } else if (total + coverBytes > MAX_UPLOAD_BYTES) {
+        warnings.push('加上封面会超过整包上限，这次没带上封面');
+      } else {
+        files.push({ name: COVER_FILE_NAME, content: coverContent, binary: true, bytes: coverBytes });
+        seen.add(COVER_FILE_NAME);
+        total += coverBytes;
+        coverName = COVER_FILE_NAME;
+      }
+    }
+  }
   // `missing` 与服务器取产物那条路同义：这里由客户端自己保证，平台侧没有"没取到"的概念
-  return { name: entryName, files, missing: [], warnings: [] };
+  return { name: entryName, files, coverName, missing: [], warnings };
 }
 
 /**
@@ -442,6 +473,7 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
   const assetUrls = new Map();
   const embeddedImages = [];
   let entryFileId = null;
+  let coverFileId = null;
   for (const file of collected.files || []) {
     if (!file.binary) continue;
     const name = safeArtifactName(file.name);
@@ -463,6 +495,9 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
       if (name === entryFile) {
         // 主产物就是这份真文件：字节进 file_assets，快照里只记 fileId
         entryFileId = asset.id;
+      } else if (name === collected.coverName) {
+        // 客户端截的封面：不进 embeddedImages（那是"被 HTML 引用的图"），单独标出来
+        coverFileId = asset.id;
       } else if (mimeType.startsWith('image/')) {
         // 被 HTML 引用的图：进快照的准入名单，发布后广场那条公开代理才认它
         embeddedImages.push({ fileId: asset.id });
@@ -491,6 +526,9 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
     artifacts.push({
       name: entryFile, kind: entryKind, bytes: Number(entryPayload.bytes || 0), revision: 1,
       updatedAt: now, fileId: entryFileId, generatedImages: [], attachmentImages: [], embeddedImages: [],
+      // ⭐ 客户端截的封面（没有就是 null）：各端算封面时**优先用它**（见 lib.js 的 workCoverFromSnapshot
+      //    与 public.js 的 VibeCoding 封面），这样纯代码作品在广场上也有一张真封面。
+      coverFileId: coverFileId || null,
     });
   }
   for (const name of Object.keys(files)) {
@@ -505,6 +543,7 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
       attachmentImages: [],
       // 只有入口 HTML 上挂图：与老链路 snapshotArtifacts 的规则一致（它只认入口那一份的配图）
       embeddedImages: name === entryFile ? embeddedImages : [],
+      coverFileId: name === entryFile ? (coverFileId || null) : null,
     });
   }
 

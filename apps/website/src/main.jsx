@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, Icon, QrCode, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, CONTACT_DEFAULT, Icon, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { StudentAccountPage } from './pages/AccountSecurity.jsx';
 import { MyWorkDetailPage } from './pages/MyWorkDetail.jsx';
@@ -935,35 +935,11 @@ function HomeLanding() {
         整块没配用内置默认，运营把 cards 删空就是不要这一栏（不回退）。
         ⚠️ 同样在 `.hp-first` **外面**：加它不许改变第一屏（含背景视频）的取景。 */}
     {ready ? <HomeCompare block={content.compare === undefined || content.compare === null ? HOME_COMPARE_DEFAULT : content.compare} /> : null}
-    {/* ⭐ 二维码一栏（用户口径 2026-09-27：「官网首页做个二维码出来，微信扫码可以打开官网首页」）——
-        编的是**当前站点首页**（`window.location.origin`，换域名/预发环境自动跟着走），所以不需要后台配。
-        排在对比栏之后、页脚之前：最后一屏，不打扰首屏取景（p135/p147 那几条"第一屏取景"的约束照旧）。
-        二维码是自己画的（`packages/shared/src/qr.js`，零依赖、无外站素材）；守卫 p155 钉着它。 */}
-    {ready ? <HomeQr /> : null}
+    {/* ⚠️ 2026-09-28 用户口径：「二维码我已经保存了，这个区域不需要了」——
+        2026-09-27 加的那一栏「扫码访问」（自实现二维码 + `HomeQr` 组件 + `packages/shared/src/qr.js`）
+        连同守卫 `p155` 一起撤掉了；要再拿出来看 git 历史（提交 788ea69 / c38a367）。
+        这一屏撤掉后，对比栏**又变回页面最后一段**（p142 那条位置断言也回退了）。 */}
   </main>;
-}
-/**
- * 首页最后一栏：微信扫码打开官网。
- *
- * 为什么自己生成而不是用二维码服务：仓库纪律是**不引依赖、不引外站素材**（p147 那条同样写过），
- * 二维码服务会把站址发给第三方；而我们的内容很短，自实现一个够用的编码器更干净。
- * ⚠️ 编的地址取 `window.location.origin` —— 这样生产/预发/本地都指向**当前这台**首页，不会写死。
- */
-function HomeQr() {
-  const url = typeof window === 'undefined' ? '' : `${window.location.origin}/`;
-  return <section className="hp-qr" aria-label="扫码访问官网">
-    <div className="hp-qr-inner">
-      <div className="hp-qr-copy">
-        <p className="hp-qr-kicker">手机访问</p>
-        <h2>微信扫一扫<br />在手机上打开官网</h2>
-        <p className="hp-qr-note">学生端、课堂作品、机构方案都在同一个站点里。</p>
-      </div>
-      <div className="hp-qr-code">
-        {url ? <QrCode value={url} size={172} label={`扫码打开：${url}`} /> : null}
-        <span>{url.replace(/^https?:\/\//, '')}</span>
-      </div>
-    </div>
-  </section>;
 }
 function Home(_props) { return <HomeLanding />; }
 function CTA(){return <section className="cta"><div><Kicker>准备好把 AI 课开起来了吗？</Kicker><h2>让每个孩子<br/><em>用 AI 做出自己的作品</em></h2><p>获取演示账号与示范课包清单。</p></div><Button>联系我们</Button></section>}
@@ -1444,6 +1420,8 @@ const CMS_FALLBACK = {
   // 灵动课程（/marketplace）的页头：大标题 + 副标题。用户在后台「官网内容 → 灵动课程」可改
   // （用户口径 2026-09-18 晚：这两句要能后台配置）。
   MARKETPLACE: { title: '灵动Ai学院课包展示', lead: '灵动Ai坚持自研国内精品Ai课程，持续探索适合青少年Ai培训体系。' },
+  // 「联系我们」（/demo）页：公开接口挂掉时用这份（与后台预填、`websiteContentDefaults` 三处同源）。
+  CONTACT: CONTACT_DEFAULT,
 };
 function useWebsiteContent(key) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
@@ -1458,27 +1436,37 @@ function LegalPage({ type }){
   return <><Title eyebrow="协议与隐私" title={<>{document.title}</>} desc={document.intro}/><main className="inner legal-page"><div className="legal-meta"><span className="status-pill">{LEGAL_STATUS}</span><span>版本 {LEGAL_VERSION}</span><span>生效日期 {LEGAL_EFFECTIVE_DATE}</span><span>主体：{LEGAL_OWNER}</span></div><div className="legal-notice">本页面是上线准备稿。正式对外服务前，运营主体、备案信息和法务审核结果应由业务方确认并替换；如与正式发布版本不一致，以正式发布版本为准。</div>{document.sections.map(([heading,body])=><section className="legal-section" key={heading}><h2>{heading}</h2><p>{body}</p></section>)}<div className="legal-links"><b>相关入口</b><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><Link to="/demo">联系我们</Link></div></main></>;
 }
 
+/**
+ * 「联系我们」（/demo）。
+ *
+ * ⚠️ 2026-09-27 用户口径（图2）：「联系我们的页面重做，直接显示姓名电话微信二维码。后台可配置。」
+ *    原来这一页是一张**表单**（机构名 / 联系人 / 电话 / 意向 / 补充说明 → POST /api/public/contact 收线索）。
+ *    现在改成**直接展示联系方式**：联系人姓名、电话（`tel:` 可点）、微信二维码（可长按/扫码保存）。
+ *    三个字段都来自 CMS 的 `CONTACT` 区块（后台「官网内容 → 联系我们」可改可传图），
+ *    公开接口不通时用 `CONTACT_DEFAULT` 兜底（与后台预填同源，见 siteDefaults 的注释）。
+ *    ⚠️ 后端 `POST /api/public/contact` 那条接口**没删**（线索入表与法务版本留痕的逻辑还在），
+ *       只是官网上不再有表单入口 —— 哪天要加回来，照 git 历史里这一版之前的实现接即可。
+ */
 function Demo(){
-  const [state,setState]=useState('idle');
-  const [error,setError]=useState('');
-  const [legalConsent,setLegalConsent]=useState(false);
-  async function submit(e){
-    e.preventDefault();
-    const form=e.currentTarget;
-    const orgName=form.orgName.value.trim();
-    const contactName=form.contactName.value.trim();
-    const contactPhone=form.contactPhone.value.trim();
-    if(!orgName||!contactName||!contactPhone){setError('请填写完整信息');return;}
-    if(!legalConsent){setError('请先阅读并同意用户协议、隐私政策和未成年人说明');return;}
-    if(!/^1[3-9]\d{9}$/.test(contactPhone)){setError('请输入正确的手机号');return;}
-    setState('loading');setError('');
-    try{
-      await publicApi.post('public/contact',{orgName,contactName,contactPhone,intent:form.intent.value,notes:form.notes.value,legalConsentVersion:LEGAL_VERSION,legalConsentAt:new Date().toISOString()});
-      setState('success');
-    }catch(err){setError(err.message);setState('error');}
-  }
-  if(state==='success') return <><Title eyebrow="联系我们 · 开通试用" title={<>已提交！</>} desc="我们会在 1 个工作日内联系你。"/><main className="inner"><section className="demo"><div className="success"><i>✦</i><h2>已收到你的信息！</h2><p>我们会在 1 个工作日内联系你，发送演示安排与资料。</p></div></section></main></>;
-  return <><Title eyebrow="联系我们 · 开通试用" title={<>把 AI 课开起来</>} desc="欢迎教培机构、学校与区域合作伙伴联系，获取演示账号与课包清单。"/><main className="inner"><section className="demo"><div><h2>联系我们后，你将获得</h2>{['产品演示与开课流程讲解','11 门标准课包与课件清单','体验课包与演示账号'].map((x,i)=><p key={x}><b>0{i+1}</b>{x}</p>)}</div><form onSubmit={submit}><label>机构 / 学校名称<input name="orgName" required placeholder="请输入机构名称"/></label><label>联系人<input name="contactName" required placeholder="请输入姓名"/></label><label>联系电话<input name="contactPhone" required placeholder="请输入手机号" maxLength={20}/></label><label>你想了解什么？<select name="intent" defaultValue=""><option value="" disabled>请选择合作方向</option><option>少儿编程 / AI 素养课程</option><option>学校拓展课 / 社团</option><option>寒暑假科创营</option><option>区域合作</option></select></label><label>补充说明<textarea name="notes" placeholder="例如：校区数量、预计班级规模……"/></label><label className="check-row legal-consent"><input type="checkbox" checked={legalConsent} onChange={e=>setLegalConsent(e.target.checked)}/><span>我已阅读并同意 <Link to="/terms" target="_blank">用户协议</Link>、<Link to="/privacy" target="_blank">隐私政策</Link>和<Link to="/minors" target="_blank">儿童 / 未成年人说明</Link></span></label>{error&&<small style={{color:'#e74c3c'}}>{error}</small>}<button className="button" disabled={state==='loading'}>{state==='loading'?'提交中…':'提交信息 ↗'}</button><small>提交即表示同意我们用于联系你的信息。</small></form></section></main></>;
+  const cms = useWebsiteContent('CONTACT');
+  const contact = { ...CONTACT_DEFAULT, ...(cms.data || {}) };
+  const phone = String(contact.phone || '').trim();
+  const name = String(contact.name || '').trim();
+  const qr = String(contact.wechatQrUrl || '').trim();
+  const gained = ['产品演示与开课流程讲解', '标准课包与课件清单', '体验课包与演示账号'];
+  return <><Title eyebrow="联系我们 · 开通试用" title={<>把 AI 课开起来</>} desc="欢迎教培机构、学校与区域合作伙伴联系，获取演示账号与课包清单。"/><main className="inner"><section className="demo">
+    <div><h2>联系我们后，你将获得</h2>{gained.map((x,i)=><p key={x}><b>0{i+1}</b>{x}</p>)}</div>
+    <div className="contact-card">
+      <h3>商务联系</h3>
+      <p className="contact-line"><span>联系人</span>{name ? <strong>{name}</strong> : <em className="muted">待配置（后台「官网内容 → 联系我们」）</em>}</p>
+      <p className="contact-line"><span>电话</span>{phone ? <a href={`tel:${phone}`}>{phone}</a> : <em className="muted">待配置</em>}</p>
+      <div className="contact-qr">
+        {qr ? <img src={qr} alt={`${name || '商务'}微信二维码`} loading="lazy"/> : <span className="contact-qr__empty">微信二维码待上传</span>}
+        <small>微信扫码加好友</small>
+      </div>
+      {contact.note ? <p className="muted contact-note">{contact.note}</p> : null}
+    </div>
+  </section></main></>;
 }
 
 // ---- Marketplace ----

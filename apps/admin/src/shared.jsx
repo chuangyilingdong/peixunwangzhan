@@ -50,7 +50,7 @@ export const navigation = [
 //    而且指的是生产上真在用的账号，所以整块删掉，别再从这里导出任何口令。
 
 // 官网内容区块的中文名（对应后端 website_contents.key）
-export const WEBSITE_CONTENT_LABELS = { HOME: '首页', FAQ: '常见问题', BRAND: '品牌信息', ORG: '机构方案', HANDBOOK: '机构手册', COMPARE: '选型对比', MARKETPLACE: '灵动课程' };
+export const WEBSITE_CONTENT_LABELS = { HOME: '首页', FAQ: '常见问题', BRAND: '品牌信息', ORG: '机构方案', HANDBOOK: '机构手册', COMPARE: '选型对比', MARKETPLACE: '灵动课程', CONTACT: '联系我们' };
 
 export const ADMIN_PERMISSION_LABELS = {
   ADMIN_ORGANIZATIONS: '机构与平台用户',

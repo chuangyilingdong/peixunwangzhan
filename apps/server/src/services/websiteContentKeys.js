@@ -14,4 +14,4 @@
  *    另外存量库要靠 deploy/production/migrate-website-content-20260918.mjs 补种出这一行
  *    （管理端只列库里已有的行；没有行 = 后台看不到）。
  */
-export const WEBSITE_CONTENT_KEYS = new Set(['HOME', 'ORG', 'HANDBOOK', 'COMPARE', 'FAQ', 'BRAND', 'MARKETPLACE']);
+export const WEBSITE_CONTENT_KEYS = new Set(['HOME', 'ORG', 'HANDBOOK', 'COMPARE', 'FAQ', 'BRAND', 'MARKETPLACE', 'CONTACT']);

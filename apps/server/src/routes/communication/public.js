@@ -31,6 +31,7 @@ import {
   snapshotArtifactByName,
   snapshotDocumentFileIds,
   snapshotImageFileIds,
+  parseSnapshotArtifacts,
   submissionPreview,
 } from '../vibecoding.js';
 import {
@@ -584,7 +585,11 @@ async function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
     //    一张图都没有的（例如纯代码的小游戏）仍然没有真封面可用 —— 前端继续用那张按类型画的插图，
     //    要做成"页面截图"得在客户端截或在服务器跑无头浏览器（这台机明确不跑，见 §〇）。
     coverUrl: (() => {
-      const first = [...snapshotImageFileIds(row)][0];
+      // ⭐ 优先用**客户端截的封面**（提交时随 `cover.png` 一起传上来的那张，见 studentRuntime 的采集段）：
+      //    纯代码作品（例如一个小游戏）页面里没有图，只有这样才在广场上有真封面。
+      //    老数据没有它 → 退回页面里的第一张图（2026-09-27 加的规则）。
+      const fromClient = parseSnapshotArtifacts(row).map((item) => item.coverFileId).find(Boolean) || null;
+      const first = fromClient || [...snapshotImageFileIds(row)][0];
       return first && row.share_token
         ? `/api/public/vibecoding-works/${encodeURIComponent(row.share_token)}/images/${encodeURIComponent(first)}`
         : null;

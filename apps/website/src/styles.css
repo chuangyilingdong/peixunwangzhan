@@ -1106,14 +1106,17 @@ background:radial-gradient(120% 80% at 50% 0%,rgb(255 60 90 / 26%),transparent 6
 .hp-vid-modal-nav button:disabled{opacity:.35;cursor:default}
 @media(max-width:700px){.hp-vid-modal-box{padding:10px}.hp-vid-modal-close{right:2px;top:-12px}}
 
-/* 首页「扫码访问」一栏（2026-09-27 用户口径：「官网首页做个二维码出来，微信扫码可以打开官网首页」）。
-   深色底接得住上面那栏与页脚（那两段都是暗底红调）；二维码自带白底与留白。 */
-.hp-qr{position:relative;z-index:1;padding:clamp(48px,6vw,88px) clamp(20px,4vw,40px);border-top:1px solid rgb(255 255 255 / 8%);background:radial-gradient(120% 140% at 50% 0%,#2a1116 0%,#170c11 55%,#120a0e 100%);color:#fff}
-.hp-qr-inner{display:flex;flex-wrap:wrap;gap:clamp(24px,4vw,56px);align-items:center;justify-content:center;max-width:1120px;margin:0 auto}
-.hp-qr-copy{min-width:min(320px,100%)}
-.hp-qr-kicker{margin:0 0 10px;color:#f0a3a3;font-size:12px;font-weight:800;letter-spacing:2px}
-.hp-qr h2{margin:0;font-size:clamp(24px,3.4vw,38px);line-height:1.25;letter-spacing:-1px}
-.hp-qr-note{margin:14px 0 0;color:#c9b6bd;font-size:14px}
-.hp-qr-code{display:grid;justify-items:center;gap:10px;padding:14px;border-radius:18px;background:#fff;box-shadow:0 18px 40px rgb(0 0 0 / 35%)}
-.hp-qr-code svg{display:block;border-radius:6px}
-.hp-qr-code span{color:#6b6b7a;font-size:12px;letter-spacing:.5px}
+
+/* 「联系我们」页的**联系信息卡**（2026-09-27 用户口径：表单改成直接显示姓名 / 电话 / 微信二维码）。
+   原来是 .demo 右栏的那张表单，现在是同一栏里的一张卡：联系人、电话（tel: 可点）、二维码。 */
+.contact-card{padding:32px;border:1px solid var(--line);border-radius:20px;background:#fff;box-shadow:0 16px 40px #4030710a;display:grid;gap:14px}
+.contact-card h3{margin:0;font-size:20px;color:var(--ink)}
+.contact-line{display:flex;gap:12px;align-items:baseline;margin:0;font-size:15px}
+.contact-line span{min-width:56px;color:var(--muted);font-size:13px}
+.contact-line strong{font-size:20px;color:var(--ink);letter-spacing:-.3px}
+.contact-line a{color:var(--purple);font-size:22px;font-weight:900;letter-spacing:-.5px}
+.contact-qr{display:grid;justify-items:center;gap:8px;padding:18px;border-radius:16px;background:#faf8ff;border:1px dashed var(--line)}
+.contact-qr img{display:block;width:min(260px,100%);height:auto;border-radius:10px;background:#fff}
+.contact-qr__empty{display:grid;place-items:center;width:min(260px,100%);aspect-ratio:1;border-radius:10px;background:#fff;color:var(--muted);font-size:13px}
+.contact-qr small{color:var(--muted);font-size:12px}
+.contact-note{margin:0;font-size:13px;line-height:1.7}

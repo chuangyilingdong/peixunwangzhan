@@ -423,6 +423,21 @@ export function WebsiteContent({ api }) {
             <label>副标题<textarea value={structured?.lead || ''} onChange={(event) => updateStructured({ lead: event.target.value })} maxLength={400} /></label>
             <p className="muted">这里只改「灵动课程」页头这两句。课包本身（价格、封面、难度、适学年龄、课时、上下架）在「课包与课程编排」里维护 —— 官网列表读的就是那些字段。</p>
           </div>}
+          {/* ⭐ 「联系我们」（/demo）页的联系方式（2026-09-27 用户口径：「联系我们的页面重做，
+              直接显示姓名电话微信二维码。后台可配置。」）——
+              官网那一页原先是表单，现在是**直接展示**这三项；二维码可以直接在这里传图
+              （与机构手册同一条上传路：传完把公开地址写回字段）。 */}
+          {selectedKey === 'CONTACT' && <div className="cms-form">
+            <div className="cms-section-heading"><strong>联系方式</strong><span>官网「联系我们」页直接展示这三项；留空的项在官网上显示「待配置」</span></div>
+            <div className="form-grid">
+              <label>联系人姓名<input value={structured?.name || ''} onChange={(event) => updateStructured({ name: event.target.value })} maxLength={40} placeholder="例如：王老师" /></label>
+              <label>联系电话<input value={structured?.phone || ''} onChange={(event) => updateStructured({ phone: event.target.value })} maxLength={30} placeholder="例如：13800000000（官网上可点击拨打）" /></label>
+            </div>
+            <label>微信二维码图片地址<input value={structured?.wechatQrUrl || ''} onChange={(event) => updateStructured({ wechatQrUrl: event.target.value })} placeholder="点下面的「上传二维码」也可以直接传图" /></label>
+            <div className="row-actions"><label className="inline-file-upload">{uploading === 'contact-qr' ? '上传中…' : '上传二维码'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url) => updateStructured({ wechatQrUrl: url }), 'contact-qr'); }} /></label>
+              {structured?.wechatQrUrl ? <img src={structured.wechatQrUrl} alt="微信二维码预览" style={{ width: 96, height: 96, objectFit: 'contain', border: '1px solid #eee', borderRadius: 8 }} /> : null}</div>
+            <label>二维码下面那行小字<textarea value={structured?.note || ''} onChange={(event) => updateStructured({ note: event.target.value })} maxLength={200} placeholder="例如：加微信时请备注机构名称" /></label>
+          </div>}
           {selectedKey === 'HANDBOOK' && <div className="cms-form">
             {/* 2026-09-19 按用户给的设计稿（design (1).zip）重做：整页换成
                 「主视觉 + 关于 + 海报 + 横滑卡片 + 对比 + 结尾行动」。字段与官网一一对应
