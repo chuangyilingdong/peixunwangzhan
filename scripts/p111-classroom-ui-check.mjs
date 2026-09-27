@@ -232,8 +232,8 @@ function writeSamplePdf(file, pageCount = 3) {
       await aq("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_at,quota_total,quota_used) VALUES(?,?,?,'ACTIVE',?,?,?)", [`assign-ui-quota-${seriesId}`, seriesId, teacher.org_id, new Date().toISOString(), total, used]);
     }
   };
-  // 素材课包**故意给少一点**：后面「勾选要授权的学员」那一屏要验「按剩余人次封顶」
-  // （可授权学员比剩余人次多 → 「全选本页」必须只选到剩余人次，并说明是按上限选的）。
+  // 素材课包**故意给少一点**：后面「勾选要授权的学生」那一屏要验「按剩余人次封顶」
+  // （可授权学生比剩余人次多 → 「全选本页」必须只选到剩余人次，并说明是按上限选的）。
   await upsertQuota('series-ui-materials', 5, 0);
   await upsertQuota(lesson.series_id, 10, grantedIds.length);
   console.log(`002-04A 夹具：素材课包 5 人次（候选 + 后面验封顶用）、学生已持有的课包 10 人次其中 ${grantedIds.length} 已分配（应被候选池排除）`);
@@ -711,7 +711,7 @@ try {
     const createButton = await orgPage.getByRole('button', { name: '创建课堂' }).count();
     if (createButton !== 0) problems.push('机构课堂总览：不该有「创建课堂」按钮（实际 ' + createButton + ' 个）');
     const teacherInput = await orgPage.getByPlaceholder('教师姓名 / 登录账号').count();
-    const studentInput = await orgPage.getByPlaceholder('学员姓名 / 登录账号').count();
+    const studentInput = await orgPage.getByPlaceholder('学生姓名 / 登录账号').count();
     if (teacherInput !== 1) problems.push('机构课堂总览：「教师名称」筛选框应有 1 个（实际 ' + teacherInput + '）');
     if (studentInput !== 1) problems.push('机构课堂总览：「学生名称」筛选框应有 1 个（实际 ' + studentInput + '）');
   }
@@ -724,7 +724,7 @@ try {
     await orgPage.waitForTimeout(900);
     const hit = await orgPage.locator('table tbody tr').count();
     if (!hit) problems.push('机构课堂总览：按教师名「' + teacherName + '」筛不出任何课堂（教师筛选没生效？）');
-    await orgPage.getByPlaceholder('学员姓名 / 登录账号').fill('这个学生不存在zzz');
+    await orgPage.getByPlaceholder('学生姓名 / 登录账号').fill('这个学生不存在zzz');
     await orgPage.getByRole('button', { name: '查询' }).click();
     await orgPage.waitForTimeout(900);
     const miss = await orgPage.locator('table tbody tr').count();
@@ -980,12 +980,12 @@ try {
   const orgToken = (await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } })).data?.token;
   assert.ok(orgToken, 'fixture: org-admin 登录失败（002-05 需要它来造一条真实授权记录）');
   const noGrantStudent = students[5];   // 孙雨桐：前面「暂无课包」筛选里用的就是这类学生
-  // 再搭一个**保持授权不撤销**的学生：这样「勾选要授权的学员」那一屏才有「已授权」行可验
+  // 再搭一个**保持授权不撤销**的学生：这样「勾选要授权的学生」那一屏才有「已授权」行可验
   // （不然所有行都是「可授权」，那个分支就是没验过的）。
   const keepGrantStudent = students[6];
   const grantResp = await api('/api/org/course-grants', { method: 'POST', token: orgToken, body: { seriesId: 'series-ui-materials', studentIds: [noGrantStudent.id, keepGrantStudent.id], source: 'STUDENT_CENTER' } });
   assert.equal(grantResp.status, 200, `002-05 夹具：真实授权失败 ${JSON.stringify(grantResp).slice(0, 200)}`);
-  console.log('002-05 夹具：给', noGrantStudent.name, '/', keepGrantStudent.name, '授了素材课包（source=STUDENT_CENTER）；后者不撤销，留给「勾选学员」验已授权行');
+  console.log('002-05 夹具：给', noGrantStudent.name, '/', keepGrantStudent.name, '授了素材课包（source=STUDENT_CENTER）；后者不撤销，留给「勾选学生」验已授权行');
 
   await orgPage.locator('.tab', { hasText: '学生授权记录' }).click();
   await orgSettle();
@@ -1036,7 +1036,7 @@ try {
   if (!(revokedThisMonth >= 1)) problems.push(`002-05：「本月取消」至少该是 1（刚撤销过一次），实际 ${revokedThisMonth}`);
   await orgShot('29-org-grant-records-revoke');
 
-  // ── 「学员许可」（/grants）里「勾选要授权的学员」这一块（2026-09-18 用户反馈「布局和逻辑很不舒服」后重做）。
+  // ── 「批量添加课包」（/grants，原「学生许可」）里「勾选要授权的学生」这一块（2026-09-18 用户反馈「布局和逻辑很不舒服」后重做）。
   // 这一屏以前**没有守卫**，所以它烂在那儿没人发现：`checkbox-option` 这个类**只在平台端 admin.css 里有定义**
   // （`.admin-console .checkbox-option`），机构端引不到它 → 落到全局 `label{display:grid;gap:6px;margin:12px 0}`
   // 上：姓名和复选框被拆成两行、每行还撑到上百像素高（用户截图里复选框飘在名字右边很远处）。
@@ -1044,19 +1044,19 @@ try {
   //    所以这里**直接按路由打开**，继续守这一屏的布局与逻辑。
   await orgPage.goto(`${base}/grants`, { waitUntil: 'domcontentloaded' });
   await orgSettle();
-  await orgExpect('学员许可（选课包前）', ['① 选课包', '课包', '可用次数']);
+  await orgExpect('批量添加课包（选课包前）', ['① 选课包', '课包', '可用次数']);
   await orgPage.locator('.form-grid select').first().selectOption('series-ui-materials');
   await orgSettle();
-  await orgExpect('勾选学员', [
-    '② 勾选要授权的学员', '③ 本次授权',
+  await orgExpect('勾选学生', [
+    '② 勾选要授权的学生', '③ 本次授权',
     '本页可授权', '全选本页可授权', '清空选择', '已选',
-    '选', '学员', '登录账号', '手机号', '授权情况', '已授权',
+    '选', '学生', '登录账号', '手机号', '授权情况', '已授权',
     '本次将用掉', '授权后本课包剩',
   ]);
   // 「已授权」那一行必须真的显示出来（夹具特意留了一个不撤销的授权）：
   // 既要有徽标，也要出现在表头计数里 —— 不然这一屏就只剩「可授权」一种行，分支没验过。
   if (!(await orgPage.locator('.student-pick-row', { hasText: '已授权' }).count())) {
-    problems.push('勾选学员：没有任何一行显示「已授权」—— 夹具留了一个有效授权，这一行必须出现');
+    problems.push('勾选学生：没有任何一行显示「已授权」—— 夹具留了一个有效授权，这一行必须出现');
   }
   await orgExpect('已授权计数', ['已授权 1 人']);
   // 布局硬指标：复选框必须**紧挨**姓名（同一行、横向离得近）—— 老版本它飘在名字右边几百像素外，
@@ -1071,10 +1071,10 @@ try {
     const b = name.getBoundingClientRect();
     return { gap: Math.round(b.left - a.right), sameLine: Math.abs(a.top - b.top) < 12 };
   });
-  if (!pickGeometry) problems.push('勾选学员：量不到复选框与姓名的位置（表格没渲染出来？）');
+  if (!pickGeometry) problems.push('勾选学生：量不到复选框与姓名的位置（表格没渲染出来？）');
   else {
-    if (!pickGeometry.sameLine) problems.push('勾选学员：复选框与姓名不在同一行（纵向差 > 12px）');
-    if (pickGeometry.gap > 40) problems.push(`勾选学员：复选框离姓名太远（横向间距 ${pickGeometry.gap}px）—— 就是用户说的「布局不舒服」`);
+    if (!pickGeometry.sameLine) problems.push('勾选学生：复选框与姓名不在同一行（纵向差 > 12px）');
+    if (pickGeometry.gap > 40) problems.push(`勾选学生：复选框离姓名太远（横向间距 ${pickGeometry.gap}px）—— 就是用户说的「布局不舒服」`);
   }
   // 逻辑：按剩余人次封顶。**期望值从页面上读**（可授权人数、剩余次数），不写死 ——
   // 夹具人数或人次一改，这里不用跟着改，而且读出来算才能证明"封顶"是按这两个数算的。
@@ -1083,25 +1083,25 @@ try {
   const quotaInput = await orgPage.locator('.form-grid input').first().inputValue();
   const remainCount = Number((quotaInput.match(/剩 (\d+) 次/) || [])[1]);
   if (!(addableCount > remainCount)) {
-    problems.push(`勾选学员：夹具没造出「可授权人数 > 剩余人次」的局面（可授权 ${addableCount} / 剩余 ${remainCount}），封顶逻辑就验不到`);
+    problems.push(`勾选学生：夹具没造出「可授权人数 > 剩余人次」的局面（可授权 ${addableCount} / 剩余 ${remainCount}），封顶逻辑就验不到`);
   }
   const expectPicked = Math.min(addableCount, remainCount);
   await orgPage.getByRole('button', { name: '全选本页可授权' }).click();
   await orgPage.waitForTimeout(500);
   const pickBar = await orgPage.locator('.pick-bar').innerText();
   if (!pickBar.includes(`已选 ${expectPicked} 人`)) {
-    problems.push(`勾选学员：可授权 ${addableCount} 人而只剩 ${remainCount} 次时，「全选本页」应当按上限只选 ${expectPicked} 人（实际：${pickBar.replace(/\n/g, ' ')}）`);
+    problems.push(`勾选学生：可授权 ${addableCount} 人而只剩 ${remainCount} 次时，「全选本页」应当按上限只选 ${expectPicked} 人（实际：${pickBar.replace(/\n/g, ' ')}）`);
   }
   await orgExpect('封顶提示', [`已按上限只选了 ${expectPicked} 人`]);
   const submitLabel = await orgPage.locator('button.primary-button').last().innerText();
-  if (!submitLabel.includes(`授权给 ${expectPicked} 名学员`)) problems.push(`勾选学员：提交按钮应当写「授权给 ${expectPicked} 名学员」（实际：${submitLabel}）`);
+  if (!submitLabel.includes(`授权给 ${expectPicked} 名学生`)) problems.push(`勾选学生：提交按钮应当写「授权给 ${expectPicked} 名学生」（实际：${submitLabel}）`);
   const pickerText = await orgPage.locator('body').innerText();
-  if (pickerText.includes('剩余人次不足')) problems.push('勾选学员：按上限封顶之后不该再出现「剩余人次不足」—— 那是没封顶才会有的状态');
+  if (pickerText.includes('剩余人次不足')) problems.push('勾选学生：按上限封顶之后不该再出现「剩余人次不足」—— 那是没封顶才会有的状态');
   await orgShot('30-org-student-picker');
   await orgPage.getByRole('button', { name: '清空选择' }).click();
   await orgPage.waitForTimeout(400);
   const cleared = await orgPage.locator('.pick-bar').innerText();
-  if (!cleared.includes('已选 0 人')) problems.push(`勾选学员：「清空选择」之后应当回到 已选 0 人（实际：${cleared.replace(/\n/g, ' ')}）`);
+  if (!cleared.includes('已选 0 人')) problems.push(`勾选学生：「清空选择」之后应当回到 已选 0 人（实际：${cleared.replace(/\n/g, ' ')}）`);
   await orgContext.close();
 
   if (pageErrors.length) problems.push(`浏览器报错：${pageErrors.slice(0, 5).join(' | ')}`);

@@ -116,7 +116,7 @@ export async function createLicensePurchaseBatch({ assignmentId, orgId, seriesId
  *
  * 事故现场：平台后台「机构与课包人次 → 调整授权次数」把某机构的次数从 0 调到 6 —— 那条路径
  * **按设计不动财务账**（见 admin/organizations.js 的注释：两者是不同口径，用户未要求联动），
- * 于是授权单上写着 6 次、批次一条都没有。机构端看得到"剩 6 次"，一点「授权给学员」就
+ * 于是授权单上写着 6 次、批次一条都没有。机构端看得到"剩 6 次"，一点「授权给学生」就
  * `LICENSE_PURCHASE_BALANCE_EXHAUSTED`「购买批次余额不足，无法确认收入」——
  * **口径分家的后果最后砸在"把课发给学生"这一步上**（生产上 3 个授权单有这个缺口：0/6、5/10、1/51）。
  *

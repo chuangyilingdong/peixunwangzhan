@@ -127,7 +127,7 @@ export async function generateIllustrationsForArtifacts({ auth, context, artifac
         // 于是「每节课花了多少」里少了这一块。现在按张记一笔，并计入算力池。
         // ⚠️ 2026-09-15：cost_fen 恢复「恒 0」口径 —— 这里以前写的是 priceFenFor（对外售价），
         //    把售价塞进了成本列，让 usage_records.cost_fen 又多了第三种含义。
-        //    现在机构端/学员端的「消耗」统一读 compute_attempts.sale_price_fen，而插画走的是
+        //    现在机构端/学生端的「消耗」统一读 compute_attempts.sale_price_fen，而插画走的是
         //    getGenerationProvider（会写算力账本），所以它照样被算进去，不需要在这里重复记金额。
         await recordAiUsage({
           orgId: auth.user.orgId, userId: auth.user.id, sessionId: context?.activeSession?.id || null,

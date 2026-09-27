@@ -92,7 +92,7 @@ export function ClassroomList({ api, isAdmin, onOpen, onCreate }) {
         {/* 教师 / 学生筛选（2026-09-26 用户口径：机构「课堂总览」要能按这两样找）。
             只在机构管理员视角出现 —— 老师本来就只看自己的课堂，按教师筛没意义。 */}
         {isAdmin ? <label>教师名称<input value={draft.teacherName} placeholder="教师姓名 / 登录账号" onChange={(event) => setDraft({ ...draft, teacherName: event.target.value })} /></label> : null}
-        {isAdmin ? <label>学生名称<input value={draft.studentName} placeholder="学员姓名 / 登录账号" onChange={(event) => setDraft({ ...draft, studentName: event.target.value })} /></label> : null}
+        {isAdmin ? <label>学生名称<input value={draft.studentName} placeholder="学生姓名 / 登录账号" onChange={(event) => setDraft({ ...draft, studentName: event.target.value })} /></label> : null}
         <label>状态<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value })}>
           <option value="">全部状态</option>
           {Object.entries(SESSION_STATE).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}

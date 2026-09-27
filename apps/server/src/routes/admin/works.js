@@ -46,7 +46,6 @@ import {
   expireDueEnrollments,
   hasAnyPlatformPermission,
   hasPermission,
-  importItems,
   integer,
   lastSuperAdminGuard,
   normalizeCanvasTemplateSnapshot,
@@ -69,14 +68,12 @@ import {
   platformUserFilters,
   platformUserRow,
   platformWorkFilters,
-  previewImport,
   replaceLessonCanvasConfig,
   replaceLessonTeachingMaterials,
   reportResolution,
   setStudentEnrollmentAccess,
   softDeleteStudent,
   userLoginMeta,
-  validateImportItem,
   validateMemberPermissions,
   validateMemberPhone,
   validateSeriesForPublishing,
@@ -301,7 +298,7 @@ export async function handleWorks(ctx, part, method) {
       params,
     );
     const content = csvDocument(
-      ['作品标题', '学员', '机构', '班级', '课时', '状态', '已上作品广场', '精选', '提交时间'],
+      ['作品标题', '学生', '机构', '班级', '课时', '状态', '已上作品广场', '精选', '提交时间'],
       items.map((work) => [work.title, work.student_name || '', work.organization_name || '', work.class_name || '', work.lesson_title || '', work.status, Number(work.is_public || 0) === 1 ? '是' : '否', work.featured_at ? '是' : '否', work.submitted_at]),
     );
     await audit(ctx, 'PLATFORM_WORK_EXPORT', 'WORK', null, null, { count: items.length, filters: { status: ctx.search.get('status') || null, orgId: ctx.search.get('orgId') || null, search: ctx.search.get('search') || null } });

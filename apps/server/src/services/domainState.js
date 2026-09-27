@@ -15,7 +15,7 @@ export const DOMAIN_STATES = Object.freeze({
   class: Object.freeze(['ACTIVE', 'ARCHIVED']),
   // 2026-09-13（批次 B）：课堂四态 —— 待上课 / 上课中 / 已结束 / 已解散
   classSession: Object.freeze(['PENDING', 'ACTIVE', 'ENDED', 'DISSOLVED']),
-  // 课堂学员六态（未加入任何课堂 = 没有这一行）
+  // 课堂学生六态（未加入任何课堂 = 没有这一行）
   sessionStudent: Object.freeze(['PENDING', 'ACTIVE', 'COMPLETED', 'INCOMPLETE', 'REMOVED']),
   studentProject: Object.freeze(['DRAFT', 'SUBMITTED', 'GRADED', 'ARCHIVED']),
   // 2026-09-13（C2）：UNPUBLISHED = 曾发布到广场、后来被撤下来（与「审核不通过」的 REJECTED 分开）
@@ -71,7 +71,7 @@ export const DOMAIN_TRANSITIONS = Object.freeze({
     ENDED: Object.freeze([]),
     DISSOLVED: Object.freeze([]),
   }),
-  // 学员参与：待上课 → 上课中（老师开课）/ 被移除（开课前）/ 直接结算（课堂结束）；
+  // 学生参与：待上课 → 上课中（老师开课）/ 被移除（开课前）/ 直接结算（课堂结束）；
   // 结算成已完课/未完课后不再变；被移除后可以复活（移除＝解锁，其他课堂能再加）
   sessionStudent: Object.freeze({
     PENDING: Object.freeze(['ACTIVE', 'REMOVED', 'COMPLETED', 'INCOMPLETE']),

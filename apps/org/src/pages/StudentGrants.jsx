@@ -1,15 +1,15 @@
-// 机构端 - 学员许可：把课包的「可用次数」分给学员。
-// 规则（用户口径）：每分给一名学员用掉 1 次；同一学员同一课包只能授权一次；
+// 机构端 - 学生许可：把课包的「可用次数」分给学生。
+// 规则（用户口径）：每分给一名学生用掉 1 次；同一学生同一课包只能授权一次；
 // 机构侧不可撤销（次数已消耗不可逆），误授权要找平台兜底撤销。
 //
-// 2026-09-16（用户口径）：学员名单会很长（「万一有100个学生呢」），所以这里改成
-// **搜索 + 分页**，并且**最新添加的学员排在最前**（服务端 created_at DESC）。
+// 2026-09-16（用户口径）：学生名单会很长（「万一有100个学生呢」），所以这里改成
+// **搜索 + 分页**，并且**最新添加的学生排在最前**（服务端 created_at DESC）。
 // 跨页选择必须看得见：勾了谁就在下面用名单列出来、还能一键清空 ——
 // 否则翻到第二页时「授权给 N 名」里的 N 有一部分是看不见的，很容易授权错人。
 //
-// 2026-09-18（用户反馈：「勾选要授权的学员布局和逻辑很不舒服」）重做这一块。
+// 2026-09-18（用户反馈：「勾选要授权的学生布局和逻辑很不舒服」）重做这一块。
 //
-// **布局**：原来每个学员是一个 `<label className="checkbox-option">`，但 `checkbox-option`
+// **布局**：原来每个学生是一个 `<label className="checkbox-option">`，但 `checkbox-option`
 // 这个类**只在平台端的 admin.css 里定义**（`.admin-console .checkbox-option`），而机构端引的是
 // 共享样式表 + 本应用的 theme.css —— 它在这儿等于不存在，于是落到全局
 // `label{display:grid;gap:6px;margin:12px 0}` 上：姓名与复选框被拆开、每行还撑到上百像素高
@@ -39,7 +39,7 @@ export function StudentGrants({ api }) {
     [api, studentPage, studentSearch],
   );
   const [seriesId, setSeriesId] = useState('');
-  // 选中的学员存**对象**（id + 姓名）：跨页之后要能把「我勾了谁」原样列出来
+  // 选中的学生存**对象**（id + 姓名）：跨页之后要能把「我勾了谁」原样列出来
   const [picked, setPicked] = useState([]);
   const [units, setUnits] = useState(1); // 每人授权次数（体验课包；切课包/改选人时会被夹回上限）
   const [busy, setBusy] = useState(false);
@@ -123,23 +123,23 @@ export function StudentGrants({ api }) {
     try {
       const result = await api.post('org/course-grants', { seriesId, studentIds: picked.map((item) => item.id), units, source: 'GRANT_PAGE' });
       const left = result.quotaTotal > 0 ? `本课包已用 ${result.quotaUsed} / ${result.quotaTotal} 次` : '本课包不限次数';
-      setMessage(`已授权 ${result.granted} 名学员${units > 1 ? `（每人 ${units} 次、共 ${result.usedUnits ?? result.granted * units} 次）` : ''}${result.skipped ? `（跳过已授权 ${result.skipped} 名）` : ''}；${left}。`);
+      setMessage(`已授权 ${result.granted} 名学生${units > 1 ? `（每人 ${units} 次、共 ${result.usedUnits ?? result.granted * units} 次）` : ''}${result.skipped ? `（跳过已授权 ${result.skipped} 名）` : ''}；${left}。`);
       setPicked([]); setUnits(1); grants.refresh(); courses.refresh(); students.refresh();
     } catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
 
   return <>
     <PageHeader
-      eyebrow="学习成果"
-      title="学员许可"
+      eyebrow="学生授权"
+      title="批量添加课包"
       description={isExperience
-        ? '体验课包：每分给一名学员用掉 1 次；同一个学员可以重复分配、次数会累积；每场课堂正常结束且有有效 AI 产出才核销 1 次。'
-        : '把课包的可用次数分给学员：每分给一名学员用掉 1 次；同一学员同一课包只能授权一次。'}
+        ? '一次把课包分给多名学生：每分给一名学生用掉 1 次；同一个学生可以再分、次数会累加（每场课堂正常结束且有有效产出才核销 1 次）。'
+        : '一次把课包分给多名学生：每分给一名学生用掉 1 次；同一个学生同一个课包只能分一次。'}
       actions={<button className="secondary-button" onClick={() => { courses.refresh(); grants.refresh(); students.refresh(); }}>刷新</button>}
     />
     {message && <Notice tone="success">{message}</Notice>}
     {/* B3：把「账号 / 席位有效期 / 课包许可」三件事的边界写在页面上，省得老师找错地方 */}
-    <p className="muted">学员账号在「教师与学生」创建，席位与有效期在「学员开通」，<strong>能不能学某个课包就看这里</strong>。</p>
+    <p className="muted">学生账号在「教师与学生」创建，席位与有效期在「学生开通」，<strong>能不能学某个课包就看这里</strong>。</p>
 
     <Panel title="① 选课包">
       {courses.loading ? <Loading /> : <>
@@ -166,7 +166,7 @@ export function StudentGrants({ api }) {
       </>}
     </Panel>
 
-    {seriesId && !noQuota ? <Panel title="② 勾选要授权的学员"
+    {seriesId && !noQuota ? <Panel title="② 勾选要授权的学生"
       actions={<span className="muted">本页可授权 <strong>{addableOnPage.length}</strong> 人{alreadyOnPage ? ` · 已授权 ${alreadyOnPage} 人` : ''}</span>}>
       <div className="pick-bar">
         <input value={studentSearch} placeholder="搜索姓名 / 登录名 / 手机号" onChange={(event) => { setStudentSearch(event.target.value); setStudentPage(1); }} />
@@ -175,12 +175,12 @@ export function StudentGrants({ api }) {
         <span className="muted">已选 <strong>{picked.length}</strong> 人</span>
       </div>
       {hint ? <Notice tone="info">{hint}</Notice> : null}
-      {students.loading ? <Loading label="正在读取学员…" />
+      {students.loading ? <Loading label="正在读取学生…" />
         : students.error ? <ErrorState error={students.error} onRetry={students.refresh} />
           : <>
-            <ListResultSummary total={students.data?.total} page={students.data?.page} totalPages={students.data?.totalPages} label="名学员" />
+            <ListResultSummary total={students.data?.total} page={students.data?.page} totalPages={students.data?.totalPages} label="名学生" />
             {studentItems.length ? <div className="table-wrap"><table>
-              <thead><tr><th style={{ width: 40 }}>选</th><th>学员</th><th>登录账号</th><th>手机号</th><th>授权情况</th></tr></thead>
+              <thead><tr><th style={{ width: 40 }}>选</th><th>学生</th><th>登录账号</th><th>手机号</th><th>授权情况</th></tr></thead>
               <tbody>{studentItems.map((student) => {
                 const already = activeStudentIds.has(student.id);
                 const pickedNow = pickedIds.has(student.id);
@@ -201,7 +201,7 @@ export function StudentGrants({ api }) {
                     : <span className="muted">{isExperience ? '还没有体验次数' : '可授权'}</span>}</td>
                 </tr>;
               })}</tbody>
-            </table></div> : <Empty title="没有学员" body={studentSearch.trim() ? `没有匹配「${studentSearch.trim()}」的学员。` : '当前机构还没有学员账号，请先在「成员管理」里创建。'} />}
+            </table></div> : <Empty title="没有学生" body={studentSearch.trim() ? `没有匹配「${studentSearch.trim()}」的学生。` : '当前机构还没有学生账号，请先在「成员管理」里创建。'} />}
             <Pagination page={students.data?.page} totalPages={students.data?.totalPages} onChange={setStudentPage} disabled={students.loading} />
           </>}
     </Panel> : null}
@@ -209,7 +209,7 @@ export function StudentGrants({ api }) {
     {seriesId && !noQuota ? <Panel title={`③ 本次授权（已选 ${picked.length} 人）`}>
       {/* ⭐ 每人授权次数（2026-09-26 用户口径：「体验课机构为学生授权，一次只能授权 1 次，要多次的话
           就只能一直点击『授权』——这里添加自定义数量的功能（数字不可超过机构当前课包实际库存数量）」）。
-          普通课包每个学员只能授权 1 次（重复授权本来就跳过），所以这一行只对体验课包出现。
+          普通课包每个学生只能授权 1 次（重复授权本来就跳过），所以这一行只对体验课包出现。
           上限 = 剩余次数 ÷ 已选人数（选了 3 个人、课包剩 10 次 → 每人最多 3 次），
           提交时服务端在事务里**按刚读出来的 quota_used 再算一次**，前端算错也拦得住。 */}
       {isExperience ? <div className="row-actions top-gap">
@@ -234,10 +234,10 @@ export function StudentGrants({ api }) {
       {picked.length ? <div className="row-actions top-gap">
         <span className="muted">将要授权：</span>
         {picked.map((item) => <span className="pick-tag" key={item.id}>{item.name}{units > 1 ? ` ×${units}` : ''}</span>)}
-      </div> : <p className="muted top-gap">还没有选择学员。上面的名单里勾选即可{isExperience ? '（体验课包可以重复分给同一个学员，次数会累加）' : '（已授权的学员不能重复选）'}。</p>}
+      </div> : <p className="muted top-gap">还没有选择学生。上面的名单里勾选即可{isExperience ? '（体验课包可以重复分给同一个学生，次数会累加）' : '（已授权的学生不能重复选）'}。</p>}
       <div className="row-actions top-gap">
         <button className="primary-button" disabled={busy || !picked.length || overLimit} onClick={submit}>
-          {busy ? '授权中…' : (units > 1 ? `授权给 ${picked.length} 名学员（每人 ${units} 次）` : `授权给 ${picked.length} 名学员`)}
+          {busy ? '授权中…' : (units > 1 ? `授权给 ${picked.length} 名学生（每人 ${units} 次）` : `授权给 ${picked.length} 名学生`)}
         </button>
         {overLimit ? <span className="muted">先去掉几个人、把每人次数调小，或让平台增购次数。</span> : null}
       </div>
@@ -249,7 +249,7 @@ export function StudentGrants({ api }) {
         : grants.loading ? <Loading />
           : grants.error ? <ErrorState error={grants.error} onRetry={grants.refresh} />
             : (grants.data?.items || []).length ? <div className="table-wrap"><table>
-              <thead><tr><th>学员</th><th>课包</th><th>授权时间</th><th>状态</th></tr></thead>
+              <thead><tr><th>学生</th><th>课包</th><th>授权时间</th><th>状态</th></tr></thead>
               <tbody>{grants.data.items.map((item) => <tr key={item.id}>
                 <td><strong>{item.studentName || item.studentLogin}</strong></td>
                 <td>{item.seriesTitle}</td>
@@ -258,7 +258,7 @@ export function StudentGrants({ api }) {
                   ? <><span className="status warning">已撤销</span>{item.revokeReason ? <div className="muted">{item.revokeReason}</div> : null}</>
                   : <span className="status success">已授权</span>}</td>
               </tr>)}</tbody>
-            </table></div> : <Empty title="还没有授权记录" body="选择课包与学员后点击授权，记录会显示在这里。" />}
+            </table></div> : <Empty title="还没有授权记录" body="选择课包与学生后点击授权，记录会显示在这里。" />}
     </Panel>
   </>;
 }

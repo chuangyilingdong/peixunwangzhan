@@ -72,7 +72,7 @@ export async function priceFenFor({ modality, model = '' } = {}) {
 }
 
 /**
- * 对外售价合计（分）——**机构端 / 学员端显示「消耗」金额的唯一口径**（2026-09-15 定）。
+ * 对外售价合计（分）——**机构端 / 学生端显示「消耗」金额的唯一口径**（2026-09-15 定）。
  *
  * 只读 `compute_attempts.sale_price_fen`：逐笔写入时的公告价快照，改价不追溯。
  * **只计成功尝试**（`status='SUCCESS'`）：失败、以及主备切换产生的额外尝试都没有交付东西，
@@ -99,7 +99,7 @@ export async function salePriceFenFor({ sessionId = null, studentId = null, orgI
 }
 
 /**
- * 同一口径的 SQL 片段：机构端/学员端的「消耗」直接把它拼进自己的聚合里，
+ * 同一口径的 SQL 片段：机构端/学生端的「消耗」直接把它拼进自己的聚合里，
  * 免得每处各写一遍 CASE WHEN 又悄悄写歪（统一走 salePriceFenFor 的定义）。
  * `alias` 传表别名（如 'attempt'）时会带上前缀。
  */
@@ -128,7 +128,7 @@ export async function computePoolReconciliation({ days = 7 } = {}) {
   const quotaPerUnit = Number(config.quotaPerUnit || 500000);
   const sinceIso = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000).toISOString();
 
-  // ① 池子账（应用侧）：学员 × 课包 × 模态
+  // ① 池子账（应用侧）：学生 × 课包 × 模态
   const ours = await arows(
     `SELECT user_id AS userId, series_id AS seriesId, modality,
             COALESCE(SUM(cost_fen),0) AS fen, COUNT(*) AS calls
@@ -146,7 +146,7 @@ export async function computePoolReconciliation({ days = 7 } = {}) {
     const segments = parseTokenSegments(log.token_name);
     const student = segments.find((item) => item.kind === 'student')?.key || '';
     const lesson = segments.find((item) => item.kind === 'lesson')?.key || '';
-    if (!student) continue; // 没有学员段就没法归到池子（进 unmapped 汇总）
+    if (!student) continue; // 没有学生段就没法归到池子（进 unmapped 汇总）
     if (lesson) lessonIds.add(lesson);
     parsedLogs.push({ student, lesson, quota: Number(log.quota || 0) });
   }
@@ -182,7 +182,7 @@ export async function computePoolReconciliation({ days = 7 } = {}) {
     bucket.gatewayFen += fen; bucket.gatewayCalls += 1;
   }
 
-  // ③ 补名字（学员 / 机构 / 课包）
+  // ③ 补名字（学生 / 机构 / 课包）
   const ids = [...buckets.values()];
   if (ids.length) {
     for (const item of buckets.values()) {

@@ -49,7 +49,6 @@ import {
   expireDueEnrollments,
   hasAnyPlatformPermission,
   hasPermission,
-  importItems,
   integer,
   lastSuperAdminGuard,
   normalizeCanvasTemplateSnapshot,
@@ -72,14 +71,12 @@ import {
   platformUserFilters,
   platformUserRow,
   platformWorkFilters,
-  previewImport,
   replaceLessonCanvasConfig,
   replaceLessonTeachingMaterials,
   reportResolution,
   setStudentEnrollmentAccess,
   softDeleteStudent,
   userLoginMeta,
-  validateImportItem,
   validateMemberPermissions,
   validateMemberPhone,
   validateSeriesForPublishing,
@@ -789,10 +786,10 @@ export async function handleOverview(ctx, part, method) {
    *
    * 归属来自算力池账本 usage_records 的 org_id + user_id —— **不需要给学生发 API key**：
    * 学生不是拿 key 直连上游，而是经我们的后端调用，后端从登录会话就知道是谁在调。
-   * 所以只要机构/学员存在，归属天然成立（新机构、新学员都不用做任何「分发」动作）。
+   * 所以只要机构/学生存在，归属天然成立（新机构、新学生都不用做任何「分发」动作）。
    *
    * 返回两块：orgs（所有机构，含零消耗的，便于一眼看出「谁还没用过」）与
-   * students（**选中机构**下每个学员的汇总）。days 用左闭右开口径，与其他用量口径一致。
+   * students（**选中机构**下每个学生的汇总）。days 用左闭右开口径，与其他用量口径一致。
    */
   const usageRange = (ctx) => {
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 });
@@ -806,8 +803,8 @@ export async function handleOverview(ctx, part, method) {
     const orgId = String(ctx.search.get('orgId') || '').trim();
     if (orgId && !await arow('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     // 所有机构（含这段时间没有消耗的）：LEFT JOIN 用量，零消耗也列出来
-    // 每个机构 / 学员**两笔钱并排**（2026-09-15）：
-    //   saleFen = 对外售价合计（机构/学员看到的「消耗」，只计成功尝试）；
+    // 每个机构 / 学生**两笔钱并排**（2026-09-15）：
+    //   saleFen = 对外售价合计（机构/学生看到的「消耗」，只计成功尝试）；
     //   costFen = **我们已知的上游成本**；有任何一笔成本未知就整体给 null（不把已知部分当总额）。
     // 这就是「机构下面学生花的钱 vs 我们的成本」的对照。
     const SALE_FEN = `COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT SUM(a.sale_price_fen) FROM compute_attempts a WHERE a.call_id=usage.compute_call_id AND a.status='SUCCESS') ELSE 0 END), 0) saleFen`;
@@ -834,7 +831,7 @@ export async function handleOverview(ctx, part, method) {
     const { days, since, until } = usageRange(ctx);
     const orgId = String(ctx.search.get('orgId') || '').trim();
     if (orgId && !await arow('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
-    // 导出「机构 × 学员」两级的明细（选了机构就只导那家），列与页面一致
+    // 导出「机构 × 学生」两级的明细（选了机构就只导那家），列与页面一致
     const items = await arows(`SELECT organization.name orgName, organization.id orgId, student.login studentLogin,
         student.display_name studentName, student.id studentId,
         COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END), 0) fen, COUNT(usage.id) calls
@@ -845,7 +842,7 @@ export async function handleOverview(ctx, part, method) {
       GROUP BY organization.id, student.id
       ORDER BY fen DESC, organization.name ASC, student.display_name ASC`, orgId ? [since, until, orgId] : [since, until]);
     const content = csvDocument(
-      ['机构', '机构ID', '学员', '学员账号', '学员ID', '调用次数', '已知成本合计（元，不含未知）'],
+      ['机构', '机构ID', '学生', '学生账号', '学生ID', '调用次数', '已知成本合计（元，不含未知）'],
       items.map((item) => [item.orgName, item.orgId, item.studentName || item.studentLogin, item.studentLogin, item.studentId, Number(item.calls || 0), (Number(item.fen || 0) / 100).toFixed(2)]),
     );
     await audit(ctx, 'PLATFORM_USAGE_EXPORT', 'ORG', orgId || null, null, { count: items.length, days, orgId: orgId || null });

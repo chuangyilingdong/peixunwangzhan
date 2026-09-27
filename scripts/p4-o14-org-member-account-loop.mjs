@@ -24,6 +24,8 @@ try{await wait(); const admin=(await login('org-admin','org123')).cookie; const 
  // 班级与调班都已下线，改钉两件事：旧接口确实没了（防回退），成员资料仍可读。
  r=await req(admin,`/org/users/${id}/classes`,'PUT',{classIds:[]}); check('旧的「调班」接口已随班级退场下线（404）',r.status===404);
  r=await req(admin,`/org/users/${id}`); check('成员资料仍可读（下线调班没影响账号管理）',r.status===200&&r.body.data?.id===id);
- r=await req(admin,'/org/users/import/preview','POST',{items:[{login:'p4-o14-import',displayName:'导入测试学生',role:'STUDENT',password:'import1'}]}); check('批量导入预览',r.status===200&&r.body.data?.items?.length===1);
- r=await req(admin,'/org/users/import/commit','POST',{items:[{login:'p4-o14-import',displayName:'导入测试学生',role:'STUDENT',password:'import1'}]}); check('批量导入提交',r.status===200&&r.body.data?.total===1);
+ // 2026-09-27 用户口径「批量导入要删」：界面上一版已删，这一版把接口也删了 ——
+ // 这里反过来钉住它别偷偷回来（与上面「调班接口已下线」同一套写法）。
+ r=await req(admin,'/org/users/import/preview','POST',{items:[{login:'p4-o14-import',displayName:'导入测试学生',role:'STUDENT',password:'import1'}]}); check('批量导入预览接口已下线（404）',r.status===404,r.status);
+ r=await req(admin,'/org/users/import/commit','POST',{items:[{login:'p4-o14-import',displayName:'导入测试学生',role:'STUDENT',password:'import1'}]}); check('批量导入提交接口已下线（404）',r.status===404,r.status);
  console.log(JSON.stringify({total:checks.length,passed:checks.filter(x=>x.pass).length,failed:checks.filter(x=>!x.pass).length,checks},null,2));}finally{server.kill()}

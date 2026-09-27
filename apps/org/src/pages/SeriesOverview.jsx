@@ -12,8 +12,8 @@
 //
 // 与相邻页面的边界（沿用原注释，别又出现"三套东西说不清"）：
 //   · 「课程中心」＝看课包内容（封面/课时/教案）
-//   · 本页＝看课包的**分配与使用账**（次数、学员、课堂），并下钻到「谁被分到了」
-//   · 「学员开通」＝学员的席位与有效期
+//   · 本页＝看课包的**分配与使用账**（次数、学生、课堂），并下钻到「谁被分到了」
+//   · 「学生开通」＝学生的席位与有效期
 //
 // ⚠️ 「授权状态：待激活 / 学习中 / 已取消」这一层**数据库里没有状态列**（student_course_grants 只有
 //    granted_at/revoked_at）。但线框图 002-04 的「授权规则」第一次给了判定口径，所以现在**能真算**：
@@ -214,8 +214,8 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
         {busy ? '授权中…' : (isExperience && useNow > 1 ? `授权 ${useNow} 次` : '确认授权')}
       </button>
       <button className="secondary-button" type="button" onClick={onClose}>取消</button>
-      {/* 批量那条路没删（一次给很多学员授权还是它合适），只是不再占一个页签 */}
-      <Link className="text-button" to="/grants" onClick={onClose}>批量给多名学员授权</Link>
+      {/* 批量那条路没删（一次给很多学生分课包还是它合适），只是不再占一个页签 */}
+      <Link className="text-button" to="/grants" onClick={onClose}>批量添加课包（一次多名学生）</Link>
     </>}
   >
     <h3>① 为谁添加</h3>
@@ -225,14 +225,14 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
       {pickedStudent.status ? <AccountBadge status={pickedStudent.status} /> : null}
       {!student ? <button type="button" className="text-button" onClick={() => { setPickedStudent(null); setSeriesId(''); }}>重选</button> : null}
     </div> : <>
-      <label>搜索学生（姓名 / 登录名 / 手机号）<input value={keyword} placeholder="输入关键字；留空显示最近创建的学员" onChange={(event) => setKeyword(event.target.value)} /></label>
-      {students.loading ? <Loading label="正在读取学员…" /> : students.error ? <ErrorState error={students.error} onRetry={students.refresh} />
+      <label>搜索学生（姓名 / 登录名 / 手机号）<input value={keyword} placeholder="输入关键字；留空显示最近创建的学生" onChange={(event) => setKeyword(event.target.value)} /></label>
+      {students.loading ? <Loading label="正在读取学生…" /> : students.error ? <ErrorState error={students.error} onRetry={students.refresh} />
         : (students.data?.items || []).length ? <div className="card-list">
           {(students.data.items || []).map((item) => <button type="button" className="secondary-button wide" key={item.id}
             onClick={() => { setPickedStudent(item); setSeriesId(''); }} style={{ textAlign: 'left' }}>
             <strong>{item.displayName || item.login}</strong> <span className="muted">{item.login}{item.phone ? ` · ${item.phone}` : ''}</span>
           </button>)}
-        </div> : <Empty title="没有匹配的学员" body="换个关键字，或先在「机构成员管理」里创建学生账号。" />}
+        </div> : <Empty title="没有匹配的学生" body="换个关键字，或先在「机构成员管理」里创建学生账号。" />}
     </>}
 
     <h3 className="top-gap">② 添加什么课包</h3>
@@ -527,7 +527,7 @@ export function SeriesOverview({ api }) {
     return true;
   });
   const current = allItems.find((item) => item.seriesId === openId) || null;
-  // 下钻明细：谁被分到了这个课包（复用「学员许可」那条接口）
+  // 下钻明细：谁被分到了这个课包（复用「学生许可」那条接口）
   const detail = useData(
     () => (openId ? api.get(`org/course-grants?seriesId=${encodeURIComponent(openId)}`) : Promise.resolve({ items: [] })),
     [api, openId],

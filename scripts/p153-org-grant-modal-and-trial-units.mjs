@@ -212,8 +212,9 @@ try {
     && /orgName = ''/.test(shell) && /className="org-name"/.test(shell) && /\.org-name\{/.test(styles));
   check('⑥ 成员页的「批量导入」面板已删（含它的状态与两个函数）',
     !/预览导入/.test(main) && !/parseImport/.test(main) && !/api\.post\('org\/users\/import\//.test(main));
-  check('⑥ 服务端的两个导入接口**没被顺手删掉**（p4-o14 还在按真接口验账号唯一性/席位/回滚）',
-    orgRoute.includes('importMatch') && orgRoute.includes('(preview|commit)'));
+  check('⑥ 批量导入的服务端接口也随着下线了（用户 2026-09-27：「批量导入要删」——界面+接口一起）',
+    !orgRoute.includes('importMatch') && !orgRoute.includes('/users/import/')
+    && !read('apps/server/src/routes/admin/helpers.js').includes('previewImport'));
   check('⑥ 老记录的来源标签不许删（ADD_GRANT_DRAWER 是历史授权记录在用的）',
     /ADD_GRANT_DRAWER: '学生授权详情（添加课包）'/.test(orgRoute));
 }

@@ -57,7 +57,7 @@ export async function activeGrantFor({ orgId, studentId, seriesId }) {
 }
 
 /**
- * 一次取全「这个课包下每个学生的剩余体验次数」—— 候选人列表/加学员都用它，
+ * 一次取全「这个课包下每个学生的剩余体验次数」—— 候选人列表/加学生都用它，
  * 免得在循环里逐个学生打一次库。
  */
 export async function experienceBalanceByStudent({ orgId, seriesId }) {
@@ -90,7 +90,7 @@ export async function consumeExperienceUnit({ orgId, studentId, seriesId, lesson
   if (existing) return { consumed: false, reason: 'ALREADY_CONSUMED' };
   const { remaining } = grantUnitsOf(grant);
   if (remaining <= 0) {
-    throw errors.conflict('这个学生的体验次数已经用完，课堂无法结束：请先到「学员许可」再分一次，或把学生移出课堂', 'EXPERIENCE_UNITS_EXHAUSTED');
+    throw errors.conflict('这个学生的体验次数已经用完，课堂无法结束：请先到「学生许可」再分一次，或把学生移出课堂', 'EXPERIENCE_UNITS_EXHAUSTED');
   }
   const now = nowIso();
   await aq(

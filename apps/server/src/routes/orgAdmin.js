@@ -114,7 +114,7 @@ async function releaseSessionRuntimes(sessionId, reason = 'SESSION_END') {
 // 批次 D（班级退场）：原来这里还导入 classInOrg / assertTeachingClassManager / classMemberships /
 // teacherCanAccessClass / teacherScope / classSessionRows / classProgressRows / classDetail / curriculumItem
 // —— 那些都是班级口径的辅助函数，随 `/classes/*` 旧接口一起下线了。
-import { ensureOrgBilling, integer, orgId, orgUser, hasPermission, accessibleLesson, accessibleSeries, ORG_MEMBER_ROLES, validateMemberPhone, validateMemberPermissions, orgMemberRow, ENROLLMENT_STATUSES, PAYMENT_STATUSES, packageSnapshot, enrollmentDate, enrollmentRow, normalizeEnrollment, appendEnrollmentEvent, expireDueEnrollments, occupiedStudentSeats, assertEnrollmentSeat, setStudentEnrollmentAccess, packageWithSeatUsage, previewImport, createMember, validateTeacher, workInReviewScope, workReportRows, workReportInReviewScope, reportResolution, normalizeWorkPublishRequest, sessionTeacherScope, sessionOwnedByTeacherExists } from './adminOrg.js';
+import { ensureOrgBilling, integer, orgId, orgUser, hasPermission, accessibleLesson, accessibleSeries, ORG_MEMBER_ROLES, validateMemberPhone, validateMemberPermissions, orgMemberRow, ENROLLMENT_STATUSES, PAYMENT_STATUSES, packageSnapshot, enrollmentDate, enrollmentRow, normalizeEnrollment, appendEnrollmentEvent, expireDueEnrollments, occupiedStudentSeats, assertEnrollmentSeat, setStudentEnrollmentAccess, packageWithSeatUsage, createMember, validateTeacher, workInReviewScope, workReportRows, workReportInReviewScope, reportResolution, normalizeWorkPublishRequest, sessionTeacherScope, sessionOwnedByTeacherExists } from './adminOrg.js';
 /**
  * 学生课包授权的展示状态（线框图 002-04「授权规则」给的判定口径）。
  * ⚠️ 「已完成」不在其中：线框图只列了这个状态名，**没给判定口径**，按纪律不编。
@@ -190,7 +190,7 @@ export async function handleOrg(ctx) {
     const pendingSessions = await acount("SELECT COUNT(*) n FROM class_sessions session WHERE session.org_id=? AND session.status='PENDING'" + teacherSessionScope, sessionParams);
     // 班级退场：这个键保留但恒为 0（既有读取方不炸），课堂上数用 activeSessions/pendingSessions
     const activeClasses = 0;
-    // 学员数：教师＝**自己课堂名单里的学员**（去重）；管理员＝本机构全部有效学员
+    // 学生数：教师＝**自己课堂名单里的学生**（去重）；管理员＝本机构全部有效学生
     const students = isTeacher
       ? await acount(
         "SELECT COUNT(DISTINCT part.student_id) n FROM session_students part JOIN class_sessions session ON session.id=part.session_id JOIN users student ON student.id=part.student_id WHERE session.org_id=? AND part.status<>'REMOVED' AND student.deleted_at IS NULL" + teacherSessionScope,
@@ -296,7 +296,7 @@ export async function handleOrg(ctx) {
     //
     // ⚠️ **带 page 才分页，不带 page 维持老的整表语义（上限 500）**。
     // 为什么这么设计：这个接口还有三个「当选项源用」的调用方（机构成员管理页、
-    // 学员开通页的学生选择、课堂的「负责老师」下拉），它们只读 items、不翻页 ——
+    // 学生开通页的学生选择、课堂的「负责老师」下拉），它们只读 items、不翻页 ——
     // 如果一律按 20 条分页，这些页面会**静默只显示前 20 个人**（本轮差点就这么上线）。
     // 所以：分页由调用方显式声明（带 page），老调用方行为不变；total 一律给真的。
     const wantsPaging = ctx.search.get('page') !== null;
@@ -309,17 +309,6 @@ export async function handleOrg(ctx) {
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
     const items = (await arows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', [...params, limit, offset])).map((item) => orgMemberRow(item, currentOrgId));
     return pageResult(items, { page, limit, total });
-  }
-  let importMatch = part.match(/^\/users\/import\/(preview|commit)$/);
-  if (importMatch && method === 'POST') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可批量导入账号', 'ORG_ADMIN_REQUIRED');
-    const preview = await previewImport(ctx.body || {}, currentOrgId);
-    if (importMatch[1] === 'preview') return preview;
-    if (preview.invalidCount) throw errors.badRequest('批量导入校验失败，未写入任何账号', 'IMPORT_VALIDATION_FAILED', preview);
-    const created = await atransaction(async () => await amap(preview.items, async (item) => await createMember(currentOrgId, item.value)));
-    for (const item of created) { await audit(ctx, 'USER_IMPORT_CREATE', 'USER', item.id, null, { role: item.role, login: item.login }); };
-    await audit(ctx, 'USER_IMPORT_COMMIT', 'IMPORT_BATCH', null, null, { total: created.length, logins: created.map((item) => item.login) });
-    return { total: created.length, validCount: created.length, invalidCount: 0, items: created.map((item) => orgMemberRow(item, currentOrgId)) };
   }
   if (part === '/users' && method === 'POST') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可创建账号', 'ORG_ADMIN_REQUIRED');
@@ -335,7 +324,7 @@ export async function handleOrg(ctx) {
     const organization = await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
     if (role === 'TEACHER' && organization.teacherSeats - organization.teacherUsedSeats <= 0) throw errors.badRequest('教师席位不足', 'TEACHER_SEAT_LIMIT');
     if (body.billingPackageId && !await arow('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [body.billingPackageId, currentOrgId])) throw errors.badRequest('套餐不属于当前机构', 'INVALID_BILLING_PACKAGE');
-    // 批次 D：不再接受 classIds（班级退场）—— 学员进课堂改在「课堂」页做。
+    // 批次 D：不再接受 classIds（班级退场）—— 学生进课堂改在「课堂」页做。
     const created = await atransaction(async () => await createMember(currentOrgId, {
       role, login, displayName, password: String(body.password), phone: phone || null,
       permissions, expiresAt: body.expiresAt || null,
@@ -406,9 +395,9 @@ export async function handleOrg(ctx) {
     if (!name) throw errors.badRequest('套餐名称必填', 'PACKAGE_NAME_REQUIRED');
     if (await arow('SELECT id FROM billing_packages WHERE org_id=? AND name=?', [currentOrgId, name])) throw errors.conflict('同名套餐已存在', 'BILLING_PACKAGE_EXISTS');
     const capabilities = body.capabilities || {}; const packageId = id('pkg'); const now = nowIso();
-    const studentSeats = integer(body.studentSeats, '学员席位', { min: 1, max: 100000, fallback: 1 });
+    const studentSeats = integer(body.studentSeats, '学生席位', { min: 1, max: 100000, fallback: 1 });
     // 2026-09-13（P4 删积分）：套餐的「月度积分 / 赠送积分」两列保留（历史数据），
-    // 但不再作为输入 —— 新套餐一律写 0。套餐现在只服务「学员席位 + 能力开关」。
+    // 但不再作为输入 —— 新套餐一律写 0。套餐现在只服务「学生席位 + 能力开关」。
     await aq('INSERT INTO billing_packages(id,org_id,name,price_fen,monthly_credits,bonus_credits,duration_days,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,student_seats,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
       packageId, currentOrgId, name, integer(body.priceFen, '价格'), 0, 0, integer(body.durationDays, '套餐有效期', { min: 1, max: 3650, fallback: 30 }),
       capabilities.allowImage ? 1 : 0, capabilities.allowMusic ? 1 : 0, capabilities.allowVideo ? 1 : 0, capabilities.allowPodcast ? 1 : 0, capabilities.allowDubbing ? 1 : 0, studentSeats, now, now,
@@ -432,12 +421,12 @@ export async function handleOrg(ctx) {
       status = body.status;
       if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('套餐状态无效', 'INVALID_PACKAGE_STATUS');
       if (status === 'DISABLED' && target.status !== 'DISABLED' && await occupiedStudentSeats(currentOrgId, target.id) > 0) {
-        throw errors.conflict('套餐仍有已开通学员，请先停用或到期处理对应开通单', 'PACKAGE_HAS_ACTIVE_ENROLLMENTS');
+        throw errors.conflict('套餐仍有已开通学生，请先停用或到期处理对应开通单', 'PACKAGE_HAS_ACTIVE_ENROLLMENTS');
       }
     }
-    const studentSeats = body.studentSeats === undefined ? Number(target.student_seats || 0) : integer(body.studentSeats, '学员席位', { min: 1, max: 100000, fallback: 1 });
+    const studentSeats = body.studentSeats === undefined ? Number(target.student_seats || 0) : integer(body.studentSeats, '学生席位', { min: 1, max: 100000, fallback: 1 });
     const occupied = await occupiedStudentSeats(currentOrgId, target.id);
-    if (studentSeats < occupied) throw errors.conflict('学员席位不能低于当前已占用数量', 'STUDENT_SEAT_BELOW_OCCUPIED');
+    if (studentSeats < occupied) throw errors.conflict('学生席位不能低于当前已占用数量', 'STUDENT_SEAT_BELOW_OCCUPIED');
     await aq('UPDATE billing_packages SET name=?,price_fen=?,monthly_credits=?,bonus_credits=?,duration_days=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=?,student_seats=?,status=?,updated_at=? WHERE id=? AND org_id=?', [
       name,
       body.priceFen === undefined ? target.price_fen : integer(body.priceFen, '价格'),
@@ -458,7 +447,7 @@ export async function handleOrg(ctx) {
   }
 
   if (part === '/billing/enrollments' && method === 'GET') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学员开通', 'ORG_ADMIN_REQUIRED');
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学生开通', 'ORG_ADMIN_REQUIRED');
     await expireDueEnrollments(currentOrgId);
     const status = String(ctx.search.get('status') || '').trim().toUpperCase();
     if (status && !ENROLLMENT_STATUSES.has(status)) throw errors.badRequest('开通状态无效', 'INVALID_ENROLLMENT_STATUS');
@@ -477,13 +466,13 @@ export async function handleOrg(ctx) {
     return { items, summary: { total: items.length, pending: items.filter((item) => item.status === 'PENDING').length, active: active.length, suspended: items.filter((item) => item.status === 'SUSPENDED').length, expiringSoon: active.filter((item) => { const days = Math.ceil((Date.parse(item.expiresAt) - now) / 86400000); return days >= 0 && days <= 30; }).length } };
   }
   if (part === '/billing/enrollments' && method === 'POST') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可创建学员开通单', 'ORG_ADMIN_REQUIRED');
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可创建学生开通单', 'ORG_ADMIN_REQUIRED');
     const body = ctx.body || {}; const studentId = String(body.studentId || '').trim(); const packageId = String(body.packageId || '').trim();
     const student = await arow("SELECT * FROM users WHERE id=? AND org_id=? AND role='STUDENT' AND deleted_at IS NULL", [studentId, currentOrgId]);
-    if (!student) throw errors.badRequest('学员不属于当前机构', 'INVALID_ENROLLMENT_STUDENT');
+    if (!student) throw errors.badRequest('学生不属于当前机构', 'INVALID_ENROLLMENT_STUDENT');
     const pkg = await arow("SELECT * FROM billing_packages WHERE id=? AND org_id=? AND status='ACTIVE'", [packageId, currentOrgId]);
     if (!pkg) throw errors.badRequest('套餐不存在或已停用', 'INVALID_ENROLLMENT_PACKAGE');
-    if (await arow("SELECT id FROM student_enrollments WHERE student_id=? AND status='ACTIVE'", [student.id])) throw errors.conflict('该学员已有生效中的开通单，请使用续费或停用操作', 'STUDENT_ALREADY_ENROLLED');
+    if (await arow("SELECT id FROM student_enrollments WHERE student_id=? AND status='ACTIVE'", [student.id])) throw errors.conflict('该学生已有生效中的开通单，请使用续费或停用操作', 'STUDENT_ALREADY_ENROLLED');
     const now = nowIso(); const startsAt = enrollmentDate(body.startsAt, '开始时间', now);
     const expiresAt = new Date(new Date(startsAt).valueOf() + Number(pkg.duration_days || 0) * 86400000).toISOString();
     const paymentStatus = body.paymentStatus === undefined ? 'UNRECORDED' : String(body.paymentStatus).trim().toUpperCase();
@@ -499,13 +488,13 @@ export async function handleOrg(ctx) {
   }
   let enrollmentMatch = part.match(/^\/billing\/enrollments\/([^/]+)$/);
   if (enrollmentMatch && method === 'GET') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学员开通', 'ORG_ADMIN_REQUIRED');
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学生开通', 'ORG_ADMIN_REQUIRED');
     await expireDueEnrollments(currentOrgId);
     return await normalizeEnrollment(await enrollmentRow(currentOrgId, enrollmentMatch[1]), { includeEvents: true });
   }
   let enrollmentActionMatch = part.match(/^\/billing\/enrollments\/([^/]+)\/(payment-record|activate|suspend|resume|renew|void)$/);
   if (enrollmentActionMatch && method === 'POST') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可操作学员开通', 'ORG_ADMIN_REQUIRED');
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可操作学生开通', 'ORG_ADMIN_REQUIRED');
     await expireDueEnrollments(currentOrgId);
     const enrollment = await enrollmentRow(currentOrgId, enrollmentActionMatch[1]); const action = enrollmentActionMatch[2]; const before = enrollment.status; const now = nowIso();
     const pkg = await arow('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [enrollment.package_id, currentOrgId]);
@@ -667,7 +656,7 @@ export async function handleOrg(ctx) {
   /* ─────────────── 课堂（2026-09-13 批次 B：班级退场，课堂成为主对象）───────────────
    *
    * 四态：待上课（创建即此）→ 上课中（老师点开始）→ 已结束（老师点结束）；
-   *       待上课也可直接「解散」。学员六态与完课判定见 services/classroomSessions.js。
+   *       待上课也可直接「解散」。学生六态与完课判定见 services/classroomSessions.js。
    * 教师只能操作自己创建的课堂（sessionScope / assertSessionManager），机构管理员管全机构。
    * ⚠️ 下列接口与旧的 /classes/* 并存一段时间：界面已切到课堂，旧接口留待批次 D 清理。
    */
@@ -1072,7 +1061,7 @@ export async function handleOrg(ctx) {
     if (action === 'start') {
       if (target.status !== 'PENDING') throw errors.conflict('只有待上课的课堂可以开始上课', 'SESSION_NOT_PENDING');
       const ready = await acount("SELECT COUNT(*) n FROM session_students WHERE session_id=? AND status='PENDING'", [target.id]);
-      if (!ready) throw errors.badRequest('先添加学员再开始上课（名单为空不能开课）', 'SESSION_STUDENTS_REQUIRED');
+      if (!ready) throw errors.badRequest('先添加学生再开始上课（名单为空不能开课）', 'SESSION_STUDENTS_REQUIRED');
       // ⭐ 开课要**复查占用**（2026-09-20，用户口径：「他进了这个课堂，别的课堂就加不进，必须先解散/结束」）。
       //    加人那一步已经拦了（`IN_OTHER_SESSION`，连 PENDING 也算占用），但**开课这一步以前不查** ——
       //    于是只要名单里存在异常占用（2026-09-13 那条校验最初**只按同一课时**过滤，跨课时拦不住，
@@ -1094,7 +1083,7 @@ export async function handleOrg(ctx) {
       );
       if (busy.length) {
         const detail = busy.map((item) => `${item.name}（${item.session_title || '未命名课堂'} · ${item.lesson_title || '未知课程'}）`).join('、');
-        throw errors.conflict(`这些学员还在另一场课堂里：${detail}。先结束或解散那场课堂，再开始这一节。`, 'STUDENT_IN_OTHER_SESSION');
+        throw errors.conflict(`这些学生还在另一场课堂里：${detail}。先结束或解散那场课堂，再开始这一节。`, 'STUDENT_IN_OTHER_SESSION');
       }
       await atransaction(async () => {
         await assertTeacherSessionAvailable(target.teacher_id, target.id);
@@ -1111,7 +1100,7 @@ export async function handleOrg(ctx) {
       if (target.status !== 'ACTIVE') throw errors.conflict('只有正在上课的课堂可以结束', 'SESSION_NOT_ACTIVE');
       const settlement = await atransaction(async () => {
         await assertTransition(ctx, 'classSession', target.status, 'ENDED', { targetType: 'CLASS_SESSION', targetId: target.id, before: normalizeSession(target), code: 'INVALID_CLASS_SESSION_TRANSITION', message: '当前状态不能结束课堂' });
-        // 先结算学员（按「这节课有没有消耗过算力」），再落课堂状态：两件事在同一事务里
+        // 先结算学生（按「这节课有没有消耗过算力」），再落课堂状态：两件事在同一事务里
         const summary = await settleSessionStudents({ sessionId: target.id, actorId: auth.user.id });
         await aq("UPDATE class_sessions SET status='ENDED', ended_by=?, ended_at=?, ended_reason=?, updated_at=? WHERE id=?", [auth.user.id, now, reason || 'MANUAL', now, target.id]);
         return summary;
@@ -1142,7 +1131,7 @@ export async function handleOrg(ctx) {
   if (part.match(/^\/sessions\/([^/]+)\/students$/) && method === 'POST') {
     const target = await sessionInOrg(part.match(/^\/sessions\/([^/]+)\/students$/)[1]);
     const studentIds = Array.isArray(ctx.body?.studentIds) ? [...new Set(ctx.body.studentIds.map(String).filter(Boolean))] : [];
-    if (!studentIds.length) throw errors.badRequest('请选择要添加的学员', 'SESSION_STUDENTS_REQUIRED');
+    if (!studentIds.length) throw errors.badRequest('请选择要添加的学生', 'SESSION_STUDENTS_REQUIRED');
     const result = await addSessionStudents({ session: target, studentIds, actorId: auth.user.id });
     await audit(ctx, 'SESSION_STUDENTS_ADD', 'CLASS_SESSION', target.id, null, { added: result.added.length, skipped: result.skipped });
     return result;
@@ -1330,11 +1319,11 @@ export async function handleOrg(ctx) {
 
   /**
    * 机构端「课包概览」（2026-09-13，用户要求）：一眼看清每个已授权课包的
-   * 可授权次数 / 已分配 / 剩余 / 已分配学员数 / 涉及老师数 / 课堂情况。
+   * 可授权次数 / 已分配 / 剩余 / 已分配学生数 / 涉及老师数 / 课堂情况。
    *
    * 口径说明（字段刻意设计成**在班级退场前后都成立**，免得模型一改又要重写）：
    *   · 次数：quotaTotal 来自平台给本机构的授权单，quotaUsed 是「分给学生」用掉的次数（每人次 1）
-   *   · 已分配学员：student_course_grants 未撤销的去重人数（人次另给 grantedCount）
+   *   · 已分配学生：student_course_grants 未撤销的去重人数（人次另给 grantedCount）
    *   · 课堂：按「课时属于哪个课包」归集（课时的 series_id），所以与"课堂挂在班级还是独立"无关
    *     ⚠️ 进行中/待上课是**存量口径**（现在有多少），已结束按 days 区间（这段时间上完多少）
    *   · 涉及老师：开过这个课包课堂的老师去重（老师与课包没有直接绑定关系，只有课堂这一条实证）
@@ -1433,14 +1422,14 @@ export async function handleOrg(ctx) {
     return { items, total: items.length };
   }
   if (part === '/course-grants' && method === 'POST') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可以给学员授权课包', 'ORG_ADMIN_REQUIRED');
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可以给学生授权课包', 'ORG_ADMIN_REQUIRED');
     const seriesId = nonEmptyString(ctx.body?.seriesId, '课包', { max: 100 });
     // 002-05「来源」列要它，见 GRANT_SOURCE_LABELS 的注释（白名单外的值当没传）
     const requestedSource = String(ctx.body?.source || '').trim().toUpperCase();
     const grantSource = GRANT_SOURCE_LABELS[requestedSource] ? requestedSource : null;
     const requested = Array.isArray(ctx.body?.studentIds) ? ctx.body.studentIds : [];
     const studentIds = [...new Set(requested.map((value) => String(value || '').trim()).filter(Boolean))];
-    if (!studentIds.length || studentIds.length > 200) throw errors.badRequest('请选择 1-200 名学员', 'INVALID_STUDENT_IDS');
+    if (!studentIds.length || studentIds.length > 200) throw errors.badRequest('请选择 1-200 名学生', 'INVALID_STUDENT_IDS');
     return await atransaction(async () => {
     if (!await arow("SELECT id FROM course_series WHERE id=? AND status='PUBLISHED'", [seriesId])) throw errors.forbidden('课包未发布', 'COURSE_NOT_PUBLISHED');
     // 课包类型决定"重复分配"的语义：普通课包重复授权跳过，体验课包累加次数（见下面 already/fresh）
@@ -1450,7 +1439,7 @@ export async function handleOrg(ctx) {
     if (!assignment) throw errors.forbidden('该课包未授权给当前机构', 'COURSE_NOT_AUTHORIZED');
     const placeholders = studentIds.map(() => '?').join(',');
     const students = await arows(`SELECT id, display_name, login FROM users WHERE id IN (${placeholders}) AND org_id=? AND role='STUDENT' AND deleted_at IS NULL`, [...studentIds, currentOrgId]);
-    if (students.length !== studentIds.length) throw errors.badRequest('存在不属于本机构的学员', 'STUDENT_NOT_FOUND');
+    if (students.length !== studentIds.length) throw errors.badRequest('存在不属于本机构的学生', 'STUDENT_NOT_FOUND');
     // 已授权过的跳过（不重复扣次数）：同一机构 + 同一学生 + 同一课包只允许一条有效记录
     // ⭐ 体验课包例外（2026-09-24 用户口径）：**同一个体验课包可以重复分给同一个学生**，
     //    未使用的次数**预先累积** —— 每次分配都算一次（同一行 `granted_units` +1），不跳过。
@@ -1467,7 +1456,7 @@ export async function handleOrg(ctx) {
     //    · 上限按**这次真会扣掉的次数**算：本次新增授权数 × 每人次数 ≤ 课包剩余次数。
     //      这条检查在事务里、拿到的是**刚读出来的** quota_used，所以是"实际检测"而不是前端算的账。
     const units = integer(ctx.body?.units, '每人授权次数', { min: 1, max: 1000, fallback: 1 });
-    if (units > 1 && !experience) throw errors.badRequest('普通课包每个学员只能授权 1 次；按次累加只适用于体验课包', 'UNITS_NOT_SUPPORTED');
+    if (units > 1 && !experience) throw errors.badRequest('普通课包每个学生只能授权 1 次；按次累加只适用于体验课包', 'UNITS_NOT_SUPPORTED');
     const quotaTotal = Number(assignment.quota_total || 0);
     const quotaUsed = Number(assignment.quota_used || 0);
     const needed = fresh.length * units;

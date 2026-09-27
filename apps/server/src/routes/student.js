@@ -308,7 +308,7 @@ async function studentCourseOverview(ctx) {
 }
 
 
-// 2026-09-13：**学员自助合规套件已废掉**（用户决定）—— 学生自己改昵称/头像、填监护人、
+// 2026-09-13：**学生自助合规套件已废掉**（用户决定）—— 学生自己改昵称/头像、填监护人、
 // 改隐私开关、点协议同意、提交账号申请（导出/注销）这些接口与它们的 helper/常量全部删除。
 // 保留且**仍被读取**的东西（删了会连带坏事）：
 //   · users.privacy_showcase_anonymous —— 公开作品广场拿它决定是否匿名展示；
@@ -332,7 +332,7 @@ async function studentAccountOverview(ctx) {
   const rawUser = await arow('SELECT * FROM users WHERE id = ? AND org_id = ? AND deleted_at IS NULL', [ctx.auth.user.id, ctx.auth.user.orgId]);
   if (!rawUser) throw errors.notFound('学生账号不存在', 'STUDENT_NOT_FOUND');
   const sessions = await arows('SELECT * FROM sessions WHERE user_id = ? AND org_id = ? AND superseded_at IS NULL AND expires_at > ? ORDER BY created_at DESC', [ctx.auth.user.id, ctx.auth.user.orgId, nowIso()]);
-  // 2026-09-13：学员自助合规套件废掉后，这里不再返回 legalConsents / profileOptions / requests
+  // 2026-09-13：学生自助合规套件废掉后，这里不再返回 legalConsents / profileOptions / requests
   // （协议同意留痕、头像与监护人选项、账号申请都在被删的那套接口里，没有读取方了）。
   return {
     user: normalizeUser(rawUser),
@@ -384,7 +384,7 @@ export async function handleStudent(ctx) {
     return { lessonId, status, startedAt: existing?.started_at || now, completedAt: status === 'COMPLETED' ? now : (existing?.completed_at || null), lastAccessedAt: now };
   }
   if (part === '/courses' && method === 'GET') {
-    // P5-W05: 学员端课程列表支持筛选
+    // P5-W05: 学生端课程列表支持筛选
     const filters = {
       difficulty: ctx.search.get('difficulty') != null ? Number(ctx.search.get('difficulty')) : undefined,
       ageMin: ctx.search.get('ageMin') != null ? Number(ctx.search.get('ageMin')) : undefined,
@@ -426,7 +426,7 @@ export async function handleStudent(ctx) {
   }
   if (part === '/account' && method === 'GET') return await studentAccountOverview(ctx);
 
-  // 2026-09-13：学员自助合规套件（改昵称/头像、监护人、隐私开关、协议同意、账号申请）已废掉，
+  // 2026-09-13：学生自助合规套件（改昵称/头像、监护人、隐私开关、协议同意、账号申请）已废掉，
   // 这些分支与其 helper 一并删除。**保留** /account（概览）、/account/password、
   // /account/sessions/:id/revoke —— 多设备会话与改密是学生确实要用的，守卫 p37 也钉着。
 

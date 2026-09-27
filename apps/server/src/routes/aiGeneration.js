@@ -1071,7 +1071,7 @@ async function generationHistory(auth, search) {
       total,
       succeeded: await acount("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
       failed: await acount("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
-      // 对外售价口径（2026-09-15）：学员看到的「消耗」= 算力账本里成功尝试的售价快照合计。
+      // 对外售价口径（2026-09-15）：学生看到的「消耗」= 算力账本里成功尝试的售价快照合计。
       // 原来读 usage_records.cost_fen —— 那一列现行代码恒为 0（平台承担成本、不扣学生），这里永远显示 0。
       costFen: await acount(`SELECT ${salePriceFenSuccessSql()} n FROM compute_attempts WHERE user_id = ? AND org_id = ?`, [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
     },
@@ -1094,8 +1094,8 @@ function assetUsageStatus(asset, currentSnapshot, snapshots) {
  * ⚠️ 这里原来走 `classes JOIN class_members` 并要求 `class.current_session_id = session.id`。
  *    班级退场后新课堂的 class_id 是空的，所以它**恒返回空**，进而让下面那句
  *    `scopeBlocked = student_usage_scope !== 'HOME_PRACTICE' && !session` 两个方向都错：
- *      · HOME_PRACTICE 学员 → 恒为 false（等于宣称「不进课堂也能用」，正是被取消的那条通道）；
- *      · FOLLOW_CLASS 学员 → 恒为 true（哪怕课堂正在上，也一直被告知「等待老师开启课堂」）。
+ *      · HOME_PRACTICE 学生 → 恒为 false（等于宣称「不进课堂也能用」，正是被取消的那条通道）；
+ *      · FOLLOW_CLASS 学生 → 恒为 true（哪怕课堂正在上，也一直被告知「等待老师开启课堂」）。
  *    改成从**课堂名单**取之后两个方向都对了。真实门禁一直在 studentContext（生成时才拦），
  *    所以这里错了只表现为**展示与口径矛盾**，不是安全洞 —— 但矛盾本身就是 bug。
  */

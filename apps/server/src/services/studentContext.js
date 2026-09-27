@@ -237,7 +237,7 @@ export async function getStudentCourses(user) {
 
 /**
  * P5-W05: 返回当前学生机构可访问的 PUBLISHED 课包 + 已发布课时清单，
- * 不受"是否已加入班级课单"限制。用于学员端"我的课程"列表与详情。
+ * 不受"是否已加入班级课单"限制。用于学生端"我的课程"列表与详情。
  * 支持 difficulty / ageMin / ageMax / tag / search 筛选。
  */
 export async function getStudentAccessibleCourses(user, filters = {}) {
@@ -285,7 +285,7 @@ export async function getStudentAccessibleCourses(user, filters = {}) {
 }
 
 /**
- * P5-W05: 学员端单课包详情。校验可访问性 + 返回完整课时清单（含 lessonContent）。
+ * P5-W05: 学生端单课包详情。校验可访问性 + 返回完整课时清单（含 lessonContent）。
  */
 export async function getStudentCourseDetail(user, seriesId) {
   const { orgId } = studentIdentity(user);
@@ -314,7 +314,7 @@ export async function getStudentCourseDetail(user, seriesId) {
  * 判定顺序（每一步失败都给**准确的原因**，免得学生找错人）：
  *   ① 课时/课包已发布                  → 否则 LESSON_NOT_ASSIGNED
  *   ② 机构对这个课包有生效授权          → 否则 COURSE_NOT_ASSIGNED
- *   ③ 学生持有有效学员许可              → 否则 COURSE_GRANT_REQUIRED（找老师/机构分清课包）
+ *   ③ 学生持有有效学生许可              → 否则 COURSE_GRANT_REQUIRED（找老师/机构分清课包）
  *   ④ 这节课上有一条属于他的参与记录    → 否则 NOT_IN_CLASSROOM（还没被老师加进课堂）
  *   ⑤ 那条记录已「上课中」且课堂正在进行 → 否则 CLASS_SESSION_REQUIRED（等老师开始上课）
  *   ⑥ 课堂入口类型与他要走的入口一致    → 否则 VIBECODING_CLASSROOM_UNAVAILABLE 等

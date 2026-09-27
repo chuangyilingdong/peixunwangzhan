@@ -118,7 +118,7 @@ try {
   const workExport = await api('/api/admin/works/export', { token: admin });
   assert.equal(workExport.status, 200, `作品导出失败: ${JSON.stringify(workExport.data)}`);
   const workLines = csvLines(workExport.data.content);
-  assert.equal(workLines[0], '作品标题,学员,机构,班级,课时,状态,已上作品广场,精选,提交时间', `作品表头不符: ${workLines[0]}`);
+  assert.equal(workLines[0], '作品标题,学生,机构,班级,课时,状态,已上作品广场,精选,提交时间', `作品表头不符: ${workLines[0]}`);
   assert.ok(workExport.data.count >= 1, `作品导出应至少 1 条，实际 ${workExport.data.count}`);
   assert.ok(workLines.some((line) => line.includes('P21 导出用例作品')), '导出内容应包含刚提交的作品');
 

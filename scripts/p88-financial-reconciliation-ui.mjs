@@ -235,7 +235,7 @@ assert.match(modelSource, /<FinancialReconciliation api=\{api\} view="calls"/, '
 assert.match(modelSource, /<FinancialReconciliation api=\{api\} view="margin"/, '两账与毛利');
 // 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
 // （原断言：advancedView 下挂着「供应商账单 / 匹配与核销」两个子视图。）
-assert.match(modelSource, /<OrgStudentUsagePanel api=\{api\}/, '「机构与学员」入口必须接出来（按机构看每个学员的消耗）');
+assert.match(modelSource, /<OrgStudentUsagePanel api=\{api\}/, '「机构与学生」入口必须接出来（按机构看每个学员的消耗）');
 assert.match(modelSource, /<ComputeBudgetPanel api=\{api\}/, '平台成本预警挂在两账与毛利下');
 assert.match(adminSource, /handleFinancialReporting/);
 
@@ -256,11 +256,11 @@ if (minorText(0.3678) !== '0.0037') throw new Error('小数分必须按 4 位显
 if (minorText(4.3678) !== '0.0437') throw new Error('整数分+小数分混合也按 4 位：' + minorText(4.3678));
 if (minorText(null) !== '未知') throw new Error('未知不能显示成 0：' + minorText(null));
 const api = { get: () => new Promise(() => {}), post: () => Promise.resolve({}) };
-// 2026-09-15 重排：顶层是「调用账 / 机构与学员 / 两账与毛利」。
+// 2026-09-15 重排：顶层是「调用账 / 机构与学生 / 两账与毛利」。
 // 2026-09-18：「高级」一级页签随供应商账单两条线一起删掉（它下面只有那两屏），断言里的 advanced 一并去掉；
 //            同一天「三账」改称「两账」（第二本账就是上游成本，没有第三本）—— 口径变更，不是测试漂移。
 const render = (entry) => renderToStaticMarkup(<MemoryRouter initialEntries={[entry]}><Routes><Route path="/compute/usage" element={<ModelCompute api={api} />} /></Routes></MemoryRouter>);
-for (const [view, tabs] of [['calls', ['调用账', '机构与学员', '两账与毛利']], ['orgs', []], ['margin', []]]) {
+for (const [view, tabs] of [['calls', ['调用账', '机构与学生', '两账与毛利']], ['orgs', []], ['margin', []]]) {
   const html = render('/compute/usage?view=' + view);
   for (const tab of tabs) if (!html.includes(tab)) throw new Error(view + ' missing tab ' + tab);
 }

@@ -335,7 +335,7 @@ export function computeContractCost({ modality, model = '', unitPrices = null, m
     // 单位是分/百万 token。⚠️ 单笔成本**常常小于 1 分**（DeepSeek 一次课堂对话约 0.2 分），
     // 所以这里**不按整数分取整**，保留到 0.0001 分（compute_attempts.upstream_cost_fen 本来就是 REAL，
     // double 精度对任何现实累计额都够）。若按整数分取整，每一笔都会记成 0 ——
-    // 一节课的文本成本整块消失，文本那一侧的「机构/学员消耗 vs 我们实际消耗」对照永远是空的。
+    // 一节课的文本成本整块消失，文本那一侧的「机构/学生消耗 vs 我们实际消耗」对照永远是空的。
     // （图片/视频/音乐的单笔都是整数分，各自的分支不需要这层小数。）
     const inputFen = subFen((input * perInput.fen) / 1000000);
     const outputFen = subFen((output * perOutput.fen) / 1000000);

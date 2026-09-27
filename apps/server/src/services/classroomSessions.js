@@ -1,12 +1,12 @@
 // 「课堂」的领域逻辑（2026-09-13，批次 B：班级退场、课堂成为主对象）。
 //
 // 四态：PENDING（待上课，已创建未开始）/ ACTIVE（上课中）/ ENDED（已结束）/ DISSOLVED（已解散）
-// 学员六态：不在任何行 = 未加入任何课堂 … PENDING 待上课 / ACTIVE 上课中 /
+// 学生六态：不在任何行 = 未加入任何课堂 … PENDING 待上课 / ACTIVE 上课中 /
 //           COMPLETED 已完课 / INCOMPLETE 未完课 / REMOVED 被移除
 //
 // 完课判定 = 这个学生在这节课**消耗过算力**（真实成功调用，不依赖费用是否已知或大于零）。
 // 这里有三个规则是用户逐条定的，改动前请先看注释：
-//   ① 已完课的学员**不能再被加到同一节课**（但可以上同课包的其他课时）；
+//   ① 已完课的学生**不能再被加到同一节课**（但可以上同课包的其他课时）；
 //   ② 未结束的参与（待上课/上课中）也不允许被别的课堂同时占用；
 //   ③ 被移除 = 解锁（可以再被其他课堂加）。
 import { errors, id, nowIso, q, row, rows, transaction, arow, arows, aq, atransaction, amap } from '../lib.js';
@@ -46,7 +46,7 @@ export function assertSessionManager(auth, session) {
 
 /**
  * 教师数据范围的新落点（替代原来按「班级」的 teacherScope）：
- * 课堂列表/详情/学员/用量/作品都只圈「我创建的课堂」。
+ * 课堂列表/详情/学生/用量/作品都只圈「我创建的课堂」。
  */
 export function sessionScope(alias, auth, params) {
   if (auth.user.role !== 'TEACHER') return '';
@@ -60,7 +60,7 @@ export function sessionScope(alias, auth, params) {
  * 2026-09-15 改口径：原来读 `usage_records.cost_fen`，那一列现行代码恒写 0
  * （平台承担算力成本、不扣学生），所以这一列在机构端**永远显示 ¥0.00**。
  * 现在改为对外售价口径（见 computePool.salePriceFenFor 的完整说明）：
- * 机构/学员看到的是「按公告价算的消耗」，平台自己的进货成本与毛利只在「用量与成本」看。
+ * 机构/学生看到的是「按公告价算的消耗」，平台自己的进货成本与毛利只在「用量与成本」看。
  */
 export async function lessonCostFenFor({ studentId, sessionId }) {
   return await salePriceFenFor({ sessionId, studentId });
@@ -102,9 +102,9 @@ export async function completedParticipationFor({ studentId, lessonId, excludeSe
 const SESSION_STATE_LABELS = { PENDING: '待上课', ACTIVE: '上课中', ENDED: '已结束', DISSOLVED: '已解散' };
 
 /**
- * 老师要「添加学员」时的候选名单：可添加 / 不可添加（每条给原因，并带上占用它的课堂信息）。
+ * 老师要「添加学生」时的候选名单：可添加 / 不可添加（每条给原因，并带上占用它的课堂信息）。
  * 规则（用户口径）：
- *   · 必须有这个课包的有效学员许可；
+ *   · 必须有这个课包的有效学生许可；
  *   · 这节课上不能有别的课堂的未结束参与（待上课/上课中）→ 不可加，标明所属课堂/状态/老师；
  *   · 已经完课过这节课 → 不可加（可以上同课包其他课时）；
  *   · 被移除过 → 算可加（移除即解锁）。
@@ -146,12 +146,12 @@ export async function sessionCandidates(session) {
       [session.id, student.id],
     );
     if (own) { alreadyIn.push({ ...base, studentState: own.status }); continue; }
-    if (student.status !== 'ACTIVE') { blocked.push({ ...base, reason: 'STUDENT_DISABLED', reasonText: '学员账号已停用' }); continue; }
-    if (student.expires_at && Date.parse(student.expires_at) <= Date.now()) { blocked.push({ ...base, reason: 'STUDENT_EXPIRED', reasonText: '学员账号已到期' }); continue; }
-    if (!granted.has(student.id)) { blocked.push({ ...base, reason: 'NO_GRANT', reasonText: '没有这个课包的许可（到「学员许可」分给 ta）' }); continue; }
+    if (student.status !== 'ACTIVE') { blocked.push({ ...base, reason: 'STUDENT_DISABLED', reasonText: '学生账号已停用' }); continue; }
+    if (student.expires_at && Date.parse(student.expires_at) <= Date.now()) { blocked.push({ ...base, reason: 'STUDENT_EXPIRED', reasonText: '学生账号已到期' }); continue; }
+    if (!granted.has(student.id)) { blocked.push({ ...base, reason: 'NO_GRANT', reasonText: '没有这个课包的许可（到「学生许可」分给 ta）' }); continue; }
     const remainingUnits = experience ? (balanceByStudent.get(student.id) || 0) : null;
     if (experience && remainingUnits <= 0) {
-      blocked.push({ ...base, reason: 'NO_EXPERIENCE_UNITS', remainingUnits: 0, reasonText: '体验次数已经用完了（到「学员许可」再给 ta 分一次就能继续上）' });
+      blocked.push({ ...base, reason: 'NO_EXPERIENCE_UNITS', remainingUnits: 0, reasonText: '体验次数已经用完了（到「学生许可」再给 ta 分一次就能继续上）' });
       continue;
     }
     const occupied = await activeParticipationFor({ studentId: student.id });
@@ -210,7 +210,7 @@ async function candidateCostCap(session, studentId) {
 }
 
 /**
- * 结束课堂时结算学员状态：这节课花过算力 → 已完课，否则 → 未完课。
+ * 结束课堂时结算学生状态：这节课花过算力 → 已完课，否则 → 未完课。
  * 幂等：只结算还在 PENDING/ACTIVE 的行；已结算的行不动（重复点「结束」不会重算）。
  *
  * ⭐ 体验课包（2026-09-24 用户口径）：判定成 `COMPLETED`（= **有真实非 mock 的成功调用**，
@@ -253,9 +253,9 @@ export async function settleSessionStudents({ sessionId, actorId }) {
   return summary;
 }
 
-/** 加学员（事务内）：把学生加进课堂名单；已结束/已解散的课堂不能加。 */
+/** 加学生（事务内）：把学生加进课堂名单；已结束/已解散的课堂不能加。 */
 export async function addSessionStudents({ session, studentIds, actorId }) {
-  if (!['PENDING', 'ACTIVE'].includes(session.status)) throw errors.conflict('课堂已结束或已解散，不能再加学员', 'SESSION_NOT_OPEN');
+  if (!['PENDING', 'ACTIVE'].includes(session.status)) throw errors.conflict('课堂已结束或已解散，不能再加学生', 'SESSION_NOT_OPEN');
   const series = await arow('SELECT id, series_type FROM course_series WHERE id=?', [session.series_id]);
   const experience = isExperienceSeries(series);
   const now = nowIso();
@@ -297,18 +297,18 @@ export async function addSessionStudents({ session, studentIds, actorId }) {
   return { added, skipped };
 }
 
-/** 移除学员：只在开始上课前允许（用户口径「移除＝解锁」）。 */
+/** 移除学生：只在开始上课前允许（用户口径「移除＝解锁」）。 */
 export async function removeSessionStudent({ session, studentId, actorId, reason = null }) {
-  if (session.status !== 'PENDING') throw errors.conflict('只能在开始上课前移除学员', 'SESSION_ALREADY_STARTED');
+  if (session.status !== 'PENDING') throw errors.conflict('只能在开始上课前移除学生', 'SESSION_ALREADY_STARTED');
   const now = nowIso();
   const part = await arow("SELECT * FROM session_students WHERE session_id=? AND student_id=? AND status<>'REMOVED'", [session.id, studentId]);
-  if (!part) throw errors.notFound('这名学员不在课堂名单里', 'SESSION_STUDENT_NOT_FOUND');
+  if (!part) throw errors.notFound('这名学生不在课堂名单里', 'SESSION_STUDENT_NOT_FOUND');
   await aq("UPDATE session_students SET status='REMOVED', removed_by=?, removed_at=?, removed_reason=?, updated_at=? WHERE id=?",
     [actorId, now, reason, now, part.id]);
   return { studentId, removedAt: now };
 }
 
-/** 课堂列表上的学员统计（避免前端 N+1）。 */
+/** 课堂列表上的学生统计（避免前端 N+1）。 */
 export async function sessionStudentCounts(sessionIds) {
   if (!sessionIds.length) return new Map();
   const placeholders = sessionIds.map(() => '?').join(',');
@@ -367,7 +367,7 @@ export async function sessionRuntimeDetail(session, auth, students) {
   })));
   for (const work of works) work.detailUrl = `/api/org/sessions/${encodeURIComponent(session.id)}/works/${work.source}/${encodeURIComponent(work.id)}`;
   works.sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
-  const labels = { SESSION_CREATE: '创建课堂', SESSION_UPDATE: '编辑课堂', SESSION_START: '开始上课', SESSION_END: '结束课堂', SESSION_DISSOLVE: '解散课堂', SESSION_STUDENTS_ADD: '添加学员', SESSION_STUDENT_REMOVE: '移除学员' };
+  const labels = { SESSION_CREATE: '创建课堂', SESSION_UPDATE: '编辑课堂', SESSION_START: '开始上课', SESSION_END: '结束课堂', SESSION_DISSOLVE: '解散课堂', SESSION_STUDENTS_ADD: '添加学生', SESSION_STUDENT_REMOVE: '移除学生' };
   const events = (await arows(`SELECT audit.id,audit.action,audit.actor_id,actor.display_name actor_name,audit.created_at
     FROM audit_logs audit LEFT JOIN users actor ON actor.id=audit.actor_id
     WHERE audit.org_id=? AND audit.target_type='CLASS_SESSION' AND audit.target_id=? ORDER BY audit.created_at DESC LIMIT 200`, [session.org_id, session.id]))

@@ -299,7 +299,7 @@ const GROUP_DIMENSIONS = [
   { key: 'channel', label: '渠道', of: (call) => call.channelId || null, fallback: '未知渠道' },
   { key: 'model', label: '模型', of: (call) => call.model || null, fallback: '未知模型' },
   { key: 'org', label: '机构', of: (call) => call.orgId || null, fallback: '未归属机构' },
-  { key: 'student', label: '学员', of: (call) => call.userId || null, fallback: '未归属学员' },
+  { key: 'student', label: '学生', of: (call) => call.userId || null, fallback: '未归属学生' },
 ];
 
 function emptyBucket(key, label) {
@@ -336,7 +336,7 @@ function finalizeBucket(bucket) {
 }
 
 /**
- * 调用账汇总：按模态 / 渠道 / 模型（以及机构 / 学员）对照**两账**金额 ——
+ * 调用账汇总：按模态 / 渠道 / 模型（以及机构 / 学生）对照**两账**金额 ——
  * 对外售价（externalAmountMinor，未知单列 saleUnknownCount）与上游成本（knownUpstreamCostMinor，未知单列 upstreamUnknownCount）。
  * 未知一律单列计数，绝不并入差额、绝不按 0 处理。
  */

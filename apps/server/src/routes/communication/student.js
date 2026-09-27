@@ -109,7 +109,7 @@ export async function handleStudentCommunication(ctx) {
   const auth = requireRole(ctx, ['STUDENT']);
   const currentOrgId = orgId(auth);
   const part = pathname.slice('/api/student'.length);
-  // 2026-09-13：**学员站内信已废掉**（用户决定）—— /student/inbox（列表 / 单条已读 / 全部已读）
+  // 2026-09-13：**学生站内信已废掉**（用户决定）—— /student/inbox（列表 / 单条已读 / 全部已读）
   // 三个分支删除。注意：站内信功能本身没废，机构端与平台端的 inbox 仍在（communication/org.js
   // 与 admin 侧），所以下面这些 helper 继续被那边用着，不能一起删。
   //

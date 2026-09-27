@@ -29,7 +29,7 @@ export function ModelCompute({ api }) {
     <nav aria-label="面包屑" className="breadcrumb row-actions"><NavLink to="/compute/config">AI 能力与价格</NavLink>{usage ? <><span className="muted" aria-hidden="true">/</span><span>用量与成本</span></> : null}{names ? <><span className="muted" aria-hidden="true">/</span><span>模型显示名</span></> : null}</nav>
     <PageHeader eyebrow={usage ? '平台运营' : '平台配置'} title={names ? '模型显示名' : 'AI 能力与价格'}
       description={usage
-        ? '看每一笔调用的对外售价与上游成本（两本账），并按机构 / 学员对照；两账与毛利看收入侧。'
+        ? '看每一笔调用的对外售价与上游成本（两本账），并按机构 / 学生对照；两账与毛利看收入侧。'
         : names
           ? '给模型取一个学生看得懂的名字 —— 画布与 VibeCoding 课堂显示的就是它。只改显示：调用上游仍然用模型 ID，也不动课包快照。'
           : '三块就配完：① 渠道（怎么连上游）② 价目表（成本价与对外价并排）③ 路由与开关（用哪个渠道）。'} />
@@ -41,7 +41,7 @@ export function ModelCompute({ api }) {
     {names ? <ModelNamePanel api={api} /> : usage ? <>
       <nav className="admin-tabs" aria-label="用量与成本视图">
         <button type="button" className={view === 'calls' ? 'active' : ''} aria-pressed={view === 'calls'} onClick={() => setView('calls')}>调用账</button>
-        <button type="button" className={view === 'orgs' ? 'active' : ''} aria-pressed={view === 'orgs'} onClick={() => setView('orgs')}>机构与学员</button>
+        <button type="button" className={view === 'orgs' ? 'active' : ''} aria-pressed={view === 'orgs'} onClick={() => setView('orgs')}>机构与学生</button>
         <button type="button" className={view === 'margin' ? 'active' : ''} aria-pressed={view === 'margin'} onClick={() => setView('margin')}>两账与毛利</button>
       </nav>
       {view === 'calls' ? <FinancialReconciliation api={api} view="calls" /> : null}

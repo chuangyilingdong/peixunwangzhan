@@ -135,7 +135,7 @@ export const WEBSITE_CONTENT_DEFAULTS = {
     //    所以这里写成空数组是有意义的，不是漏写。
     audienceOrder: ['student', 'teacher', 'org'],
     student: [
-      { question: '需要学员自备 API Key 或对话平台账号吗？', answer: '不需要。机构账号登录即可使用平台统一模型能力。' },
+      { question: '需要学生自备 API Key 或对话平台账号吗？', answer: '不需要。机构账号登录即可使用平台统一模型能力。' },
       { question: '机房和教室的电脑都能用吗？', answer: '可以，公开客户端支持 macOS Apple 芯片版与 Windows 64 位。' },
       { question: '能否做 Arduino 和 micro:bit 硬件课？', answer: '支持 Arduino Uno 与 micro:bit 的课堂实践。' },
       { question: '机构的授权次数用完了会怎样？', answer: '机构端会提示老师补足授权次数，补足后学生即可继续上课；平台不会因为算力用量去拦学生。' },
@@ -145,7 +145,7 @@ export const WEBSITE_CONTENT_DEFAULTS = {
       { question: '学生的作品和用量在哪里看？', answer: '机构后台可以查看学生的用量记录与作品，并把优秀作品发布到作品展厅。' },
     ],
     org: [
-      { question: '学生需要自己买账号或自备 API Key 吗？', answer: '不需要。机构账号分级，学员无需自备 Key，由机构统一开通与管理。' },
+      { question: '学生需要自己买账号或自备 API Key 吗？', answer: '不需要。机构账号分级，学生无需自备 Key，由机构统一开通与管理。' },
       { question: '平台提供哪些课程？', answer: '课程中心提供标准课包（含 PPT 与 HTML 互动课件），机构可按课包直接排课。' },
     ],
   },

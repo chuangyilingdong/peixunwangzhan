@@ -1,4 +1,4 @@
-// 「用量与成本」页的三个视图（2026-09-13 起）：调用账 / 两账与毛利（机构与学员在 BillingPanels.jsx）。
+// 「用量与成本」页的三个视图（2026-09-13 起）：调用账 / 两账与毛利（机构与学生在 BillingPanels.jsx）。
 //
 // 2026-09-18 减法（用户口径「供应商账单两条线整体下线」「必须做大量的减法」）：
 //   删掉 SupplierBillsView（CSV 手工导入 + 供应商账户 + 导入历史）、MatchingView（匹配与核销 + 人工拆分 + 争议/排除/取消）、
@@ -66,7 +66,7 @@ function FilterBar({ options, filters, onChange, includeCurrency = false, margin
   </div>;
 }
 
-const CALL_DIMENSIONS = [['modality', '模态'], ['channel', '渠道'], ['model', '模型'], ['org', '机构'], ['student', '学员']];
+const CALL_DIMENSIONS = [['modality', '模态'], ['channel', '渠道'], ['model', '模型'], ['org', '机构'], ['student', '学生']];
 // 2026-09-18：两账合并列 —— 原来「已知上游成本」「已结算」「未结算笔数」三列里，
 // 后两个分别恒等于第一个与「另有 N 笔成本未知」（后端 settledAmountMinor 恒等于 knownUpstreamCostMinor、
 // unsettledCount 恒等于 upstreamUnknownCount），并排显示就是同一堆数字看三遍。现在只留一列「上游成本」，

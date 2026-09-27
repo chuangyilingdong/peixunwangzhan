@@ -359,7 +359,7 @@ async function enrollmentRow(currentOrgId, enrollmentId) {
     JOIN users student ON student.id=enrollment.student_id AND student.org_id=enrollment.org_id
     JOIN billing_packages package ON package.id=enrollment.package_id AND package.org_id=enrollment.org_id
     WHERE enrollment.id=? AND enrollment.org_id=?`, [enrollmentId, currentOrgId]);
-  if (!item) throw errors.notFound('学员开通单不存在', 'ENROLLMENT_NOT_FOUND');
+  if (!item) throw errors.notFound('学生开通单不存在', 'ENROLLMENT_NOT_FOUND');
   return item;
 }
 
@@ -409,7 +409,7 @@ async function occupiedStudentSeats(currentOrgId, packageId, { excludeEnrollment
 }
 
 /**
- * 开通/恢复/续费开通单前的**机构级**学员席位检查。
+ * 开通/恢复/续费开通单前的**机构级**学生席位检查。
  *
  * ⚠️ 2026-09-26 审计两处修正：
  *   ① 判据原先是 `>`，而建号那条（createMember）是 `>=` —— 同一个错误码、同一个计数源，两处结论不同：
@@ -428,7 +428,7 @@ async function setStudentEnrollmentAccess(currentOrgId, enrollment, status) {
   const snapshot = parseJson(enrollment.package_snapshot, {});
   const now = nowIso();
   if (status === 'ACTIVE') {
-    // 2026-09-13（P4 删积分）：开通学员只给「有效期 + 套餐绑定」，
+    // 2026-09-13（P4 删积分）：开通学生只给「有效期 + 套餐绑定」，
     // 不再把套餐的月度/赠送积分写进 users（那两列是积分时代的产物）。
     await aq(`UPDATE users SET status='ACTIVE',expires_at=?,billing_package_id=?,updated_at=?
       WHERE id=? AND org_id=? AND role='STUDENT'`, [enrollment.expires_at, enrollment.package_id, now, enrollment.student_id, currentOrgId]);
@@ -473,77 +473,6 @@ function sessionOwnedByTeacherExists(column, auth, params, { orgColumn = 'usage.
 
 
 
-function importItems(body) {
-  const items = Array.isArray(body?.items) ? body.items : Array.isArray(body?.rows) ? body.rows : null;
-  if (!items) throw errors.badRequest('批量导入必须提供 items 数组', 'IMPORT_ITEMS_REQUIRED');
-  if (!items.length) throw errors.badRequest('批量导入不能为空', 'IMPORT_ITEMS_REQUIRED');
-  if (items.length > 500) throw errors.badRequest('单批最多导入 500 条', 'IMPORT_LIMIT');
-  return items;
-}
-
-async function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, seenNames, teacherSeatOffset = 0) {
-  const item = raw && typeof raw === 'object' ? raw : {};
-  const role = String(item.role || '').trim().toUpperCase();
-  const login = String(item.login || '').trim();
-  const displayName = String(item.displayName || item.name || '').trim();
-  const password = String(item.password || '');
-  const phone = String(item.phone || '').trim();
-  const errorsForRow = [];
-  // 2026-09-13（P4 删积分）：批量导入不再处理 monthlyCreditAllowance / aiCreditLimit。
-  if (!ORG_MEMBER_ROLES.has(role)) errorsForRow.push('角色必须是 TEACHER 或 STUDENT');
-  if (!login) errorsForRow.push('登录名不能为空');
-  else if (!LOGIN_PATTERN.test(login)) errorsForRow.push('登录名只能用英文和数字（可带 . _ -），2-50 位');
-  if (!displayName) errorsForRow.push('姓名不能为空');
-  if (password.length < 6) errorsForRow.push('初始密码至少 6 位');
-  if (phone && !/^[0-9+()\-\s]{6,30}$/.test(phone)) errorsForRow.push('手机号格式无效');
-  if (seenLogins.has(login.toLowerCase())) errorsForRow.push('本批次登录名重复');
-  if (await arow('SELECT id FROM users WHERE LOWER(login)=LOWER(?)', [login])) errorsForRow.push('登录名已存在');
-  // 同机构同角色不允许重名（本批次内 + 与库里已存在的都算）—— 2026-09-16 用户口径
-  if (displayName && (seenNames.has(displayName.toLowerCase()) || await arow('SELECT id FROM users WHERE display_name=? AND deleted_at IS NULL AND org_id IS ? AND role=?', [displayName, currentOrgId, role]))) {
-    errorsForRow.push('本机构已有同名的' + (role === 'TEACHER' ? '老师' : '学员') + '，请换个名字或加个区分');
-  }
-  seenNames.add((displayName || '').toLowerCase());
-  if (phone && (seenPhones.has(phone) || await arow('SELECT id FROM users WHERE phone=? AND deleted_at IS NULL', [phone]))) errorsForRow.push('手机号已被其他账号使用');
-  let permissions = [];
-  if (role === 'TEACHER') {
-    try { permissions = validateMemberPermissions(item.permissions, role); } catch (error) { errorsForRow.push(error.message); }
-  }
-  // 批次 D：studentUsageScope 与 classIds 都不再参与导入 ——
-  // 前者已退役（不再决定门禁），后者对应班级（历史表，进课堂改在机构端「课堂」页做）。
-  // 传了就忽略，不当成校验错误（老客户端还在发也不要 400）。
-  if (item.billingPackageId && !await arow('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [item.billingPackageId, currentOrgId])) errorsForRow.push('套餐不属于当前机构');
-  seenLogins.add(login);
-  if (phone) seenPhones.add(phone);
-  return {
-    index,
-    valid: errorsForRow.length === 0,
-    errors: errorsForRow,
-    value: {
-      role, login, displayName, password, phone: phone || null,
-      permissions,
-      expiresAt: item.expiresAt || null,
-      // 批次 D：student_usage_scope 已退役（不再决定任何门禁）→ 不再默认 HOME_PRACTICE；
-      // classIds 也不写了：班级退场后「进哪个班」不再是导入的一部分（选课堂在机构端「课堂」页做）。
-      studentUsageScope: role === 'STUDENT' ? 'FOLLOW_CLASS' : null,
-      billingPackageId: role === 'STUDENT' ? (item.billingPackageId || null) : null,
-    },
-  };
-}
-
-async function previewImport(body, currentOrgId) {
-  const items = importItems(body);
-  const seenLogins = new Set(); const seenPhones = new Set();
-  // 本批次里已经用过的姓名（小写）：同机构同角色重名要在导入预览阶段就挡下来
-  const seenNames = new Set();
-  const normalized = await amap(items, async (item, index) => await validateImportItem(item, currentOrgId, index + 1, seenLogins, seenPhones, seenNames));
-  const teacherCount = normalized.filter((item) => item.valid && item.value.role === 'TEACHER').length;
-  const org = await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
-  if ((org.teacherSeats - org.teacherUsedSeats) < teacherCount) normalized.forEach((item) => { if (item.valid && item.value.role === 'TEACHER') { item.valid = false; item.errors.push('教师席位不足'); } });
-  const studentCount = normalized.filter((item) => item.valid && item.value.role === 'STUDENT').length;
-  if (org.studentSeats - org.studentUsedSeats < studentCount) normalized.forEach((item) => { if (item.valid && item.value.role === 'STUDENT') { item.valid = false; item.errors.push('机构学生容量不足'); } });
-  return { total: normalized.length, validCount: normalized.filter((item) => item.valid).length, invalidCount: normalized.filter((item) => !item.valid).length, items: normalized };
-}
-
 async function createMember(currentOrgId, value) {
   const org = await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
   if (value.role === 'STUDENT' && org.studentUsedSeats >= org.studentSeats) throw errors.conflict('机构学生容量不足', 'STUDENT_SEAT_LIMIT');
@@ -552,7 +481,7 @@ async function createMember(currentOrgId, value) {
   // 2026-09-13（P4 删积分）：建号不再写 monthly_credit_allowance / ai_credit_limit（积分已废弃）
   await aq('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,phone,status,expires_at,student_usage_scope,billing_package_id,period_start_at,period_reset_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [userId, currentOrgId, value.login, value.displayName, value.role, json(value.permissions), hashPassword(value.password), value.phone, 'ACTIVE', value.expiresAt, value.studentUsageScope, value.billingPackageId, now, new Date(Date.now() + 30 * 86400000).toISOString(), now, now]);
   // 批次 D（班级退场）：不再往 class_members 写归属 —— 那是历史表，且「进哪个班」已经没有意义。
-  // 学员进课堂改在机构端「课堂」页做（POST /api/org/sessions/:id/students）。
+  // 学生进课堂改在机构端「课堂」页做（POST /api/org/sessions/:id/students）。
   return await arow('SELECT * FROM users WHERE id=?', [userId]);
 }
 
@@ -1067,7 +996,6 @@ export {
   expireDueEnrollments,
   hasAnyPlatformPermission,
   hasPermission,
-  importItems,
   integer,
   lastSuperAdminGuard,
   normalizeCanvasTemplateSnapshot,
@@ -1090,7 +1018,6 @@ export {
   platformUserFilters,
   platformUserRow,
   platformWorkFilters,
-  previewImport,
   capturePublishedContent,
   replaceLessonCanvasConfig,
   replaceLessonTeachingMaterials,
@@ -1101,7 +1028,6 @@ export {
   sessionTeacherScope,
   sessionOwnedByTeacherExists,
   userLoginMeta,
-  validateImportItem,
   validateMemberPermissions,
   validateMemberPhone,
   validateSeriesForPublishing,

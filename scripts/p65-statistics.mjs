@@ -142,8 +142,8 @@ try {
     (studentsOfOrg.data?.students || []).reduce((sum, item) => sum + Number(item.costFen || 0), 0) === Number(seededOrg.costFen),
     JSON.stringify({ orgFen: seededOrg.costFen, studentsFen: (studentsOfOrg.data?.students || []).map((item) => item.costFen) }));
   const exportCsv = await api('/api/admin/billing/org-student-usage/export?days=30', { token: admin });
-  check('⑥ 导出台账可用（CSV 带机构与学员两列，含调用次数与消耗元）',
-    exportCsv.status === 200 && typeof exportCsv.data?.content === 'string' && exportCsv.data.content.includes('机构') && exportCsv.data.content.includes('学员') && Number(exportCsv.data?.count) >= 1,
+  check('⑥ 导出台账可用（CSV 带机构与学生两列，含调用次数与消耗元）',
+    exportCsv.status === 200 && typeof exportCsv.data?.content === 'string' && exportCsv.data.content.includes('机构') && exportCsv.data.content.includes('学生') && Number(exportCsv.data?.count) >= 1,
     JSON.stringify({ count: exportCsv.data?.count, head: String(exportCsv.data?.content || '').split(String.fromCharCode(10))[0] }).slice(0, 200));
   const foreignOrg = await api('/api/admin/billing/org-student-usage?days=30&orgId=org_does_not_exist', { token: admin });
   check('⑥ 不存在的机构被拒（不会静默返回空表）', foreignOrg.status === 400, `实际 ${foreignOrg.status}`);

@@ -200,7 +200,7 @@ CREATE TABLE IF NOT EXISTS billing_packages (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_packages_org_name ON billing_packages(org_id, name);
 
--- 学员套餐开通单仅记录机构线下履约，不承诺或模拟在线支付、自动续费。
+-- 学生套餐开通单仅记录机构线下履约，不承诺或模拟在线支付、自动续费。
 CREATE TABLE IF NOT EXISTS student_enrollments (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL,
@@ -2105,9 +2105,9 @@ CREATE INDEX IF NOT EXISTS idx_session_students_session ON session_students(sess
 try { db.exec('ALTER TABLE session_students ADD COLUMN vibecoding_sends INTEGER NOT NULL DEFAULT 0'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
-// 历史课堂的学员回填 —— 只认**证据**：确实在这节课消耗过算力的人判为「已完课」。
+// 历史课堂的学生回填 —— 只认**证据**：确实在这节课消耗过算力的人判为「已完课」。
 // 不按「今天的班级名单」回填：班级成员是可变的，用今天的名单去还原当时谁在这节课上，等于编数据。
-// 幂等：`NOT EXISTS (同课堂已有学员行)` 保证只回填「新模型之前的老课堂」，跑第二遍什么都不做。
+// 幂等：`NOT EXISTS (同课堂已有学生行)` 保证只回填「新模型之前的老课堂」，跑第二遍什么都不做。
 db.exec(`INSERT OR IGNORE INTO session_students(
     id, session_id, student_id, org_id, lesson_id, series_id, status, added_at, completed_at, completed_cost_fen, updated_at
   )

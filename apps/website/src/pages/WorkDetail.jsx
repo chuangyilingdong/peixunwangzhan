@@ -95,8 +95,8 @@ export function WorkDetailPage({ api }) {
     return <main className="inner">
       <ReplayShell
         embedded
-        eyebrow={`${work?.featured ? '精选作品' : '学员作品'} · ${label}`}
-        title={work?.title || '学员作品'}
+        eyebrow={`${work?.featured ? '精选作品' : '学生作品'} · ${label}`}
+        title={work?.title || '学生作品'}
         meta={work ? (
           <>
             {work.studentName ? <span>{work.studentName}</span> : null}
@@ -188,7 +188,7 @@ export function WorkDetailPage({ api }) {
 
     {work && !isVibeCoding ? <>
       <header className="work-detail__head">
-        <p className="work-detail__eyebrow">{work.featured ? '精选作品' : '学员作品'}</p>
+        <p className="work-detail__eyebrow">{work.featured ? '精选作品' : '学生作品'}</p>
         <h1>{work.title}</h1>
         {work.description ? <p className="work-detail__desc">{work.description}</p> : null}
         <p className="work-detail__meta">

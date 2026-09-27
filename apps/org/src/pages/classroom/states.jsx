@@ -1,7 +1,7 @@
 // 课堂的状态与类型口径（四个页面共用）。
 //
 // 四态：待上课 / 上课中 / 已结束 / 已解散 —— 与服务端 class_sessions.status 一一对应；
-// 学员六态比课堂多两个终态（已完课 / 未完课）外加「被移除」。
+// 学生六态比课堂多两个终态（已完课 / 未完课）外加「被移除」。
 // ⚠️「上课类型」是**平台**在课包课时里设定的（可同时开画布 + VibeCoding），老师只读不改，
 //    所以这里只负责把值翻成人话，不提供任何入口让老师改。
 export const SESSION_STATE = {
@@ -36,11 +36,11 @@ export const deliveryModeLabels = (lesson) => publishedModes(lesson).map((mode) 
 export function removedReasonLabel(reason) {
   const labels = {
     SESSION_LESSON_SWAP: '课程已更换，原名单已移除',
-    SESSION_DISSOLVE: '课堂已解散，学员已移除',
-    SESSION_DISSOLVED: '课堂已解散，学员已移除',
-    DISSOLVED: '课堂已解散，学员已移除',
-    SESSION_STUDENT_REMOVE: '老师已移除该学员',
+    SESSION_DISSOLVE: '课堂已解散，学生已移除',
+    SESSION_DISSOLVED: '课堂已解散，学生已移除',
+    DISSOLVED: '课堂已解散，学生已移除',
+    SESSION_STUDENT_REMOVE: '老师已移除该学生',
     MANUAL: '老师手动移除',
   };
-  return labels[reason] || (/^[A-Z][A-Z0-9_]*$/.test(reason) ? '学员已移除' : reason);
+  return labels[reason] || (/^[A-Z][A-Z0-9_]*$/.test(reason) ? '学生已移除' : reason);
 }

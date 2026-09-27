@@ -147,7 +147,7 @@ function TeacherDashboard({ api }) {
 
 function Dashboard({ api }) {
   const { loading, error, data, refresh } = useData(() => api.get('org/overview'), [api]);
-  // 2026-09-13（用户要求）：首页按「课包」看家底 —— 每个课包多少人次、多少学员、多少老师、多少课堂。
+  // 2026-09-13（用户要求）：首页按「课包」看家底 —— 每个课包多少人次、多少学生、多少老师、多少课堂。
   // ⚠️ 必须和其它 hook 一起放在提前 return 之前（放到 return 之后会变成条件 hook，切页时 React 会崩）。
   const seriesBox = useData(() => data?.scope?.role === 'ORG_ADMIN' ? api.get('org/series-overview?days=30') : Promise.resolve({ items: [], totals: {} }), [api, data?.scope?.role]);
   if (loading) return <Loading />;
@@ -199,7 +199,7 @@ function Dashboard({ api }) {
       </Panel>
       <Panel title="按课包（近 30 天课堂）">
         {seriesBox.loading ? <Loading /> : seriesBox.error ? <ErrorState error={seriesBox.error} onRetry={seriesBox.refresh} /> : seriesItems.length ? <div className="table-wrap"><table>
-          <thead><tr><th>课包</th><th>已分配 / 可授权</th><th>学员</th><th>课堂（待 / 中）</th><th>老师</th></tr></thead>
+          <thead><tr><th>课包</th><th>已分配 / 可授权</th><th>学生</th><th>课堂（待 / 中）</th><th>老师</th></tr></thead>
           <tbody>{seriesItems.map((item) => <tr key={item.seriesId}>
             <td><strong>{item.title}</strong></td>
             <td>{item.quotaUsed} / {item.quotaTotal}<div className="muted">剩 {item.remaining} 次</div></td>
@@ -223,7 +223,7 @@ function Members({ api, user }) {
   const isAdmin = user.role === 'ORG_ADMIN';
   const members = useData(() => api.get(user.role === 'TEACHER' ? 'org/users?role=STUDENT' : 'org/users'), [api, user.role]);
   // 批次 D：班级退场 —— 成员管理不再有「调班 / 授权班级」（那是班级口径）。
-  // 老师在哪个课堂上带谁，改在「课堂」页里加/移除学员。
+  // 老师在哪个课堂上带谁，改在「课堂」页里加/移除学生。
   const [roleFilter, setRoleFilter] = useState('');
   const [search, setSearch] = useState('');
   const [form, setForm] = useState({ role: 'STUDENT', login: '', displayName: '', password: '', phone: '' });
@@ -277,7 +277,7 @@ function Members({ api, user }) {
       actions={<div className="row-actions">{isAdmin ? <button className="primary-button" onClick={() => { setMessage(''); setCreateOpen(true); }}>创建账号</button> : null}<button className="secondary-button" onClick={members.refresh}>刷新</button></div>}
     />
     {/* B3（2026-09-13）：机构端有三套容易混的东西，这里把边界一次说清（界面上的「我该去哪」） */}
-    <p className="muted">这里管的是<strong>账号本身</strong>（角色、启停）。学员的<strong>席位与有效期</strong>在「学员开通」，<strong>课包分给谁</strong>在「课包库存与学生授权 → 学生授权中心」（那里点「添加课包」直接弹窗分配）。学员看不到课包时，先确认后两处。</p>
+    <p className="muted">这里管的是<strong>账号本身</strong>（角色、启停）。学生的<strong>席位与有效期</strong>在「学生开通」，<strong>课包分给谁</strong>在「课包库存与学生授权 → 学生授权中心」（那里点「添加课包」直接弹窗分配）。学生看不到课包时，先确认后两处。</p>
     {message && <Notice tone="success">{message}</Notice>}
     {/* 「创建账号」= 按钮 + 弹窗（用户 2026-09-21 口径）。字段顺序也按用户口径：
         角色 → **姓名**（按角色叫「学生姓名 / 老师姓名」）→ **登录账号** → **登录密码**（两者挨着）→ 手机号。 */}
@@ -602,25 +602,25 @@ function EnrollmentPage({ api, user }) {
     try { await api.post(`org/billing/enrollments/${item.id}/${action}`, payload); setMessage(action === 'payment-record' ? '已登记线下收款状态。' : '开通单状态已更新。'); await refresh(); }
     catch (err) { setMessage(errorText(err)); } finally { setBusy(false); }
   }
-  if (!isAdmin) return <><PageHeader eyebrow="学员经营" title="学员开通" description="学员套餐、席位与线下履约由机构管理员统一管理。" /><Notice tone="info">当前账号为教师，没有学员套餐开通与席位管理权限。</Notice></>;
+  if (!isAdmin) return <><PageHeader eyebrow="学生经营" title="学生开通" description="学生套餐、席位与线下履约由机构管理员统一管理。" /><Notice tone="info">当前账号为教师，没有学生套餐开通与席位管理权限。</Notice></>;
   if (loading) return <Loading />;
   if (error) return <ErrorState error={error} onRetry={refresh} />;
   const summary = enrollmentData.summary || {};
   return <>
-    <PageHeader eyebrow="学员经营" title="学员开通" description="登记线下履约、分配套餐席位并管理生效、停用、续费和到期提醒。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
+    <PageHeader eyebrow="学生经营" title="学生开通" description="登记线下履约、分配套餐席位并管理生效、停用、续费和到期提醒。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
     {message ? <Notice tone="success">{message}</Notice> : null}
     <div className="metrics"><MetricCard label="待开通" value={summary.pending || 0} hint="尚未生效，不占席位" /><MetricCard label="生效中" value={summary.active || 0} hint="正在占用套餐席位" tone="teal" /><MetricCard label="已停用" value={summary.suspended || 0} hint="可恢复或续费" tone="orange" /><MetricCard label="30 日内到期" value={summary.expiringSoon || 0} hint="请及时安排续费" tone="pink" /></div>
     <div className="split">
-      <Panel title="新建学员开通单"><form onSubmit={createEnrollment}>
-        <label>学员<select value={form.studentId} onChange={(e) => setForm({ ...form, studentId: e.target.value })} required><option value="">请选择学员</option>{students.map((item) => <option key={item.id} value={item.id}>{item.displayName}（{item.login}）</option>)}</select></label>
+      <Panel title="新建学生开通单"><form onSubmit={createEnrollment}>
+        <label>学生<select value={form.studentId} onChange={(e) => setForm({ ...form, studentId: e.target.value })} required><option value="">请选择学生</option>{students.map((item) => <option key={item.id} value={item.id}>{item.displayName}（{item.login}）</option>)}</select></label>
         <label>套餐<select value={form.packageId} onChange={(e) => setForm({ ...form, packageId: e.target.value })} required><option value="">请选择有可用席位的启用套餐</option>{activePackages.map((item) => <option key={item.id} value={item.id}>{item.name} · 可用 {item.availableSeats} / {item.studentSeats}</option>)}</select></label>
         <label>线下收款登记<select value={form.paymentStatus} onChange={(e) => setForm({ ...form, paymentStatus: e.target.value })}><option value="UNRECORDED">未登记</option><option value="RECORDED">已登记</option><option value="WAIVED">免收 / 赠送</option></select></label>
         <label>备注<textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} maxLength="2000" placeholder="可记录线下履约说明，不填写敏感支付凭证。" /></label>
         <button className="primary-button" disabled={busy || !activePackages.length}>{busy ? '处理中…' : '创建待开通单'}</button>
       </form></Panel>
-      <Panel title="席位规则"><div className="card-list">{packages.map((item) => <article className="item-card" key={item.id}><strong>{item.name}</strong><p>已占 {item.occupiedSeats} / {item.studentSeats}，可用 {item.availableSeats} 个席位。</p><small>套餐停用前必须先处理全部生效开通单，避免误中断在学学员。</small></article>) || <Empty title="暂无套餐" body="当前机构没有可用套餐，请联系平台管理员配置后再开通学员。" />}</div></Panel>
+      <Panel title="席位规则"><div className="card-list">{packages.map((item) => <article className="item-card" key={item.id}><strong>{item.name}</strong><p>已占 {item.occupiedSeats} / {item.studentSeats}，可用 {item.availableSeats} 个席位。</p><small>套餐停用前必须先处理全部生效开通单，避免误中断在学学生。</small></article>) || <Empty title="暂无套餐" body="当前机构没有可用套餐，请联系平台管理员配置后再开通学生。" />}</div></Panel>
     </div>
-    <Panel title="开通记录"><div className="table-wrap"><table><thead><tr><th>学员 / 套餐</th><th>状态</th><th>线下登记</th><th>有效期</th><th>留痕</th><th>操作</th></tr></thead><tbody>{enrollmentData.items.length ? enrollmentData.items.map((item) => <tr key={item.id}><td><strong>{item.studentName}</strong><div className="muted">{item.packageName}</div></td><td><Status value={item.status} /></td><td><Status value={item.paymentStatus} /></td><td>{formatDate(item.startsAt)}<div className="muted">至 {formatDate(item.expiresAt)}</div></td><td>{item.eventCount || 0} 条<div className="muted">{item.lastEventAt ? formatDate(item.lastEventAt) : '—'}</div></td><td><div className="row-actions">{item.status === 'PENDING' && <><button className="text-button" disabled={busy} onClick={() => act(item, 'payment-record', { paymentStatus: 'RECORDED' })}>登记收款</button><button className="text-button" disabled={busy} onClick={() => act(item, 'activate')}>完成开通</button><button className="text-button" disabled={busy} onClick={() => act(item, 'void')}>作废</button></>}{item.status === 'ACTIVE' && <><button className="text-button" disabled={busy} onClick={() => act(item, 'suspend')}>停用</button><button className="text-button" disabled={busy} onClick={() => act(item, 'renew')}>续费</button></>}{item.status === 'SUSPENDED' && <><button className="text-button" disabled={busy} onClick={() => act(item, 'resume')}>恢复</button><button className="text-button" disabled={busy} onClick={() => act(item, 'renew')}>续费</button><button className="text-button" disabled={busy} onClick={() => act(item, 'void')}>作废</button></>}{item.status === 'EXPIRED' && <button className="text-button" disabled={busy} onClick={() => act(item, 'renew')}>续费并开通</button>}</div></td></tr>) : <tr><td colSpan="6"><Empty title="暂无开通记录" body="创建开通单后会在这里沉淀状态、有效期与完整操作留痕。" /></td></tr>}</tbody></table></div></Panel>
+    <Panel title="开通记录"><div className="table-wrap"><table><thead><tr><th>学生 / 套餐</th><th>状态</th><th>线下登记</th><th>有效期</th><th>留痕</th><th>操作</th></tr></thead><tbody>{enrollmentData.items.length ? enrollmentData.items.map((item) => <tr key={item.id}><td><strong>{item.studentName}</strong><div className="muted">{item.packageName}</div></td><td><Status value={item.status} /></td><td><Status value={item.paymentStatus} /></td><td>{formatDate(item.startsAt)}<div className="muted">至 {formatDate(item.expiresAt)}</div></td><td>{item.eventCount || 0} 条<div className="muted">{item.lastEventAt ? formatDate(item.lastEventAt) : '—'}</div></td><td><div className="row-actions">{item.status === 'PENDING' && <><button className="text-button" disabled={busy} onClick={() => act(item, 'payment-record', { paymentStatus: 'RECORDED' })}>登记收款</button><button className="text-button" disabled={busy} onClick={() => act(item, 'activate')}>完成开通</button><button className="text-button" disabled={busy} onClick={() => act(item, 'void')}>作废</button></>}{item.status === 'ACTIVE' && <><button className="text-button" disabled={busy} onClick={() => act(item, 'suspend')}>停用</button><button className="text-button" disabled={busy} onClick={() => act(item, 'renew')}>续费</button></>}{item.status === 'SUSPENDED' && <><button className="text-button" disabled={busy} onClick={() => act(item, 'resume')}>恢复</button><button className="text-button" disabled={busy} onClick={() => act(item, 'renew')}>续费</button><button className="text-button" disabled={busy} onClick={() => act(item, 'void')}>作废</button></>}{item.status === 'EXPIRED' && <button className="text-button" disabled={busy} onClick={() => act(item, 'renew')}>续费并开通</button>}</div></td></tr>) : <tr><td colSpan="6"><Empty title="暂无开通记录" body="创建开通单后会在这里沉淀状态、有效期与完整操作留痕。" /></td></tr>}</tbody></table></div></Panel>
   </>;
 }
 
@@ -636,11 +636,11 @@ function UsagePage({ api }) {
   if (overview.loading) return <Loading />;
   if (overview.error) return <ErrorState error={overview.error} onRetry={overview.refresh} />;
   return <>
-    <PageHeader eyebrow="算力经营" title="算力用量" description="查看机构算力消耗、能力分布、高频学员和每一笔真实用量。" actions={<button className="secondary-button" onClick={() => { overview.refresh(); records.refresh(); }}>刷新</button>} />
+    <PageHeader eyebrow="算力经营" title="算力用量" description="查看机构算力消耗、能力分布、高频学生和每一笔真实用量。" actions={<button className="secondary-button" onClick={() => { overview.refresh(); records.refresh(); }}>刷新</button>} />
     <div className="metrics"><MetricCard label="算力消耗" value={formatYuan(overview.data.totalFen)} hint={`近 ${filters.days} 日`} tone="orange" /><MetricCard label="调用次数" value={overview.data.calls} tone="teal" /><MetricCard label="能力类型" value={overview.data.modalities.length} hint={'近 ' + filters.days + ' 日'} tone="pink" /></div>
     <div className="split">
       <Panel title="能力汇总"><table><thead><tr><th>能力</th><th>调用</th><th>消耗</th></tr></thead><tbody>{overview.data.modalities.map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td>{formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
-      <Panel title="Top 学员"><table><thead><tr><th>学员</th><th>调用</th><th>消耗</th></tr></thead><tbody>{overview.data.topUsers.map((item) => <tr key={item.id}><td>{item.studentName}</td><td>{item.calls}</td><td>{formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
+      <Panel title="Top 学生"><table><thead><tr><th>学生</th><th>调用</th><th>消耗</th></tr></thead><tbody>{overview.data.topUsers.map((item) => <tr key={item.id}><td>{item.studentName}</td><td>{item.calls}</td><td>{formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
     </div>
     <Panel title="用量明细">
       <div className="form-grid">
@@ -668,7 +668,7 @@ function OrgInbox({ api, user }) {
   return <>
     <PageHeader eyebrow="机构运营" title="站内信" description="接收平台公告与机构内部通知，已读状态由服务端记录。" actions={<div className="row-actions"><button className="secondary-button" onClick={() => api.put('org/inbox/read-all', {}).then(inbox.refresh).catch((err) => setMessage(errorText(err)))}>全部标记已读</button><button className="secondary-button" onClick={inbox.refresh}>刷新</button></div>} />
     <div className="metrics"><MetricCard label="收件总数" value={inbox.data?.total || 0} hint="当前账号可见" /><MetricCard label="未读消息" value={inbox.data?.unread || 0} hint="需要关注的通知" tone="orange" /></div>
-    {isAdmin ? <Panel title="发送机构通知"><form onSubmit={send}><div className="form-grid"><label>标题<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label><label>接收角色<div className="row-actions top-gap">{[['TEACHER', '教师'], ['STUDENT', '学员']].map(([role, label]) => <button type="button" className={form.roles.includes(role) ? 'secondary-button' : 'text-button'} key={role} onClick={() => toggleRole(role)}>{label}</button>)}</div></label></div><label>内容<textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} required /></label>{message ? <Notice tone="success">{message}</Notice> : null}<button className="primary-button" disabled={saving}>{saving ? '发送中…' : '发送通知'}</button></form></Panel> : <Notice tone="info">授课教师可以查看和标记消息；机构内部通知由机构管理员发送。</Notice>}
+    {isAdmin ? <Panel title="发送机构通知"><form onSubmit={send}><div className="form-grid"><label>标题<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label><label>接收角色<div className="row-actions top-gap">{[['TEACHER', '教师'], ['STUDENT', '学生']].map(([role, label]) => <button type="button" className={form.roles.includes(role) ? 'secondary-button' : 'text-button'} key={role} onClick={() => toggleRole(role)}>{label}</button>)}</div></label></div><label>内容<textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} required /></label>{message ? <Notice tone="success">{message}</Notice> : null}<button className="primary-button" disabled={saving}>{saving ? '发送中…' : '发送通知'}</button></form></Panel> : <Notice tone="info">授课教师可以查看和标记消息；机构内部通知由机构管理员发送。</Notice>}
     <Panel title="消息列表">{inbox.loading ? <Loading /> : inbox.error ? <ErrorState error={inbox.error} onRetry={inbox.refresh} /> : inbox.data.items.length ? <div className="card-list">{inbox.data.items.map((item) => <article className="item-card" key={item.id} style={{ borderColor: item.readAt ? undefined : '#c8baf7', background: item.readAt ? '#fff' : '#faf8ff' }}><div className="row-actions"><Status value={item.kind} /><strong>{item.pinned ? '📌 ' : ''}{item.title}</strong><span className="muted">{formatDate(item.publishAt || item.createdAt)}</span>{!item.readAt ? <button className="text-button" onClick={() => read(item)}>标记已读</button> : <span className="muted">已读</span>}</div><p>{item.body}</p>{item.senderName ? <small className="muted">发送人：{item.senderName}</small> : null}{item.targetUrl ? <div className="top-gap"><span className="muted">跳转：{item.targetUrl}</span></div> : null}</article>)}</div> : <Empty title="暂无站内信" body="平台公告或机构通知送达后会显示在这里。" />}</Panel>
   </>;
 }
@@ -701,7 +701,7 @@ export function App() {
   async function login(credentials) { const data = await api.login(credentials); if (!['ORG_ADMIN', 'TEACHER'].includes(data.user.role)) throw new ApiError('该账号没有机构教务权限', { code: 'ROLE_MISMATCH' }); setSession(writeSession(data)); navigate('/dashboard'); }
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   // 2026-09-13（批次 B-6）：班级退场后登录页文案也跟着改，别再说「管理班级」。
-  if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理课堂、成员、课包与学员创作成果。" clientType="org" onLogin={login} />} /></Routes>;
+  if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理课堂、成员、课包与学生创作成果。" clientType="org" onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" onLogin={login} />;
   // 老师那一套导航是**另写的一份**（只给自己相关的入口）—— 加/删入口时两份都要动，
   // 否则会出现「机构管理员看得到、老师看不到」这种半边生效（本轮加「账号安全」就踩在这个点上）。

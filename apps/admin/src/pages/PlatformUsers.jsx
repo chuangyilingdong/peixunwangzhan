@@ -34,7 +34,7 @@ export function PlatformUsers({ api }) {
       setMessage(`已导出 ${result.count} 名用户。`);
     } catch (error) { setMessage(errorText(error)); } finally { setExporting(false); }
   }
-  const roleLabels = { SUPER_ADMIN: '平台超管', ORG_ADMIN: '机构管理员', TEACHER: '教师', STUDENT: '学员' };
+  const roleLabels = { SUPER_ADMIN: '平台超管', ORG_ADMIN: '机构管理员', TEACHER: '教师', STUDENT: '学生' };
   async function run(target, action, body, successMessage, confirmText) {
     const execute = async () => {
       setBusy(true); setMessage('');

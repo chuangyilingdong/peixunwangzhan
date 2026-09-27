@@ -1048,7 +1048,7 @@ export async function assertLoginAvailable(login, { excludeUserId = null } = {})
 /**
  * 姓名唯一：**同一机构 + 同一角色**内不允许重名（2026-09-16 用户口径）。
  * 为什么按这个范围：不同机构的学生当然可以同名；一个机构里「张老师」和「张三同学」也可以同名。
- * 会出问题的场景是「同一批名单里两个同名的人」—— 老师在学员列表里根本分不出来。
+ * 会出问题的场景是「同一批名单里两个同名的人」—— 老师在学生列表里根本分不出来。
  * orgId 为空（平台管理员）时按全局同名同角色算。
  */
 export async function assertDisplayNameAvailable(displayName, { orgId = null, role = null, excludeUserId = null } = {}) {
@@ -1063,7 +1063,7 @@ export async function assertDisplayNameAvailable(displayName, { orgId = null, ro
   );
   if (clash) {
     const scope = orgId ? '本机构' : '平台';
-    throw errors.conflict(`${scope}已经有同名的${role === 'STUDENT' ? '学员' : role === 'TEACHER' ? '老师' : '账号'}「${name}」（登录名 ${clash.login}），请换个名字或加个区分`, 'DISPLAY_NAME_EXISTS');
+    throw errors.conflict(`${scope}已经有同名的${role === 'STUDENT' ? '学生' : role === 'TEACHER' ? '老师' : '账号'}「${name}」（登录名 ${clash.login}），请换个名字或加个区分`, 'DISPLAY_NAME_EXISTS');
   }
 }
 

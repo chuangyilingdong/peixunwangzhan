@@ -4,11 +4,13 @@
  * 口径原话：「给机构或者机构给老师给学生创建账号时，要做唯一性校验，因为不同的用户可能是同登录名
  * 或者同名字。而且登录名现在可以填中文，应该是只能英文、数字的。」
  *
- * 这条守卫钉住四件事：
+ * 这条守卫钉住三件事：
  *   ① 登录名只允许英文/数字（可带 . _ -）：中文、空格、@ 一律拒；
  *   ② 登录名**全局唯一且忽略大小写**（Zhang 与 zhang 不能并存）；
- *   ③ 姓名**同机构同角色**不能重名；不同机构、或同机构的老师与学员同名是允许的；
- *   ④ 批量导入的预览里就要把这两类问题逐行标出来（而不是提交时才炸）。
+ *   ③ 姓名**同机构同角色**不能重名；不同机构、或同机构的老师与学员同名是允许的。
+ *
+ * ⚠️ 2026-09-27 用户口径「批量导入要删」：原来这里还有第 ④ 条（导入预览里逐行标错），
+ *    功能与接口一起下线后那一节删掉了 —— 唯一性由上面三条按 POST /users 与改名两条路继续钉。
  *
  * 用临时 SQLite，不碰默认库与生产库。
  */
@@ -97,23 +99,9 @@ await rejects(() => org(orgA.id, `/users/${target.id}`, 'PUT', { displayName: '�
 const renamed = await org(orgA.id, `/users/${target.id}`, 'PUT', { displayName: '换了个名字' });
 check('改成不冲突的名字可以', renamed?.displayName === '换了个名字');
 
-console.log('\n【五】批量导入：预览阶段逐行标出格式错与重名');
-const preview = await org(orgA.id, '/users/import/preview', 'POST', {
-  items: [
-    { login: 'imp01', displayName: '导入甲', role: 'STUDENT', password: 'secret123' },
-    { login: '导入中文', displayName: '导入乙', role: 'STUDENT', password: 'secret123' },
-    { login: 'imp01', displayName: '导入丙', role: 'STUDENT', password: 'secret123' },
-    { login: 'imp02', displayName: '导入甲', role: 'STUDENT', password: 'secret123' },
-    { login: 'stu01', displayName: '导入戊', role: 'STUDENT', password: 'secret123' },
-  ],
-});
-const errorsOf = (index) => (preview.items.find((item) => item.index === index)?.errors || []);
-check('第 1 行合法', errorsOf(1).length === 0, JSON.stringify(errorsOf(1)));
-check('第 2 行：中文登录名被标出', errorsOf(2).some((text) => text.includes('英文和数字')), JSON.stringify(errorsOf(2)));
-check('第 3 行：本批次登录名重复被标出', errorsOf(3).some((text) => text.includes('本批次登录名重复')), JSON.stringify(errorsOf(3)));
-check('第 4 行：本批次姓名重复被标出', errorsOf(4).some((text) => text.includes('同名')), JSON.stringify(errorsOf(4)));
-check('第 5 行：与库里已有登录名冲突被标出', errorsOf(5).some((text) => text.includes('登录名已存在')), JSON.stringify(errorsOf(5)));
-
+// 2026-09-27 用户口径「批量导入要删」：这一节原来验的是导入预览逐行标错
+// （本批次重名 / 中文登录名 / 与库内冲突）。功能与接口一起下线后没有对应入口了 ——
+// 账号唯一性仍由上面【一】~【四】按 POST /users 与改名两条路钉着。
 console.log('\n【六】学员名单分页：最新添加的在最前，total 是真的');
 {
   // 造 25 个学员，看分页是不是真的（原来是 LIMIT 500 + 假 total，分页组件算不出页数）
