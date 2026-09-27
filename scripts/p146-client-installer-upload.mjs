@@ -79,6 +79,13 @@ const bodyIndex = index.indexOf("if (bodyMethods.has(ctx.method))");
 check('① ⭐ 挂载点在"读 body"之前（否则就白流式了）', hookIndex > 0 && bodyIndex > 0 && hookIndex < bodyIndex,
   `hook=${hookIndex} body=${bodyIndex}`);
 check('① 权限用的是 ADMIN_AUDIT（能改更新策略的人才能发包）', /requirePlatformPermission\(ctx, 'ADMIN_AUDIT'\)/.test(route));
+// 2026-09-28：客户端要发 macOS 的 DMG（500MB+）。上传上限必须覆盖得住 ——
+// 生产上 nginx 那条 `client_max_body_size 800m` 是另一道闸，两边要一起看（见 §五十一）。
+{
+  const ceiling = /:\s*(\d+)\s*\*\s*1024\s*\*\s*1024/.exec(routeCode);
+  const mb = ceiling ? Number(ceiling[1]) : 0;
+  check(`① ⭐ 安装包默认上限覆盖得住 500MB+ 的 DMG（当前 ${mb}MB；调小到 500 以下这条会红）`, mb >= 500, String(mb));
+}
 
 /* ② 文件名契约（纯函数，先离线钉） */
 console.log('② 文件名契约');
@@ -151,6 +158,33 @@ try {
     JSON.stringify({ enabled: written.enabled, mandatory: written.mandatory, minVersion: written.minVersion, note: written.note, channel: written.channel }));
   check('④ 清单里别的平台条目原样留着（这次发 win，原来的 mac 条目一个字节都不许动）',
     JSON.stringify(written.files['mac-arm64']) === JSON.stringify(macEntry), JSON.stringify(written.files['mac-arm64']));
+
+  /* ⑥ 2026-09-28：Mac 包（.dmg）走同一条路 —— 这次发布就是它。 */
+  const macPayload = Buffer.alloc(1024 * 1024);
+  for (let i = 0; i < macPayload.length; i += 1) macPayload[i] = (i * 17) % 249;
+  const macDigest = createHash('sha256').update(macPayload).digest('hex');
+  const macName = 'lingdong-client-9.9.9-mac-arm64.dmg';
+  const macUpload = await post(macName, macPayload);
+  const macBody = await macUpload.json().catch(() => ({}));
+  check('⑥ 上传 macOS 的 .dmg → 200（同一条路，文件名契约认它）',
+    macUpload.status === 200, `HTTP ${macUpload.status} ${JSON.stringify(macBody).slice(0, 160)}`);
+  const afterMac = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+  check('⑥ mac-arm64 条目四项齐全（版本 / 文件名 / 字节数 / sha256）',
+    afterMac.files['mac-arm64'].name === macName && afterMac.files['mac-arm64'].size === macPayload.length
+    && afterMac.files['mac-arm64'].sha256 === macDigest, JSON.stringify(afterMac.files['mac-arm64']).slice(0, 200));
+  check('⑥ 这次反过来：win 的条目一个字节都不许动',
+    afterMac.files['win-x64'].name === name && afterMac.files['win-x64'].sha256 === digest,
+    JSON.stringify(afterMac.files['win-x64']).slice(0, 200));
+  {
+    const { readClientUpdateManifest } = await import('../apps/server/src/services/clientUpdateManifest.js');
+    const view = readClientUpdateManifest(baseEnv);
+    // ⚠️ 客户端团队 2026-09-28 的硬约束：双端必须同版本。后台页面就靠 `stale` 判"两边对齐了没有"。
+    check('⑥ ⭐ 双端同版本发完之后 stale 为空（没对齐的话 Windows 会反复提示更新）',
+      Array.isArray(view.stale) && view.stale.length === 0, JSON.stringify(view.stale));
+    check('⑥ 后台读得到两个平台（同一份清单里 Win/Mac 的名字与 SHA256 都要有）',
+      view.files?.['win-x64']?.sha256 === digest && view.files?.['mac-arm64']?.sha256 === macDigest,
+      JSON.stringify(view.files || {}).slice(0, 200));
+  }
 
   const badName = await post('lingdong-client-win-x64.exe', Buffer.from('x'));
   check('② 不合规的文件名 → 400（不是 500，也不是默默收下）', badName.status === 400, `HTTP ${badName.status}`);

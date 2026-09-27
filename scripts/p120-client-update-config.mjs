@@ -33,6 +33,44 @@ try {
     assert.equal(value.file.name, 'lingdong-client-0.1.7-win-x64.exe')
   })
 
+  check('⭐ 两个平台都读得出来（后台要同时展示 Win/Mac 的文件名、大小、SHA256）', () => {
+    writeFileSync(manifest, JSON.stringify({
+      version: '0.1.7-rc.2.9',
+      channel: 'stable',
+      files: {
+        'win-x64': { name: 'lingdong-client-0.1.7-rc.2.9-win-x64.exe', size: 395987312, sha256: 'c'.repeat(64) },
+        'mac-arm64': { name: 'lingdong-client-0.1.7-rc.2.9-mac-arm64.dmg', size: 200123456, sha256: 'd'.repeat(64) },
+      },
+    }, null, 2))
+    const value = readClientUpdateManifest(env)
+    assert.equal(value.files['win-x64'].name, 'lingdong-client-0.1.7-rc.2.9-win-x64.exe')
+    assert.equal(value.files['mac-arm64'].name, 'lingdong-client-0.1.7-rc.2.9-mac-arm64.dmg')
+    assert.equal(value.files['mac-arm64'].size, 200123456)
+    assert.equal(value.files['mac-arm64'].version, '0.1.7-rc.2.9', 'macOS 那条要从文件名里解析出版本')
+    assert.equal(value.file.name, value.files['win-x64'].name, '`file` 必须还是 Windows 那条（既有调用方读它）')
+    assert.deepEqual(value.stale, [], '双端同版本时不该报 stale')
+  })
+
+  check('⭐ 只抬一个平台的版本 → 必须报 stale（Windows 会反复提示更新却装不上）', () => {
+    writeFileSync(manifest, JSON.stringify({
+      version: '0.1.7-rc.2.9',
+      channel: 'stable',
+      files: {
+        'win-x64': { name: 'lingdong-client-0.1.7-rc.2.8-win-x64.exe', size: 1, sha256: 'e'.repeat(64) },
+        'mac-arm64': { name: 'lingdong-client-0.1.7-rc.2.9-mac-arm64.dmg', size: 1, sha256: 'f'.repeat(64) },
+      },
+    }, null, 2))
+    const value = readClientUpdateManifest(env)
+    assert.deepEqual(value.stale, ['win-x64'], '清单说新版、Windows 文件还是旧版，却没被标出来')
+    // 复原成"只有 win"的老形状：mac 缺席时不该误报（官网那档显示"正在准备中"）
+    writeFileSync(manifest, JSON.stringify({
+      version: '0.1.7', channel: 'stable',
+      files: { 'win-x64': { name: 'lingdong-client-0.1.7-win-x64.exe', size: 123, sha256: 'a'.repeat(64) }, 'mac-arm64': null },
+    }, null, 2))
+    assert.deepEqual(readClientUpdateManifest(env).stale, [], 'mac 还没发的时候不该报 stale')
+    assert.equal(readClientUpdateManifest(env).files['mac-arm64'], null)
+  })
+
   check('后台只改策略并保留安装包身份', () => {
     const value = updateClientUpdateManifest({ enabled: true, mandatory: true, minVersion: '0.1.6-alpha.2', note: '修复课堂工作区', channel: 'stable' }, env)
     assert.equal(value.mandatory, true)

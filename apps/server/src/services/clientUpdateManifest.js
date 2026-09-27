@@ -79,26 +79,61 @@ function booleanValue(value, fallback) {
   return value
 }
 
+/**
+ * 平台键：与客户端 `LingdongUpdater.updateTarget()` 认的两个目标一致。
+ * ⚠️ 2026-09-28 客户端团队口径：**双端必须同版本发布**（客户端读的是清单顶层的 `version`，
+ *    只抬 Mac 的版本会让老 Windows 客户端以为有新版本、下下来还是旧的，来回更新不上去）。
+ *    将来若改成每平台独立版本，客户端读的是 `files[target].version ?? manifest.version`。
+ */
+export const CLIENT_PLATFORMS = ['win-x64', 'mac-arm64']
+
+/** 文件名里那个版本（清单顶层 `version` 是"这次发布的版本"；两者不一致 = 这个平台的文件是旧的）。 */
+function installerVersion(name) {
+  try { return parseClientInstallerName(name).version } catch { return '' }
+}
+
+/** 把清单里一个平台条目读成视图；没有 / 没名字 → null。 */
+function fileView(entry) {
+  const item = object(entry)
+  const name = typeof item.name === 'string' ? item.name : ''
+  if (!name) return null
+  return {
+    name,
+    size: Number.isSafeInteger(item.size) ? item.size : 0,
+    sha256: typeof item.sha256 === 'string' ? item.sha256 : '',
+    url: typeof item.url === 'string' ? item.url : '',
+    version: installerVersion(name),
+  }
+}
+
 export function readClientUpdateManifest(env = process.env) {
   const { path, exists, value } = readManifest(env)
   const files = object(value.files)
-  const windows = object(files['win-x64'])
+  const version = typeof value.version === 'string' ? value.version : ''
+  const platforms = Object.fromEntries(CLIENT_PLATFORMS.map((key) => [key, fileView(files[key])]))
   return {
     exists,
     enabled: value.enabled !== false,
-    version: typeof value.version === 'string' ? value.version : '',
+    version,
     channel: typeof value.channel === 'string' ? value.channel : 'stable',
     mandatory: value.mandatory === true,
     minVersion: typeof value.minVersion === 'string' ? value.minVersion : '',
     note: typeof value.note === 'string' ? value.note : '',
     updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : '',
     publishedAt: typeof value.publishedAt === 'string' ? value.publishedAt : '',
-    file: Object.keys(windows).length === 0 ? null : {
-      name: typeof windows.name === 'string' ? windows.name : '',
-      size: Number.isSafeInteger(windows.size) ? windows.size : 0,
-      sha256: typeof windows.sha256 === 'string' ? windows.sha256 : '',
-      url: typeof windows.url === 'string' ? windows.url : '',
-    },
+    // ⚠️ 保留 `file`（= Windows 那一条）：后台与既有调用方读的是它，Windows 自动更新的身份也在里面。
+    file: platforms['win-x64'],
+    // 两个平台都给（后台「客户端更新」页要同时展示 Win / Mac 的文件名、大小、SHA256）。
+    files: platforms,
+    /**
+     * 「声明了新版、但这个平台的文件还是旧的」的平台列表（拿文件名里的版本与顶层 version 比）。
+     * ⚠️ 非空就是危险状态：Windows 客户端会看到新版本 → 下到的还是旧包 → 装完还是旧的 → 反复提示更新。
+     * 所以发布时**两个平台要一起发**（客户端仓 `deploy/desktop/publish-client.sh <win> <mac>` 一次写两条）。
+     */
+    stale: CLIENT_PLATFORMS.filter((key) => {
+      const view = platforms[key]
+      return Boolean(view && view.version && version && view.version !== version)
+    }),
   }
 }
 

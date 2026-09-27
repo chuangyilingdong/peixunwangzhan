@@ -123,6 +123,11 @@ export function ClientUpdate({ api }) {
   }
 
   const file = data?.file;
+  const platforms = data?.files || {};
+  const stale = Array.isArray(data?.stale) ? data.stale : [];
+  const PLATFORM_ORDER = ['win-x64', 'mac-arm64'];
+  const PLATFORM_LABEL = { 'win-x64': 'Windows（x64）', 'mac-arm64': 'macOS（Apple 芯片）' };
+  const PLATFORM_EXAMPLE = { 'win-x64': 'lingdong-client-<版本>-win-x64.exe', 'mac-arm64': 'lingdong-client-<版本>-mac-arm64.dmg' };
   return <>
     <PageHeader eyebrow="系统管理" title="客户端更新" description="上传新安装包并发布，或配置客户端启动时的更新提示。发布后客户端下次启动检查时即可收到更新。" />
     {error ? <Notice tone="danger">{error}</Notice> : null}
@@ -132,6 +137,9 @@ export function ClientUpdate({ api }) {
         <p className="muted">直接选安装包上传即可发布（几百 MB 的包会上传较久，进度在标题栏）。文件名必须是
           <code>lingdong-client-&lt;版本&gt;-win-x64.exe</code>，Mac 版是
           <code>lingdong-client-&lt;版本&gt;-mac-arm64.dmg</code> —— 客户端按这个名字与清单里的 SHA256 校验。</p>
+        <p className="muted">⚠️ Windows 与 macOS 必须<strong>同一次发布、同一个版本号</strong>：客户端判断「要不要更新」读的是清单顶层的
+          <code>version</code>，只抬高一个平台的版本号，另一个平台的客户端就会反复提示更新却装不上。两个平台一起发时，
+          用客户端仓的 <code>deploy/desktop/publish-client.sh &lt;win&gt; &lt;mac&gt;</code>（两条目一次原子写入）最稳。</p>
         <div className="row-actions top-gap">
           <input ref={fileInputRef} type="file" accept=".exe,.dmg" disabled={uploading}
             onChange={(event) => { setPicked(event.target.files?.[0] || null); setError(''); setNotice(''); }} />
@@ -143,14 +151,28 @@ export function ClientUpdate({ api }) {
         {uploading ? <progress className="top-gap" value={percent} max={100} style={{ width: '100%' }} /> : null}
       </Panel>
       <Panel title="当前发布包" actions={<button type="button" className="secondary-button" onClick={load}>刷新</button>}>
-        {!data.exists || !file ? <Notice tone="warning">当前服务器还没有客户端更新清单。用上面的「上传新安装包」发布第一版即可（也可以在客户端仓跑 <code>deploy/desktop/publish-client.sh</code>）。</Notice> : <div className="form-grid">
-          <label>版本<input value={data.version || '未记录'} readOnly /></label>
-          <label>更新通道<input value={data.channel || 'stable'} readOnly /></label>
-          <label>安装包<input value={file.name || '未记录'} readOnly /></label>
-          <label>大小<input value={megabytes(file.size)} readOnly /></label>
-          <label>发布时间<input value={timestamp(data.publishedAt || data.updatedAt)} readOnly /></label>
-          <label>SHA256<input value={file.sha256 || '未记录'} readOnly /></label>
-        </div>}
+        {!data.exists || !file ? <Notice tone="warning">当前服务器还没有客户端更新清单。用上面的「上传新安装包」发布第一版即可（也可以在客户端仓跑 <code>deploy/desktop/publish-client.sh</code>）。</Notice> : <>
+          <div className="form-grid">
+            <label>版本<input value={data.version || '未记录'} readOnly /></label>
+            <label>更新通道<input value={data.channel || 'stable'} readOnly /></label>
+            <label>发布时间<input value={timestamp(data.publishedAt || data.updatedAt)} readOnly /></label>
+          </div>
+          {/* ⚠️ 客户端（Windows）判「要不要更新」看的是顶层 version，实际装的是 files['win-x64']。
+              两者版本不一致 = 反复提示更新却装不上 —— 这就是「必须双端同版本发布」那条约束的形状。 */}
+          {stale.length ? <Notice tone="warning">
+            版本对不上：清单声明的是 {data.version || '未记录'}，但 {stale.map((key) => PLATFORM_LABEL[key] || key).join('、')} 的文件名里还是旧版本。
+            装那个平台的客户端会反复提示更新却装不上。请把两个平台<strong>同一次</strong>发布（客户端仓 <code>deploy/desktop/publish-client.sh &lt;win&gt; &lt;mac&gt;</code>）。
+          </Notice> : null}
+          {PLATFORM_ORDER.map((key) => <div key={key} className="top-gap">
+            <strong>{PLATFORM_LABEL[key]}</strong>
+            {platforms[key] ? <div className="form-grid top-gap">
+              <label>文件名<input value={platforms[key].name} readOnly /></label>
+              <label>大小<input value={megabytes(platforms[key].size)} readOnly /></label>
+              <label>版本<input value={platforms[key].version || '未记录'} readOnly /></label>
+              <label>SHA256<input value={platforms[key].sha256 || '未记录'} readOnly /></label>
+            </div> : <p className="muted top-gap">未上传（文件名要形如 <code>{PLATFORM_EXAMPLE[key]}</code>）</p>}
+          </div>)}
+        </>}
       </Panel>
       <Panel title="更新策略">
         <form onSubmit={save}>
