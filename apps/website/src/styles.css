@@ -1147,6 +1147,20 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 .sw-avatar-option:disabled{opacity:.5;cursor:default}
 /* 头像里的照片（2026-09-27 用户口径「学生可以自行修改照片」）：铺满那个圆形、裁成正方形。
    `.sw-avatar` 是 64px 圆 + place-items:center，img 给满宽高 + object-fit:cover 就不会变形。 */
-.sw-avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}
+.sw-avatar{position:relative;overflow:hidden}
+/* ⚠️ 头像图**必须绝对定位**铺满，不能只写 width/height:100%。
+   为什么（2026-09-27 用户报「上传了头像变成了竖椭圆」）：头像是 place-items:center 的网格容器，
+   **居中时网格项不会被拉伸** → 图片的 height:100% 解析不出来 → 退回图片自身高度（64 宽 × 原图比例高），
+   再叠上 border-radius:50% 就成了竖椭圆。测出来才发现：夹具用的是一张 1:1 的图，正方形看不出问题。
+   inset:0 给出确定的长宽，两个 100% 才有意义。
+   ⚠️ 我没能在 Chrome 下复现（量出来一直是 64×64），所以这条是"**让它在任何引擎下都不可能是椭圆**"的加固：
+   inset:0 把四边钉死，百分比高度解析失败也照样是方的；再加 overflow:hidden 兜住一切外溢。 */
+.sw-avatar img{position:absolute;inset:0;width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}
 .sw-home-panel__upload{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 12px}
 .sw-home-panel__upload label.button{cursor:pointer}
+
+/* 主页的作品卡现在是 `<button>`（点开弹窗看，不再跳详情页）：把按钮自带的边框/底色/padding 抹掉，
+   让它长得跟原来那个 <Link> 一模一样（布局仍由 .sw-card__link 管）。 */
+.sw-card__link--button{width:100%;padding:0;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}
+/* 弹窗里的网页预览：给它一块深色舞台，和广场那个查看层一致 */
+.creator-modal__web{background:#141418;border-radius:12px;padding:10px}

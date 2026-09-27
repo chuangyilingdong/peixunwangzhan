@@ -276,10 +276,10 @@ export async function handlePublicCommunication(ctx) {
       WHERE work.student_id=? AND work.org_id=?
       ORDER BY work.featured_at DESC NULLS LAST, work.submitted_at DESC
       LIMIT ?
-    `, [creator.id, creator.org_id, limit])), async (row) => await publicWorkRow(row, {
+    `, [creator.id, creator.org_id, limit])), async (row) => ({ ...await publicWorkRow(row, {
       mediaBase: canvasBase(row.id),
       openUrl: `/u/${token}/w/CANVAS/${row.id}`,
-    }));
+    }), source: 'CANVAS', isPublic: Boolean(row.share_token) }));
     const vibeItems = await amap((await arows(`
       SELECT submission.id, submission.title, submission.description, submission.entry_file, submission.files, submission.artifacts,
              submission.featured_at, submission.submitted_at, submission.share_token,
@@ -291,10 +291,10 @@ export async function handlePublicCommunication(ctx) {
       WHERE submission.student_id=? AND submission.org_id=?
       ORDER BY submission.featured_at DESC NULLS LAST, submission.submitted_at DESC
       LIMIT ?
-    `, [creator.id, creator.org_id, limit])), async (item) => await publicVibeCodingWorkRow(item, {
+    `, [creator.id, creator.org_id, limit])), async (item) => ({ ...await publicVibeCodingWorkRow(item, {
       mediaBase: vibeBase(item.id),
       openUrl: `/u/${token}/w/VIBECODING/${item.id}`,
-    }));
+    }), source: 'VIBECODING', isPublic: Boolean(item.share_token) }));
     // 两条链路合并后**精选优先、再按提交时间倒序**（与广场列表的排序口径一致）
     const items = [...canvasItems, ...vibeItems].sort((a, b) => {
       if (Boolean(a.featured) !== Boolean(b.featured)) return a.featured ? -1 : 1;

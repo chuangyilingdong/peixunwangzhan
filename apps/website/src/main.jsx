@@ -5,12 +5,11 @@ import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
 import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, CONTACT_DEFAULT, Icon, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
-import { MyWorksPage } from './pages/MyWorks.jsx';
 import { StudentAccountPage } from './pages/AccountSecurity.jsx';
-import { MyWorkDetailPage } from './pages/MyWorkDetail.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
 // 学生个人主页（对外公开，路由 /u/:token）—— 用户口径 2026-09-27：「学生创建了账号应该就有个主页的专属链接」
 import { CreatorHomePage } from './pages/CreatorHome.jsx';
+import { MyHomeRedirect } from './components/MyHomeRedirect.jsx';
 
 /**
  * 老地址 `/my-works/:source/:id` → `/my-home/:source/:id`（2026-09-27 改名）。
@@ -1774,7 +1773,7 @@ export function App(){
             只显示 TA **已公开**的作品；名字是服务端脱敏后的（匿名 →「小创作者」）。
             ⚠️ 不放进 sitemap（见 apps/server/src/index.js 的 PUBLIC_ROUTES）—— 这是学生的个人页面，
                分享靠直接给链接，不该被搜索引擎收录索引。 */}
-        <Route path='/u/:token' element={<CreatorHomePage api={publicApi}/>}/>
+        <Route path='/u/:token' element={<CreatorHomePage api={publicApi} studentApi={api}/>}/>
         {/* 从主页里点开一件作品（含**未公开**的那些 —— 它们没有分享码，按分享码取不到）。
             WorkDetailPage 自己按路由参数分辨走哪条取数口，见那个文件头的说明。 */}
         <Route path='/u/:token/w/:source/:id' element={<WorkDetailPage api={publicApi}/>}/>
@@ -1798,8 +1797,11 @@ export function App(){
         {/* ⚠️ 2026-09-27 改名：「我的作品」→「我的主页」（用户口径「现在不需要『我的作品』了，
             就是叫『我的主页』」），路径一起改成 /my-home。下面两条是老地址的重定向 ——
             别删，删了老书签/老链接就 404（与 /my-courses → /learn 同一套做法）。 */}
-        <Route path='/my-home' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login?as=student' replace />}/>
-        <Route path='/my-home/:source/:id' element={session ? <MyWorkDetailPage api={api} /> : <Navigate to='/login?as=student' replace />}/>
+        {/* ⚠️ 2026-09-27 用户口径：「**现在不需要这个 my-home 了。直接跳转到对外主页就行了**」——
+            所以这两条都改成**跳回学生自己的对外主页** （学生口拿到 homeToken 再跳）。
+            原来那两页（我的主页·控制台 / 我的主页·单件详情）已经删掉，别再加回来。 */}
+        <Route path='/my-home' element={session ? <MyHomeRedirect api={api} /> : <Navigate to='/login?as=student' replace />}/>
+        <Route path='/my-home/:source/:id' element={session ? <MyHomeRedirect api={api} /> : <Navigate to='/login?as=student' replace />}/>
         <Route path='/my-works' element={<Navigate to='/my-home' replace/>}/>
         <Route path='/my-works/:source/:id' element={<LegacyMyWorksRedirect/>}/>
         {/* ⚠️ 这两条是**老地址的重定向**：`/my-courses`（指标卡 + 课时列表那一版）已按用户口径删掉，

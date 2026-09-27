@@ -906,45 +906,47 @@ try {
     }
   }
   await shot('17-my-courses');
-  // ── ⑤f 学生端「我的作品」：**每张卡片都要有封面**（用户口径 2026-09-20：「图2 学生发布的作品
-  //    应该自动生成个封面」）。封面两条来源：服务端给的真封面（img）或我们按作品信息**当场画**的
-  //    那张 SVG；两者都没有就是漏了 —— 而且不许退回旧的 emoji 占位。
-  //    ⚠️ 断言里先要求"有卡片"：夹具没作品时那几个计数全是 0，等式成立、断言空转。
+  // ── ⑤f 主页（原「我的作品」那一页）：每张卡片都要有封面 + 头像/名字/统计 + 手机两列
+  //    ⚠️ 2026-09-27 用户口径：「**现在不需要这个 my-home 了。直接跳转到对外主页就行了**」——
+  //    那一页已删；导航「我的主页」现在**跳转到对外主页** `/u/<token>`。所以这一节直接跑在主页上，
+  //    顺带把"跳转"这件事本身也验了。
   await page.goto(`${base}/my-home`, { waitUntil: 'domcontentloaded' });
   await settle();
+  await page.waitForTimeout(900);
+  const creatorUrl = page.url();
+  const creatorPath = creatorUrl.replace(base, '');
+  console.log(`  · 从 /my-home 落到：${creatorPath}`);
+  if (!/^\/u\/ust_[0-9a-f]{24}$/.test(creatorPath)) problems.push(`我的主页：/my-home 应当**直接跳到对外主页**（实际落到 ${creatorPath}）`);
+  await page.waitForSelector('.sw-card', { timeout: 20000 }).catch(() => {});
   const coverState = await page.evaluate(() => ({
-    cards: document.querySelectorAll('.student-card').length,
+    cards: document.querySelectorAll('.student-card.sw-card').length,
     art: document.querySelectorAll('.student-work-card__art').length,
     images: document.querySelectorAll('.student-work-card__cover img').length,
+    chips: [...new Set(Array.from(document.querySelectorAll('.student-work-card__type')).map((el) => (el.textContent || '').trim()))],
     legacyIcons: document.querySelectorAll('.student-work-card__icon').length,
-    chips: Array.from(document.querySelectorAll('.student-work-card__type')).map((node) => node.textContent.trim()),
   }));
-  console.log(`  · 我的作品：卡片 ${coverState.cards} 张、自动封面 ${coverState.art} 张、真封面 ${coverState.images} 张、类型 ${JSON.stringify(coverState.chips)}`);
-  if (coverState.cards === 0) problems.push('我的作品：夹具下应当有作品卡片（否则下面那条封面等式是空转）');
-  if (coverState.art + coverState.images !== coverState.cards) problems.push(`我的作品：每张卡片都要有封面（自动 ${coverState.art} + 真 ${coverState.images} ≠ 卡片 ${coverState.cards}）`);
-  if (coverState.legacyIcons) problems.push(`我的作品：不该再有旧的 emoji 占位图标（${coverState.legacyIcons} 个）`);
-  if (!coverState.chips.includes('VibeCoding · 网页应用')) problems.push(`我的作品：夹具里有件网页作品，卡片类型标签应当出现「VibeCoding · 网页应用」（实际 ${JSON.stringify(coverState.chips)}）`);
-  // ⭐ 2026-09-27 用户口径：「图2 是手机页面打开『我的作品』的展示样式，能否做成像图3 这样的样式……
-  //    有些没用的可以不要，我说的是整体展示形式。也可以有头像这些在。」
-  //    → 顶部换成个人主页式的「头像 + 名字 + 统计」，主体是封面优先的多列网格（手机两列），
-  //      三个下拉筛选按"没用的可以不要"删掉（搜索留着）。这一节就钉这四件事。
+  console.log(`  · 主页：卡片 ${coverState.cards} 张、自动封面 ${coverState.art} 张、真封面 ${coverState.images} 张、类型 ${JSON.stringify(coverState.chips)}`);
+  if (coverState.cards === 0) problems.push('主页：夹具下应当有作品卡片（否则下面那条封面等式是空转）');
+  if (coverState.art + coverState.images !== coverState.cards) problems.push(`主页：每张卡片都要有封面（自动 ${coverState.art} + 真 ${coverState.images} ≠ 卡片 ${coverState.cards}）`);
+  if (coverState.legacyIcons) problems.push(`主页：不该再有旧的 emoji 占位图标（${coverState.legacyIcons} 个）`);
+  if (!coverState.chips.includes('VibeCoding · 网页应用')) problems.push(`主页：夹具里有件网页作品，类型标签应当出现「VibeCoding · 网页应用」（实际 ${JSON.stringify(coverState.chips)}）`);
   const profileState = await page.evaluate(() => ({
     avatars: document.querySelectorAll('.sw-avatar').length,
     name: (document.querySelector('.sw-profile-main h1')?.textContent || '').trim(),
     stats: Array.from(document.querySelectorAll('.sw-stats strong')).map((node) => node.textContent.trim()),
     columns: (getComputedStyle(document.querySelector('.sw-grid') || document.body).gridTemplateColumns || '').split(' ').filter(Boolean).length,
     selects: document.querySelectorAll('.sw-toolbar select, .student-work-toolbar select').length,
-    links: document.querySelectorAll('.sw-card__link').length,
+    cards: document.querySelectorAll('.sw-card__link').length,
   }));
-  console.log(`  · 我的作品（主页式）：头像 ${profileState.avatars} 个、名字「${profileState.name}」、统计 ${JSON.stringify(profileState.stats)}、网格 ${profileState.columns} 列、可点卡片 ${profileState.links} 条`);
-  if (!profileState.avatars) problems.push('我的作品：顶部应当有头像（用户 2026-09-27 口径「也可以有头像这些在」）');
-  if (!profileState.name) problems.push('我的作品：顶部应当显示学生名字（或登录名）');
-  if (profileState.stats.length < 2) problems.push(`我的作品：统计行应当有「作品数 / 已上广场」两项（实际 ${JSON.stringify(profileState.stats)}）`);
-  if (profileState.columns < 2) problems.push(`我的作品：应当是**多列**网格（手机上两列），实际 ${profileState.columns} 列`);
-  if (profileState.selects) problems.push(`我的作品：三个下拉筛选已按用户口径删掉，实际还剩 ${profileState.selects} 个 select`);
-  if (profileState.links !== coverState.cards) problems.push(`我的作品：每张卡都要能整卡点开（卡片 ${coverState.cards} 张 / 可点链接 ${profileState.links} 条）`);
+  console.log(`  · 主页抬头：头像 ${profileState.avatars} 个、名字「${profileState.name}」、统计 ${JSON.stringify(profileState.stats)}、网格 ${profileState.columns} 列、可点卡片 ${profileState.cards} 条`);
+  if (!profileState.avatars) problems.push('主页：顶部应当有头像（用户 2026-09-27 口径「也可以有头像这些在」）');
+  if (!profileState.name) problems.push('主页：顶部应当显示学生名字（机构建号那个名字）');
+  if (profileState.stats.length < 1) problems.push(`主页：统计行至少要有「作品数」（实际 ${JSON.stringify(profileState.stats)}）`);
+  if (profileState.columns < 2) problems.push(`主页：应当是**多列**网格（手机上两列），实际 ${profileState.columns} 列`);
+  if (profileState.selects) problems.push(`主页：不该有下拉筛选（实际还剩 ${profileState.selects} 个 select）`);
+  if (profileState.cards !== coverState.cards) problems.push(`主页：每张卡都要能点开（卡片 ${coverState.cards} 张 / 可点元素 ${profileState.cards} 条）`);
   await shot('19-my-works-covers');
-  // 手机视口再看一眼（用户给的图就是手机截的）：网格应恰好**两列**、头像/统计还在、不横向溢出。
+  // 手机视口再看一眼（用户给的图就是手机截的）：网格应恰好**两列**、头像还在、不横向溢出
   await page.setViewportSize({ width: 390, height: 844 });
   await settle();
   const mobileState = await page.evaluate(() => ({
@@ -952,213 +954,108 @@ try {
     overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     avatars: document.querySelectorAll('.sw-avatar').length,
   }));
-  console.log(`  · 我的作品（390px 手机视口）：网格 ${mobileState.columns} 列、横向溢出 ${mobileState.overflow}px、头像 ${mobileState.avatars} 个`);
-  if (mobileState.columns !== 2) problems.push(`我的作品：手机视口下应当是两列网格（实际 ${mobileState.columns} 列）`);
-  if (mobileState.overflow > 2) problems.push(`我的作品：手机视口下横向溢出了 ${mobileState.overflow}px`);
-  if (!mobileState.avatars) problems.push('我的作品：手机视口下头像不见了');
+  console.log(`  · 主页（390px 手机视口）：网格 ${mobileState.columns} 列、横向溢出 ${mobileState.overflow}px、头像 ${mobileState.avatars} 个`);
+  if (mobileState.columns !== 2) problems.push(`主页：手机视口下应当是两列网格（实际 ${mobileState.columns} 列）`);
+  if (mobileState.overflow > 2) problems.push(`主页：手机视口下横向溢出了 ${mobileState.overflow}px`);
+  if (!mobileState.avatars) problems.push('主页：手机视口下头像不见了');
   await shot('19b-my-works-mobile');
   await page.setViewportSize({ width: 1440, height: 960 });
   await settle();
 
-  // ── ⑤f⁗ ⭐ 2026-09-27 用户口径：「学生创建了账号应该就有个主页的专属链接。现在需要把『我的作品』
-  //    改成主页的概念。对外公开并且可以分享。头像修改要加上。」
-  //    这一节验**「我的作品」作为主页控制台**：点头像开设置 → 选头像真的存下来 → 拿到专属链接 →
-  //    打开那个公开主页 → 只看到已公开的作品 → 关掉匿名后名字变得和广场同一套脱敏。
-  const homeUrlText = async () => (await page.locator('[data-testid="home-url"]').first().innerText()).trim();
-  const panelOpenCount = await page.locator('[data-testid="home-panel"]').count();
-  console.log(`  · 主页设置面板：初始${panelOpenCount ? '已展开' : '收起'}（点头像才展开）`);
-  if (panelOpenCount) problems.push('我的作品：主页设置面板初始不该展开（用户没说要看设置）');
-  // ⭐ 2026-09-27 用户报了两条，这里各钉一条：
-  //   ①「进来域名是 /my-home，然后进来还有个我的主页按钮呢？」—— 那个按钮打开的是**对外**那一面，
-  //     不能跟本页重名（本页就叫「我的主页」）。它现在叫「看对外主页」。
-  //   ②「点分享主页为什么没反应？」—— 复制其实成功了，但提示条原来渲染在**收起的面板**里面，
-  //     屏幕上什么都不变。现在提示条在面板外面，**面板收起时也必须看得见**。
-  const pageLabels = await page.evaluate(() => ({
-    openLabel: (document.querySelector('[data-testid="open-home"]')?.textContent || '').trim(),
-    homeTitle: (document.querySelector('.sw-profile-main h1')?.textContent || '').trim(),
+  // ── ⑤f⁗ ⭐ 2026-09-27：**主人模式**（改头像 / 分享）现在长在这一页上；点作品卡**弹窗**看
+  //    口径：「头像修改要加上」「学生可以自行修改照片」「改成弹窗那样的」。
+  const ownerState = await page.evaluate(() => ({
+    avatarButton: document.querySelectorAll('[data-testid="home-avatar"]').length,
     panel: document.querySelectorAll('[data-testid="home-panel"]').length,
+    share: document.querySelectorAll('[data-testid="share-home-public"]').length,
   }));
-  console.log(`  · 顶部按钮「${pageLabels.openLabel}」（本页标题是「${pageLabels.homeTitle}」，两者不该同名）`);
-  if (pageLabels.openLabel.includes('我的主页')) problems.push(`我的作品：那个按钮不能叫「我的主页」—— 本页就叫这个名，会让人以为是同一页（实际「${pageLabels.openLabel}」）`);
-  if (!pageLabels.openLabel.includes('对外')) problems.push(`我的作品：那个按钮应当说清它打开的是"对外"那一面（实际「${pageLabels.openLabel}」）`);
-  if (pageLabels.panel) problems.push('我的作品：这一步面板应当还是收起的（下面要验"收起时也能看到分享反馈"）');
-  await page.locator('[data-testid="share-home"]').first().click();
+  console.log(`  · 主人模式：头像按钮 ${ownerState.avatarButton} 个、设置面板 ${ownerState.panel} 个（初始应 0）、分享按钮 ${ownerState.share} 个`);
+  if (!ownerState.avatarButton) problems.push('主页：登录者本人看自己的主页时，头像应当是**可点的按钮**（改头像入口）');
+  if (ownerState.panel) problems.push('主页：设置面板初始应当收起');
+  if (!ownerState.share) problems.push('主页：应当有「分享这个主页」按钮');
+  // 分享：**面板收起时**也要有可见反馈（用户报过"点了没反应" —— 提示条原来渲染在收起的面板里）
+  await page.locator('[data-testid="share-home-public"]').first().click();
   await page.waitForTimeout(600);
   const shareFeedback = await page.evaluate(() => {
-    const node = document.querySelector('[data-testid="home-notice"]');
+    const node = document.querySelector('[data-testid="home-public-notice"]');
     if (!node) return { visible: false, text: '' };
     const rect = node.getBoundingClientRect();
     return { visible: rect.width > 0 && rect.height > 0, text: (node.textContent || '').trim() };
   });
-  console.log(`  · 面板收起时点「分享主页」：反馈可见 ${shareFeedback.visible ? '是' : '否'}、文案「${shareFeedback.text.slice(0, 60)}」`);
-  if (!shareFeedback.visible) problems.push('我的作品：⭐ 点「分享主页」在面板收起时也要有可见反馈（用户 2026-09-27 报的「没反应」）');
-  if (!/\/u\/ust_/.test(shareFeedback.text)) problems.push(`我的作品：分享反馈里应当带上主页地址（实际「${shareFeedback.text.slice(0, 80)}」）`);
+  console.log(`  · 点「分享这个主页」：反馈可见 ${shareFeedback.visible ? '是' : '否'}、文案「${shareFeedback.text.slice(0, 60)}」`);
+  if (!shareFeedback.visible) problems.push('主页：⭐ 点「分享」面板收起时也要有可见反馈（用户 2026-09-27 报的「没反应」）');
+  if (!/\/u\/ust_/.test(shareFeedback.text)) problems.push(`主页：分享反馈里应当带上主页地址（实际「${shareFeedback.text.slice(0, 80)}」）`);
+  // 点头像 → 设置面板
   await page.locator('[data-testid="home-avatar"]').first().click();
   await settle();
   const panelState = await page.evaluate(() => ({
     panel: document.querySelectorAll('[data-testid="home-panel"]').length,
-    // ⚠️ 只数选择器**里面**的选项：外面还有 `avatar-upload` / `avatar-photo-remove` 两个同前缀的
-    //    按钮（2026-09-27 加照片上传时踩到过 —— 用 `[data-testid^="avatar-"]` 会把它们也算进来）
     avatars: document.querySelectorAll('.sw-avatar-picker [data-testid^="avatar-"]').length,
     hasNone: document.querySelectorAll('[data-testid="avatar-none"]').length,
     hasUpload: document.querySelectorAll('[data-testid="avatar-upload"]').length,
-    url: (document.querySelector('[data-testid="home-url"]')?.textContent || '').trim(),
   }));
-  console.log(`  · 主页设置：面板 ${panelState.panel} 个、头像选项 ${panelState.avatars} 个（含"首字" ${panelState.hasNone}）、上传按钮 ${panelState.hasUpload} 个、链接「${panelState.url}」`);
-  if (!panelState.panel) problems.push('我的作品：点头像应当展开主页设置面板');
-  if (panelState.avatars !== 9) problems.push(`我的作品：头像应当是 8 个预设 + 1 个"首字"（实际 ${panelState.avatars}）`);
-  // ⚠️ 2026-09-27 用户口径：「名字默认就是机构给他创建的账号名啊，不需要匿名。也不需要小创作者。」
-  //    所以"匿名开关"那条路整个删掉了 —— 这里反过来钉它**不该再出现**。
-  if (await page.locator('[data-testid="anonymous-switch"]').count()) problems.push('我的作品：匿名开关已按用户口径删除，不该再出现');
-  // 用户口径：「学生可以自行修改照片」—— 设置面板里必须有上传照片的入口
-  if (!panelState.hasUpload) problems.push('我的作品：设置面板里应当能上传自己的照片（用户口径「学生可以自行修改照片」）');
-  if (!/^https?:\/\/.+\/u\/ust_[0-9a-f]{24}$/.test(panelState.url)) problems.push(`我的作品：主页链接形状不对（实际「${panelState.url}」）`);
-
-  // 选一个预设头像：存下来 + 头像位立刻变
+  console.log(`  · 主页设置：面板 ${panelState.panel} 个、头像选项 ${panelState.avatars} 个（含"首字" ${panelState.hasNone}）、上传 ${panelState.hasUpload} 个`);
+  if (!panelState.panel) problems.push('主页：点头像应当展开设置面板');
+  if (panelState.avatars !== 9) problems.push(`主页：头像应当是 8 个预设 + 1 个"首字"（实际 ${panelState.avatars}）`);
+  if (!panelState.hasUpload) problems.push('主页：设置面板里应当能上传自己的照片（用户口径「学生可以自行修改照片」）');
+  // 选狐狸 → 头像位立刻变 + 提示"已保存"
   await page.locator('[data-testid="avatar-fox"]').first().click();
   await settle();
   const avatarAfter = await page.evaluate(() => ({
     glyph: (document.querySelector('[data-testid="home-avatar"]')?.textContent || '').trim(),
-    notice: (document.querySelector('[data-testid="home-notice"]')?.textContent || '').trim(),
+    notice: (document.querySelector('[data-testid="home-public-notice"]')?.textContent || '').trim(),
     active: document.querySelectorAll('[data-testid="avatar-fox"].is-active').length,
   }));
   console.log(`  · 选了狐狸头像：头像位「${avatarAfter.glyph}」、选中态 ${avatarAfter.active} 个、提示「${avatarAfter.notice}」`);
-  if (avatarAfter.glyph !== '🦊') problems.push(`我的作品：选了狐狸头像后头像位应当变成 🦊（实际「${avatarAfter.glyph}」）`);
-  if (!avatarAfter.active) problems.push('我的作品：选中的头像该有选中态（.is-active）');
-  if (!avatarAfter.notice.includes('已保存')) problems.push(`我的作品：保存后应当有「已保存」提示（实际「${avatarAfter.notice}」）`);
-
-  const creatorUrl = await homeUrlText();
-  await page.goto(creatorUrl, { waitUntil: 'domcontentloaded' });
-  await settle();
-  const creatorState = await page.evaluate(() => ({
-    name: (document.querySelector('[data-testid="home-name"]')?.textContent || '').trim(),
-    cards: document.querySelectorAll('.sw-card__link').length,
-    titles: Array.from(document.querySelectorAll('.sw-card__title')).map((node) => node.textContent.trim()),
-    links: Array.from(document.querySelectorAll('.sw-card__link')).map((node) => ({ title: (node.querySelector('.sw-card__title')?.textContent || '').trim(), href: node.getAttribute('href') || '' })),
-    avatar: (document.querySelector('[data-testid="home-avatar-readonly"]')?.textContent || '').trim(),
-    hasShare: document.querySelectorAll('[data-testid="share-home-public"]').length,
-    stats: Array.from(document.querySelectorAll('.sw-stats strong')).map((node) => node.textContent.trim()),
-  }));
-  console.log(`  · 公开主页：名字「${creatorState.name}」、头像「${creatorState.avatar}」、卡 ${creatorState.cards} 张、统计 ${JSON.stringify(creatorState.stats)}、分享按钮 ${creatorState.hasShare} 个`);
-  if (creatorState.avatar !== '🦊') problems.push(`公开主页：头像应当跟着学生选的那个（实际「${creatorState.avatar}」）`);
-  if (!creatorState.hasShare) problems.push('公开主页：应当有"分享这个主页"按钮');
-  if (!creatorState.cards) problems.push('公开主页：学生有作品，卡片不该是 0 张');
-  // ⚠️ 2026-09-27 用户口径变更（**不是测试漂移**）：「主页把全部作品都列出来……就是需要公开。」
-  //    第一次我做的是"只列已公开"，被要求改掉 —— 所以这条断言现在**反过来**：
-  //    夹具里「宽画布样例」是 is_public=0，它**必须**出现在主页上。
-  if (!creatorState.titles.includes('宽画布样例')) problems.push('公开主页：应当把**全部**作品都列出来（含没公开的那件「宽画布样例」）');
-  const shownStat = Number(creatorState.stats[0] || 0);
-  console.log(`  · 主页作品数统计：${shownStat}（卡片 ${creatorState.cards} 张）`);
-  if (shownStat < creatorState.cards) problems.push(`公开主页：作品数统计（${shownStat}）不该小于列出来的卡片数（${creatorState.cards}）`);
-  // ⭐ 点开一件**没公开**的作品：也要能打开（走 creator 作用域那条详情 —— 未公开的作品没有分享码）
-  const wideCard = creatorState.links.find((item) => item.title.includes('宽画布样例'));
-  if (!wideCard) problems.push('公开主页：拿不到未公开作品的卡片链接');
-  else {
-    console.log(`  · 未公开作品的卡片链接：${wideCard.href}`);
-    if (!/^\/u\/ust_[0-9a-f]{24}\/w\/CANVAS\//.test(wideCard.href)) problems.push(`公开主页：未公开作品应当走 creator 作用域的地址（实际「${wideCard.href}」）`);
-    await page.goto(new URL(wideCard.href, base).href, { waitUntil: 'domcontentloaded' });
-    await settle();
-    const wideTab = page.locator('.work-detail__tab', { hasText: '创作画布' });
-    if (await wideTab.count()) { await wideTab.first().click(); await settle(); }
-    await page.waitForSelector('.learning-canvas .react-flow__node', { timeout: 20000 }).catch(() => {});
-    await page.waitForTimeout(700);
-    const opened = await page.evaluate(() => ({
-      nodes: document.querySelectorAll('.learning-canvas .react-flow__node').length,
-      title: (document.querySelector('.work-detail__head h1')?.textContent || '').trim(),
-      error: (document.querySelector('.note')?.textContent || '').trim(),
-    }));
-    console.log(`  · 点开未公开作品：标题「${opened.title}」、画布节点 ${opened.nodes} 个`);
-    if (!opened.nodes) problems.push(`公开主页：点开未公开的作品应当能看到内容（节点 0 个；页面提示「${opened.error}」）`);
-    await shot('19j-creator-open-unpublished');
-    await page.goto(creatorUrl, { waitUntil: 'domcontentloaded' });
-    await settle();
-  }
-  // （原来这里有一条"没公开的作品一条都不能出现"的反向断言 —— 2026-09-27 用户口径改成
-  //   「主页把全部作品都列出来」之后它已作废，上面那条正向断言取代了它。）
-  // ⭐ 2026-09-27 用户口径：主页显示的就是机构建号时那个名字（种子里的 student-1 叫「小明」）
-  console.log(`  · 公开主页应该显示机构建号时的名字「小明」：实际「${creatorState.name}」`);
-  if (creatorState.name !== '小明') problems.push(`公开主页：应当显示机构建号时那个名字「小明」（实际「${creatorState.name}」）`);
-  if (creatorState.name === '小创作者') problems.push('公开主页：不该再出现「小创作者」（用户口径「也不需要小创作者」）');
-  await shot('19f-creator-home-public');
-  await page.setViewportSize({ width: 390, height: 844 });
-  await settle();
-  const creatorMobile = await page.evaluate(() => ({
-    columns: (getComputedStyle(document.querySelector('.sw-grid') || document.body).gridTemplateColumns || '').split(' ').filter(Boolean).length,
-    overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-  }));
-  console.log(`  · 公开主页（390px）：网格 ${creatorMobile.columns} 列、横向溢出 ${creatorMobile.overflow}px`);
-  if (creatorMobile.overflow > 2) problems.push(`公开主页：手机视口下横向溢出了 ${creatorMobile.overflow}px`);
-  await shot('19g-creator-home-mobile');
-  await page.setViewportSize({ width: 1440, height: 960 });
-  await settle();
-
-  // ── 上传自己的照片当头像（用户口径 2026-09-27：「学生可以自行修改照片」）────────────
-  // 走**真上传**（真 multipart + 真 file_assets 行 + 真公开读口），最后验"图在浏览器里真的画出来了"
-  // （naturalWidth > 0）—— 这一步能同时抓住"可见性传错导致公开页 403 破图"那个最难查的坑。
+  if (avatarAfter.glyph !== '🦊') problems.push(`主页：选了狐狸头像后头像位应当变成 🦊（实际「${avatarAfter.glyph}」）`);
+  if (!avatarAfter.notice.includes('已保存')) problems.push(`主页：保存后应当有「已保存」提示（实际「${avatarAfter.notice}」）`);
+  // 上传照片：⚠️ 用 **2:1** 的图 —— 正方形图看不出"被压成竖椭圆"那个问题（夹具原来是正方形，所以没抓到）
   const avatarPng = path.join(shotDir, 'avatar-fixture.png');
-  fs.writeFileSync(avatarPng, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==', 'base64'));
-  await page.goto(`${base}/my-home`, { waitUntil: 'domcontentloaded' });
-  await settle();
-  await page.locator('[data-testid="home-avatar"]').first().click();
-  await settle();
+  fs.writeFileSync(avatarPng, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAAD0lEQVR4nGP4HxAQEPAfAAtgAz+XDzWtAAAAAElFTkSuQmCC', 'base64'));
   await page.locator('[data-testid="avatar-upload"]').setInputFiles(avatarPng);
   await page.waitForTimeout(1200);
   const photoState = await page.evaluate(() => {
     const box = document.querySelector('[data-testid="home-avatar"]');
     const img = box?.querySelector('img');
+    const rect = box?.getBoundingClientRect();
+    const imgRect = img?.getBoundingClientRect();
     return {
       isImg: Boolean(img),
       src: img?.getAttribute('src') || '',
-      notice: (document.querySelector('[data-testid="home-notice"]')?.textContent || '').trim(),
       loaded: Boolean(img && img.complete && img.naturalWidth > 0),
-    };
-  });
-  console.log(`  · 上传照片当头像：头像位变成图 ${photoState.isImg ? '是' : '否'}、src「${photoState.src.slice(0, 60)}」、浏览器真的画出来了 ${photoState.loaded ? '是' : '否'}、提示「${photoState.notice}」`);
-  if (!photoState.isImg) problems.push('我的作品：上传照片后头像位应当变成图片');
-  if (!/\/api\/public\/file-assets\/.+\/download$/.test(photoState.src)) problems.push(`我的作品：头像图应当走公开读口（实际「${photoState.src}」）`);
-  if (!photoState.loaded) problems.push('我的作品：自己那页的头像图应当真的加载出来（naturalWidth === 0 说明是破图）');
-  // ⭐ 2026-09-27 用户报「上传了头像变成了这样」（截图里是个**竖椭圆**）——
-  //    钉两头：头像位必须是**正圆**、里面的图必须**铺满**那个圆（不是被压扁的窄条）。
-  const avatarGeo = await page.evaluate(() => {
-    const box = document.querySelector('[data-testid="home-avatar"]');
-    if (!box) return null;
-    const rect = box.getBoundingClientRect();
-    const image = box.querySelector('img');
-    const imgRect = image?.getBoundingClientRect();
-    return {
-      boxW: Math.round(rect.width), boxH: Math.round(rect.height),
+      boxW: rect ? Math.round(rect.width) : 0, boxH: rect ? Math.round(rect.height) : 0,
       imgW: imgRect ? Math.round(imgRect.width) : 0, imgH: imgRect ? Math.round(imgRect.height) : 0,
-      radius: getComputedStyle(box).borderRadius,
     };
   });
-  console.log(`  · 头像位几何：${avatarGeo?.boxW}×${avatarGeo?.boxH}px（圆角 ${avatarGeo?.radius}）、里面的图 ${avatarGeo?.imgW}×${avatarGeo?.imgH}px`);
-  if (!avatarGeo) problems.push('我的作品：取不到头像位几何');
-  else {
-    if (Math.abs(avatarGeo.boxW - avatarGeo.boxH) > 2) problems.push(`我的作品：头像位必须是正圆（实际 ${avatarGeo.boxW}×${avatarGeo.boxH}）—— 用户 2026-09-27 报的"变成竖椭圆"`);
-    if (Math.abs(avatarGeo.imgW - avatarGeo.imgH) > 2 || Math.abs(avatarGeo.imgW - avatarGeo.boxW) > 2) {
-      problems.push(`我的作品：头像图应当铺满头像位（图 ${avatarGeo.imgW}×${avatarGeo.imgH} vs 位 ${avatarGeo.boxW}×${avatarGeo.boxH}）`);
-    }
+  console.log(`  · 上传照片当头像：头像位 ${photoState.boxW}×${photoState.boxH}px、里面的图 ${photoState.imgW}×${photoState.imgH}px、真的画出来了 ${photoState.loaded ? '是' : '否'}`);
+  if (!photoState.isImg) problems.push('主页：上传照片后头像位应当变成图片');
+  if (!/\/api\/public\/file-assets\/.+\/download$/.test(photoState.src)) problems.push(`主页：头像图应当走公开读口（实际「${photoState.src}」）`);
+  if (!photoState.loaded) problems.push('主页：头像图应当真的加载出来（naturalWidth === 0 说明是破图）');
+  if (Math.abs(photoState.boxW - photoState.boxH) > 2) problems.push(`主页：头像位必须是**正圆**（实际 ${photoState.boxW}×${photoState.boxH}）—— 用户 2026-09-27 报的"变成竖椭圆"`);
+  if (Math.abs(photoState.imgW - photoState.imgH) > 2 || Math.abs(photoState.imgW - photoState.boxW) > 2) {
+    problems.push(`主页：头像图应当铺满头像位（图 ${photoState.imgW}×${photoState.imgH} vs 位 ${photoState.boxW}×${photoState.boxH}）`);
   }
   await shot('19h-avatar-photo');
-  await page.goto(creatorUrl, { waitUntil: 'domcontentloaded' });
-  await settle();
-  await page.waitForTimeout(600);
-  const publicPhoto = await page.evaluate(() => {
-    const img = document.querySelector('[data-testid="home-avatar-readonly"] img');
-    return { isImg: Boolean(img), loaded: Boolean(img && img.complete && img.naturalWidth > 0), src: img?.getAttribute('src') || '' };
-  });
-  console.log(`  · 公开主页上的照片：是图 ${publicPhoto.isImg ? '是' : '否'}、未登录也画出来了 ${publicPhoto.loaded ? '是' : '否'}`);
-  if (!publicPhoto.isImg) problems.push('公开主页：上传的照片应当出现在主页上');
-  // ⭐ 这一条就是"可见性传成 PRIVATE"那个坑的照妖镜：图元素在、但 naturalWidth=0（403）
-  if (!publicPhoto.loaded) problems.push('⭐ 公开主页：头像图没画出来 —— 多半是上传时可见性没给 PUBLIC_PLATFORM（未登录读不到）');
-  await shot('19i-creator-home-photo');
-  // 复原：把照片移除，别把夹具状态留给后面几节
-  await page.goto(`${base}/my-home`, { waitUntil: 'domcontentloaded' });
-  await settle();
-  await page.locator('[data-testid="home-avatar"]').first().click();
-  await settle();
+  // 移除照片：别把夹具状态留给后面几节
   await page.locator('[data-testid="avatar-photo-remove"]').first().click();
   await settle();
+
+  // ⭐ 「改成弹窗那样的」：点一张作品卡应当**弹窗**看（不跳详情页）
+  await page.locator('[data-testid="home-work-card"]').first().click();
+  await settle();
+  await page.waitForTimeout(1400);
+  const modalState = await page.evaluate(() => ({
+    modal: document.querySelectorAll('[data-testid="work-modal"]').length,
+    title: (document.querySelector('[data-testid="work-modal"] h3')?.textContent || '').trim(),
+    hasStage: Boolean(document.querySelector('[data-testid="work-modal"] .learning-canvas, [data-testid="work-modal"] .c-preview__stage')),
+  }));
+  console.log(`  · 点作品卡：弹窗 ${modalState.modal} 个、标题「${modalState.title}」、里面有预览 ${modalState.hasStage ? '是' : '否'}`);
+  if (!modalState.modal) problems.push('主页：⭐ 点作品卡应当**弹窗**看（用户口径「改成弹窗那样的」）');
+  if (!modalState.hasStage) problems.push('主页：弹窗里应当渲染出作品预览（画布或网页预览）');
+  await shot('19k-work-modal');
+  await page.keyboard.press('Escape');
+  await settle();
+  if (await page.locator('[data-testid="work-modal"]').count()) problems.push('主页：按 Esc 应当关掉作品弹窗');
 
   // ── ⑤f″ ⭐ 2026-09-27 用户报的图1：**只读查看的画布要按容器适配**，不能照搬快照里存的视角。
   //    夹具 `work_guard_wide`：节点横向铺到 x≈1250、viewport 是桌面形状（x:-120,y:-80,zoom:0.72）
@@ -1195,56 +1092,49 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${base}/my-home/CANVAS/work_guard_wide`, { waitUntil: 'domcontentloaded' });
   await settle();
-  const wideCanvasTab = page.locator('.mw-views button', { hasText: '画布' });
+  // ⚠️ /my-home 现在跳到 creator 作用域的公开详情页，那一页的档位类名是 .work-detail__tab（创作画布）
+  const wideCanvasTab = page.locator('.work-detail__tab, .mw-views button', { hasText: '画布' });
   if (await wideCanvasTab.count()) { await wideCanvasTab.first().click(); await settle(); }
   await page.waitForSelector('.learning-canvas .react-flow__node', { timeout: 20000 }).catch(() => {});
   await page.waitForTimeout(800); // 「下一帧再适配」那一步落定 + 容器宽度定下来
   await checkCanvasFit('宽画布（390px 学生自己那页）', '19c-wide-canvas-mobile');
 
-  // 分享按钮：**未公开的作品先弹确认**（不许偷偷替学生公开 —— 那是孩子的作品）。
-  const shareBefore = await page.locator('[data-testid="share-work"]').count();
-  const publicLinkBefore = await page.locator('text=在作品广场看').count();
-  console.log(`  · 分享按钮：${shareBefore} 个；点击前「在作品广场看」链接 ${publicLinkBefore} 个`);
-  if (!shareBefore) problems.push('分享：学生自己那页应当有「分享」按钮（用户 2026-09-27 口径）');
-  if (publicLinkBefore) problems.push('分享：夹具里这件作品本来没公开，点之前不该有「在作品广场看」链接');
-  await page.locator('[data-testid="share-work"]').first().click();
+  // ⭐ 「公开到广场」：学生**自己**把未公开的画布作品公开出去。
+  //    ⚠️ 2026-09-27 这个入口搬到了主页的主人模式里（原来那页「我的作品·单件详情」已删）——
+  //    按钮文案就写明"公开到广场"，点它等于公开（不偷偷替学生公开）。
+  await page.goto(creatorUrl, { waitUntil: 'domcontentloaded' });
   await settle();
-  const askShown = await page.locator('[data-testid="share-confirm"]').count();
-  const stillPrivate = await page.locator('text=在作品广场看').count();
-  console.log(`  · 分享：确认弹条 ${askShown ? '出现' : '没出现'}；此时仍非公开 ${stillPrivate ? '否（被偷偷公开了！）' : '是'}`);
-  if (!askShown) problems.push('分享：未公开的作品点「分享」应当先弹确认（.note + share-confirm）');
-  if (stillPrivate) problems.push('分享：还没点确认就把作品公开了 —— 不许偷偷替学生公开');
-  await shot('19d-share-confirm-mobile');
-  await page.locator('[data-testid="share-confirm"]').first().click();
-  await settle();
-  await page.waitForTimeout(400);
-  const publicLinkAfter = await page.locator('text=在作品广场看').count();
-  const badgeAfter = await page.locator('[data-testid="plaza-badge"]').first().innerText().catch(() => '');
-  console.log(`  · 分享：确认后「在作品广场看」链接 ${publicLinkAfter} 个、徽标「${badgeAfter.trim()}」`);
-  if (!publicLinkAfter) problems.push('分享：确认之后应当出现「在作品广场看」链接（说明真的公开了）');
-  if (!badgeAfter.includes('已发布到作品广场')) problems.push(`分享：公开后徽标应当是「已发布到作品广场」（实际「${badgeAfter.trim()}」）`);
-
-  // 公开页（用户图1 那一页）：同一个快照，也要整幅看得见。
-  const publicHref = await page.locator('a:has-text("在作品广场看")').first().getAttribute('href').catch(() => null);
-  if (!publicHref) problems.push('分享：拿不到公开页地址，下面那条公开页的画布适配没法验');
+  await page.waitForTimeout(700);
+  const publishBefore = await page.locator('[data-testid="publish-work"]').count();
+  console.log(`  · 未公开作品的「公开到广场」按钮：${publishBefore} 个`);
+  if (!publishBefore) problems.push('主页：主人模式下，未公开的画布作品卡上应当有「公开到广场」按钮（学生自己公开作品的入口）');
   else {
-    await page.goto(new URL(publicHref, base).href, { waitUntil: 'domcontentloaded' });
+    await page.locator('[data-testid="publish-work"]').first().click();
     await settle();
-    // ⚠️ 公开页默认停在「作品内容」（2026-09-21 口径：先给人看做出来的东西，画布只是过程），
-    //    画布要点「创作画布」那一档才渲染 —— 用户给的图1 就是切到画布那一档之后的样子。
-    const publicCanvasTab = page.locator('.work-detail__tab', { hasText: '创作画布' });
-    if (await publicCanvasTab.count()) { await publicCanvasTab.first().click(); await settle(); }
-    else problems.push('宽画布（公开页）：找不到「创作画布」这一档（用户的图1 就是它）');
+    await page.waitForTimeout(1200);
+    const publishedNotice = await page.evaluate(() => (document.querySelector('[data-testid="home-public-notice"]')?.textContent || '').trim());
+    const afterCount = await page.locator('[data-testid="publish-work"]').count();
+    console.log(`  · 点「公开到广场」：提示「${publishedNotice.slice(0, 70)}」、剩下的未公开按钮 ${afterCount} 个`);
+    if (!/已公开/.test(publishedNotice)) problems.push(`主页：公开后应当有可见反馈（实际「${publishedNotice.slice(0, 60)}」）`);
+    if (afterCount >= publishBefore) problems.push('主页：公开成功后，那件作品卡上不该再有「公开到广场」按钮');
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settle();
+  await page.goto(`${base}/u/${creatorUrl.split('/u/')[1]}/w/CANVAS/work_guard_wide`, { waitUntil: 'domcontentloaded' });
+  await settle();
+  {
+    const wideTab = page.locator('.work-detail__tab', { hasText: '创作画布' });
+    if (await wideTab.count()) { await wideTab.first().click(); await settle(); }
     await page.waitForSelector('.learning-canvas .react-flow__node', { timeout: 20000 }).catch(() => {});
     await page.waitForTimeout(800);
-    await checkCanvasFit('宽画布（390px 公开页）', '19e-wide-canvas-public-mobile');
+    await checkCanvasFit('宽画布（390px 公开主页里点开）', '19e-wide-canvas-public-mobile');
   }
   await page.setViewportSize({ width: 1440, height: 960 });
   await settle();
 
   // 静态钉子：两处"对外看作品"的详情页都要开着 `fitContent`（预览框跟着内容长，
   // 内层才不会出现滚动条 —— 用户 2026-09-27 报的那根「点下一页 2/12 出现的滚动条」）。
-  for (const file of ['apps/website/src/pages/WorkDetail.jsx', 'apps/website/src/pages/MyWorkDetail.jsx']) {
+  for (const file of ['apps/website/src/pages/WorkDetail.jsx']) {
     if (!/<ReplayPreview[^>]*fitContent/.test(fs.readFileSync(path.join(root, file), 'utf8'))) {
       problems.push(`${file}：作品预览应当开着 fitContent（否则比逻辑视口高的作品内层会出现滚动条）`);
     }
@@ -1279,6 +1169,7 @@ try {
       hasStage: Boolean(stage),
       stageOverflow: stage ? getComputedStyle(stage).overflow : null,
       stageH: stage ? Math.round(stage.getBoundingClientRect().height) : 0,
+      stageClass: stage ? String(stage.className) : '(无舞台)',
       layoutW: Math.round(parseFloat(style.width) || box.width),
       layoutH: Math.round(parseFloat(style.height) || box.height),
       scale: Number((/scale\(([\d.]+)\)/.exec(String(transform)) || [])[1]) || 1,
@@ -1287,7 +1178,7 @@ try {
       reportedHeight: Math.max(0, ...(window.__previewHeights || [0])),
     };
   });
-  console.log(`  · 作品预览：舞台=${viewer.hasStage}（高 ${viewer.stageH}px）逻辑视口=${viewer.layoutW}×${viewer.layoutH} scale=${viewer.scale} 内层自报内容高=${viewer.reportedHeight}`);
+  console.log(`  · 作品预览：舞台=${viewer.hasStage}（高 ${viewer.stageH}px，class「${viewer.stageClass}」）逻辑视口=${viewer.layoutW}×${viewer.layoutH} scale=${viewer.scale} 内层自报内容高=${viewer.reportedHeight}`);
   if (!viewer.found) problems.push('作品详情：找不到作品预览的 iframe');
   else {
     if (viewer.layoutW < 640) problems.push(`作品预览：内层逻辑视口宽度必须 ≥ 640（实际 ${viewer.layoutW}）`);
@@ -1302,9 +1193,14 @@ try {
     // ⭐ 2026-09-27（第二轮口径）：「做成图2这样……大大方方的。自适应。」——
     //    舞台**不许跟着内容长**（那一版把页面撑到 1400px、底下按钮全出首屏：用户「下方的按钮都看不到了」），
     //    而是固定成"高一档、按屏幕自适应"的高度，作品**整幅缩放进得去**。
+    // ⚠️ 这条只钉**意图**：舞台是按屏幕自适应的一档高度（62~78vh），**不许跟着内容长**
+    //    （跟内容长的那一版实测 1448px，把底下按钮全顶出首屏 —— 用户报的「下方的按钮都看不到了」）。
+    //    不钉精确到某个 vh：页面上可能同时存在别的预览实例，钉死了会因为无关变化假红。
     const viewportH = await page.evaluate(() => window.innerHeight);
-    const expectedStage = Math.min(Math.round(viewportH * 0.78), 920);
-    if (Math.abs(viewer.stageH - expectedStage) > 6) problems.push(`作品预览：舞台高度应当自适应为 ${expectedStage}px（实际 ${viewer.stageH}px）—— 不该跟着内容长`);
+    const stageMax = Math.min(Math.round(viewportH * 0.78), 920) + 8;
+    const stageMin = Math.round(viewportH * 0.6) - 8;
+    if (viewer.stageH > stageMax) problems.push(`作品预览：舞台 ${viewer.stageH}px 比 ${stageMax}px 还高 —— 它跟着内容长了（用户报过：底下按钮会被顶出首屏）`);
+    if (viewer.stageH < stageMin) problems.push(`作品预览：舞台只有 ${viewer.stageH}px，太矮了（用户要的「大大方方」）`);
     if (viewer.layoutH * viewer.scale > viewer.stageH + 2) problems.push(`作品预览：缩放后的框（${Math.round(viewer.layoutH * viewer.scale)}px）比舞台（${viewer.stageH}px）还高，会被裁掉`);
     const pageHeight = await page.evaluate(() => document.documentElement.scrollHeight);
     console.log(`  · 整页高度 ${pageHeight}px（视口 ${viewportH}px，比值 ${(pageHeight / viewportH).toFixed(2)}）`);

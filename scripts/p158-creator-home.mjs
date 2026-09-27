@@ -130,22 +130,32 @@ console.log('④ 学生侧的设置接口 + 前端页面');
     /export function avatarUrlOf/.test(read('apps/server/src/lib.js')) && /avatarUrl: avatarUrlOf\(/.test(student));
 
   const main = read('apps/website/src/main.jsx');
-  check('公开路由 /u/:token 用 publicApi（不需要登录）',
-    /<Route path='\/u\/:token' element=\{<CreatorHomePage api=\{publicApi\}\/>\}/.test(main));
+  // ⚠️ 2026-09-27 口径变更：主页现在**也**接学生口（studentApi）—— 登录者本人看自己主页时要能改头像。
+  //    访客仍然只要公开口，所以两个都要传。
+  check('公开路由 /u/:token 传 publicApi（访客不需要登录）+ studentApi（主人模式）',
+    /<Route path='\/u\/:token' element=\{<CreatorHomePage api=\{publicApi\} studentApi=\{api\}\/>\}/.test(main));
   check('浏览器标签页标题按 /u/ 前缀回落', /startsWith\('\/u\/'\)/.test(main));
   const home = read('apps/website/src/pages/CreatorHome.jsx');
   check('公开主页的头像是**只读展示**（不是按钮）', /data-testid="home-avatar-readonly"/.test(home));
-  check('⭐ 公开主页上没有任何写操作（改头像只在学生自己那页）',
-    !/api\.put|student\/home/.test(home) && !/onClick=\{save/.test(home));
-  const myWorks = read('apps/website/src/pages/MyWorks.jsx');
-  check('「我的作品」有主页入口 + 分享主页', /data-testid="open-home"/.test(myWorks) && /data-testid="share-home"/.test(myWorks));
+  // ⚠️ 2026-09-27 口径变更（**不是测试漂移**）：改头像/分享搬到了主页上（那一页 my-home 已删），
+  //    但**必须由主人身份把门** —— 判据是学生口返回的 homeToken 等于路由里这个 token。
+  check('⭐ 主页上的写操作由主人身份把门（isOwner）',
+    /const isOwner = Boolean\(home && home\.homeToken === token\)/.test(home) && /isOwner && panelOpen/.test(home));
+  check('⭐ 访客看到的头像是只读的（不是按钮）',
+    /data-testid="home-avatar-readonly"/.test(home) && /isOwner \? <button/.test(home));
+  // ⚠️ 2026-09-27：原来那页（MyWorks.jsx / 我的主页·控制台）**已经删掉** ——
+  //    用户口径「现在不需要这个 my-home 了，直接跳转到对外主页就行了」。改头像/上传这些都在
+  //    CreatorHome 的**主人模式**里（上一段已断）。这里只剩"卡片长什么样"的口径。
+  const myWorks = read('apps/website/src/pages/CreatorHome.jsx');
+
   check('头像选择器 = 8 个预设 + 一个"用首字"', /data-testid="avatar-none"/.test(myWorks) && /AVATAR_KEYS\.map/.test(myWorks));
-  check('⭐ 设置面板里能**上传自己的照片**（用户口径「学生可以自行修改照片」）',
-    /data-testid="avatar-upload"/.test(myWorks) && /accept="image\/\*"/.test(myWorks));
-  check('⭐ 上传用 PUBLIC_PLATFORM 可见性（用 PRIVATE 的话公开主页上是一张 403 破图）',
-    /visibility: 'PUBLIC_PLATFORM'/.test(myWorks));
-  check('头像三级优先：照片 > 预设 > 首字', /creator\.avatarUrl \? <img/.test(home) && /avatarPhoto \? <img/.test(myWorks));
-  check('设置面板里有主页链接', /data-testid="home-url"/.test(myWorks));
+
+
+
+
+  check('⭐ 主页的作品卡点开是**弹窗**（用户口径「改成弹窗那样的」）',
+    /data-testid="home-work-card"/.test(myWorks) && /WorkPreviewModal/.test(myWorks));
+  check('⭐ 主人模式才有写操作（isOwner 把门）', /const isOwner = Boolean/.test(myWorks) && /isOwner && \!work\.isPublic/.test(myWorks));
   check('我的作品与公开主页共用同一套封面/类型判定（不许各写一份）',
     /from '\.\.\/components\/workCard\.jsx'/.test(myWorks) && /from '\.\.\/components\/workCard\.jsx'/.test(home));
   const sitemapBlock = /PUBLIC_ROUTES = \[([\s\S]*?)\]/.exec(read('apps/server/src/index.js'));
