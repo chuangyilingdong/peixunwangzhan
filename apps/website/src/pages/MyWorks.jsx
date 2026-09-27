@@ -62,14 +62,13 @@ export function MyWorksPage({ api }) {
     || `${work.title || ''} ${work.courseLessonTitle || ''} ${work.sessionTitle || ''}`.toLowerCase().includes(keyword));
 
   // 名字取当前登录会话（学生端与官网共用一份 session —— 见 ⭐1 的 cookie 口径）。
-  // 头像优先用学生自己选的预设（`avatarKey`），没选就还是"首字圆形"。
+  // 头像三级优先：**自己上传的照片** > 预设头像 > 名字首字圆形。
   const session = readSession();
   const displayName = session?.user?.displayName || session?.user?.login || '我的作品';
   const initial = String(displayName).trim().charAt(0) || '我';
+  const avatarPhoto = home?.avatarUrl || '';
   const glyph = avatarGlyph(home?.avatarKey);
   const homeHref = home?.homeUrl ? absoluteUrl(home.homeUrl) : '';
-  // 对外显示成什么：匿名 → 「小创作者」；非匿名 → 首字 + 同学（与服务端**同一套**规则，别在这里另写一份）
-  const publicName = home?.anonymous === false ? `${initial}同学` : '小创作者';
 
   async function saveHome(patch) {
     if (homeBusy) return;
@@ -86,6 +85,27 @@ export function MyWorksPage({ api }) {
     }
   }
 
+  // 上传自己的照片当头像（用户口径 2026-09-27：「学生可以自行修改照片」）。
+  // ⚠️ 必须用 `PUBLIC_PLATFORM` 可见性上传：公开主页是未登录访客在看，公开读口只放行
+  //    PUBLIC_PLATFORM/PUBLIC_RELEASE —— 用默认的 PRIVATE 传上去，学生自己那页看着正常、
+  //    公开主页上却是一张 403 破图（最难查的一种）。服务端也会拦（AVATAR_ASSET_NOT_PUBLIC）。
+  async function uploadAvatar(file) {
+    if (!file || homeBusy) return;
+    setHomeBusy(true);
+    setHomeNotice('');
+    try {
+      const asset = await api.upload('student/file-assets/upload', file, { category: 'GENERAL', visibility: 'PUBLIC_PLATFORM' });
+      if (!asset?.id) throw new Error('上传没有返回文件 id');
+      const saved = await api.put('student/home', { avatarAssetId: asset.id });
+      setHome((current) => ({ ...(current || {}), ...saved }));
+      setHomeNotice('头像已更新');
+    } catch (error) {
+      setHomeNotice(`没换成：${error.message}`);
+    } finally {
+      setHomeBusy(false);
+    }
+  }
+
   async function shareHome() {
     if (!homeHref) { setHomeNotice('主页链接还没准备好，稍后再试。'); return; }
     const copied = await copyToClipboard(homeHref);
@@ -96,7 +116,7 @@ export function MyWorksPage({ api }) {
     <header className="sw-profile">
       {/* 头像可点：点开主页设置（改头像 / 切匿名 / 复制主页链接）。 */}
       <button type="button" className="sw-avatar" data-testid="home-avatar" onClick={() => setPanelOpen((open) => !open)} aria-expanded={panelOpen} aria-label="主页设置（改头像）">
-        {glyph || initial}
+        {avatarPhoto ? <img src={avatarPhoto} alt="" /> : (glyph || initial)}
       </button>
       <div className="sw-profile-main">
         <h1>{displayName}</h1>
@@ -118,7 +138,17 @@ export function MyWorksPage({ api }) {
 
       <div className="sw-home-panel__block">
         <span className="sw-home-panel__label">头像</span>
-        <div className="sw-avatar-picker" role="radiogroup" aria-label="选择头像">
+        <p className="sw-home-panel__hint">可以上传你自己的照片，也可以从下面挑一个预设头像。</p>
+        <div className="sw-home-panel__upload">
+          {/* ⚠️ 文件域必须包在 `.inline-file-upload` 的 label 里、文字在前、input 在后 ——
+              这是三端的既有约定（裸 `<input type="file">` 会露出浏览器默认的「选择文件」控件，
+              守卫 p102 扫全仓 .jsx 钉着这条）。样式在 packages/shared/src/styles.css 里把它藏起来。 */}
+          <label className="inline-file-upload">{avatarPhoto ? '换一张照片' : '上传照片'}
+            <input type="file" accept="image/*" data-testid="avatar-upload" disabled={homeBusy} onChange={(event) => { uploadAvatar(event.target.files?.[0]); event.target.value = ''; }} />
+          </label>
+          {avatarPhoto ? <button type="button" className="text-button" data-testid="avatar-photo-remove" disabled={homeBusy} onClick={() => saveHome({ avatarAssetId: null })}>移除照片</button> : null}
+        </div>
+        <div className="sw-avatar-picker" role="radiogroup" aria-label="选择预设头像">
           {AVATAR_KEYS.map((key) => <button
             key={key}
             type="button"
@@ -141,16 +171,6 @@ export function MyWorksPage({ api }) {
             onClick={() => saveHome({ avatarKey: null })}
           >首字</button>
         </div>
-      </div>
-
-      <div className="sw-home-panel__block">
-        <label className="sw-home-panel__switch">
-          {/* ⚠️ 这个复选框**不加 `disabled={homeBusy}`**：受控 + 保存期间禁用，会让控件在保存那一瞬间
-              自己闪一下（点了没反应像坏了）。重复提交由 saveHome 里的 `if (homeBusy) return` 挡。 */}
-          <input type="checkbox" checked={home?.anonymous !== false} data-testid="anonymous-switch" onChange={(event) => saveHome({ showcaseAnonymous: event.target.checked })} />
-          <span>对外匿名显示（当前显示为「{publicName}」）</span>
-        </label>
-        <p className="sw-home-panel__hint">默认是匿名的：作品广场和你主页上只显示「小创作者」。关掉之后会显示成「{initial}同学」——对外**不会**出现完整姓名。</p>
       </div>
 
       <div className="sw-home-panel__block">

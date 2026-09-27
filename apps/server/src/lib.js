@@ -142,6 +142,17 @@ export function nowIso() {
   return new Date().toISOString();
 }
 
+/**
+ * 头像图的**公开地址**：`users.avatar_asset_id` → 公开读口（`/api/public/file-assets/<id>/download`）。
+ * 没有图就返回 null（调用方自己退回预设头像 / "首字圆形"）。
+ * 那口子只放行 `visibility IN ('PUBLIC_PLATFORM','PUBLIC_RELEASE')` 的文件，而且拒绝教学素材 ——
+ * 所以学生上传头像时必须用 `PUBLIC_PLATFORM`，否则公开主页上会是一张 403 的破图。
+ */
+export function avatarUrlOf(assetId) {
+  const id = String(assetId || '').trim();
+  return id ? `/api/public/file-assets/${encodeURIComponent(id)}/download` : null;
+}
+
 export function hashPassword(password) {
   const salt = randomBytes(16).toString('hex');
   const hash = scryptSync(`${PEPPER}:${String(password)}`, salt, 64).toString('hex');
@@ -484,6 +495,9 @@ export function normalizeUser(value, { includeAuthMeta = false } = {}) {
     // 2026-09-13（P4 删积分）：月度额度 / 魔法石 / 个人积分 / 成员 AI 上限都不再对外返回。
     // 库里那几列保留给历史数据（删代码不删表的惯例），代码不再读写。
     avatarKey: value.avatar_key || null,
+    // 学生自己上传的头像图（file_assets 的 id，见 schema.js 的 avatar_asset_id 注释）。
+    // 展示地址不放在 normalizeUser 里 —— 那是**路由形状**的知识，由需要它的接口自己拼（avatarUrlOf）。
+    avatarAssetId: value.avatar_asset_id || null,
     // 学生个人主页的专属 token（2026-09-27）：公开地址是 `/u/<token>`。
     // ⚠️ 它是**公开 token**（和 works.share_token 一个性质），不是秘密 —— 泄漏不等于泄漏数据，
     //    能看到什么由服务端那条公开接口按"已公开的作品"过滤。NULL = 还没生成（见 ensureHomeToken）。

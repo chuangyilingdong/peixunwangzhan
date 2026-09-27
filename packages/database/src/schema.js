@@ -117,6 +117,12 @@ CREATE TABLE IF NOT EXISTS users (
   -- 个人主页的专属 token（2026-09-27）：每个学生一个，公开主页地址 /u/<home_token> 用它。
   -- 建号时生成，存量学生由一次性回填补上（见 ensureHomeToken）；NULL 表示还没生成。
   home_token TEXT,
+  -- 学生自己上传的头像图（2026-09-27 用户口径「学生可以自行修改照片」）：
+  -- 存 file_assets 的 id（那张图以 PUBLIC_PLATFORM 可见性上传，公开读口才放行），
+  -- 展示地址由服务端拼 /api/public/file-assets/<id>/download。
+  -- ⚠️ 这段 SQL 在**模板字符串**里 —— 注释里别写反引号（写了会把字符串提前闭合，2026-09-27 踩过两次）。
+  -- 与 avatar_key（8 个预设键）**并存**：有这张图就用图，没有才退回预设、再退回首字圆形。
+  avatar_asset_id TEXT,
   guardian_name TEXT,
   guardian_phone TEXT,
   guardian_relationship TEXT CHECK (guardian_relationship IS NULL OR guardian_relationship IN ('PARENT','GRANDPARENT','OTHER_GUARDIAN')),
@@ -1631,6 +1637,7 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_projects_student_deleted ON student_proj
 //    纯复制粘贴残留，两段一改一漏就是隐性地基，删掉后一份。
 for (const statement of [
   'ALTER TABLE users ADD COLUMN avatar_key TEXT',
+  'ALTER TABLE users ADD COLUMN avatar_asset_id TEXT',
   'ALTER TABLE users ADD COLUMN home_token TEXT',
   'ALTER TABLE users ADD COLUMN guardian_name TEXT',
   'ALTER TABLE users ADD COLUMN guardian_phone TEXT',

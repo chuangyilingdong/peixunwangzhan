@@ -17,7 +17,7 @@ import {
   row,
   rows,
   seriesDeliveryModesOf,
-  transaction, canvasMediaFrom, workCoverFromSnapshot, arows, arow, aq, amap, likeKeyword, likeEscapeClause } from '../../lib.js';
+  transaction, canvasMediaFrom, workCoverFromSnapshot, arows, arow, aq, amap, likeKeyword, likeEscapeClause, avatarUrlOf } from '../../lib.js';
 import { hostname } from 'node:os';
 import { Readable } from 'node:stream';
 import { assertTransition } from '../../services/domainState.js';
@@ -243,14 +243,16 @@ export async function handlePublicCommunication(ctx) {
   //     没公开的作品**一条都不出现** —— 个人主页不该把学生的对外可见面变大。
   //     ⚠️ 这两段 WHERE 是**故意各抄一遍**而不是抽公共函数：广场那两条各自贴着自己那段注释与字段，
   //        抽出来会让"改一处忘一处"变隐蔽。护栏在守卫里（直接对比三处的 WHERE 片段）。
-  //   · ⚠️ 名字**沿用广场那套脱敏**（匿名 → 「小创作者」；非匿名 → 首字 + 同学），不在这里放宽：
-  //     对外可见的信息量与广场保持一致，是刻意的隐私口径（未成年人平台）。
+  //   · ⚠️ **名字就是要显示机构建号时那个名字**（用户 2026-09-27 口径：「名字默认就是机构给他创建的账号名啊，
+  //     不需要匿名。也不需要小创作者。」）—— 所以这里**不套广场那套脱敏**，直接给 display_name。
+  //     个人主页本来就是学生自己选择对外公开的那一面。
+  //     （作品广场那条链路**没动**：它仍按 `privacy_showcase_anonymous` 显示「小创作者」/「X同学」。）
   //   · 只认 STUDENT + 未注销 —— 这是"学生主页"，教师/管理员不该有对外页面。
   const creatorMatch = pathname.match(/^\/api\/public\/creators\/([\w-]+)$/);
   if (creatorMatch && method === 'GET') {
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 60 });
     const creator = await arow(`
-      SELECT id, display_name, avatar_key, privacy_showcase_anonymous, created_at
+      SELECT id, display_name, login, avatar_key, avatar_asset_id, created_at
       FROM users WHERE home_token=? AND role='STUDENT' AND deleted_at IS NULL
     `, [creatorMatch[1]]);
     if (!creator) throw errors.notFound('个人主页不存在', 'PUBLIC_CREATOR_NOT_FOUND');
@@ -286,16 +288,12 @@ export async function handlePublicCommunication(ctx) {
       if (Boolean(a.featured) !== Boolean(b.featured)) return a.featured ? -1 : 1;
       return String(b.submittedAt || '').localeCompare(String(a.submittedAt || ''));
     });
-    let name = '小创作者';
-    if (!creator.privacy_showcase_anonymous && creator.display_name) {
-      const trimmed = String(creator.display_name).trim();
-      if (trimmed) name = trimmed.charAt(0) + '同学';
-    }
+    const name = String(creator.display_name || '').trim() || String(creator.login || '').trim() || '同学';
     return {
       name,
       avatarKey: creator.avatar_key || null,
-      // 前端要能显示"当前是匿名状态"，但**不返回** display_name 原文（那是对外页面，只能给脱敏后的）
-      anonymous: Boolean(creator.privacy_showcase_anonymous),
+      // 学生自己上传的照片（没传就是 null，前端退回预设头像 / "首字圆形"）
+      avatarUrl: avatarUrlOf(creator.avatar_asset_id),
       joinedAt: creator.created_at || null,
       workCount: items.length,
       featuredCount: items.filter((item) => item.featured).length,

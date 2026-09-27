@@ -82,8 +82,11 @@ console.log('③ 主页接口：只列已公开的作品，判据与广场逐字
     /role='STUDENT' AND deleted_at IS NULL/.test(publicJs));
   check('找不到主页返回 404（不泄漏"这个 token 存不存在"以外的东西）',
     /PUBLIC_CREATOR_NOT_FOUND/.test(publicJs));
-  check('名字脱敏与广场同一套（不返回 display_name 原文）',
-    /let name = '小创作者'/.test(publicJs) && !/display_name: creator\.display_name/.test(publicJs));
+  // ⚠️ 2026-09-27 口径变更（**不是测试漂移**）：用户说「名字默认就是机构给他创建的账号名啊，
+  //    不需要匿名。也不需要小创作者。」—— 主页那条链路**不再脱敏**（作品广场那条没动，仍按
+  //    privacy_showcase_anonymous 显示「小创作者」/「X同学」）。
+  check('⭐ 主页的名字用 display_name 原文（按用户口径放开了，不再脱敏）',
+    /const name = String\(creator\.display_name/.test(publicJs));
 }
 
 console.log('④ 学生侧的设置接口 + 前端页面');
@@ -100,6 +103,17 @@ console.log('④ 学生侧的设置接口 + 前端页面');
   check('学生侧 /home 有 GET 与 PUT', /part === '\/home' && method === 'GET'/.test(student) && /part === '\/home' && method === 'PUT'/.test(student));
   check('⭐ 头像白名单在**服务端**校验（不是只靠前端选择器）', /INVALID_AVATAR_KEY/.test(student) && /isAvatarKey/.test(student));
   check('PUT 只允许改两样，别的字段一律拒绝', /NOTHING_TO_UPDATE/.test(student));
+  // ⭐ 2026-09-27 用户口径：「名字默认就是机构给他创建的账号名啊，不需要匿名。也不需要小创作者。」
+  check('⭐ 主页不再有"匿名开关"（那条路已按用户口径删掉）',
+    !/showcaseAnonymous/.test(student) && !/INVALID_SHOWCASE_ANONYMOUS/.test(student));
+  check('⭐ 公开主页直接给 display_name，不再脱敏成「小创作者」/「X同学」',
+    !/let name = '小创作者'/.test(read('apps/server/src/routes/communication/public.js')));
+  // ⭐ 学生可以自己上传照片当头像（用户口径：「学生可以自行修改照片」）
+  check('⭐ 上传的头像要查四条：存在 / 是自己的 / 是图片 / **公开可见性**',
+    /AVATAR_ASSET_NOT_FOUND/.test(student) && /AVATAR_ASSET_NOT_OWNED/.test(student)
+    && /AVATAR_ASSET_NOT_IMAGE/.test(student) && /AVATAR_ASSET_NOT_PUBLIC/.test(student));
+  check('展示地址由服务端拼（avatarUrlOf），别让前端各写一份路由形状',
+    /export function avatarUrlOf/.test(read('apps/server/src/lib.js')) && /avatarUrl: avatarUrlOf\(/.test(student));
 
   const main = read('apps/website/src/main.jsx');
   check('公开路由 /u/:token 用 publicApi（不需要登录）',
@@ -107,12 +121,17 @@ console.log('④ 学生侧的设置接口 + 前端页面');
   check('浏览器标签页标题按 /u/ 前缀回落', /startsWith\('\/u\/'\)/.test(main));
   const home = read('apps/website/src/pages/CreatorHome.jsx');
   check('公开主页的头像是**只读展示**（不是按钮）', /data-testid="home-avatar-readonly"/.test(home));
-  check('⭐ 公开主页上没有任何写操作（改头像/改匿名只在学生自己那页）',
+  check('⭐ 公开主页上没有任何写操作（改头像只在学生自己那页）',
     !/api\.put|student\/home/.test(home) && !/onClick=\{save/.test(home));
   const myWorks = read('apps/website/src/pages/MyWorks.jsx');
   check('「我的作品」有主页入口 + 分享主页', /data-testid="open-home"/.test(myWorks) && /data-testid="share-home"/.test(myWorks));
   check('头像选择器 = 8 个预设 + 一个"用首字"', /data-testid="avatar-none"/.test(myWorks) && /AVATAR_KEYS\.map/.test(myWorks));
-  check('设置面板里有匿名开关与主页链接', /data-testid="anonymous-switch"/.test(myWorks) && /data-testid="home-url"/.test(myWorks));
+  check('⭐ 设置面板里能**上传自己的照片**（用户口径「学生可以自行修改照片」）',
+    /data-testid="avatar-upload"/.test(myWorks) && /accept="image\/\*"/.test(myWorks));
+  check('⭐ 上传用 PUBLIC_PLATFORM 可见性（用 PRIVATE 的话公开主页上是一张 403 破图）',
+    /visibility: 'PUBLIC_PLATFORM'/.test(myWorks));
+  check('头像三级优先：照片 > 预设 > 首字', /creator\.avatarUrl \? <img/.test(home) && /avatarPhoto \? <img/.test(myWorks));
+  check('设置面板里有主页链接', /data-testid="home-url"/.test(myWorks));
   check('我的作品与公开主页共用同一套封面/类型判定（不许各写一份）',
     /from '\.\.\/components\/workCard\.jsx'/.test(myWorks) && /from '\.\.\/components\/workCard\.jsx'/.test(home));
   const sitemapBlock = /PUBLIC_ROUTES = \[([\s\S]*?)\]/.exec(read('apps/server/src/index.js'));
@@ -194,12 +213,16 @@ console.log('⑤ 真请求：建号就有链接 → 主页只列已公开 → �
     check('⭐ 新建的学生**当场就有主页 token**（「创建了账号应该就有个主页的专属链接」）',
       /^ust_[0-9a-f]{24}$/.test(String(newbieHome.data?.homeToken || '')), JSON.stringify(newbieHome.data));
     check('主页链接形状是 /u/<token>', newbieHome.data?.homeUrl === `/u/${newbieHome.data?.homeToken}`);
-    check('默认是**匿名**（沿用 privacy_showcase_anonymous 的默认值 1）', newbieHome.data?.anonymous === true);
-    check('默认没有头像（avatarKey 为 null，前端退回"首字圆形"）', newbieHome.data?.avatarKey === null);
+    check('默认没有头像（avatarUrl 与 avatarKey 都是 null，前端退回"首字圆形"）',
+      newbieHome.data?.avatarKey === null && newbieHome.data?.avatarUrl === null);
 
     const login = await api('/api/auth/login', { method: 'POST', body: { login: 'student-1', password: 'study123' } });
     const token = login.data?.token;
     check('学生登录成功（下面几条都靠它）', Boolean(token), JSON.stringify(login.data).slice(0, 160));
+    // 另找一位学生：下面要用他的文件验"不能拿别人的图当头像"
+    const login2 = await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } });
+    const student2Token = login2.data?.token;
+    check('第二位学生也登录上了（验"别人的文件"用）', Boolean(student2Token), JSON.stringify(login2.data).slice(0, 120));
     const mine = await api('/api/student/home', { token });
     const homeToken = mine.data?.homeToken;
     check('存量学生也能拿到主页 token（ensureHomeToken 见到就补）', /^ust_/.test(String(homeToken || '')), JSON.stringify(mine.data));
@@ -211,21 +234,65 @@ console.log('⑤ 真请求：建号就有链接 → 主页只列已公开 → �
       titles.includes('P158 已公开') && !titles.includes('P158 没公开'), JSON.stringify(titles));
     check('⭐ 公开但**没确认展示授权**的也不列（与广场同一条判据）', !titles.includes('P158 公开但没确认授权'), JSON.stringify(titles));
     check('VibeCoding 那条公开链路也收进来了', titles.includes('P158 网页作品'), JSON.stringify(titles));
-    check('匿名时名字是「小创作者」（与广场同一套脱敏）', creator.data?.name === '小创作者', String(creator.data?.name));
+    // ⭐ 2026-09-27 用户口径：「名字默认就是机构给他创建的账号名啊，不需要匿名。也不需要小创作者。」
+    check('⭐ 主页显示的就是机构建号时那个名字（学生-1 的 display_name 是「小明」）',
+      creator.data?.name === '小明', String(creator.data?.name));
     check('作品数就是列表长度（不泄漏"还有几件没公开"）', creator.data?.workCount === (creator.data?.items || []).length);
 
+    const newbieCreator = await api(`/api/public/creators/${newbieHome.data?.homeToken}`);
+    check('⭐ 机构刚建的学生，主页上就是机构填的那个名字（「新同学」）',
+      newbieCreator.data?.name === '新同学', String(newbieCreator.data?.name));
+
     const bad = await api('/api/student/home', { method: 'PUT', token, body: { avatarKey: 'dragon' } });
-    check('⭐ 头像白名单在服务端把关（不在预设里的键被拒）', bad.status === 400, `HTTP ${bad.status}`);
+    check('⭐ 预设头像白名单在服务端把关（不在预设里的键被拒）', bad.status === 400, `HTTP ${bad.status}`);
     const empty = await api('/api/student/home', { method: 'PUT', token, body: {} });
     check('什么都不改的请求被拒（不静默成功）', empty.status === 400, `HTTP ${empty.status}`);
-    const saved = await api('/api/student/home', { method: 'PUT', token, body: { avatarKey: 'fox', showcaseAnonymous: false } });
-    check('改头像 + 关匿名：都存下来了', saved.data?.avatarKey === 'fox' && saved.data?.anonymous === false, JSON.stringify(saved.data));
+    const stale = await api('/api/student/home', { method: 'PUT', token, body: { showcaseAnonymous: false } });
+    check('⭐ 匿名开关那条路已经删掉（再传它一律拒，不是静默忽略）', stale.status === 400, `HTTP ${stale.status}`);
+    const saved = await api('/api/student/home', { method: 'PUT', token, body: { avatarKey: 'fox' } });
+    check('选预设头像存下来了', saved.data?.avatarKey === 'fox', JSON.stringify(saved.data));
     const creator2 = await api(`/api/public/creators/${homeToken}`);
-    check('公开主页上头像跟着变了', creator2.data?.avatarKey === 'fox', String(creator2.data?.avatarKey));
-    check('⭐ 关掉匿名后显示的是「首字 + 同学」，**不是完整姓名**（对外可见量不放宽）',
-      creator2.data?.name === '小同学', String(creator2.data?.name));
-    const back = await api('/api/student/home', { method: 'PUT', token, body: { showcaseAnonymous: true } });
-    check('能切回匿名', back.data?.anonymous === true);
+    check('公开主页上预设头像跟着变了', creator2.data?.avatarKey === 'fox', String(creator2.data?.avatarKey));
+
+    // ── 学生自己上传照片当头像（用户口径：「学生可以自行修改照片」）──────────────────
+    // 1×1 的真 PNG，走**真上传口**（不手插 file_assets 行）——这样连可见性参数一起验到。
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==', 'base64');
+    const upload = async (authToken, fields) => {
+      const form = new FormData();
+      for (const [key, value] of Object.entries(fields)) form.append(key, value);
+      form.append('file', new Blob([png], { type: 'image/png' }), 'avatar.png');
+      const response = await fetch(`http://127.0.0.1:${port}/api/student/file-assets/upload`, {
+        method: 'POST', headers: { authorization: `Bearer ${authToken}` }, body: form,
+      });
+      const payload = await response.json().catch(() => ({}));
+      return { status: response.status, data: payload?.data ?? payload };
+    };
+
+    const privateAsset = await upload(token, { category: 'GENERAL', visibility: 'PRIVATE' });
+    check('夹具：以 PRIVATE 上传一张图（下面那条要证明它会被拦）', Boolean(privateAsset.data?.id), JSON.stringify(privateAsset.data).slice(0, 140));
+    const privateAsAvatar = await api('/api/student/home', { method: 'PUT', token, body: { avatarAssetId: privateAsset.data?.id } });
+    check('⭐ PRIVATE 的图不能当头像（公开主页上会是 403 破图，服务端直接拦）',
+      privateAsAvatar.status === 400, `HTTP ${privateAsAvatar.status} ${JSON.stringify(privateAsAvatar.data).slice(0, 120)}`);
+    const mineAsset = await upload(token, { category: 'GENERAL', visibility: 'PUBLIC_PLATFORM' });
+    const othersAsset = await upload(student2Token, { category: 'GENERAL', visibility: 'PUBLIC_PLATFORM' });
+    check('夹具：另外两位各传一张公开图', Boolean(mineAsset.data?.id) && Boolean(othersAsset.data?.id));
+    const notImage = await upload(token, { category: 'GENERAL', visibility: 'PUBLIC_PLATFORM' });
+    check('夹具：再传一张（下面用它验"不是图片"那条 —— mime 由服务端按内容定，这里只造得出图片，'
+      + '所以「非图片」那条走静态断言，见 ④）', Boolean(notImage.data?.id));
+    const steal = await api('/api/student/home', { method: 'PUT', token, body: { avatarAssetId: othersAsset.data?.id } });
+    check('⭐ 不能拿别人的文件当自己的头像', steal.status === 403, `HTTP ${steal.status}`);
+    const noSuch = await api('/api/student/home', { method: 'PUT', token, body: { avatarAssetId: 'file_not_exist' } });
+    check('不存在的文件被拒', noSuch.status === 400, `HTTP ${noSuch.status}`);
+    const withPhoto = await api('/api/student/home', { method: 'PUT', token, body: { avatarAssetId: mineAsset.data?.id } });
+    check('⭐ 上传的照片当头像：存下来了', withPhoto.data?.avatarAssetId === mineAsset.data?.id, JSON.stringify(withPhoto.data).slice(0, 160));
+    check('服务端给出了展示地址', withPhoto.data?.avatarUrl === `/api/public/file-assets/${mineAsset.data?.id}/download`, String(withPhoto.data?.avatarUrl));
+    // 最要紧的一条：那个地址**未登录真能取到图**（否则公开主页上就是一张破图）
+    const photoResponse = await fetch(`http://127.0.0.1:${port}${withPhoto.data?.avatarUrl}`);
+    check('⭐ 那个展示地址**未登录真能取到图**（公开主页上不会是破图）', photoResponse.status === 200, `HTTP ${photoResponse.status}`);
+    const creator3 = await api(`/api/public/creators/${homeToken}`);
+    check('公开主页上带上了照片地址', creator3.data?.avatarUrl === withPhoto.data?.avatarUrl, String(creator3.data?.avatarUrl));
+    const removed = await api('/api/student/home', { method: 'PUT', token, body: { avatarAssetId: null } });
+    check('能移除照片（退回预设头像）', removed.data?.avatarAssetId === null && removed.data?.avatarUrl === null);
 
     const missing = await api('/api/public/creators/ust_000000000000000000000000');
     check('不存在的 token → 404（不是 500、也不是空白页）', missing.status === 404, `HTTP ${missing.status}`);
@@ -234,7 +301,8 @@ console.log('⑤ 真请求：建号就有链接 → 主页只列已公开 → �
     console.error(log.slice(-1500));
     console.error('真请求段异常：', error.message);
   } finally {
-    server.kill('SIGKILL');
+    // server 可能还没轮到 spawn 就失败了（比如 init 报错），所以要判空
+    server?.kill('SIGKILL');
     try { fs.rmSync(temp, { recursive: true, force: true }); } catch { /* 交给系统清理 */ }
   }
 }

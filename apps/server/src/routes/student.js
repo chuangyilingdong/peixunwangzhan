@@ -1,4 +1,4 @@
-import { asPositiveInteger, audit, clearAuthCookies, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, workCoverFromSnapshot, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, likeKeyword, likeEscapeClause, ensureHomeToken } from '../lib.js';
+import { asPositiveInteger, audit, clearAuthCookies, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, workCoverFromSnapshot, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, likeKeyword, likeEscapeClause, ensureHomeToken, avatarUrlOf } from '../lib.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
@@ -354,11 +354,11 @@ async function refreshStudentAccount(ctx, userId, orgId) {
 }
 
 /**
- * 个人主页设置（学生自己看的那一份）：主页链接 + 头像 + 匿名开关。
+ * 个人主页设置（学生自己看的那一份）：主页链接 + 头像（预设键或自己上传的照片）。
  *
- * ⚠️ `anonymous` 用既有列 `users.privacy_showcase_anonymous`（**默认 1 = 匿名**，见 schema.js）——
- *    那是给未成年人设计的隐私默认值，这里**只把它读出来交给界面**，不替用户改默认。
- *    对外显示成什么（「小创作者」还是「X同学」）由公开接口按同一个字段算，前端不算。
+ * ⚠️ 这里**不再有"匿名开关"**（2026-09-27 用户口径：「名字默认就是机构给他创建的账号名啊，不需要匿名。
+ *    也不需要小创作者。」）—— 主页直接显示 display_name。
+ *    作品广场那条链路没动：它仍按 `privacy_showcase_anonymous` 显示「小创作者」/「X同学」。
  * ⚠️ `patch` 是给 PUT 用的：刚写完库时 `auth.user` 还是旧值，不覆盖一下就会把旧值回给前端
  *    （界面就会出现"改了但没变"）。
  */
@@ -368,9 +368,8 @@ async function studentHomeSettings(auth, patch = {}) {
     homeToken: homeToken || null,
     homeUrl: homeToken ? `/u/${homeToken}` : null,
     avatarKey: patch.avatarKey !== undefined ? patch.avatarKey : (auth.user.avatarKey || null),
-    // 语义：true = **对外匿名**（显示为「小创作者」）。前端那个开关按这个语义标注，
-    // 别做成"显示我的名字"再反转一次 —— 反转错一次就是隐私事故（默认必须是匿名）。
-    anonymous: patch.anonymous !== undefined ? patch.anonymous : Boolean(auth.user.privacy?.showcaseAnonymous),
+    avatarAssetId: patch.avatarAssetId !== undefined ? patch.avatarAssetId : (auth.user.avatarAssetId || null),
+    avatarUrl: avatarUrlOf(patch.avatarAssetId !== undefined ? patch.avatarAssetId : auth.user.avatarAssetId),
     displayName: auth.user.displayName || auth.user.login || '',
   };
 }
@@ -472,37 +471,46 @@ export async function handleStudent(ctx) {
   }
 
   // ⭐ 2026-09-27：**个人主页设置**（用户口径「学生创建了账号应该就有个主页的专属链接。现在需要把
-  //    『我的作品』改成主页的概念。对外公开并且可以分享」+「头像修改要加上」）。
+  //    『我的作品』改成主页的概念。对外公开并且可以分享」+「头像修改要加上」+「学生可以自行修改照片」）。
   // GET 顺手 ensureHomeToken：存量学生（建号时还没有这一列）第一次打开就补上，
   // 不必等一次性回填脚本（脚本仍然要跑，目的是让链接**稳定**，不是"访问过才生成"）。
   if (part === '/home' && method === 'GET') return await studentHomeSettings(auth);
   if (part === '/home' && method === 'PUT') {
-    // 这里**只允许改两样**：头像、要不要在对外页面显示名字（匿名开关）。
-    // ⚠️ 名字本身（display_name）不在这里改 —— 那是机构端口径（同机构内不能重名），
-    //    与"对外显示成什么"是两件事，别混。
-    // ⚠️ 想清零头像就传 `avatarKey: null`（不是空串）。
+    // 这里**只允许改两样**：预设头像键、自己上传的照片。别的字段一律拒绝。
+    // ⚠️ 没有"匿名开关"了 —— 主页直接显示 display_name（用户口径 2026-09-27）。
+    // ⚠️ 想清空就传 `null`（不是空串）：`avatarKey: null` / `avatarAssetId: null`。
     const body = ctx.body || {};
-    const hasAvatar = Object.hasOwn(body, 'avatarKey');
-    const hasAnon = Object.hasOwn(body, 'showcaseAnonymous');
-    if (!hasAvatar && !hasAnon) throw errors.badRequest('没有要改的内容', 'NOTHING_TO_UPDATE');
-    if (hasAvatar && body.avatarKey !== null && !isAvatarKey(body.avatarKey)) {
+    const hasKey = Object.hasOwn(body, 'avatarKey');
+    const hasAsset = Object.hasOwn(body, 'avatarAssetId');
+    if (!hasKey && !hasAsset) throw errors.badRequest('没有要改的内容', 'NOTHING_TO_UPDATE');
+    if (hasKey && body.avatarKey !== null && !isAvatarKey(body.avatarKey)) {
       throw errors.badRequest('头像只能从预设里选', 'INVALID_AVATAR_KEY');
     }
-    if (hasAnon && typeof body.showcaseAnonymous !== 'boolean') {
-      throw errors.badRequest('showcaseAnonymous 必须是布尔值', 'INVALID_SHOWCASE_ANONYMOUS');
+    if (hasAsset && body.avatarAssetId !== null) {
+      // ⚠️ 三条都要查，缺一条就会出"看着保存成功、主页上却是一张破图"：
+      //    ① 文件得存在；② 得是**自己的**（别拿别人的 fileId 当头像）；③ 得是**图片**；
+      //    ④ 得是**公开可见性**——公开读口只放行 PUBLIC_PLATFORM/PUBLIC_RELEASE，
+      //       用默认的 PRIVATE 传上来，公开主页上就是 403 的破图（学生自己那页反而正常，最难查）。
+      const asset = await arow('SELECT id, owner_user_id, mime_type, visibility FROM file_assets WHERE id=?', [String(body.avatarAssetId)]);
+      if (!asset) throw errors.badRequest('头像文件不存在', 'AVATAR_ASSET_NOT_FOUND');
+      if (asset.owner_user_id !== auth.user.id) throw errors.forbidden('只能用自己上传的头像文件', 'AVATAR_ASSET_NOT_OWNED');
+      if (!String(asset.mime_type || '').startsWith('image/')) throw errors.badRequest('头像必须是图片', 'AVATAR_ASSET_NOT_IMAGE');
+      if (!['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(String(asset.visibility))) {
+        throw errors.badRequest('头像图要以公开可见性上传，否则对外看不到', 'AVATAR_ASSET_NOT_PUBLIC');
+      }
     }
     // 列名是这里写死的字面量、值走占位符（不拼用户输入）
     const sets = [];
     const params = [];
-    if (hasAvatar) { sets.push('avatar_key=?'); params.push(body.avatarKey); }
-    if (hasAnon) { sets.push('privacy_showcase_anonymous=?'); params.push(body.showcaseAnonymous ? 1 : 0); }
+    if (hasKey) { sets.push('avatar_key=?'); params.push(body.avatarKey); }
+    if (hasAsset) { sets.push('avatar_asset_id=?'); params.push(body.avatarAssetId); }
     params.push(nowIso(), auth.user.id);
     await aq(`UPDATE users SET ${sets.join(', ')}, updated_at=? WHERE id=?`, params);
     await audit(ctx, 'STUDENT_HOME_PROFILE_UPDATE', 'USER', auth.user.id, null,
-      { avatarKey: hasAvatar ? body.avatarKey : undefined, showcaseAnonymous: hasAnon ? body.showcaseAnonymous : undefined });
+      { avatarKey: hasKey ? body.avatarKey : undefined, avatarAssetId: hasAsset ? body.avatarAssetId : undefined });
     return await studentHomeSettings(auth, {
-      ...(hasAvatar ? { avatarKey: body.avatarKey } : {}),
-      ...(hasAnon ? { anonymous: body.showcaseAnonymous } : {}),
+      ...(hasKey ? { avatarKey: body.avatarKey } : {}),
+      ...(hasAsset ? { avatarAssetId: body.avatarAssetId } : {}),
     });
   }
 

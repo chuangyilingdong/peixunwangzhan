@@ -60,18 +60,33 @@ const newToken = () => `ust_${randomUUID().replaceAll('-', '').slice(0, 24)}`;
 console.log(`目标库：${database}（凭据 ${defaultsFile}）${apply ? '' : ' · 试运行（加 --apply 才真写）'}`);
 
 // ── ① 列 ────────────────────────────────────────────────────────────────
-let columnReady = false;
-const column = query("SELECT COLUMN_NAME, COLUMN_TYPE FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='users' AND column_name='home_token'").trim();
-if (column) {
-  columnReady = true;
-  console.log(`① 列已存在：${column}`);
-} else if (!apply) {
-  console.log('① 要加列：users.home_token VARCHAR(64) NULL');
-} else {
-  query('ALTER TABLE users ADD COLUMN home_token VARCHAR(64) NULL');
-  columnReady = true;
-  console.log('① 已加列：users.home_token VARCHAR(64) NULL');
+// 个人主页这个功能要的两列（都是**加列**，不动已有数据）：
+//   · home_token：主页 token，**要建唯一索引** → 类型必须能当索引键 → VARCHAR(64)。
+//   · avatar_asset_id：学生自己上传的头像图（file_assets 的 id）。**不索引** ——
+//     所以类型跟 12 号生成器的规则走（非索引 TEXT → MEDIUMTEXT），与 production 里
+//     `billing_package_id` / `student_usage_scope` 那两个同类列保持一致（否则结构对齐会对不上）。
+// ⚠️ 两列都必须**先于发版**加上：新代码的建号 INSERT 与 normalizeUser 会读它们。
+const REQUIRED_COLUMNS = [
+  { name: 'home_token', ddl: 'VARCHAR(64) NULL', why: '主页 token（建唯一索引，所以是 VARCHAR）' },
+  { name: 'avatar_asset_id', ddl: 'MEDIUMTEXT NULL', why: '上传的头像图（不索引，跟随生成器规则的 MEDIUMTEXT）' },
+];
+let columnsReady = true;
+for (const column of REQUIRED_COLUMNS) {
+  const existing = query(`SELECT COLUMN_NAME, COLUMN_TYPE FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='users' AND column_name='${column.name}'`).trim();
+  if (existing) {
+    console.log(`① 列已存在：${existing}`);
+    continue;
+  }
+  columnsReady = false;
+  if (!apply) {
+    console.log(`① 要加列：users.${column.name} ${column.ddl}（${column.why}）`);
+    continue;
+  }
+  query(`ALTER TABLE users ADD COLUMN ${column.name} ${column.ddl}`);
+  console.log(`① 已加列：users.${column.name} ${column.ddl}`);
 }
+// 试运行时上面只是"说要做什么"，后面几步依赖列真的存在 —— 用一个总闸判断
+const columnReady = columnsReady || apply;
 
 // ── ② 唯一索引 ──────────────────────────────────────────────────────────
 const index = query("SELECT INDEX_NAME, NON_UNIQUE FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='users' AND index_name='idx_users_home_token'").trim();

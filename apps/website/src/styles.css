@@ -1145,3 +1145,8 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 .sw-avatar-option.is-active{border-color:var(--purple)}
 .sw-avatar-option--none{color:#5e5870;font-size:13px;font-weight:900}
 .sw-avatar-option:disabled{opacity:.5;cursor:default}
+/* 头像里的照片（2026-09-27 用户口径「学生可以自行修改照片」）：铺满那个圆形、裁成正方形。
+   `.sw-avatar` 是 64px 圆 + place-items:center，img 给满宽高 + object-fit:cover 就不会变形。 */
+.sw-avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}
+.sw-home-panel__upload{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 12px}
+.sw-home-panel__upload label.button{cursor:pointer}

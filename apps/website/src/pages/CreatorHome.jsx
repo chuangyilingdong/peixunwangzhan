@@ -51,8 +51,11 @@ export function CreatorHomePage({ api }) {
 
   return <main className="inner student-page student-home-page">
     <header className="sw-profile">
-      {/* 这一页是**只读展示**：头像不是按钮（改头像只在学生自己的「我的作品」页上）。 */}
-      <div className="sw-avatar" data-testid="home-avatar-readonly" aria-hidden="true">{glyph || initial}</div>
+      {/* 这一页是**只读展示**：头像不是按钮（改头像只在学生自己的「我的作品」页上）。
+          三级优先：学生上传的照片 > 预设头像 > 名字首字。 */}
+      <div className="sw-avatar" data-testid="home-avatar-readonly" aria-hidden="true">
+        {creator.avatarUrl ? <img src={creator.avatarUrl} alt="" /> : (glyph || initial)}
+      </div>
       <div className="sw-profile-main">
         <h1 data-testid="home-name">{creator.name}</h1>
         <p className="sw-stats">
