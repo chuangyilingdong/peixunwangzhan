@@ -32,9 +32,9 @@ export const PREVIEW_MAX_HEIGHT = 4000;
  * @param html 完整的 HTML 文档字符串
  * @param onConsole 可选：(line) => void，接收学生页面里的 console 输出
  * @param reloadKey 变化即重新投递（用于「重新运行」）
- * @param growToContent 可选：**按"这份文档有多高"把框长到那么高**（见下）
+ * @param fitContent 可选：**按"这份文档有多高"来缩放**（见下）
  */
-export function PreviewFrame({ html, className = '', stageClassName = '', title = '预览', onConsole, reloadKey = 0, fitToLogical = false, growToContent = false }) {
+export function PreviewFrame({ html, className = '', stageClassName = '', title = '预览', onConsole, reloadKey = 0, fitToLogical = false, fitContent = false }) {
   const frameRef = useRef(null);
   const boxRef = useRef(null);
   const [fit, setFit] = useState(null);
@@ -77,38 +77,49 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
   // 量可用空间 → 算出「至少 PREVIEW_LOGICAL_MIN」的逻辑视口 → 整体缩放（口径㉕）。
   // 量不到（老浏览器 / DOM 桩里没有 ResizeObserver）就不设样式，退回原来的"铺满框体"。
   //
-  // ⭐ `growToContent`（2026-09-27 用户口径）：「这里的展示应该是**大的作品预览**」+
-  //    「点下一页 2/12 这里出现（滚动条）」—— 学生的 PPT 式网页比写死的 768 高，内层就自己滚起来。
-  //    开了它就**只按宽度**定缩放，高度按内层报上来的内容高度（至少 768、至多 PREVIEW_MAX_HEIGHT）：
-  //    内层永远不会出现滚动条，多出来的高度交给**外层页面**滚 —— 这才是"大预览"。
+  // ⭐ `fitContent`（2026-09-27 用户口径「做成图2这样……大大方方的。自适应。」）：
+  //    **逻辑视口高度改用"内层自报的真实内容高度"**，缩放仍然**同时受宽度和高度约束** ——
+  //    于是整份作品都装得进这个框（内层不会出现滚动条），而框本身**不长大**（页面不会变成几千像素、
+  //    把下面的按钮顶出首屏）。
+  //
+  //    ⚠️ 这里踩过一次：第一版做成"框跟着内容长"，结果一个 1400px 高的作品把页面撑到 1400px，
+  //    底下的按钮全在首屏之外（用户报「下方的按钮都看不到了」）。**"整幅装下"和"框长大"是两回事**，
+  //    要的是前者。
   useLayoutEffect(() => {
     if (!fitToLogical) return undefined;
     const box = boxRef.current;
     if (!box || typeof ResizeObserver !== 'function') return undefined;
     const measure = () => {
       const w = box.clientWidth;
-      if (!w) return;
-      const next = growToContent
-        ? (() => {
-          const scale = Math.min(1, w / PREVIEW_LOGICAL_MIN.w);
-          const height = Math.min(PREVIEW_MAX_HEIGHT, Math.max(PREVIEW_LOGICAL_MIN.h, contentHeight || 0));
-          return { scale, w: w / scale, h: height };
-        })()
-        : (() => {
-          const h = box.clientHeight;
-          if (!h) return null;
-          const scale = Math.min(1, w / PREVIEW_LOGICAL_MIN.w, h / PREVIEW_LOGICAL_MIN.h);
-          return { scale, w: w / scale, h: h / scale };
-        })();
-      // 值没变就别 setState：grow 模式下"设框高 → ResizeObserver 又触发"很容易来回抖
-      if (!next) return;
-      setFit((current) => (current && current.scale === next.scale && current.w === next.w && current.h === next.h ? current : next));
+      const h = box.clientHeight;
+      if (!w || !h) return;
+      // fitContent：高度按内层自报的内容高度（至少 768、至多 PREVIEW_MAX_HEIGHT ——
+      // 上限是给"内容随视口一起长"的那类页面兜底的）；其余情况沿用老口径（高度就取框高）。
+      const logicalH = fitContent ? Math.min(PREVIEW_MAX_HEIGHT, Math.max(PREVIEW_LOGICAL_MIN.h, contentHeight || 0)) : h;
+      const scale = Math.min(1, w / PREVIEW_LOGICAL_MIN.w, h / logicalH);
+      const next = { scale, w: w / scale, h: logicalH, boxW: w, boxH: h };
+      // 值没变就别 setState：ResizeObserver 触发很密
+      setFit((current) => (current && current.scale === next.scale && current.w === next.w && current.h === next.h
+        && current.boxW === next.boxW && current.boxH === next.boxH ? current : next));
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(box);
     return () => observer.disconnect();
-  }, [fitToLogical, growToContent, contentHeight, html, reloadKey]);
+  }, [fitToLogical, fitContent, contentHeight, html, reloadKey]);
+
+  // ⚠️ fitContent 下框要**居中**，但**不能让框参与舞台的布局**：
+  //    第一版把 iframe 改成 `position:static` + grid 居中，结果框的宽度反过来把舞台撑大 →
+  //    ResizeObserver 又量到更大的宽 → 逻辑视口算出 64868900px（正反馈，实测踩到）。
+  //    现在框仍是绝对定位（CSS 里那条），居中靠 transform 的 translate 自己算 —— 不参与布局就没有反馈。
+  const frameStyle = !fit ? undefined : (fitContent
+    ? {
+      width: `${fit.w}px`,
+      height: `${fit.h}px`,
+      transform: `translate(${Math.round((fit.boxW - fit.w * fit.scale) / 2)}px, ${Math.round((fit.boxH - fit.h * fit.scale) / 2)}px) scale(${fit.scale})`,
+      transformOrigin: 'top left',
+    }
+    : { width: `${fit.w}px`, height: `${fit.h}px`, transform: `scale(${fit.scale})`, transformOrigin: 'top left' });
 
   const frame = (
     <iframe
@@ -117,13 +128,10 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
       title={title}
       sandbox="allow-scripts"
       src={PREVIEW_SHELL_URL}
-      style={fit ? { width: `${fit.w}px`, height: `${fit.h}px`, transform: `scale(${fit.scale})`, transformOrigin: 'top left' } : undefined}
+      style={frameStyle}
     />
   );
   // 不开适配时保持**原样结构**（工作台的编辑预览与手机模拟器自己有 stage，别动它们）
   if (!fitToLogical) return frame;
-  // grow 模式：舞台高度得**显式**写成缩放后的高度 —— 里面的 iframe 是绝对定位（不贡献高度），
-  // 而 CSS 的 `transform: scale()` 又不影响布局盒，不写就会留一大截空白。
-  const stageStyle = fit && growToContent ? { height: `${Math.round(fit.h * fit.scale)}px` } : undefined;
-  return <div ref={boxRef} className={`c-preview__stage ${stageClassName}`.trim()} style={stageStyle}>{frame}</div>;
+  return <div ref={boxRef} className={`c-preview__stage ${stageClassName}`.trim()}>{frame}</div>;
 }

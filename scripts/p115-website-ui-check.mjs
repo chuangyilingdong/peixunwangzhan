@@ -1117,6 +1117,28 @@ try {
   if (!photoState.isImg) problems.push('我的作品：上传照片后头像位应当变成图片');
   if (!/\/api\/public\/file-assets\/.+\/download$/.test(photoState.src)) problems.push(`我的作品：头像图应当走公开读口（实际「${photoState.src}」）`);
   if (!photoState.loaded) problems.push('我的作品：自己那页的头像图应当真的加载出来（naturalWidth === 0 说明是破图）');
+  // ⭐ 2026-09-27 用户报「上传了头像变成了这样」（截图里是个**竖椭圆**）——
+  //    钉两头：头像位必须是**正圆**、里面的图必须**铺满**那个圆（不是被压扁的窄条）。
+  const avatarGeo = await page.evaluate(() => {
+    const box = document.querySelector('[data-testid="home-avatar"]');
+    if (!box) return null;
+    const rect = box.getBoundingClientRect();
+    const image = box.querySelector('img');
+    const imgRect = image?.getBoundingClientRect();
+    return {
+      boxW: Math.round(rect.width), boxH: Math.round(rect.height),
+      imgW: imgRect ? Math.round(imgRect.width) : 0, imgH: imgRect ? Math.round(imgRect.height) : 0,
+      radius: getComputedStyle(box).borderRadius,
+    };
+  });
+  console.log(`  · 头像位几何：${avatarGeo?.boxW}×${avatarGeo?.boxH}px（圆角 ${avatarGeo?.radius}）、里面的图 ${avatarGeo?.imgW}×${avatarGeo?.imgH}px`);
+  if (!avatarGeo) problems.push('我的作品：取不到头像位几何');
+  else {
+    if (Math.abs(avatarGeo.boxW - avatarGeo.boxH) > 2) problems.push(`我的作品：头像位必须是正圆（实际 ${avatarGeo.boxW}×${avatarGeo.boxH}）—— 用户 2026-09-27 报的"变成竖椭圆"`);
+    if (Math.abs(avatarGeo.imgW - avatarGeo.imgH) > 2 || Math.abs(avatarGeo.imgW - avatarGeo.boxW) > 2) {
+      problems.push(`我的作品：头像图应当铺满头像位（图 ${avatarGeo.imgW}×${avatarGeo.imgH} vs 位 ${avatarGeo.boxW}×${avatarGeo.boxH}）`);
+    }
+  }
   await shot('19h-avatar-photo');
   await page.goto(creatorUrl, { waitUntil: 'domcontentloaded' });
   await settle();
@@ -1220,11 +1242,11 @@ try {
   await page.setViewportSize({ width: 1440, height: 960 });
   await settle();
 
-  // 静态钉子：两处"对外看作品"的详情页都要开着 `growToContent`（预览框跟着内容长，
+  // 静态钉子：两处"对外看作品"的详情页都要开着 `fitContent`（预览框跟着内容长，
   // 内层才不会出现滚动条 —— 用户 2026-09-27 报的那根「点下一页 2/12 出现的滚动条」）。
   for (const file of ['apps/website/src/pages/WorkDetail.jsx', 'apps/website/src/pages/MyWorkDetail.jsx']) {
-    if (!/<ReplayPreview[^>]*growToContent/.test(fs.readFileSync(path.join(root, file), 'utf8'))) {
-      problems.push(`${file}：作品预览应当开着 growToContent（否则比逻辑视口高的作品内层会出现滚动条）`);
+    if (!/<ReplayPreview[^>]*fitContent/.test(fs.readFileSync(path.join(root, file), 'utf8'))) {
+      problems.push(`${file}：作品预览应当开着 fitContent（否则比逻辑视口高的作品内层会出现滚动条）`);
     }
   }
 
@@ -1277,9 +1299,16 @@ try {
     else if (viewer.layoutH + 1 < viewer.reportedHeight) {
       problems.push(`作品预览：⭐ 内层视口 ${viewer.layoutH} 比内容 ${viewer.reportedHeight} 矮 —— 内层会出现滚动条（用户 2026-09-27 报的那根）`);
     }
-    // 舞台高度必须**正好**是缩放后的框高（框是绝对定位、scale 又不影响布局盒，写错了就会留白或裁掉）
-    const expectedStage = Math.round(viewer.layoutH * viewer.scale);
-    if (Math.abs(viewer.stageH - expectedStage) > 2) problems.push(`作品预览：舞台高度应为缩放后的框高 ${expectedStage}px（实际 ${viewer.stageH}px）`);
+    // ⭐ 2026-09-27（第二轮口径）：「做成图2这样……大大方方的。自适应。」——
+    //    舞台**不许跟着内容长**（那一版把页面撑到 1400px、底下按钮全出首屏：用户「下方的按钮都看不到了」），
+    //    而是固定成"高一档、按屏幕自适应"的高度，作品**整幅缩放进得去**。
+    const viewportH = await page.evaluate(() => window.innerHeight);
+    const expectedStage = Math.min(Math.round(viewportH * 0.78), 920);
+    if (Math.abs(viewer.stageH - expectedStage) > 6) problems.push(`作品预览：舞台高度应当自适应为 ${expectedStage}px（实际 ${viewer.stageH}px）—— 不该跟着内容长`);
+    if (viewer.layoutH * viewer.scale > viewer.stageH + 2) problems.push(`作品预览：缩放后的框（${Math.round(viewer.layoutH * viewer.scale)}px）比舞台（${viewer.stageH}px）还高，会被裁掉`);
+    const pageHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+    console.log(`  · 整页高度 ${pageHeight}px（视口 ${viewportH}px，比值 ${(pageHeight / viewportH).toFixed(2)}）`);
+    if (pageHeight > viewportH * 1.9) problems.push(`作品详情：整页高 ${pageHeight}px（视口的 ${(pageHeight / viewportH).toFixed(2)} 倍）—— 底下的按钮会被顶出首屏（用户 2026-09-27 报的「下方的按钮都看不到了」）`);
     if (!/allow-scripts/.test(viewer.sandbox) || /allow-same-origin/.test(viewer.sandbox)) problems.push(`作品预览：沙箱属性不对（${viewer.sandbox}）`);
     // 顺手量一下右上角那排按钮：`.c-page__actions` 是 `flex:none` **不换行**，按钮一多就会挤到一起
     // （2026-09-27 在截图里看到「分享」和「← 返回我的主页」叠在一起）。

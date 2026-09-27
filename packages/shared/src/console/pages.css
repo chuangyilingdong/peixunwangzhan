@@ -237,3 +237,11 @@
    让按钮保持自然宽度、窄了就换行。 */
 .c-page__actions { flex-wrap: wrap; }
 .c-page__actions > * { flex: none; }
+
+/* 「对外看作品」那两页的预览舞台（2026-09-27 用户口径「做成图2这样……大大方方的。自适应。」）：
+   比默认的 62vh 高一档、按屏幕自适应，作品整幅缩放进得去（缩放同时受宽高约束，见 PreviewFrame 的 fitContent）。
+   居中显示（iframe 在 fitContent 下把 transform-origin 也换成 center），上下留白由深色底吃住。 */
+.c-replay__stage--tall { height: min(78vh, 920px); }
+/* ⚠️ iframe 仍然绝对定位（不参与布局）：居中由 PreviewFrame 用 transform: translate 自己算。
+   改成 static + grid 居中会让框的宽度反过来撑大舞台 → 逻辑视口正反馈跑飞（2026-09-27 实测）。 */
+@media (max-width: 700px) { .c-replay__stage--tall { height: 68vh; } }

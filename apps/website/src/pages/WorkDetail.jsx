@@ -184,7 +184,7 @@ export function WorkDetailPage({ api }) {
                   />
                 </ReplayPanel>
               ) : (
-                <ReplayPreview html={buildPreviewDocument(files, current.name)} title={work.title} growToContent />
+                <ReplayPreview html={buildPreviewDocument(files, current.name)} title={work.title} fitContent />
               )}
             </div>
           </div>
