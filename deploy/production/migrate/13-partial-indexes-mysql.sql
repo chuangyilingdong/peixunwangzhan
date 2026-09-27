@@ -17,6 +17,15 @@
 -- ⚠️ 执行顺序：等 12 号脚本生成的建表语句灌完**之后**再跑这个（表得先存在）。
 -- ⚠️ 拼接必须包一层 MD5：CONCAT() 返回 TEXT，MySQL **不允许**在返回 TEXT/BLOB 的表达式上建索引
 --   （实测 ERROR 3757），而 MD5 返回 32 字符的字符串 —— 既躲开类型限制，也躲开 3072 字节的键长上限。
+--   ⚠️ ⭐ 2026-09-27 修正这条规矩的适用范围：**不只是 CONCAT** —— 任何**返回裸 TEXT/BLOB 列**的
+--   表达式一样建不出来。而这一天之前的「444 列拉齐 MEDIUMTEXT」把 `course_series.title` 与
+--   `organizations.org_code` 变成了 MEDIUMTEXT，于是下面 C 组里那两条**直接返回裸列**的表达式
+--   变成了"线上还在、但再也建不出来"的定时炸弹：
+--     · 线上没事（索引当初是按 VARCHAR 建的，MySQL 不会回头重新校验）；
+--     · **一旦按转储重建就炸** —— 也就是**备份恢复不了**（2026-09-27 实测：mysqldump 出来的转储
+--       灌进 MySQL 8.0.46 时，`course_series` / `organizations` 两张表直接建不起来，各带 4 条
+--       `ERROR 1146` 的 INSERT 连带失败）。**只看"备份有没有生成"是看不见这个的。**
+--     所以：C 组里凡是表达式里出现列的，一律包 MD5（下面两条已改）。
 -- ⚠️ 分隔符用 `:`：所有 id 都是 `前缀_随机串` 形状，不含 `:`，所以拼起来不会撞。
 
 -- ─────────────────────────── A. 普通索引（原来就不是唯一） ───────────────────────────
@@ -44,12 +53,14 @@ CREATE UNIQUE INDEX `idx_classes_org_active_name` ON `classes`
   ((IF(`status` = 'ACTIVE', MD5(CONCAT(`org_id`, ':', `name`)), NULL)));
 
 -- 「平台自营的课程系列标题不能重复」
+-- ⚠️ 包 MD5 是**必须**的：`title` 现在是 MEDIUMTEXT，裸列建不出函数索引（见文件头 2026-09-27 那条）。
 CREATE UNIQUE INDEX `idx_course_series_platform_title` ON `course_series`
-  ((IF(`owner_type` = 'PLATFORM', `title`, NULL)));
+  ((IF(`owner_type` = 'PLATFORM', MD5(`title`), NULL)));
 
 -- 「机构码必须唯一，且空串不算」（注意：不能只写 UNIQUE(org_code)，否则多个空串会互相冲突）
+-- ⚠️ 同上：`org_code` 现在是 MEDIUMTEXT，必须包 MD5。
 CREATE UNIQUE INDEX `idx_organizations_org_code` ON `organizations`
-  ((IF(`org_code` IS NULL OR `org_code` = '', NULL, `org_code`)));
+  ((IF(`org_code` IS NULL OR `org_code` = '', NULL, MD5(`org_code`))));
 
 -- 「同一供应商账号 + 同一账期 + 同一响应内容，只能有一条已抓取的成功快照」（幂等键）
 CREATE UNIQUE INDEX `idx_provider_bill_snapshot_idempotency` ON `provider_bill_snapshots`
