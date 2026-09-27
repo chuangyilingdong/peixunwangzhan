@@ -124,19 +124,27 @@ assert.match(authorizationPage, /SearchSelect ariaLabel="搜索课包" value=\{s
 assert.match(authorizationPage, /SearchSelect ariaLabel="搜索机构" value=\{orgId\}/);
 assert.equal((authorizationPage.match(/ariaLabel="搜索课包"/g) || []).length, 1);
 assert.equal((authorizationPage.match(/ariaLabel="搜索机构"/g) || []).length, 1);
-assert.match(authorizationPage, /license-purchases\/append/);
+// ⚠️ 2026-09-27 口径变更（**不是测试漂移**）：用户口径「图4 添加库存还能授权给机构，图5图6 这里也能授权给机构、
+//    也能添加次数。很多重复的逻辑和操作。梳理下能合并就合并」——
+//    采购追加入口从「授权与人次流水」页（Organizations.jsx）**搬进了机构页的「调整授权次数」抽屉**
+//    （OrganizationQuota.jsx，与平台调整二选一）。所以这条断言改看新家；老页面里**不该**再有这个调用。
+assert.match(fs.readFileSync(new URL('../apps/admin/src/pages/OrganizationQuota.jsx', import.meta.url), 'utf8'), /license-purchases\/append/);
+assert.doesNotMatch(authorizationPage, /license-purchases\/append/);
 // 授权有效期不再由平台填（2026-09-16 口径）：界面上**不该**再有这个调用了，
 // 取而代之的是「跟随机构合同到期日」的说明。哪天有人把入口加回来，这里会红。
 assert.doesNotMatch(authorizationPage, /assignments\/validity/);
 assert.match(authorizationPage, /合同到期日/);
 assert.match(authorizationPage, /deepLink\.get\('seriesId'\)/);
 assert.match(authorizationPage, /deepLink\.get\('orgId'\)/);
-assert.match(authorizationPage, /实际成交总额（元）/);
-assert.match(authorizationPage, /paymentStatus: 'PAID'/);
-assert.match(authorizationPage, /收款状态<input value="已收款" readOnly/);
-assert.doesNotMatch(authorizationPage, /<option value="(?:PARTIAL|UNPAID|REFUNDED)"/);
-assert.match(authorizationPage, /订单号/);
-assert.match(authorizationPage, /合同号/);
+// ⚠️ 2026-09-27 口径变更：成交/收款字段随「采购追加」一起搬进机构页的抽屉（OrganizationQuota.jsx）——
+//    这里改成对**新家**断言。旧的「已收款 readOnly + 不给 PARTIAL/UNPAID/REFUNDED」那条口径**变了**：
+//    抽屉里现在给三种收款状态（已收款/待收款/已退款），因为那是运营在登记真实收款，不是只放行已收款。
+const quotaPage = fs.readFileSync(new URL('../apps/admin/src/pages/OrganizationQuota.jsx', import.meta.url), 'utf8');
+assert.match(quotaPage, /实际成交总额（元）/);
+assert.match(quotaPage, /paymentStatus: purchase\.paymentStatus/);
+assert.match(quotaPage, /<option value="PAID">已收款<\/option><option value="PENDING">待收款<\/option><option value="REFUNDED">已退款<\/option>/);
+assert.match(quotaPage, /订单号/);
+assert.match(quotaPage, /合同号/);
 assert.match(authorizationPage, /未知（历史导入）/);
 assert.doesNotMatch(authorizationPage, /select multiple|可多选|保存购买 \/ 续期/);
 

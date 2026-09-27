@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayFiles, ReplayPanel, ReplayPreview, ReplayShell, WorkMediaGallery, artifactGroup, formatDate, workPlazaLabel } from '@platform/shared';
+import { buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayPanel, ReplayPreview, ReplayShell, WorkMediaGallery, artifactGroup, formatDate, workPlazaLabel } from '@platform/shared';
 
 /** 快照里的私有素材地址 → fileId（服务端拼的 imageUrls 用的就是这个地址）。 */
 function fileIdOfAssetUrl(value) {
@@ -250,10 +250,9 @@ export function MyWorkDetailPage({ api }) {
           <ConsoleIcon name="download" size={14} /> 下载原文件《{selectedDocument.name}》
         </button> : null}
       </div>
-      {Object.keys(files).length ? <details className="mw-source">
-        <summary>它是怎么写出来的（{Object.keys(files).length} 个文件）</summary>
-        <ReplayFiles files={files} entryFile={webArtifact?.name || work.entryFile} />
-      </details> : null}
+      {/* ⚠️ 2026-09-27 用户口径：「学生自己登录后的『我的作品』详情页代码块也要删」——
+          原来这里是 `<details>它是怎么写出来的（N 个文件）</details>` 的源码清单（一个 HTML 就几屏长）。
+          与公开作品页同一处理：成品预览与「下载原文件」都还在，想看正文下载即可。 */}
     </ReplayShell>
   </main>;
 }

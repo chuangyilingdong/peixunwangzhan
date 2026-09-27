@@ -578,6 +578,17 @@ async function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
     orgName: row.org_name || null,
     studentName,
     preview: submissionPreview(row),
+    // ⭐ 2026-09-27 用户口径：「图1 为什么还有作品还是默认界面」——VibeCoding 作品也能有**真封面**：
+    //    它没有画布快照，但页面里可能带图（生成图/附件图/内嵌图，见 snapshotImageFileIds）。
+    //    有图就用第一张（走公开口 `/api/public/vibecoding-works/<token>/images/<fileId>`）；
+    //    一张图都没有的（例如纯代码的小游戏）仍然没有真封面可用 —— 前端继续用那张按类型画的插图，
+    //    要做成"页面截图"得在客户端截或在服务器跑无头浏览器（这台机明确不跑，见 §〇）。
+    coverUrl: (() => {
+      const first = [...snapshotImageFileIds(row)][0];
+      return first && row.share_token
+        ? `/api/public/vibecoding-works/${encodeURIComponent(row.share_token)}/images/${encodeURIComponent(first)}`
+        : null;
+    })(),
     ...(includeFiles ? { files, artifacts: publicArtifactCatalog(row) } : {}),
   };
 }

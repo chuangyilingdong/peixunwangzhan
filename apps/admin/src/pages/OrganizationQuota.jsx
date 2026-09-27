@@ -152,6 +152,11 @@ function AddPackageDrawer({ api, orgId = '', options = [], assignedIds = new Set
 function AdjustQuotaDrawer({ api, orgId = '', assignment = null, assignments = [], seriesById = new Map(), onClose = () => {}, onDone = () => {} }) {
   const [direction, setDirection] = useState('ADD');
   const [value, setValue] = useState('');
+  // ⭐ 2026-09-27（合并重复入口）：加次数只有这一个地方。原来「是不是采购」要换一个页面填
+  //    （「授权与人次流水」的追加次数表单）—— 用户口径「很多重复的逻辑和操作，能合并就合并」，
+  //    于是把成交/收款字段搬进来：平台调整（不记钱）与机构采购（记批次+收入台账）在这里二选一。
+  const [recordMode, setRecordMode] = useState('ADJUST');
+  const [purchase, setPurchase] = useState({ amount: '', currency: 'CNY', paymentStatus: 'PAID', orderNo: '', contractNo: '' });
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -168,16 +173,33 @@ function AdjustQuotaDrawer({ api, orgId = '', assignment = null, assignments = [
   const nextTotal = total + delta;
   const belowUsed = nextTotal < used;
   const reasonValid = reason.trim().length > 0 && reason.trim().length <= 200;
+  const isPurchase = direction === 'ADD' && recordMode === 'PURCHASE';
+  const purchaseValid = !isPurchase || Number(purchase.amount) > 0;
 
   async function submit() {
     if (!amountValid) { setError('调整数值必须是大于 0 的整数'); return; }
     if (!reasonValid) { setError('请填写调整原因（不超过 200 字）'); return; }
+    if (!purchaseValid) { setError('采购追加要填实际成交总额（元）'); return; }
     if (belowUsed) { setError(`调整后总授权次数不能少于当前已授权次数（${used} 次）`); return; }
     setBusy(true); setError('');
     try {
-      await api.post(`admin/organizations/${encodeURIComponent(orgId)}/course-quotas/${encodeURIComponent(current.seriesId)}/adjust`, { delta, reason: reason.trim() });
-      setValue('');
-      onDone(`已调整课包「${current.title}」的授权次数：总授权次数 ${total} → ${nextTotal} 次。`);
+      if (isPurchase) {
+        // 采购：走原来「追加次数」那条接口（写许可批次 + 收入台账），字段与那边逐字一致。
+        await api.post('admin/license-purchases/append', {
+          seriesId: current.seriesId, orgId, additionalQuota: amount,
+          amountMinor: Math.round(Number(purchase.amount) * 100), currency: purchase.currency,
+          paymentStatus: purchase.paymentStatus,
+          ...(purchase.orderNo.trim() ? { orderNo: purchase.orderNo.trim() } : {}),
+          ...(purchase.contractNo.trim() ? { contractNo: purchase.contractNo.trim() } : {}),
+          idempotencyKey: `admin-quota-purchase-${orgId}-${current.seriesId}-${Date.now()}`,
+        });
+        setValue(''); setPurchase({ amount: '', currency: 'CNY', paymentStatus: 'PAID', orderNo: '', contractNo: '' });
+        onDone(`已给课包「${current.title}」追加 ${amount} 次并记入采购与收款（成交 ${purchase.amount} 元）。`);
+      } else {
+        await api.post(`admin/organizations/${encodeURIComponent(orgId)}/course-quotas/${encodeURIComponent(current.seriesId)}/adjust`, { delta, reason: reason.trim() });
+        setValue('');
+        onDone(`已调整课包「${current.title}」的授权次数：总授权次数 ${total} → ${nextTotal} 次。`);
+      }
     } catch (failure) {
       // 服务端在「总授权次数不得小于已授权次数」时返回 409，message 里带「当前已授权次数」——原样就地显示。
       setError(failure.message);
@@ -212,23 +234,41 @@ function AdjustQuotaDrawer({ api, orgId = '', assignment = null, assignments = [
               <label className="checkbox-option"><input type="radio" name="quota-direction" checked={direction === 'REDUCE'} onChange={() => { setDirection('REDUCE'); setError(''); }} />减少</label>
             </div>
           </div>
+          {/* ⭐ 2026-09-27 用户口径（合并重复入口）：「很多重复的逻辑和操作。梳理下能合并就合并」——
+              原来「机构真的付了钱」要去另一个页面（授权与人次流水 → 追加次数）填成交/收款，
+              这里只能"不记钱地调整"。现在两条路都收在这一个抽屉里，按「这次增加怎么记」二选一；
+              各自记的东西不变：平台调整补 0 金额平台批次（保证机构能发课），机构采购写许可批次 + 收入台账。 */}
+          {direction === 'ADD' ? <div>
+            <span className="org-field-label">这次增加怎么记</span>
+            <div className="row-actions">
+              <label className="checkbox-option"><input type="radio" name="quota-record-mode" checked={recordMode === 'ADJUST'} onChange={() => { setRecordMode('ADJUST'); setError(''); }} />平台调整（不记钱）</label>
+              <label className="checkbox-option"><input type="radio" name="quota-record-mode" checked={recordMode === 'PURCHASE'} onChange={() => { setRecordMode('PURCHASE'); setError(''); }} />机构采购（记成交与收款）</label>
+            </div>
+          </div> : null}
           <label>调整数值（次）*<input type="number" min="1" step="1" value={value} onChange={(event) => { setValue(event.target.value); setError(''); }} placeholder="如：50" /><small className="muted">单位：次，必须是大于 0 的整数；{direction === 'ADD' ? '增加' : '减少'} {amountValid ? amount : 0} 次</small></label>
-          <label>调整原因（必填，不超过 200 字）*<textarea rows={3} maxLength={200} value={reason} onChange={(event) => { setReason(event.target.value); setError(''); }} placeholder="如：机构追加采购 50 次" /><small className="muted">{reason.length}/200</small></label>
+          {isPurchase ? <div>
+            <span className="org-field-label">采购与收款（机构真的付了钱才填）</span>
+            <div className="form-grid">
+              <label>实际成交总额（元）*<input type="number" min="0" step="0.01" value={purchase.amount} onChange={(event) => { setPurchase({ ...purchase, amount: event.target.value }); setError(''); }} placeholder="如：5000" /></label>
+              <label>币种<select value={purchase.currency} onChange={(event) => setPurchase({ ...purchase, currency: event.target.value })}><option value="CNY">CNY</option><option value="USD">USD</option></select></label>
+              <label>收款状态<select value={purchase.paymentStatus} onChange={(event) => setPurchase({ ...purchase, paymentStatus: event.target.value })}><option value="PAID">已收款</option><option value="PENDING">待收款</option><option value="REFUNDED">已退款</option></select></label>
+              <label>订单号（可选）<input value={purchase.orderNo} onChange={(event) => setPurchase({ ...purchase, orderNo: event.target.value })} placeholder="如：SO-20260927-01" /></label>
+              <label>合同号（可选）<input value={purchase.contractNo} onChange={(event) => setPurchase({ ...purchase, contractNo: event.target.value })} /></label>
+            </div>
+          </div> : null}
+          <label>调整原因（必填，不超过 200 字）*<textarea rows={3} maxLength={200} value={reason} onChange={(event) => { setReason(event.target.value); setError(''); }} placeholder={isPurchase ? '如：机构追加采购 50 次（合同 SO-…）' : '如：平台补偿 50 次'} /><small className="muted">{reason.length}/200</small></label>
           <Notice tone="warning">调整后总授权次数不能少于当前已授权次数（{used} 次）。{amountValid ? <> 本次调整后总授权次数为 <strong>{nextTotal}</strong> 次，已授权 {used} 次、剩余 {Math.max(0, nextTotal - used)} 次。</> : null}</Notice>
-          {/* 两条路的区别写在按钮边上（2026-09-26 生产事故：这里调增过的次数没有对应的许可批次，
-              机构一点「授权给学生」就报「购买批次余额不足，无法确认收入」）。 */}
           <Notice tone="info">
-            <strong>这个入口只改「能发多少次课」，不记钱</strong>：增加时会自动补一笔
-            <strong> 0 金额的平台开通批次</strong>（保证机构能正常发课）；<strong>减少不会动财务账</strong>。
-            如果是机构真的付了钱（要记成交金额 / 订单号 / 合同号），请走
-            「课包管理与发布 → 给机构开通 / 追加授权」那条路 —— 那里才填收款信息。
+            {isPurchase
+              ? <><strong>机构采购</strong>：增加 {amountValid ? amount : 0} 次，并记一笔<strong>许可批次 + 收入台账</strong>（机构端「采购与开通记录」里看得到）。</>
+              : <><strong>平台调整</strong>：只改「能发多少次课」，不记钱 —— 增加时服务端会自动补一笔 <strong>0 金额的平台批次</strong>（保证机构能正常发课），减少不动财务账。机构真的付了钱就选上面的「机构采购」。</>}
           </Notice>
         </section>
         {error ? <Notice tone="danger">{error}</Notice> : null}
       </div>
       <footer className="drawer-foot">
         <button type="button" className="secondary-button" disabled={busy} onClick={onClose}>取消</button>
-        <button type="button" className="primary-button" disabled={busy || !amountValid || !reasonValid || belowUsed} onClick={submit}>{busy ? '提交中…' : '确认调整'}</button>
+        <button type="button" className="primary-button" disabled={busy || !amountValid || !reasonValid || !purchaseValid || belowUsed} onClick={submit}>{busy ? '提交中…' : (isPurchase ? '确认追加并记账' : '确认调整')}</button>
       </footer>
     </div>
   </div>;

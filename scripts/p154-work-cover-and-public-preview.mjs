@@ -180,14 +180,24 @@ try {
     /for \(const item of work\?\.media \|\| \[\]\) if \(item\?\.fileId && item\.url\) map\[item\.fileId\] = item\.url;/.test(publicDetail));
 }
 
-/* ⑥ 静态契约：平台端预览面板 + 服务端的封面口径 */
+/* ⑥ 静态契约：平台端预览（弹窗 + 走 token 取图）+ 服务端的封面口径 + 「给机构加次数」的入口归并 */
 {
   const adminWorks = read('apps/admin/src/pages/PlatformWorks.jsx');
-  check('⑥ 平台端预览面板真的渲染作品内容（WorkMediaGallery + 只读画布），不再只有一段 JSON',
-    /<WorkMediaGallery media=\{detail\.data\.media\}/.test(adminWorks)
-    && /<CanvasEditor key=\{detailId\} initialSnapshot=\{detail\.data\.canvasSnapshot\} readOnly/.test(adminWorks)
-    && /canvasAssetOf\(detail\.data\)/.test(adminWorks));
-  check('⑥ 平台端列表显示封面缩略图', /work-cell__thumb/.test(adminWorks) && /item\.coverUrl/.test(adminWorks));
+  const workPreview = read('apps/admin/src/components/WorkPreview.jsx');
+  // ⚠️ 2026-09-27 用户口径变更（**不是测试漂移**）：
+  //   「图2图3 平台侧学生作品都失效，而且不要拉到下面才能看，只有操作那给个预览按钮，弹窗查看就行了」。
+  //   平台端的 `<img>` 请求拿不到会话 cookie（会话在 localStorage / Bearer），生产实测全是 401 ——
+  //   所以改成：列表**不放图**（操作列一枚「预览」）→ 弹窗，弹窗里的图经 `api.fetchDataUrl` 取成 data:。
+  check('⑥ 平台端：操作列有「预览」按钮，且**不再**在列表里放缩略图（用户 2026-09-27 口径）',
+    /onClick=\{\(\) => setPreviewItem\(item\)\}>预览</.test(adminWorks) && !/work-cell__thumb/.test(adminWorks));
+  check('⑥ 平台端：预览是**弹窗**（原生 dialog + showModal），不再渲染在表格下面',
+    /function PreviewDialog/.test(workPreview) && /showModal\(\)/.test(workPreview) && /className="admin-confirm admin-work-preview"/.test(workPreview)
+    && !/<Panel title=\{`作品预览/.test(adminWorks));
+  check('⑥ 平台端：弹窗里的图走**带 token 的接口**（fetchDataUrl → data:），不依赖 cookie',
+    /api\.fetchDataUrl\(path\)/.test(workPreview) && /\/api\/admin\/works\/\$\{encodeURIComponent\(workId\)\}\/images\//.test(workPreview));
+  check('⑥ 平台端：画布作品也有「作品内容 / 创作画布」两档（真预览，不是一段 JSON）',
+    /<WorkMediaGallery media=\{data\.media\}/.test(workPreview)
+    && /<CanvasEditor key=\{workId\} initialSnapshot=\{data\.canvasSnapshot\} readOnly/.test(workPreview));
   const lib = read('apps/server/src/lib.js');
   check('⑥ 服务端有统一的"从快照自动取封面"助手（三端共用一处口径）',
     /export function workCoverFromSnapshot\(canvasSnapshot, urlFor\)/.test(lib));
@@ -197,6 +207,20 @@ try {
     && /workCoverFromSnapshot\(parseJson\(work\.canvas_snapshot/.test(read('apps/server/src/routes/admin/works.js')));
   check('⑥ 封面只认"我们自己的下载口"（外链会过期 → 不能当封面）',
     /const pick = media\.find\(\(item\) => item\.modality === 'IMAGE' && item\.fileId\)/.test(lib));
+  check('⑥ VibeCoding 作品也用页面里的真图当封面（没有图才回落到自动插图）',
+    /coverUrl: \(\(\) => \{[\s\S]{0,400}snapshotImageFileIds\(row\)/.test(read('apps/server/src/routes/communication/public.js')));
+  check('⑥ ⭐ 学生端自己的作品详情页也不再铺源码清单（用户 2026-09-27：「也要删」）',
+    !/<summary>它是怎么写出来的/.test(read('apps/website/src/pages/MyWorkDetail.jsx')));
+  // ⭐ 「给机构加次数」只会有一个入口（用户 2026-09-27：「很多重复的逻辑和操作，能合并就合并」）：
+  //    课包页（授权与人次流水）不再有追加/开通表单；采购字段在机构页的「调整授权次数」抽屉里。
+  const authorizations = read('apps/admin/src/pages/Organizations.jsx');
+  const quotaPage = read('apps/admin/src/pages/OrganizationQuota.jsx');
+  check('⑥ 课包页不再有「追加次数 / 首次授权」表单（那条路已合并到机构页）',
+    !/license-purchases\/append/.test(authorizations) && !/Panel title="追加次数"/.test(authorizations));
+  check('⑥ 机构页的「调整授权次数」抽屉同时支持平台调整与机构采购（同一抽屉二选一，各记各的账）',
+    /admin\/license-purchases\/append/.test(quotaPage)
+    && /course-quotas\/\$\{encodeURIComponent\(current\.seriesId\)\}\/adjust/.test(quotaPage)
+    && /机构采购（记成交与收款）/.test(quotaPage) && /平台调整（不记钱）/.test(quotaPage));
 }
 
 if (failures) {

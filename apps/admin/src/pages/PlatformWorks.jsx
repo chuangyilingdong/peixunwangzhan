@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CanvasEditor } from '@platform/canvas';
-import { Empty, ErrorState, formatDate, Loading, Notice, PageHeader, Panel, Pagination, ListResultSummary, useData, useDebouncedValue, WorkMediaGallery, resolveWorkMediaUrl } from '@platform/shared';
+import { Empty, ErrorState, formatDate, Loading, Notice, PageHeader, Panel, Pagination, ListResultSummary, useData, useDebouncedValue } from '@platform/shared';
 import { downloadCsv } from '../shared.jsx';
 
 const publicationLabels = { SUBMITTED: '已提交待发布', PUBLISHED: '已发布到官网', UNPUBLISHED: '已下架' };
@@ -9,21 +8,6 @@ import { WorkPreview } from '../components/WorkPreview.jsx';
 // 这里只是别让管理员对着一串英文 key 做选择。与官网的 PL_TYPE_META 是两处，都只影响显示。
 const typeLabels = { image: '图片', video: '视频', webpage: '网页', miniGame: '小游戏', ppt: 'PPT', brandDesign: '品牌设计', music: '音乐', podcast: 'AI播客', agent: '智能体', workflow: '工作流', pictureBook: '绘本' };
 const emptyFilters = { publicationState: '', published: '', orgId: '', student: '', packageName: '', lesson: '', search: '' };
-
-/**
- * 画布上的图也要换成**平台侧的同源口**（2026-09-27）：快照里存的是学生域地址
- * `/api/student/file-assets/<id>/download`，平台端拿它必然 403（那条路只认学生角色）。
- * 服务端详情已经把这份作品允许的图片映射成 `/api/admin/works/<id>/images/<fileId>`（imageUrls），
- * 照着映射即可；映射不到返回 null，让画布显示占位，**不发必然失败的请求**。
- */
-function canvasAssetOf(data) {
-  return (value) => {
-    const raw = String(value || '');
-    const matched = raw.match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:[?#].*)?$/);
-    if (!matched) return raw;                       // 外链 / data: / 站内相对地址原样用
-    return data?.imageUrls?.[matched[1]] || null;
-  };
-}
 
 export function PlatformWorks({ api }) {
   const organizations = useData(() => api.get('admin/organizations/options'), [api]);
@@ -40,12 +24,11 @@ export function PlatformWorks({ api }) {
   const [previewItem, setPreviewItem] = useState(null);
   const busy = useRef(false);
   const [exporting, setExporting] = useState(false);
-  const [detailId, setDetailId] = useState(null);
-  // 「作品内容 / 创作画布」两档（与官网作品页同一套切法）：默认看成出来的东西，画布只是过程。
-  const [detailView, setDetailView] = useState('media');
   const [historyOpen, setHistoryOpen] = useState(false);
   const reports = useData(() => historyOpen ? api.get('admin/work-reports') : Promise.resolve(null), [api, historyOpen]);
-  const detail = useData(() => detailId ? api.get(`admin/works/${detailId}/detail`) : Promise.resolve(null), [api, detailId]);
+  // （2026-09-27：原来这里有一套「详情面板」状态 —— detailId / detailView / detail。
+  //   用户口径「只有操作那给个预览按钮，弹窗查看就行了」之后，预览整体交给 WorkPreview 弹窗，
+  //   这套状态与那个渲染在表格下面的 Panel 一并删掉。）
   // 编辑（标题/描述）与彻底删除（2026-09-19 用户点名）。两者都带 kind：画布/导入件在 works 表，
   // VibeCoding 在 vibecoding_submissions 表，接口前缀不同但形状一样。
   const [edit, setEdit] = useState(null);
@@ -79,7 +62,7 @@ export function PlatformWorks({ api }) {
   const refresh = () => setRevision((value) => value + 1);
   const loading = result.loading || result.key !== requestKey;
   function filter(key, value) { setFilters((old) => ({ ...old, [key]: value })); setPage(1); }
-  function changeKind(next) { setKind(next); setPage(1); setAction(null); setDetailId(null); setMessage(null); setEdit(null); setPurge(null); }
+  function changeKind(next) { setKind(next); setPage(1); setAction(null); setPreviewItem(null); setMessage(null); setEdit(null); setPurge(null); }
   function confirmPublication(item) { setAction({ item, kind, published: item.publicationState !== 'PUBLISHED' }); setReason(''); setMessage(null); }
   async function publish() {
     if (!action || busy.current || (!action.published && !reason.trim())) return;
@@ -90,7 +73,6 @@ export function PlatformWorks({ api }) {
       await api.put(`${base}/${action.item.id}/${path}`, { published: action.published, reason: reason.trim() });
       setMessage({ tone: 'success', text: `已${action.published ? '发布到官网' : '下架'}《${action.item.title}》。` });
       setAction(null); setReason(''); refresh();
-      if (detailId) detail.refresh();
     } catch (error) { setMessage({ tone: 'danger', text: error.message || '操作失败，请重试。' }); }
     finally { busy.current = false; setSaving(false); }
   }
@@ -113,7 +95,6 @@ export function PlatformWorks({ api }) {
       await api.put(`${base}/${edit.item.id}`, { title: edit.title.trim(), description: edit.description.trim() });
       setMessage({ tone: 'success', text: `已保存《${edit.title.trim()}》的标题与描述。` });
       setEdit(null); refresh();
-      if (detailId) detail.refresh();
     } catch (error) { setMessage({ tone: 'danger', text: error.message || '保存失败，请重试。' }); }
     finally { busy.current = false; setSaving(false); }
   }
@@ -129,7 +110,6 @@ export function PlatformWorks({ api }) {
       const media = result?.media?.action === 'quarantined' ? `；媒体目录已挪到 ${result.media.trash}`
         : result?.media ? `；媒体目录未挪动（${result.media.note || result.media.action}）` : '';
       setMessage({ tone: 'success', text: `已彻底删除《${purge.item.title}》${media}。` });
-      if (detailId === purge.item.id) setDetailId(null);
       setPurge(null); refresh();
     } catch (error) { setMessage({ tone: 'danger', text: error.message || '删除失败，请重试。' }); }
     finally { busy.current = false; setSaving(false); }
@@ -198,41 +178,22 @@ export function PlatformWorks({ api }) {
       {loading ? <Loading /> : result.error ? <ErrorState error={result.error} onRetry={refresh} /> : result.data?.items?.length ? <>
         <ListResultSummary total={result.data.total} page={result.data.page} totalPages={result.data.totalPages} label="件作品" />
         <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生账号 / 机构</th><th>课包 / 课时 / 课堂</th><th>发布状态</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{result.data.items.map((item) => <tr key={`${kind}-${item.id}`}>
-          <td><div className="work-cell">
-            {/* ⭐ 2026-09-27 用户口径：「平台端看不到学生的作品预览」—— 列表先给一张自动封面缩略图 */}
-            {item.coverUrl ? <img className="work-cell__thumb" src={item.coverUrl} alt="" loading="lazy" /> : <span className="work-cell__thumb is-empty" aria-hidden="true">✦</span>}
-            <div className="work-cell__text">
-              {kind === 'canvas' ? <button className="text-button" onClick={() => { setDetailId(item.id); setDetailView('media'); }}><strong>{item.title}</strong></button> : <strong>{item.title}</strong>}
-              <div className="muted">{item.description || '暂无描述'}</div>
-            </div>
-          </div></td>
+          {/* ⚠️ 2026-09-27 用户口径：「不要拉到下面才能看，只有操作那给个预览按钮，弹窗查看就行了」——
+              这里**不放缩略图**（列表一屏几十行、每张图几 MB，而且平台端 `<img>` 请求拿不到 cookie 会 401），
+              预览统一走「操作」列那枚按钮 → 弹窗（弹窗里的图经带 token 的接口取成 data:）。 */}
+          <td><strong>{item.title}</strong><div className="muted">{item.description || '暂无描述'}</div></td>
           <td><strong>{item.studentName || item.studentId}</strong><div>{item.studentLogin || '账号未记录'}</div><div className="muted">{item.organizationName || '未绑定机构'}</div></td>
           <td><strong>{item.packageName || '课包未记录'}</strong><div>{item.courseLessonTitle || item.lessonTitle || '课时未记录'}</div><div className="muted">{item.sessionTitle || '课堂未记录'}</div></td>
           <td><span className={`status ${item.publicationState === 'PUBLISHED' ? 'success' : ''}`}>{publicationLabels[item.publicationState] || '已提交待发布'}</span>{item.featured && <span className="status success">精选</span>}{item.publicationState === 'UNPUBLISHED' && item.unpublishReason && <div className="muted">下架原因：{item.unpublishReason}</div>}<div className="muted">{item.copyrightConfirmedAt ? '已确认展示授权' : '未确认展示授权'}</div></td>
           <td>{formatDate(item.submittedAt)}</td>
-          <td><div className="row-actions"><button className="text-button" disabled={saving || (item.publicationState !== 'PUBLISHED' && (!item.copyrightConfirmedAt || (kind === 'canvas' && item.status === 'REJECTED')))} onClick={() => confirmPublication(item)}>{item.publicationState === 'PUBLISHED' ? '下架' : '发布到官网'}</button>{item.publicationState === 'PUBLISHED' && item.shareToken && <a className="text-button" href={`/works/${item.shareToken}`} target="_blank" rel="noreferrer">查看官网作品</a>}{kind === 'canvas' && item.publicationState === 'PUBLISHED' && <button className="text-button" disabled={saving} onClick={() => toggleFeature(item)}>{item.featured ? '取消精选' : '设为精选'}</button>}{kind === 'vibecoding' && <button className="text-button" disabled={saving} onClick={() => setPreviewItem(item)}>预览</button>}<button className="text-button" disabled={saving} onClick={() => openEdit(item, kind)}>编辑</button><button className="text-button" disabled={saving} onClick={() => openPurge(item, kind)}>彻底删除</button></div>{kind === 'canvas' && item.status === 'REJECTED' && <span className="muted">历史退回作品，需学生重新提交</span>}</td>
+          <td><div className="row-actions"><button className="text-button" disabled={saving || (item.publicationState !== 'PUBLISHED' && (!item.copyrightConfirmedAt || (kind === 'canvas' && item.status === 'REJECTED')))} onClick={() => confirmPublication(item)}>{item.publicationState === 'PUBLISHED' ? '下架' : '发布到官网'}</button>{item.publicationState === 'PUBLISHED' && item.shareToken && <a className="text-button" href={`/works/${item.shareToken}`} target="_blank" rel="noreferrer">查看官网作品</a>}{kind === 'canvas' && item.publicationState === 'PUBLISHED' && <button className="text-button" disabled={saving} onClick={() => toggleFeature(item)}>{item.featured ? '取消精选' : '设为精选'}</button>}<button className="text-button" disabled={saving} onClick={() => setPreviewItem(item)}>预览</button><button className="text-button" disabled={saving} onClick={() => openEdit(item, kind)}>编辑</button><button className="text-button" disabled={saving} onClick={() => openPurge(item, kind)}>彻底删除</button></div>{kind === 'canvas' && item.status === 'REJECTED' && <span className="muted">历史退回作品，需学生重新提交</span>}</td>
         </tr>)}</tbody></table></div>
         <Pagination page={result.data.page} totalPages={result.data.totalPages} onChange={setPage} disabled={loading} />
       </> : <Empty title="没有符合条件的作品" body="可调整筛选条件，或切换作品类型。" />}
     </Panel>
-    {detailId && <Panel title={`作品预览 · ${detail.data?.title || ''}`} actions={<button className="secondary-button" onClick={() => setDetailId(null)}>关闭</button>}>
-      {detail.loading ? <Loading /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : detail.data && <>
-        <p>{detail.data.description || '暂无描述'}</p><p>学生：{detail.data.studentName}（{detail.data.studentLogin}） · {detail.data.organizationName || '未绑定机构'}</p>
-        <p>课时：{detail.data.courseLessonTitle || '未记录'}</p>
-        {/* ⭐ 2026-09-27 用户口径：「平台端看不到学生的作品预览」—— 原来这里只有一个
-            `JSON.stringify(快照)` 的 <pre>，平台侧其实**看不到作品长什么样**。现在与官网/机构端
-            同一套：默认「作品内容」（图/视频/音频，点开看大图/播放），可切「创作画布」（只读）。 */}
-        <div className="row-actions work-detail__views">
-          <button type="button" className={'text-button' + (detailView === 'media' ? ' is-on' : '')} onClick={() => setDetailView('media')}>作品内容</button>
-          <button type="button" className={'text-button' + (detailView === 'canvas' ? ' is-on' : '')} onClick={() => setDetailView('canvas')}>创作画布</button>
-        </div>
-        {detailView === 'canvas'
-          ? <div className="work-detail__canvas"><CanvasEditor key={detailId} initialSnapshot={detail.data.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={canvasAssetOf(detail.data)} /></div>
-          : <WorkMediaGallery media={detail.data.media} assets={detail.data.assets} resolveSrc={(item) => resolveWorkMediaUrl(item?.url, detail.data.imageUrls) || ''} />}
-        <details><summary>画布快照（原始 JSON，排查用）</summary><pre style={{ maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{JSON.stringify(detail.data.canvasSnapshot, null, 2)}</pre></details>
-        <details><summary>提交历史（只读） · {detail.data.submissions?.length || 0}</summary>{detail.data.submissions?.map((item) => <p key={item.id}>第 {item.round} 次 · {item.title} · {formatDate(item.submittedAt)}</p>)}</details>
-      </>}
-    </Panel>}
+    {/* 作品预览（两类共用）：**弹窗**，不再渲染在表格下面（用户 2026-09-27：
+        「不要拉到下面才能看，只有操作那给个预览按钮，弹窗查看就行了」）。 */}
+    {previewItem ? <WorkPreview api={api} kind={kind} workId={previewItem.id} title={previewItem.title} onClose={() => setPreviewItem(null)} /> : null}
     {/* 作品预览（VibeCoding 产物）：网页在不带 allow-same-origin 的沙箱里真跑，文档给服务端转的 PDF */}
     {previewItem ? <WorkPreview api={api} workId={previewItem.id} title={previewItem.title} onClose={() => setPreviewItem(null)} /> : null}
     <details onToggle={(event) => setMapOpen(event.currentTarget.open)}><summary>作品广场分类映射（改完即时生效，不用发版）</summary>

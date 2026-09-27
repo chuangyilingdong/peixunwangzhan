@@ -260,15 +260,10 @@ export function Organizations({ api }) {
   </>;
 }
 
-// ── 下面是「授权与人次流水」（Authorizations）页面用的两个小工具 ──
-// 它们原来在文件顶部；机构部分重排后挪到 Authorizations 之前，只为让归属清楚，行为没变。
-function newLicensePurchaseKey() {
-  return `license-purchase-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-function initialLicensePurchaseForm() {
-  return { amount: '', currency: 'CNY', paymentStatus: 'PAID', orderNo: '', contractNo: '', idempotencyKey: newLicensePurchaseKey() };
-}
+// （2026-09-27：这里原来有 `newLicensePurchaseKey()` / `initialLicensePurchaseForm()` 两个小工具，
+//   给「授权与人次流水」页的追加次数表单用。那份表单**整体搬去机构页**了（见下），
+//   这两个函数在本文件里已无引用，一并删掉。采购字段现在在
+//   `pages/OrganizationQuota.jsx` 的「调整授权次数」抽屉里，幂等键随每次提交现生成。）
 
 export function Authorizations({ api }) {
   const location = useLocation();
@@ -277,8 +272,6 @@ export function Authorizations({ api }) {
   const deepLink = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const [seriesId, setSeriesId] = useState(() => deepLink.get('seriesId') || '');
   const [orgId, setOrgId] = useState(() => deepLink.get('orgId') || '');
-  const [additionalQuota, setAdditionalQuota] = useState('');
-  const [purchaseForm, setPurchaseForm] = useState(initialLicensePurchaseForm);
   const [stock, setStock] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -297,8 +290,6 @@ export function Authorizations({ api }) {
   }, [deepLink, organizations.data]);
   useEffect(() => {
     setStock(selected ? String(selected.stockTotal) : '');
-    setAdditionalQuota('');
-    setPurchaseForm(initialLicensePurchaseForm());
   }, [seriesId, orgId, selected?.stockTotal, assignment?.expiresAt]);
 
   async function saveStock(event) {
@@ -311,35 +302,11 @@ export function Authorizations({ api }) {
     } });
   }
 
-  async function appendQuota(event) {
-    event.preventDefault();
-    const added = Number(additionalQuota);
-    const currentTotal = assignment?.quotaTotal || 0;
-    const currentUsed = assignment?.quotaUsed || 0;
-    const activeAssignment = assignment?.status === 'ACTIVE';
-    const nextTotal = (activeAssignment ? currentTotal : currentUsed) + added;
-    const currentRemaining = activeAssignment ? assignment.remaining : 0;
-    await confirm({
-      title: assignment ? '确认追加授权次数' : '确认首次授权',
-      message: `${selected.title} / ${selectedOrg.name}：总次数 ${currentTotal} → ${nextTotal}，已分配保持 ${currentUsed}，剩余 ${currentRemaining} → ${currentRemaining + added}。${activeAssignment ? `有效期保持 ${formatDate(assignment.expiresAt)}。` : assignment ? `授权将恢复，原有效期保持 ${formatDate(assignment.expiresAt)}；如已过期，请随后单独调整。` : '首次授权默认有效 365 天，可随后单独调整。'}`,
-      confirmLabel: assignment ? '确认追加' : '确认授权',
-      execute: async () => {
-        setBusy(true); setMessage('');
-        try {
-          const amountMinor = Math.round(Number(purchaseForm.amount) * 100);
-          await api.post('admin/license-purchases/append', {
-            seriesId, orgId, additionalQuota: added, amountMinor, currency: purchaseForm.currency,
-            paymentStatus: purchaseForm.paymentStatus, orderNo: purchaseForm.orderNo,
-            contractNo: purchaseForm.contractNo, idempotencyKey: purchaseForm.idempotencyKey,
-          });
-          setAdditionalQuota(''); setPurchaseForm(initialLicensePurchaseForm());
-          setMessage(assignment ? '授权次数已追加。' : '机构授权已创建。'); inventory.refresh();
-        }
-        finally { setBusy(false); }
-      },
-    });
-  }
-
+  // （2026-09-27：这里的 `appendQuota`（追加次数 / 首次授权）已**整体搬走** —— 用户口径
+  //   「图4 添加库存还能授权给机构，图5图6 这里也能授权给机构、也能添加次数。很多重复的逻辑和操作。
+  //   梳理下能合并就合并」：给机构开通 / 追加 / 调整次数现在只有**机构页**一个入口
+  //   （`/organizations/:orgId/quota`，机构采购与平台调整在同一个抽屉里二选一）。
+  //   本页保留**课包视角**：库存总次数（平台自己的池子）+ 各机构已分到多少，只读。）
   return <>
     <PageHeader title="授权管理" description="选择一个课包和一家机构，查看当前授权后再追加次数或调整有效期。" />
     {confirmation}
@@ -362,18 +329,16 @@ export function Authorizations({ api }) {
           <MetricCard label="有效期" value={assignment?.expiresAt ? formatDate(assignment.expiresAt) : '未设置'} hint={assignment?.status || '未授权'} />
         </div>
         <div className="split">
-          <Panel title="追加次数"><form onSubmit={appendQuota}>
-            <label>本次购买次数<input type="number" min="1" max={Math.min(100000000, selected.available)} required value={additionalQuota} onChange={(event) => setAdditionalQuota(event.target.value)} /></label>
-            <div className="form-grid">
-              <label>实际成交总额（元）<input type="number" min="0" step="0.01" required value={purchaseForm.amount} onChange={(event) => setPurchaseForm({ ...purchaseForm, amount: event.target.value })} /></label>
-              <label>币种<select value={purchaseForm.currency} onChange={(event) => setPurchaseForm({ ...purchaseForm, currency: event.target.value })}><option value="CNY">CNY</option><option value="USD">USD</option><option value="HKD">HKD</option></select></label>
-              <label>收款状态<input value="已收款" readOnly /></label>
-              <label>订单号<input required maxLength={200} value={purchaseForm.orderNo} onChange={(event) => setPurchaseForm({ ...purchaseForm, orderNo: event.target.value })} /></label>
-              <label>合同号<input required maxLength={200} value={purchaseForm.contractNo} onChange={(event) => setPurchaseForm({ ...purchaseForm, contractNo: event.target.value })} /></label>
-            </div>
-            <p className="muted">{Number(additionalQuota) > 0 ? `追加后总次数为 ${(assignment?.status === 'ACTIVE' ? assignment.quotaTotal : (assignment?.quotaUsed || 0)) + Number(additionalQuota)}；授权的有效期跟随机构合同，与本次购买无关。仅已收款购买可追加，未收款或部分收款订单请勿在此登记。` : '填写本次已收款购买的实际次数与成交信息；未收款或部分收款订单不会增加授权余额。'}</p>
-            <button className="primary-button" disabled={busy || !additionalQuota || Number(additionalQuota) > selected.available || purchaseForm.amount === '' || !purchaseForm.orderNo.trim() || !purchaseForm.contractNo.trim()}>{assignment ? '追加次数' : '创建授权并追加'}</button>
-          </form></Panel>
+          {/* ⭐ 2026-09-27（合并重复入口）：「追加次数」表单已**整体搬去机构页** —— 用户口径
+              「很多重复的逻辑和操作。梳理下能合并就合并」。这里改成指路 + 只读说明：
+              本页是**课包视角**（库存总次数 + 各机构分到多少），给机构开通/追加/调整在机构页那一个抽屉里。 */}
+          <Panel title="给这家机构加次数">
+            <p className="muted">加次数现在只有<strong>一个入口</strong>：进这家机构的「机构课包与授权次数」页——
+              那里能看到它的全部课包与次数台账，<strong>机构采购</strong>（记成交金额与收款）与
+              <strong>平台调整</strong>（只改次数、不记钱）在同一个抽屉里二选一。</p>
+            <p className="muted">这一页负责的是<strong>课包自己的库存池</strong>（上面那个「调整库存总次数」）与各机构已分到多少。</p>
+            <Link className="primary-button" to={`/organizations/${encodeURIComponent(orgId)}/quota`}>去「{selectedOrg.name}」的机构页加次数 →</Link>
+          </Panel>
           <Panel title="授权有效期"><div className="card-list">
             <p className="muted">授权有效期<strong>不需要在这里填</strong>：它自动跟随该机构的<strong>合同到期日</strong>
               （2026-09-16 口径）。要延长机构的使用期限，就去改这家机构的合同日期，授权会自动一起续上。</p>
