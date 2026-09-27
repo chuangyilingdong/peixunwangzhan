@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
@@ -11,6 +11,15 @@ import { MyWorkDetailPage } from './pages/MyWorkDetail.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
 // 学生个人主页（对外公开，路由 /u/:token）—— 用户口径 2026-09-27：「学生创建了账号应该就有个主页的专属链接」
 import { CreatorHomePage } from './pages/CreatorHome.jsx';
+
+/**
+ * 老地址 `/my-works/:source/:id` → `/my-home/:source/:id`（2026-09-27 改名）。
+ * 参数要原样带过去，所以不能用 `<Navigate to='/my-home/:source/:id'>`（那个不会插值）。
+ */
+function LegacyMyWorksRedirect() {
+  const { source, id } = useParams();
+  return <Navigate to={`/my-home/${encodeURIComponent(source || 'CANVAS')}/${encodeURIComponent(id)}`} replace />;
+}
 // 首页按钮用 React Bits 的 SpecularButton（WebGL 镜面高光），见组件文件顶部的来源与注意事项
 import SpecularButton from './components/SpecularButton.jsx';
 
@@ -1648,7 +1657,7 @@ export function App(){
       '/minors': '儿童 / 未成年人说明 · ' + BRAND_NAME,
       '/learn': '灵动学习 · ' + BRAND_NAME,
       '/my-courses': '我的课程 · ' + BRAND_NAME,
-      '/my-works': '我的作品 · ' + BRAND_NAME,
+      '/my-home': '我的主页 · ' + BRAND_NAME,
       '/learn/canvas': '画布上课 · ' + BRAND_NAME,
     };
     // 动态路由（课程/作品详情/学生主页）按前缀回落：否则它们会退到首页标题，浏览器标签上看着不像同一个站。
@@ -1700,7 +1709,9 @@ export function App(){
   // 用户口径 2026-09-20：「学习统计」整个删掉（下拉项、页面、路由、标题一并去掉）
   const studentMenuItems = [
     { to: '/learn', label: '我的课程' },
-    { to: '/my-works', label: '我的作品' },
+    // ⚠️ 2026-09-27 用户口径：「现在不需要『我的作品』了，就是叫『我的主页』」——
+    //    名字与**路径**一起改了（`/my-works` → `/my-home`），老地址留着重定向（见路由那两行）。
+    { to: '/my-home', label: '我的主页' },
     // 2026-09-23 用户口径：学生创建账号后要能自己改密码（之前只有接口、没有入口）
     { to: '/account', label: '账号安全' },
   ];
@@ -1764,6 +1775,9 @@ export function App(){
             ⚠️ 不放进 sitemap（见 apps/server/src/index.js 的 PUBLIC_ROUTES）—— 这是学生的个人页面，
                分享靠直接给链接，不该被搜索引擎收录索引。 */}
         <Route path='/u/:token' element={<CreatorHomePage api={publicApi}/>}/>
+        {/* 从主页里点开一件作品（含**未公开**的那些 —— 它们没有分享码，按分享码取不到）。
+            WorkDetailPage 自己按路由参数分辨走哪条取数口，见那个文件头的说明。 */}
+        <Route path='/u/:token/w/:source/:id' element={<WorkDetailPage api={publicApi}/>}/>
         <Route path='/handbook' element={<Handbook/>}/>
         {/* 2026-09-19 用户口径：灵动介绍这一页**整个删掉**（页面 / 导航 / 页脚入口一起）。
             留一条重定向，老链接与老书签不会 404（与 /my-courses → /learn 同一套做法）。 */}
@@ -1781,8 +1795,13 @@ export function App(){
         <Route path='/account' element={session ? <StudentAccountPage api={api} user={session.user} onSignedOut={() => { removeUserSession(); setSession(null); navigate('/login?as=student'); }} /> : <Navigate to='/login?as=student' replace />}/>
         <Route path='/learn/canvas' element={<LearnCanvasPage api={api}/>}/>
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
-        <Route path='/my-works' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login?as=student' replace />}/>
-        <Route path='/my-works/:source/:id' element={session ? <MyWorkDetailPage api={api} /> : <Navigate to='/login?as=student' replace />}/>
+        {/* ⚠️ 2026-09-27 改名：「我的作品」→「我的主页」（用户口径「现在不需要『我的作品』了，
+            就是叫『我的主页』」），路径一起改成 /my-home。下面两条是老地址的重定向 ——
+            别删，删了老书签/老链接就 404（与 /my-courses → /learn 同一套做法）。 */}
+        <Route path='/my-home' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login?as=student' replace />}/>
+        <Route path='/my-home/:source/:id' element={session ? <MyWorkDetailPage api={api} /> : <Navigate to='/login?as=student' replace />}/>
+        <Route path='/my-works' element={<Navigate to='/my-home' replace/>}/>
+        <Route path='/my-works/:source/:id' element={<LegacyMyWorksRedirect/>}/>
         {/* ⚠️ 这两条是**老地址的重定向**：`/my-courses`（指标卡 + 课时列表那一版）已按用户口径删掉，
             学生端的「我的课程」就是 /learn 那个页面。留着重定向是为了老链接/老书签不 404。
             别把这两行删了 —— 删了就真的 404。 */}

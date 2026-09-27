@@ -59,10 +59,10 @@ export function CreatorHomePage({ api }) {
       <div className="sw-profile-main">
         <h1 data-testid="home-name">{creator.name}</h1>
         <p className="sw-stats">
-          <span><strong>{Number(creator.workCount) || 0}</strong> 件公开作品</span>
+          <span><strong>{Number(creator.workCount) || 0}</strong> 件作品</span>
           {Number(creator.featuredCount) > 0 ? <span><strong>{Number(creator.featuredCount)}</strong> 件精选</span> : null}
         </p>
-        <p className="sw-bio">这是 {creator.name} 的主页，只显示 TA 已公开到作品广场的作品。</p>
+        <p className="sw-bio">这是 {creator.name} 的主页，陈列 TA 的作品。</p>
         <p className="sw-home-actions">
           <button type="button" className="button soft" data-testid="share-home-public" onClick={share}>分享这个主页</button>
         </p>

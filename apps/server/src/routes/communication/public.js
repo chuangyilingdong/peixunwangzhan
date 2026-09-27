@@ -236,26 +236,34 @@ export async function handlePublicCommunication(ctx) {
   }
 
   // ⭐ 2026-09-27：学生**个人主页**（用户口径「学生创建了账号应该就有个主页的专属链接。现在需要把
-  //    『我的作品』改成主页的概念。对外公开并且可以分享」）。前端公开页 `/u/<token>` 用它。
-  //   · **只回已公开的作品**，判据与广场那两条列表**逐字同一套**：
-  //     画布 = `is_public=1 AND status='PUBLISHED' AND share_token IS NOT NULL AND copyright_confirmed_at IS NOT NULL`；
-  //     VibeCoding = `is_public=1 AND share_token IS NOT NULL AND copyright_confirmed_at IS NOT NULL`。
-  //     没公开的作品**一条都不出现** —— 个人主页不该把学生的对外可见面变大。
-  //     ⚠️ 这两段 WHERE 是**故意各抄一遍**而不是抽公共函数：广场那两条各自贴着自己那段注释与字段，
-  //        抽出来会让"改一处忘一处"变隐蔽。护栏在守卫里（直接对比三处的 WHERE 片段）。
-  //   · ⚠️ **名字就是要显示机构建号时那个名字**（用户 2026-09-27 口径：「名字默认就是机构给他创建的账号名啊，
-  //     不需要匿名。也不需要小创作者。」）—— 所以这里**不套广场那套脱敏**，直接给 display_name。
-  //     个人主页本来就是学生自己选择对外公开的那一面。
+  //    『我的作品』改成主页的概念。对外公开并且可以分享」→ 晚些时候又明确了一次：
+  //    「主页把全部作品都列出来……就是需要公开。」）。前端公开页 `/u/<token>` 用它。
+  //   · ⚠️⭐ **列全部作品**（与「我的主页」那一屏同一套筛选：`student_id + org_id`，不看可见性/状态）。
+  //     这是用户明确要的第二次口径 —— 第一次我做的是"只列已公开"，被要求改掉。
+  //     **后果是有意为之**：课堂上的半成品、被驳回的、已下架的，都会出现在这个公开页上。
+  //   · 未公开的作品没有 share_token → 媒体走 creator 作用域的代理
+  //     （`/api/public/creators/<主页token>/works/<来源>/<作品id>/images/<fileId>`，准入 = 拿到主页链接）。
+  //   · ⚠️ **名字就是要显示机构建号时那个名字**（用户口径：「名字默认就是机构给他创建的账号名啊，
+  //     不需要匿名。也不需要小创作者。」）—— 这里**不套广场那套脱敏**，直接给 display_name。
   //     （作品广场那条链路**没动**：它仍按 `privacy_showcase_anonymous` 显示「小创作者」/「X同学」。）
   //   · 只认 STUDENT + 未注销 —— 这是"学生主页"，教师/管理员不该有对外页面。
   const creatorMatch = pathname.match(/^\/api\/public\/creators\/([\w-]+)$/);
   if (creatorMatch && method === 'GET') {
-    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 60 });
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 500, fallback: 200 });
     const creator = await arow(`
-      SELECT id, display_name, login, avatar_key, avatar_asset_id, created_at
+      SELECT id, org_id, display_name, login, avatar_key, avatar_asset_id, created_at
       FROM users WHERE home_token=? AND role='STUDENT' AND deleted_at IS NULL
     `, [creatorMatch[1]]);
     if (!creator) throw errors.notFound('个人主页不存在', 'PUBLIC_CREATOR_NOT_FOUND');
+    const token = creatorMatch[1];
+    // ⭐ 2026-09-27 用户口径（第二次）：「主页把全部作品都列出来……就是需要公开。」
+    //    → 主人的作品**全部**列出来，与「我的主页」那一屏看到的**同一套筛选**：
+    //      `student_id=? AND org_id=?`，**没有任何可见性/状态过滤**（学生自己那页也是这样）。
+    //    ⚠️ 后果（记录在案，是有意为之）：课堂上的半成品、被驳回、已下架的也会出现在这个公开页上。
+    //    ⚠️ 未公开的作品没有 share_token，媒体得走 creator 作用域的代理；
+    //      所以每条都要带上 mediaBase / openUrl（准入 = 拿到这个主页链接）。
+    const canvasBase = (workId) => `/api/public/creators/${encodeURIComponent(token)}/works/CANVAS/${encodeURIComponent(workId)}`;
+    const vibeBase = (id) => `/api/public/creators/${encodeURIComponent(token)}/works/VIBECODING/${encodeURIComponent(id)}`;
     const canvasItems = await amap((await arows(`
       SELECT work.id, work.title, work.description, work.canvas_snapshot,
              work.featured_at, work.submitted_at, work.share_token,
@@ -265,11 +273,13 @@ export async function handlePublicCommunication(ctx) {
       FROM works work
       JOIN users user ON user.id=work.student_id
       LEFT JOIN organizations organization ON organization.id=work.org_id
-      WHERE work.student_id=? AND work.is_public=1 AND work.status='PUBLISHED'
-        AND work.share_token IS NOT NULL AND work.copyright_confirmed_at IS NOT NULL
+      WHERE work.student_id=? AND work.org_id=?
       ORDER BY work.featured_at DESC NULLS LAST, work.submitted_at DESC
       LIMIT ?
-    `, [creator.id, limit])), async (row) => await publicWorkRow(row));
+    `, [creator.id, creator.org_id, limit])), async (row) => await publicWorkRow(row, {
+      mediaBase: canvasBase(row.id),
+      openUrl: `/u/${token}/w/CANVAS/${row.id}`,
+    }));
     const vibeItems = await amap((await arows(`
       SELECT submission.id, submission.title, submission.description, submission.entry_file, submission.files, submission.artifacts,
              submission.featured_at, submission.submitted_at, submission.share_token,
@@ -278,16 +288,21 @@ export async function handlePublicCommunication(ctx) {
       FROM vibecoding_submissions submission
       JOIN users user ON user.id=submission.student_id
       LEFT JOIN organizations organization ON organization.id=submission.org_id
-      WHERE submission.student_id=? AND submission.is_public=1 AND submission.share_token IS NOT NULL
-        AND submission.copyright_confirmed_at IS NOT NULL
+      WHERE submission.student_id=? AND submission.org_id=?
       ORDER BY submission.featured_at DESC NULLS LAST, submission.submitted_at DESC
       LIMIT ?
-    `, [creator.id, limit])), async (item) => await publicVibeCodingWorkRow(item));
+    `, [creator.id, creator.org_id, limit])), async (item) => await publicVibeCodingWorkRow(item, {
+      mediaBase: vibeBase(item.id),
+      openUrl: `/u/${token}/w/VIBECODING/${item.id}`,
+    }));
     // 两条链路合并后**精选优先、再按提交时间倒序**（与广场列表的排序口径一致）
     const items = [...canvasItems, ...vibeItems].sort((a, b) => {
       if (Boolean(a.featured) !== Boolean(b.featured)) return a.featured ? -1 : 1;
       return String(b.submittedAt || '').localeCompare(String(a.submittedAt || ''));
-    });
+    }).slice(0, limit);
+    // 计数走**真 COUNT**（列表有条数上限，不能拿 items.length 冒充总数）
+    const workTotal = Number((await arow('SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=?', [creator.id, creator.org_id]))?.n || 0);
+    const vibeTotal = Number((await arow('SELECT COUNT(*) n FROM vibecoding_submissions WHERE student_id=? AND org_id=?', [creator.id, creator.org_id]))?.n || 0);
     const name = String(creator.display_name || '').trim() || String(creator.login || '').trim() || '同学';
     return {
       name,
@@ -295,10 +310,76 @@ export async function handlePublicCommunication(ctx) {
       // 学生自己上传的照片（没传就是 null，前端退回预设头像 / "首字圆形"）
       avatarUrl: avatarUrlOf(creator.avatar_asset_id),
       joinedAt: creator.created_at || null,
-      workCount: items.length,
+      workCount: workTotal + vibeTotal,
+      shownCount: items.length,
       featuredCount: items.filter((item) => item.featured).length,
       items,
     };
+  }
+
+  // ⭐ 2026-09-27：**个人主页里点开一件作品**（含未公开的）。
+  //   准入只有一条：URL 里那个主页 token 有效（= 拿到了主页链接），且这件作品确实属于那个学生。
+  //   形状与 `/api/public/works/:token` 完全一致（前端复用同一个 WorkDetailPage），
+  //   区别只是媒体地址换成 creator 作用域的代理（未公开作品没有 share_token，走不了那条路）。
+  const creatorWorkMatch = pathname.match(/^\/api\/public\/creators\/([\w-]+)\/works\/(CANVAS|VIBECODING)\/([\w-]+)$/);
+  if (creatorWorkMatch && method === 'GET') {
+    const [token, source, workId] = [creatorWorkMatch[1], creatorWorkMatch[2], creatorWorkMatch[3]];
+    const creator = await arow("SELECT id, org_id FROM users WHERE home_token=? AND role='STUDENT' AND deleted_at IS NULL", [token]);
+    if (!creator) throw errors.notFound('个人主页不存在', 'PUBLIC_CREATOR_NOT_FOUND');
+    const base = `/api/public/creators/${encodeURIComponent(token)}/works/${source}/${encodeURIComponent(workId)}`;
+    if (source === 'CANVAS') {
+      const work = await arow(`
+        SELECT work.id, work.title, work.description, work.canvas_snapshot,
+               work.featured_at, work.submitted_at, work.share_token,
+               user.display_name AS student_name, user.privacy_showcase_anonymous AS student_anon,
+               organization.name AS org_name
+        FROM works work
+        JOIN users user ON user.id=work.student_id
+        LEFT JOIN organizations organization ON organization.id=work.org_id
+        WHERE work.id=? AND work.student_id=? AND work.org_id=?
+      `, [workId, creator.id, creator.org_id]);
+      if (!work) throw errors.notFound('作品不存在', 'PUBLIC_WORK_NOT_FOUND');
+      return await publicWorkRow(work, { mediaBase: base, openUrl: `/u/${token}/w/CANVAS/${workId}` });
+    }
+    const submission = await arow(`
+      SELECT submission.*, user.display_name AS student_name, user.privacy_showcase_anonymous AS student_anon,
+             organization.name AS org_name
+      FROM vibecoding_submissions submission
+      JOIN users user ON user.id=submission.student_id
+      LEFT JOIN organizations organization ON organization.id=submission.org_id
+      WHERE submission.id=? AND submission.student_id=? AND submission.org_id=?
+    `, [workId, creator.id, creator.org_id]);
+    if (!submission) throw errors.notFound('作品不存在', 'PUBLIC_WORK_NOT_FOUND');
+    return await publicVibeCodingWorkRow(submission, { includeFiles: true, mediaBase: base, openUrl: `/u/${token}/w/VIBECODING/${workId}` });
+  }
+
+  // ⭐ 2026-09-27：个人主页那条链路的**媒体代理**（画布与 VibeCoding 共用）。
+  //   准入 = 主页 token 有效 + 这件作品属于该学生 + fileId **真的出现在这件作品里**
+  //   （与 `/api/public/works/:token/images/:fileId` 同一套判据，只是"作品"的定位方式不同）。
+  //   为什么需要它：未公开的作品没有 share_token，图片走不了公开作品那条代理；而主页要列全部作品。
+  const creatorImageMatch = pathname.match(/^\/api\/public\/creators\/([\w-]+)\/works\/(CANVAS|VIBECODING)\/([\w-]+)\/images\/([\w-]+)$/);
+  if (creatorImageMatch && method === 'GET') {
+    const [token, source, workId, fileId] = [creatorImageMatch[1], creatorImageMatch[2], creatorImageMatch[3], creatorImageMatch[4]];
+    const creator = await arow("SELECT id, org_id FROM users WHERE home_token=? AND role='STUDENT' AND deleted_at IS NULL", [token]);
+    if (!creator) throw errors.notFound('个人主页不存在', 'PUBLIC_CREATOR_NOT_FOUND');
+    let allowed = new Set();
+    if (source === 'CANVAS') {
+      const work = await arow('SELECT id, canvas_snapshot FROM works WHERE id=? AND student_id=? AND org_id=?', [workId, creator.id, creator.org_id]);
+      if (!work) throw errors.notFound('作品不存在', 'PUBLIC_WORK_NOT_FOUND');
+      allowed = new Set(canvasMediaFrom(parseJson(work.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }))
+        .map((item) => item.fileId).filter(Boolean));
+    } else {
+      const submission = await arow('SELECT id, files, artifacts FROM vibecoding_submissions WHERE id=? AND student_id=? AND org_id=?', [workId, creator.id, creator.org_id]);
+      if (!submission) throw errors.notFound('作品不存在', 'PUBLIC_WORK_NOT_FOUND');
+      allowed = new Set([...snapshotImageFileIds(submission), ...parseSnapshotArtifacts(submission).map((item) => item.coverFileId).filter(Boolean)]);
+    }
+    if (!allowed.has(fileId)) throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_WORK_IMAGE_NOT_FOUND');
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
+    if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
+    if (!/^(image|audio|video)\//.test(String(file.mime_type || ''))) throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_WORK_IMAGE_NOT_FOUND');
+    if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+    return prepareFileDownload(ctx, file);
   }
 
   // 已发布作品里的文档产物（PPT / Word / Excel）。
@@ -560,8 +641,14 @@ export async function handlePublicCommunication(ctx) {
   return null;
 }
 
-async function publicWorkRow(row) {
+async function publicWorkRow(row, { mediaBase = '', openUrl = '' } = {}) {
   const canvas = parseJson(row.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
+  // ⭐ 2026-09-27：媒体地址的**基路径**可以外部指定 —— 学生个人主页要把**未公开**的作品也列出来，
+  //    那些作品没有 share_token，走不了 `/api/public/works/<token>/images/<fileId>`，改走
+  //    `/api/public/creators/<主页token>/works/<来源>/<作品id>/images/<fileId>`（准入 = 拿到主页链接）。
+  //    不传 mediaBase 时保持原行为（有 share_token 才给代理地址，否则原样/为空）。
+  const base = mediaBase || (row.share_token ? `/api/public/works/${encodeURIComponent(row.share_token)}` : '');
+  const urlFor = (fileId) => (base ? `${base}/images/${encodeURIComponent(fileId)}` : null);
   // ⚠️ 导入件（`scripts/import-plaza-works.mjs` 从用户自己的另一个站扒过来的）：
   //    作品内容不是画布快照，而是「一张封面 + 一个本体（视频/图片/或原平台链接）」，
   //    元数据塞在 `canvas_snapshot.imported` 里。这一块要原样吐给前端 —— 广场按 workType
@@ -588,12 +675,12 @@ async function publicWorkRow(row) {
     // ⚠️ 里面但凡是我们**自己的**素材（生成产物归档后就是），地址都得换成这份作品专属的公开代理：
     //    访客没登录，`/api/student/file-assets/<id>/download` 对他是 403（前端也一样转不出 data:，
     //    那条路要 token）。换完前端 `srcOf` 直接用 `item.url` 就能显示，不必再动前端。
-    media: canvasMediaFrom(canvas).map((item) => (item.fileId && row.share_token
-      ? { ...item, url: `/api/public/works/${encodeURIComponent(row.share_token)}/images/${encodeURIComponent(item.fileId)}` }
+    media: canvasMediaFrom(canvas).map((item) => (item.fileId && urlFor(item.fileId)
+      ? { ...item, url: urlFor(item.fileId) }
       : item)),
     featured: Boolean(row.featured_at),
     submittedAt: row.submitted_at,
-    publicUrl: row.share_token ? `/works/${row.share_token}` : null,
+    publicUrl: row.share_token ? `/works/${row.share_token}` : (openUrl || null),
     orgName: row.org_name || null,
     studentName,
     // 导入件才有的字段（我们自己的画布/VibeCoding 作品一律是 null/false，前端据此分支）
@@ -605,9 +692,7 @@ async function publicWorkRow(row) {
     workTypeLabel: imported?.workTypeLabel || null,
     // ⭐ 2026-09-27 用户口径：站内**画布作品自动用快照里第一张真图当封面**（原来是 null，
     //    前端只能画一张同款渐变插图，一屏作品看着全像"填充的"）。导入件保留它们自己的封面。
-    coverUrl: imported?.coverUrl || workCoverFromSnapshot(canvas, (fileId) => (row.share_token
-      ? `/api/public/works/${encodeURIComponent(row.share_token)}/images/${encodeURIComponent(fileId)}`
-      : null)),
+    coverUrl: imported?.coverUrl || workCoverFromSnapshot(canvas, urlFor),
     contentUrls: Array.isArray(imported?.contentUrls) ? imported.contentUrls : [],
     externalUrl: imported?.externalUrl || null,
     // ⭐ 托管在**我们自己** `/media/` 下的可运行网页作品（2026-09-19 从 aimagc.cn 抓的那 9 件，
@@ -622,7 +707,10 @@ async function publicWorkRow(row) {
 // VibeCoding 作品：官网详情页用 files + entryFile 在 sandbox iframe 里直接运行；
 // 文档产物（PPT/Word/Excel）另给一份清单：能不能下载、配图在哪（见 publicArtifactCatalog）。
 // ⚠️ 「显示哪一份产物」由提交时的 entryFile 明确指定，不能再按时间或种子 index.html 猜。
-async function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
+async function publicVibeCodingWorkRow(row, { includeFiles = false, mediaBase = '', openUrl = '' } = {}) {
+  // 与 publicWorkRow 同一个道理：学生个人主页要列**未公开**的作品，那些没有 share_token，
+  // 图片得走 creator 作用域的代理（基路径由调用方给）。
+  const base = mediaBase || (row.share_token ? `/api/public/vibecoding-works/${encodeURIComponent(row.share_token)}` : '');
   let studentName = '小创作者';
   if (!row.student_anon && row.student_name) {
     const trimmed = String(row.student_name).trim();
@@ -641,7 +729,7 @@ async function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
     fileCount: Object.keys(files).length,
     featured: Boolean(row.featured_at),
     submittedAt: row.submitted_at,
-    publicUrl: row.share_token ? `/works/${row.share_token}` : null,
+    publicUrl: row.share_token ? `/works/${row.share_token}` : (openUrl || null),
     orgName: row.org_name || null,
     studentName,
     preview: submissionPreview(row),
@@ -656,9 +744,7 @@ async function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
       //    老数据没有它 → 退回页面里的第一张图（2026-09-27 加的规则）。
       const fromClient = parseSnapshotArtifacts(row).map((item) => item.coverFileId).find(Boolean) || null;
       const first = fromClient || [...snapshotImageFileIds(row)][0];
-      return first && row.share_token
-        ? `/api/public/vibecoding-works/${encodeURIComponent(row.share_token)}/images/${encodeURIComponent(first)}`
-        : null;
+      return first && base ? `${base}/images/${encodeURIComponent(first)}` : null;
     })(),
     ...(includeFiles ? { files, artifacts: publicArtifactCatalog(row) } : {}),
   };

@@ -1,4 +1,4 @@
-// 官网 - 我的作品（**个人主页的控制台**）
+// 官网 - **我的主页**（学生的个人主页控制台；2026-09-27 用户口径：不再叫「我的作品」）
 //
 // ⚠️ 2026-09-27 口径：这一页从"作品列表"变成**主页概念**（用户原话「现在需要把『我的作品』改成主页的
 //    的概念。对外公开并且可以分享。头像修改要加上。」）：
@@ -64,7 +64,7 @@ export function MyWorksPage({ api }) {
   // 名字取当前登录会话（学生端与官网共用一份 session —— 见 ⭐1 的 cookie 口径）。
   // 头像三级优先：**自己上传的照片** > 预设头像 > 名字首字圆形。
   const session = readSession();
-  const displayName = session?.user?.displayName || session?.user?.login || '我的作品';
+  const displayName = session?.user?.displayName || session?.user?.login || '我的主页';
   const initial = String(displayName).trim().charAt(0) || '我';
   const avatarPhoto = home?.avatarUrl || '';
   const glyph = avatarGlyph(home?.avatarKey);
@@ -201,7 +201,7 @@ export function MyWorksPage({ api }) {
       const type = workType(work);
       const badge = workPlazaBadge(work);
       return <article className="student-card sw-card" key={work.id}>
-        <Link className="sw-card__link" to={`/my-works/${work.source || 'CANVAS'}/${encodeURIComponent(work.id)}`}>
+        <Link className="sw-card__link" to={`/my-home/${work.source || 'CANVAS'}/${encodeURIComponent(work.id)}`}>
           <div className="student-work-card__cover">
             <WorkCover work={work} type={type} />
             <span className="student-work-card__type">{type.label}</span>

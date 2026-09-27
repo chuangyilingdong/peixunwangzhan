@@ -64,20 +64,34 @@ console.log('② 头像：8 个预设键，一处定义、两边共用');
   check('shared 入口导出了它（前端从 @platform/shared 拿）', /export \* from '\.\/avatars\.js'/.test(read('packages/shared/src/index.js')));
 }
 
-console.log('③ 主页接口：只列已公开的作品，判据与广场逐字一致');
+console.log('③ 主页接口：列**全部**作品（用户口径 2026-09-27 第二次）');
 {
   const publicJs = read('apps/server/src/routes/communication/public.js');
-  const squeez = (text) => String(text || '').replace(/\s+/g, ' ').trim();
-  const canvasPlaza = /WHERE work\.is_public=1 AND work\.status='PUBLISHED'([\s\S]*?)ORDER BY/.exec(publicJs);
-  const canvasHome = /WHERE work\.student_id=\? AND work\.is_public=1 AND work\.status='PUBLISHED'([\s\S]*?)ORDER BY/.exec(publicJs);
-  check('⭐ 主页的画布判据与广场**逐字一致**（只多一个 student_id 过滤）',
-    Boolean(canvasPlaza) && Boolean(canvasHome) && squeez(canvasPlaza[1]) === squeez(canvasHome[1]),
-    `${squeez(canvasHome?.[1])}`);
-  const vibePlaza = /WHERE submission\.is_public=1 AND submission\.share_token IS NOT NULL([\s\S]*?)ORDER BY/.exec(publicJs);
-  const vibeHome = /WHERE submission\.student_id=\? AND submission\.is_public=1 AND submission\.share_token IS NOT NULL([\s\S]*?)ORDER BY/.exec(publicJs);
-  check('⭐ 主页的 VibeCoding 判据与广场**逐字一致**',
-    Boolean(vibePlaza) && Boolean(vibeHome) && squeez(vibePlaza[1]) === squeez(vibeHome[1]),
-    `${squeez(vibeHome?.[1])}`);
+  // ⚠️ 2026-09-27 口径变更（**不是测试漂移**）：第一版是"只列已公开、判据与广场逐字一致"；
+  //    用户明确改成「主页把全部作品都列出来……就是需要公开。」→ 筛选改成与学生自己那页同一套
+  //    （student_id + org_id），**不看可见性/状态**。所以下面这些断言是**反过来**的。
+  check('⭐ 主页列**全部**作品：筛选与「我的主页」那屏同一套（student_id + org_id），不看可见性',
+    publicJs.includes('WHERE work.student_id=? AND work.org_id=?')
+    && publicJs.includes('WHERE submission.student_id=? AND submission.org_id=?')
+    && !publicJs.includes('WHERE work.student_id=? AND work.is_public=1'));
+  check('⭐ 未公开的作品没有分享码 → 媒体改走 creator 作用域的代理（不再是"没分享码就没封面"）',
+    publicJs.includes('const base = mediaBase ||') && publicJs.includes('mediaBase: canvasBase(row.id)'));
+  check('creator 作用域的**详情**与**图片代理**都在（准入 = 主页 token + 这件作品属于该学生）',
+    publicJs.includes('/^\\/api\\/public\\/creators\\/([\\w-]+)\\/works\\/(CANVAS|VIBECODING)\\/([\\w-]+)$/')
+    && publicJs.includes('images\\/([\\w-]+)$/'));
+  check('图片代理的准入与公开作品那条**同一套**（fileId 必须真出现在这件作品里 + 是图/音/视频 + 未过期）',
+    publicJs.includes('PUBLIC_WORK_IMAGE_NOT_FOUND') && publicJs.includes('FILE_NOT_ACTIVE') && publicJs.includes('FILE_EXPIRED'));
+  check('计数走真 COUNT（列表有条数上限，不能拿 items.length 冒充总数）',
+    publicJs.includes('SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=?')
+    && publicJs.includes('SELECT COUNT(*) n FROM vibecoding_submissions WHERE student_id=? AND org_id=?'));
+  check('只认 STUDENT + 未注销（教师/管理员不该有对外主页）',
+    publicJs.includes("role='STUDENT' AND deleted_at IS NULL"));
+  check('找不到主页返回 404（不泄漏"这个 token 存不存在"以外的东西）',
+    publicJs.includes('PUBLIC_CREATOR_NOT_FOUND'));
+  // ⚠️ 2026-09-27 口径变更（**不是测试漂移**）：用户说「名字默认就是机构给他创建的账号名啊，
+  //    不需要匿名。也不需要小创作者。」—— 主页那条链路**不再脱敏**（作品广场那条没动）。
+  check('⭐ 主页的名字用 display_name 原文（按用户口径放开了，不再脱敏）',
+    publicJs.includes('const name = String(creator.display_name'));
   check('只认 STUDENT + 未注销（教师/管理员不该有对外主页）',
     /role='STUDENT' AND deleted_at IS NULL/.test(publicJs));
   check('找不到主页返回 404（不泄漏"这个 token 存不存在"以外的东西）',
@@ -204,6 +218,19 @@ console.log('⑤ 真请求：建号就有链接 → 主页只列已公开 → �
       return { status: response.status, data: payload?.data ?? payload };
     };
 
+    // ⭐ 上传工具挪到前面：下面「未公开作品」那几条也要用它（const 不提升，定义在后面会 ReferenceError）
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==', 'base64');
+    const upload = async (authToken, fields) => {
+      const form = new FormData();
+      for (const [key, value] of Object.entries(fields)) form.append(key, value);
+      form.append('file', new Blob([png], { type: 'image/png' }), 'avatar.png');
+      const response = await fetch(`http://127.0.0.1:${port}/api/student/file-assets/upload`, {
+        method: 'POST', headers: { authorization: `Bearer ${authToken}` }, body: form,
+      });
+      const payload = await response.json().catch(() => ({}));
+      return { status: response.status, data: payload?.data ?? payload };
+    };
+
     const admin = await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } });
     assert.equal(admin.status, 200, `机构管理员登录失败：${JSON.stringify(admin.data)}`);
     const created = await api('/api/org/users', { method: 'POST', token: admin.data.token, body: { role: 'STUDENT', login: 'p158-newbie', displayName: '新同学', password: 'study123' } });
@@ -230,14 +257,47 @@ console.log('⑤ 真请求：建号就有链接 → 主页只列已公开 → �
     const creator = await api(`/api/public/creators/${homeToken}`);
     const titles = (creator.data?.items || []).map((item) => item.title);
     check('公开主页能打开（未登录可访问）', creator.status === 200, `HTTP ${creator.status} ${JSON.stringify(creator.data).slice(0, 160)}`);
-    check('⭐ 只列已公开的作品：已公开的画布件在、没公开的不在',
-      titles.includes('P158 已公开') && !titles.includes('P158 没公开'), JSON.stringify(titles));
-    check('⭐ 公开但**没确认展示授权**的也不列（与广场同一条判据）', !titles.includes('P158 公开但没确认授权'), JSON.stringify(titles));
-    check('VibeCoding 那条公开链路也收进来了', titles.includes('P158 网页作品'), JSON.stringify(titles));
+    // ⚠️ 2026-09-27 口径变更（**不是测试漂移**）：用户要求「主页把全部作品都列出来……就是需要公开。」
+    //    → 夹具里那三件（已公开 / 没公开 / 公开但没确认授权）+ VibeCoding 那件**全都要出现**。
+    check('⭐ 全部作品都列出来（含没公开的、没确认授权的、VibeCoding 的）',
+      ['P158 已公开', 'P158 没公开', 'P158 公开但没确认授权', 'P158 网页作品'].every((title) => titles.includes(title)),
+      JSON.stringify(titles));
+    check('作品数统计 = 该学生全部作品（走真 COUNT，不是列表长度）',
+      Number(creator.data?.workCount) === 4 && Number(creator.data?.shownCount) === 4,
+      `workCount=${creator.data?.workCount} shown=${creator.data?.shownCount}`);
+    // ⭐ 未公开的那件：卡片要指向 creator 作用域的地址（它没有分享码）
+    const privateItem = (creator.data?.items || []).find((item) => item.title === 'P158 没公开');
+    check('⭐ 未公开作品的地址走 creator 作用域（没有分享码也打得开）',
+      String(privateItem?.publicUrl || '').startsWith(`/u/${homeToken}/w/CANVAS/`), String(privateItem?.publicUrl));
+    // ⭐ 点开它：creator 作用域的详情要能取到（未登录）
+    const opened = await api(`/api/public/creators/${homeToken}/works/CANVAS/p158_private`);
+    check('⭐ 未公开的作品在公开主页上**点得开**（详情接口未登录可读）',
+      opened.status === 200 && Array.isArray(opened.data?.canvasSnapshot?.nodes), `HTTP ${opened.status}`);
+    const strangerDetail = await api(`/api/public/creators/${await (async () => 'ust_000000000000000000000000')()}/works/CANVAS/p158_private`);
+    check('换个不存在的主页 token 取同一件作品 → 404（不是凭作品 id 就能读）',
+      strangerDetail.status === 404, `HTTP ${strangerDetail.status}`);
+    // ⭐ 未公开作品里的图片：走 creator 作用域的代理，未登录也要取得到（否则主页上是一张破图）
+    const privateImageFile = await upload(token, { category: 'GENERAL', visibility: 'PRIVATE' });
+    const imageSnapshot = JSON.stringify({
+      nodes: [{ id: 'n_img', type: 'image', position: { x: 40, y: 40 }, data: { title: 'P158 图', assetUrl: `/api/student/file-assets/${privateImageFile.data?.id}/download` } }],
+      edges: [], viewport: { x: 0, y: 0, zoom: 1 },
+    });
+    const probe = new DatabaseSync(path.join(temp, 'platform.db'));
+    // 参数化写（不拼字符串 —— 省得跟引号打架）
+    probe.prepare('UPDATE works SET canvas_snapshot=? WHERE id=?').run(imageSnapshot, 'p158_private');
+    probe.close();
+    const withImage = await api(`/api/public/creators/${homeToken}`);
+    const privateWithImage = (withImage.data?.items || []).find((item) => item.title === 'P158 没公开');
+    const mediaUrl = String(privateWithImage?.media?.[0]?.url || '');
+    check('⭐ 未公开作品的图片地址走 creator 作用域代理',
+      mediaUrl.startsWith(`/api/public/creators/${homeToken}/works/CANVAS/p158_private/images/`), mediaUrl);
+    const imageResponse = await fetch(`http://127.0.0.1:${port}${mediaUrl}`);
+    check('⭐ 那个图片地址**未登录真能取到**（否则主页上就是破图）', imageResponse.status === 200, `HTTP ${imageResponse.status}`);
+    const forged = await fetch(`http://127.0.0.1:${port}/api/public/creators/${homeToken}/works/CANVAS/p158_public/images/file_not_mine`);
+    check('代理只放行"真出现在这件作品里"的 fileId（拿别人的 id 换不出来）', forged.status === 404, `HTTP ${forged.status}`);
     // ⭐ 2026-09-27 用户口径：「名字默认就是机构给他创建的账号名啊，不需要匿名。也不需要小创作者。」
     check('⭐ 主页显示的就是机构建号时那个名字（学生-1 的 display_name 是「小明」）',
       creator.data?.name === '小明', String(creator.data?.name));
-    check('作品数就是列表长度（不泄漏"还有几件没公开"）', creator.data?.workCount === (creator.data?.items || []).length);
 
     const newbieCreator = await api(`/api/public/creators/${newbieHome.data?.homeToken}`);
     check('⭐ 机构刚建的学生，主页上就是机构填的那个名字（「新同学」）',
@@ -256,18 +316,6 @@ console.log('⑤ 真请求：建号就有链接 → 主页只列已公开 → �
 
     // ── 学生自己上传照片当头像（用户口径：「学生可以自行修改照片」）──────────────────
     // 1×1 的真 PNG，走**真上传口**（不手插 file_assets 行）——这样连可见性参数一起验到。
-    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==', 'base64');
-    const upload = async (authToken, fields) => {
-      const form = new FormData();
-      for (const [key, value] of Object.entries(fields)) form.append(key, value);
-      form.append('file', new Blob([png], { type: 'image/png' }), 'avatar.png');
-      const response = await fetch(`http://127.0.0.1:${port}/api/student/file-assets/upload`, {
-        method: 'POST', headers: { authorization: `Bearer ${authToken}` }, body: form,
-      });
-      const payload = await response.json().catch(() => ({}));
-      return { status: response.status, data: payload?.data ?? payload };
-    };
-
     const privateAsset = await upload(token, { category: 'GENERAL', visibility: 'PRIVATE' });
     check('夹具：以 PRIVATE 上传一张图（下面那条要证明它会被拦）', Boolean(privateAsset.data?.id), JSON.stringify(privateAsset.data).slice(0, 140));
     const privateAsAvatar = await api('/api/student/home', { method: 'PUT', token, body: { avatarAssetId: privateAsset.data?.id } });

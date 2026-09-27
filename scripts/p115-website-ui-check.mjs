@@ -908,7 +908,7 @@ try {
   //    应该自动生成个封面」）。封面两条来源：服务端给的真封面（img）或我们按作品信息**当场画**的
   //    那张 SVG；两者都没有就是漏了 —— 而且不许退回旧的 emoji 占位。
   //    ⚠️ 断言里先要求"有卡片"：夹具没作品时那几个计数全是 0，等式成立、断言空转。
-  await page.goto(`${base}/my-works`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/my-home`, { waitUntil: 'domcontentloaded' });
   await settle();
   const coverState = await page.evaluate(() => ({
     cards: document.querySelectorAll('.student-card').length,
@@ -1007,6 +1007,7 @@ try {
     name: (document.querySelector('[data-testid="home-name"]')?.textContent || '').trim(),
     cards: document.querySelectorAll('.sw-card__link').length,
     titles: Array.from(document.querySelectorAll('.sw-card__title')).map((node) => node.textContent.trim()),
+    links: Array.from(document.querySelectorAll('.sw-card__link')).map((node) => ({ title: (node.querySelector('.sw-card__title')?.textContent || '').trim(), href: node.getAttribute('href') || '' })),
     avatar: (document.querySelector('[data-testid="home-avatar-readonly"]')?.textContent || '').trim(),
     hasShare: document.querySelectorAll('[data-testid="share-home-public"]').length,
     stats: Array.from(document.querySelectorAll('.sw-stats strong')).map((node) => node.textContent.trim()),
@@ -1014,9 +1015,39 @@ try {
   console.log(`  · 公开主页：名字「${creatorState.name}」、头像「${creatorState.avatar}」、卡 ${creatorState.cards} 张、统计 ${JSON.stringify(creatorState.stats)}、分享按钮 ${creatorState.hasShare} 个`);
   if (creatorState.avatar !== '🦊') problems.push(`公开主页：头像应当跟着学生选的那个（实际「${creatorState.avatar}」）`);
   if (!creatorState.hasShare) problems.push('公开主页：应当有"分享这个主页"按钮');
-  if (!creatorState.cards) problems.push('公开主页：夹具里学生有已公开的作品，卡片不该是 0 张');
-  // ⭐ 最要紧的一条：**没公开的作品一条都不能出现**（夹具里「宽画布样例」是 is_public=0）
-  if (creatorState.titles.includes('宽画布样例')) problems.push('公开主页：出现了**没公开**的作品（宽画布样例）—— 个人主页不该把学生的可见面变大');
+  if (!creatorState.cards) problems.push('公开主页：学生有作品，卡片不该是 0 张');
+  // ⚠️ 2026-09-27 用户口径变更（**不是测试漂移**）：「主页把全部作品都列出来……就是需要公开。」
+  //    第一次我做的是"只列已公开"，被要求改掉 —— 所以这条断言现在**反过来**：
+  //    夹具里「宽画布样例」是 is_public=0，它**必须**出现在主页上。
+  if (!creatorState.titles.includes('宽画布样例')) problems.push('公开主页：应当把**全部**作品都列出来（含没公开的那件「宽画布样例」）');
+  const shownStat = Number(creatorState.stats[0] || 0);
+  console.log(`  · 主页作品数统计：${shownStat}（卡片 ${creatorState.cards} 张）`);
+  if (shownStat < creatorState.cards) problems.push(`公开主页：作品数统计（${shownStat}）不该小于列出来的卡片数（${creatorState.cards}）`);
+  // ⭐ 点开一件**没公开**的作品：也要能打开（走 creator 作用域那条详情 —— 未公开的作品没有分享码）
+  const wideCard = creatorState.links.find((item) => item.title.includes('宽画布样例'));
+  if (!wideCard) problems.push('公开主页：拿不到未公开作品的卡片链接');
+  else {
+    console.log(`  · 未公开作品的卡片链接：${wideCard.href}`);
+    if (!/^\/u\/ust_[0-9a-f]{24}\/w\/CANVAS\//.test(wideCard.href)) problems.push(`公开主页：未公开作品应当走 creator 作用域的地址（实际「${wideCard.href}」）`);
+    await page.goto(new URL(wideCard.href, base).href, { waitUntil: 'domcontentloaded' });
+    await settle();
+    const wideTab = page.locator('.work-detail__tab', { hasText: '创作画布' });
+    if (await wideTab.count()) { await wideTab.first().click(); await settle(); }
+    await page.waitForSelector('.learning-canvas .react-flow__node', { timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(700);
+    const opened = await page.evaluate(() => ({
+      nodes: document.querySelectorAll('.learning-canvas .react-flow__node').length,
+      title: (document.querySelector('.work-detail__head h1')?.textContent || '').trim(),
+      error: (document.querySelector('.note')?.textContent || '').trim(),
+    }));
+    console.log(`  · 点开未公开作品：标题「${opened.title}」、画布节点 ${opened.nodes} 个`);
+    if (!opened.nodes) problems.push(`公开主页：点开未公开的作品应当能看到内容（节点 0 个；页面提示「${opened.error}」）`);
+    await shot('19j-creator-open-unpublished');
+    await page.goto(creatorUrl, { waitUntil: 'domcontentloaded' });
+    await settle();
+  }
+  // （原来这里有一条"没公开的作品一条都不能出现"的反向断言 —— 2026-09-27 用户口径改成
+  //   「主页把全部作品都列出来」之后它已作废，上面那条正向断言取代了它。）
   // ⭐ 2026-09-27 用户口径：主页显示的就是机构建号时那个名字（种子里的 student-1 叫「小明」）
   console.log(`  · 公开主页应该显示机构建号时的名字「小明」：实际「${creatorState.name}」`);
   if (creatorState.name !== '小明') problems.push(`公开主页：应当显示机构建号时那个名字「小明」（实际「${creatorState.name}」）`);
@@ -1039,7 +1070,7 @@ try {
   // （naturalWidth > 0）—— 这一步能同时抓住"可见性传错导致公开页 403 破图"那个最难查的坑。
   const avatarPng = path.join(shotDir, 'avatar-fixture.png');
   fs.writeFileSync(avatarPng, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==', 'base64'));
-  await page.goto(`${base}/my-works`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/my-home`, { waitUntil: 'domcontentloaded' });
   await settle();
   await page.locator('[data-testid="home-avatar"]').first().click();
   await settle();
@@ -1073,7 +1104,7 @@ try {
   if (!publicPhoto.loaded) problems.push('⭐ 公开主页：头像图没画出来 —— 多半是上传时可见性没给 PUBLIC_PLATFORM（未登录读不到）');
   await shot('19i-creator-home-photo');
   // 复原：把照片移除，别把夹具状态留给后面几节
-  await page.goto(`${base}/my-works`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/my-home`, { waitUntil: 'domcontentloaded' });
   await settle();
   await page.locator('[data-testid="home-avatar"]').first().click();
   await settle();
@@ -1113,7 +1144,7 @@ try {
   };
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(`${base}/my-works/CANVAS/work_guard_wide`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/my-home/CANVAS/work_guard_wide`, { waitUntil: 'domcontentloaded' });
   await settle();
   const wideCanvasTab = page.locator('.mw-views button', { hasText: '画布' });
   if (await wideCanvasTab.count()) { await wideCanvasTab.first().click(); await settle(); }
@@ -1167,7 +1198,7 @@ try {
   //    可用空间"，所以这里断言的是**结构**：iframe 的布局尺寸 ≥640×768、带一个 ≤1 的 scale、
   //    外面套着裁剪的舞台。内层文档自己的滚动条在外层读不到（沙箱是 opaque origin），
   //    所以另存截图 20-work-preview 供人眼复核。
-  await page.goto(`${base}/my-works/VIBECODING/vibesub_guard_web`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/my-home/VIBECODING/vibesub_guard_web`, { waitUntil: 'domcontentloaded' });
   await settle();
   await page.waitForTimeout(600);
   const viewer = await page.evaluate(() => {

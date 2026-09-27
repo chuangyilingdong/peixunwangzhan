@@ -23,8 +23,19 @@ function withContent(item, files) {
   return { ...item, content: String(files?.[item.name] ?? '') };
 }
 
+/**
+ * ⭐ 2026-09-27：这一页现在有**两条入口**，靠路由参数自己分辨（不用调用方传标志位）：
+ *   · `/works/:token`（作品广场）—— 按作品分享码取数（只可能是已公开的）；
+ *   · `/u/:token/w/:source/:id`（学生个人主页里点开一件）—— 按**主页 token + 作品 id** 取数。
+ *     为什么要第二条：个人主页要列**全部**作品（含未公开的，它们没有 share_token，按分享码取不到）。
+ */
 export function WorkDetailPage({ api }) {
-  const { token } = useParams();
+  const { token, source, id } = useParams();
+  const creatorScoped = Boolean(source && id);
+  // 「是不是 VibeCoding」在主页那条路上由路由里的 source 决定，普通公开页仍按 token 前缀判
+  const vibe = creatorScoped
+    ? String(source || '').toUpperCase() === 'VIBECODING'
+    : String(token).startsWith('vbt_');
   const [state, setState] = useState({ loading: true, error: null, work: null });
   const [activeName, setActiveName] = useState('');
   // 作品先用**媒体**看（图/视频/音频），画布放到第二个标签（用户 2026-09-21 口径）。
@@ -36,12 +47,14 @@ export function WorkDetailPage({ api }) {
   useEffect(() => {
     let live = true;
     setState({ loading: true, error: null, work: null });
-    const path = String(token).startsWith('vbt_') ? 'public/vibecoding-works/' : 'public/works/';
-    api.get(path + encodeURIComponent(token))
+    const path = creatorScoped
+      ? `public/creators/${encodeURIComponent(token)}/works/${encodeURIComponent(String(source || 'CANVAS').toUpperCase())}/${encodeURIComponent(id)}`
+      : (vibe ? 'public/vibecoding-works/' : 'public/works/') + encodeURIComponent(token);
+    api.get(path)
       .then((payload) => { if (live) setState({ loading: false, error: null, work: payload || null }); })
       .catch((error) => { if (live) setState({ loading: false, error: error.message, work: null }); });
     return () => { live = false; };
-  }, [api, token]);
+  }, [api, token, source, id, creatorScoped, vibe]);
 
   const work = state.work;
   // 作品里挂的站内素材 → data:（拿得到就换，拿不到就让 <img> 拿原地址试 —— 公开作品的外链本来就能显示）
@@ -81,9 +94,9 @@ export function WorkDetailPage({ api }) {
     if (!match) return raw;   // 上游图床的外链、data:、站内相对地址都原样用
     return (work?.media || []).find((item) => item.fileId === match[1])?.url || null;
   };
-  // 加载中也要先定好外壳：token 前缀已经说明它是哪一类作品，
+  // 加载中也要先定好外壳：主页那条路用路由里的 source，普通公开页按 token 前缀判，
   // 不然深色页会先闪一下浅色版式。
-  const isVibeToken = String(token).startsWith('vbt_');
+  const isVibeToken = vibe;
 
   const files = work?.files || {};
   const catalog = useMemo(() => (Array.isArray(work?.artifacts) ? work.artifacts : []), [work]);

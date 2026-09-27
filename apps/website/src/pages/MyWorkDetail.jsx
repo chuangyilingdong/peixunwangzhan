@@ -1,4 +1,4 @@
-// 官网 - 我的作品 · 单件详情（学生看**自己**的作品）
+// 官网 - 我的主页 · 单件详情（学生看**自己**的作品）
 //
 // 为什么要有这一页：「我的作品」原来只能显示状态 —— 卡片上写「平台发布后可查看」，
 // 作品没上广场就**打不开**（学生做完的东西自己看不到，用户报的「要实际能用」）。
@@ -187,7 +187,7 @@ export function MyWorkDetailPage({ api }) {
     ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, webArtifact.name)}`
     : '';
 
-  const back = <Link className="button soft" to="/my-works">← 返回我的作品</Link>;
+  const back = <Link className="button soft" to="/my-home">← 返回我的主页</Link>;
   const plazaLink = work?.publicUrl ? <Link className="button soft" to={work.publicUrl}>在作品广场看 <ConsoleIcon name="external" size={14} /></Link> : null;
   // 「分享」按钮：把公开作品页那条链接复制走（学生发给家长/同学用）。
   const shareAction = work ? <button type="button" className="button soft" data-testid="share-work" disabled={share.busy} onClick={onShareClick}>{share.busy ? '处理中…' : '分享'}</button> : null;
@@ -226,7 +226,7 @@ export function MyWorkDetailPage({ api }) {
     return <main className="inner work-detail">
       <div className="work-detail__bar">{back}{shareAction}{plazaLink}</div>
       <header className="work-detail__head">
-        <p className="work-detail__eyebrow">我的作品 · 画布作品</p>
+        <p className="work-detail__eyebrow">我的主页 · 画布作品</p>
         <h1>{work.title}</h1>
         {work.description ? <p className="work-detail__desc">{work.description}</p> : null}
         <p className="work-detail__meta">{status}<span className="mw-provenance">{provenance}</span>{work.submittedAt ? <span>提交于 {formatDate(work.submittedAt)}</span> : null}</p>
@@ -245,7 +245,7 @@ export function MyWorkDetailPage({ api }) {
   return <main className="inner">
     <ReplayShell
       embedded
-      eyebrow="我的作品 · VibeCoding 作品"
+      eyebrow="我的主页 · VibeCoding 作品"
       title={work.title || '未命名作品'}
       meta={<>
         {status}
@@ -259,7 +259,7 @@ export function MyWorkDetailPage({ api }) {
       {shareNotice}
       {viewTabs}
       <div className="mw-stage">
-        {currentView === 'web' && webArtifact ? <ReplayPreview html={webHtml} title={work.title || '我的作品'} />
+        {currentView === 'web' && webArtifact ? <ReplayPreview html={webHtml} title={work.title || '未命名作品'} />
           : currentView === 'images' ? (media.length
             ? <WorkMediaGallery media={media} assets={work?.assets} resolveSrc={resolveMediaSrc} />
             : <ImageGallery list={images} src={resolveImageSrc} />)

@@ -137,7 +137,11 @@ check('⑪ 那条代理的准入与作品详情**逐字同一条件**（`share_t
   // 2026-09-23 RDS 阶段 1：数据访问改异步（row → await arow），**SQL 条件一个字没动**，守卫跟着改名走。
   /const work = await arow\('SELECT id, canvas_snapshot FROM works WHERE share_token=\? AND is_public=1'/.test(publicRoutes));
 check('⑫ publicWorkRow 把 fileId 形式的媒体换成作品专属代理地址（前端 srcOf 直接用 item.url 就能显示）',
-  /url: `\/api\/public\/works\/\$\{encodeURIComponent\(row\.share_token\)\}\/images\//.test(publicRoutes));
+  // ⚠️ 2026-09-27 口径追加（**不是测试漂移**）：学生个人主页要列**全部**作品，未公开的没有 share_token，
+  //    所以代理地址的**基路径**变成可注入的 —— 默认仍是 `/api/public/works/<分享码>`（本断言要守的这条），
+  //    主页那条路传 `/api/public/creators/<主页token>/works/...`。两处都要在，别只剩一条路。
+  /const base = mediaBase \|\| \(row\.share_token \? `\/api\/public\/works\/\$\{encodeURIComponent\(row\.share_token\)\}` : ''\)/.test(publicRoutes)
+  && /url: urlFor\(item\.fileId\)/.test(publicRoutes));
 
 /* ── ⑤ 机构端读面：准入要算上归档件、列表给 fileId→地址、前端要解析 ─────────── */
 const org = read('apps/server/src/routes/orgAdmin.js');
