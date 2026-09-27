@@ -969,6 +969,7 @@ function Works(){
   const [loaded,setLoaded]=useState(false);
   const [error,setError]=useState(null);
   const [query,setQuery]=useState('');
+  const [kind,setKind]=useState('');
   const [page,setPage]=useState(1);
   const [viewing,setViewing]=useState(null);
   useEffect(()=>{
@@ -986,29 +987,36 @@ function Works(){
       setLoaded(true);
     });
   },[]);
-  // ⚠️ 2026-09-27 用户口径（第二次反馈）：「课堂作品这里为什么还有下拉框呢？这里的展示应该是
-  //    **大的作品预览**啊。类似于图3，不可能存在下拉框的说法啊。」—— 所以：
-  //      · **去掉类型筛选那一排胶囊**（连 `kind` 状态一起）；搜索保留（它是输入框、不是筛选器，
-  //        而且作品多了得能找 —— 用户嫌的是"筛选框"，不是搜索）。
-  //      · 呈现改成**一列大预览**（见 styles.css 的 `.works.all`），每件作品给一块宽面板。
+  // 类型筛选（2026-09-19 晚按参考站重做）：参考站是一排「全部分类 + 各类型」的胶囊，各自带图标。
+  // 我们这边多两类站内作品（画布 / VibeCoding），所以类型集合要按**当前数据里真有的**来排，
+  // 不能写死 —— 否则广场上会挂着一堆点开是空的分类（参考站也是这个做法）。
+  // 分类只有两个：画布作品 / VibeCoding作品（哪一个类型算哪一类由后台配，见服务端 plazaCategories.js）
+  const catCounts = items.reduce((acc, w) => { const key = plCategoryOf(w); acc[key] = (acc[key] || 0) + 1; return acc; }, {});
+  const byKind = kind ? items.filter((w) => plCategoryOf(w) === kind) : items;
   // 搜索按「标题 / 学生名字」匹配（大小写不敏感、去首尾空格）
   const keyword=query.trim().toLowerCase();
-  const matched=keyword?items.filter((w)=>String(w.title||'').toLowerCase().includes(keyword)||String(w.studentName||'').toLowerCase().includes(keyword)):items;
-  // 翻页：每页 12 件。⚠️ 换搜索词要把页码**收回第 1 页**（否则在第 40 页时切到只剩 3 件的结果，
-  // 页面会空着，看着像"没作品"）。
+  const matched=keyword?byKind.filter((w)=>String(w.title||'').toLowerCase().includes(keyword)||String(w.studentName||'').toLowerCase().includes(keyword)):byKind;
+  // 翻页：每页 12 件。⚠️ 换分类/换搜索词要把页码**收回第 1 页**（否则在第 40 页时切到只有 3 件的分类，
+  // 页面会空着，看着像"这个分类没作品"）。
   const pageCount = Math.max(1, Math.ceil(matched.length / PL_PER_PAGE));
   const currentPage = Math.min(page, pageCount);
   const visible = matched.slice((currentPage - 1) * PL_PER_PAGE, currentPage * PL_PER_PAGE);
   // 分类或搜索词一变就回第 1 页（见上面 currentPage 的注释）
-  useEffect(()=>{ setPage(1); },[query]);
+  useEffect(()=>{ setPage(1); },[kind, query]);
   // 页头（「学生作品」+「孩子们的灵感，正在发光」+ 描述）与底部那条
   // 「作品来自真实课堂 / 了解机构作品展厅」提示，都按用户口径 2026-09-18 晚**删掉了**
   // （用户：「灵动作品这里全部不要」「图2也要删除」）。2026-09-19 晚只换展示，不再加回来。
   return <main className="inner works-page">
     <div className="works-bar">
       {/* 类型筛选：全部 + 数据里真有的类型（点一次选中，再点一次取消回「全部」） */}
-      {/* ⚠️ 2026-09-27 用户口径：这一排类型筛选胶囊**已删除**（「不可能存在下拉框的说法」）。
-          别再按"参考站有分类胶囊"加回来 —— 那个参考口径已被推翻。 */}
+      <div className="pl-types">
+        <button type="button" data-type="all" aria-pressed={kind===''} className={'pl-type'+(kind===''?' on':'')} onClick={()=>setKind('')}>
+          全部<span className="pl-type-n">{items.length}</span>
+        </button>
+        {['CANVAS','VIBECODING'].map((key)=><button type="button" key={key} data-type={key} aria-pressed={kind===key} className={'pl-type'+(kind===key?' on':'')} onClick={()=>setKind(kind===key?'':key)}>
+          <Icon name={PL_CATEGORY_ICON[key]} size={15} className="pl-type-ico" />{PL_CATEGORY_LABEL[key]}<span className="pl-type-n">{catCounts[key]||0}</span>
+        </button>)}
+      </div>
       {/* 搜索：按作品的「标题 / 学生名字」过滤。作品列表本来就是前端把三类作品合并出来的，
           所以过滤也在前端做 —— 不用改接口。 */}
       <div className="works-search">

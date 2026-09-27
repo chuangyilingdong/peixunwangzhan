@@ -1150,13 +1150,3 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 .sw-avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}
 .sw-home-panel__upload{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 12px}
 .sw-home-panel__upload label.button{cursor:pointer}
-
-/* ── 课堂作品（/works）：一列大预览（2026-09-27 用户口径「这里的展示应该是**大的作品预览**啊。
-   类似于图3，不可能存在下拉框的说法啊。」—— 同批把顶部那排类型筛选胶囊也删了，见 main.jsx）──
-   ⚠️ 只动 `.works.all`（这个组合只有课堂作品那一页在用），别碰其他用到 `.works` 的地方。
-   封面本来就是 16:9，一列铺满后宽屏约 1180×664 —— 就是"大预览"该有的样子。 */
-.works.all{grid-template-columns:1fr;gap:26px;margin-top:26px}
-.works.all .pl-card{border-radius:24px}
-.works.all .pl-title{font-size:22px}
-.works.all .pl-date,.works.all .pl-author{font-size:13px}
-.works.all .pl-badge{font-size:13px;padding:6px 12px}
