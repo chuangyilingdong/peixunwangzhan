@@ -123,18 +123,25 @@ export function MyWorksPage({ api }) {
         <p className="sw-stats"><span><strong>{total}</strong> 个作品</span><span><strong>{published}</strong> 已上广场</span></p>
         <p className="sw-bio">查看你在课程中生成与归档的作品。</p>
         {home?.homeUrl ? <p className="sw-home-actions">
-          <a className="button soft" href={home.homeUrl} target="_blank" rel="noreferrer" data-testid="open-home">我的主页 <b>↗</b></a>
+          {/* ⚠️ 这个按钮**不能叫「我的主页」** —— 这一页本身就叫「我的主页」（用户 2026-09-27 报：
+              「进来域名是 /my-home，然后进来还有个我的主页按钮呢？」）。它打开的是**对外那一面**
+              （`/u/<token>`，访客看到的），所以按"对外"命名，别跟本页重名。 */}
+          <a className="button soft" href={home.homeUrl} target="_blank" rel="noreferrer" data-testid="open-home">看对外主页 <b>↗</b></a>
           <button type="button" className="button soft" data-testid="share-home" onClick={shareHome}>分享主页</button>
         </p> : null}
       </div>
     </header>
+
+    {/* ⚠️ 这条提示**必须渲染在面板外面**：面板默认是收起的，放在里面的话点「分享主页」虽然复制成功了、
+        屏幕上却什么都不变 —— 用户报的「点分享主页为什么没反应」（2026-09-27）就是这么来的。 */}
+    {homeNotice ? <p className="sw-home-panel__notice" data-testid="home-notice">{homeNotice}</p> : null}
 
     {panelOpen ? <section className="sw-home-panel" data-testid="home-panel">
       <div className="sw-home-panel__head">
         <strong>主页设置</strong>
         <button type="button" className="text-button" onClick={() => setPanelOpen(false)}>收起</button>
       </div>
-      <p className="sw-home-panel__hint">你的主页是公开的：<strong>只有你已公开的作品</strong>会出现在上面，没公开的作品任何人都看不到。</p>
+      <p className="sw-home-panel__hint">你的主页是<strong>公开的</strong>：任何拿到链接的人都能看到它，上面列着你<strong>全部</strong>的作品（含还没公开到广场的）。</p>
 
       <div className="sw-home-panel__block">
         <span className="sw-home-panel__label">头像</span>
@@ -180,7 +187,6 @@ export function MyWorksPage({ api }) {
           <button type="button" className="text-button" data-testid="copy-home" disabled={!homeHref} onClick={shareHome}>复制</button>
         </p>
       </div>
-      {homeNotice ? <p className="sw-home-panel__notice" data-testid="home-notice">{homeNotice}</p> : null}
     </section> : null}
 
     <div className="sw-toolbar">

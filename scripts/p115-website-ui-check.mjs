@@ -966,6 +966,31 @@ try {
   const panelOpenCount = await page.locator('[data-testid="home-panel"]').count();
   console.log(`  · 主页设置面板：初始${panelOpenCount ? '已展开' : '收起'}（点头像才展开）`);
   if (panelOpenCount) problems.push('我的作品：主页设置面板初始不该展开（用户没说要看设置）');
+  // ⭐ 2026-09-27 用户报了两条，这里各钉一条：
+  //   ①「进来域名是 /my-home，然后进来还有个我的主页按钮呢？」—— 那个按钮打开的是**对外**那一面，
+  //     不能跟本页重名（本页就叫「我的主页」）。它现在叫「看对外主页」。
+  //   ②「点分享主页为什么没反应？」—— 复制其实成功了，但提示条原来渲染在**收起的面板**里面，
+  //     屏幕上什么都不变。现在提示条在面板外面，**面板收起时也必须看得见**。
+  const pageLabels = await page.evaluate(() => ({
+    openLabel: (document.querySelector('[data-testid="open-home"]')?.textContent || '').trim(),
+    homeTitle: (document.querySelector('.sw-profile-main h1')?.textContent || '').trim(),
+    panel: document.querySelectorAll('[data-testid="home-panel"]').length,
+  }));
+  console.log(`  · 顶部按钮「${pageLabels.openLabel}」（本页标题是「${pageLabels.homeTitle}」，两者不该同名）`);
+  if (pageLabels.openLabel.includes('我的主页')) problems.push(`我的作品：那个按钮不能叫「我的主页」—— 本页就叫这个名，会让人以为是同一页（实际「${pageLabels.openLabel}」）`);
+  if (!pageLabels.openLabel.includes('对外')) problems.push(`我的作品：那个按钮应当说清它打开的是"对外"那一面（实际「${pageLabels.openLabel}」）`);
+  if (pageLabels.panel) problems.push('我的作品：这一步面板应当还是收起的（下面要验"收起时也能看到分享反馈"）');
+  await page.locator('[data-testid="share-home"]').first().click();
+  await page.waitForTimeout(600);
+  const shareFeedback = await page.evaluate(() => {
+    const node = document.querySelector('[data-testid="home-notice"]');
+    if (!node) return { visible: false, text: '' };
+    const rect = node.getBoundingClientRect();
+    return { visible: rect.width > 0 && rect.height > 0, text: (node.textContent || '').trim() };
+  });
+  console.log(`  · 面板收起时点「分享主页」：反馈可见 ${shareFeedback.visible ? '是' : '否'}、文案「${shareFeedback.text.slice(0, 60)}」`);
+  if (!shareFeedback.visible) problems.push('我的作品：⭐ 点「分享主页」在面板收起时也要有可见反馈（用户 2026-09-27 报的「没反应」）');
+  if (!/\/u\/ust_/.test(shareFeedback.text)) problems.push(`我的作品：分享反馈里应当带上主页地址（实际「${shareFeedback.text.slice(0, 80)}」）`);
   await page.locator('[data-testid="home-avatar"]').first().click();
   await settle();
   const panelState = await page.evaluate(() => ({
