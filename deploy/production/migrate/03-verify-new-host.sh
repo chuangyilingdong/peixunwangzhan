@@ -70,6 +70,10 @@ chk "nginx.conf 有 dsh-students include" "grep -q 'dsh-students' /etc/nginx/ngi
 chk "dsh-students 占位文件在" "ls /etc/nginx/dsh-students/README.conf"
 chk "drop-in uploads.conf 在" "ls /etc/systemd/system/learning-platform-production.service.d/uploads.conf"
 chk "drop-in oom-policy.conf 在" "ls /etc/systemd/system/learning-platform-production.service.d/oom-policy.conf"
+# ⚠️ 2026-09-27：单元开了 ProtectSystem=strict，「服务能写哪些目录」全看这条 drop-in 的 ReadWritePaths。
+#    客户端安装包目录当时漏了 → **后台上传安装包在生产上一直写不进去**（实测：用服务同一套沙箱写它 = READONLY），
+#    线上那两个包只能用 root scp 放上去（属主 root 就是证据），于是也从来没走过推 OSS。这条盯住它别再漏。
+chk "drop-in 含客户端安装包目录（后台上传要写它）" "grep -q '/srv/ai-kids-platform/downloads' /etc/systemd/system/learning-platform-production.service.d/uploads.conf"
 
 log "6. 上传扫描真的能跑（拿小文件实测，不看配置看行为）"
 SCAN_SRC="$PROD/data/platform.db"
