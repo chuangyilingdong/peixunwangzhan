@@ -103,8 +103,24 @@ check('⑥ 备案行在**页脚最底部**（排在品牌行 .ft-brand 之后）
   footerCode.indexOf('className="ft-filings"') > footerCode.indexOf('className="ft-brand"'));
 check('⑥ 备案行是**居中**的（CSS 里 justify-content:center）',
   /\.site-footer \.ft-filings\{[^}]*justify-content:center/.test(css));
-check('⑥ 备案行不放图片/图标（官网没有警徽素材，不放假图 —— 同 ③ 那条口径）',
-  !/<img[^>]*ft-filings/.test(footerCode));
+// ⚠️ 2026-09-28 口径变更：这一条原来断的是"备案行不许放图标"（那时没有徽标素材），
+//    用户当天把**公安备案徽标**发过来了 → 现在反过来：公安那条**必须**带徽标，
+//    而且必须是**本站静态资源**（站点 CSP 是 `default-src 'self'`，外链图片会被直接挡成空白；
+//    这类图标也不该依赖第三方的可用性）。ICP 那条仍然**不配**图标（用户只给了公安的）。
+const iconPath = 'apps/website/public/assets/beian-gongan.png';
+const iconCode = /<img[^>]*className="ft-filings__icon"[^>]*src="\/assets\/[^"]+"/.test(footerCode);
+check('⑥ 公安备案那条带徽标，且 src 是本站 /assets/ 下的资源', iconCode);
+check('⑥ 徽标**不许**外链或内联（外链会被 CSP 挡成空白）',
+  !/<img[^>]*ft-filings__icon[^>]*src="(https?:)?\/\//.test(footerCode) && !/ft-filings__icon[^>]*src="data:/.test(footerCode));
+const icpHrefAt = footerCode.indexOf('href="https://beian.miit.gov.cn/"');
+check('⑥ ICP 那条不配图标（用户只给了公安的徽标，别自己补一个）',
+  icpHrefAt >= 0 && !footerCode.slice(icpHrefAt, footerCode.indexOf('</a>', icpHrefAt)).includes('<img'));
+// 徽标文件要**真的在仓库里、真的是 PNG**（同 p160 那条口径：别让"路径写对了但文件是 HTML 兜底"蒙过去）
+check(`⑥ 徽标文件在仓库里（${iconPath}）`, fs.existsSync(new URL(`../${iconPath}`, import.meta.url)));
+const iconBytes = fs.readFileSync(new URL(`../${iconPath}`, import.meta.url));
+check('⑥ 徽标是真 PNG（不是 HTML/空文件）',
+  iconBytes.length > 200 && iconBytes.slice(1, 4).toString() === 'PNG',
+  `前 8 字节 ${iconBytes.slice(0, 8).toString('hex')}，${iconBytes.length} 字节`);
 
 console.log('');
 if (failures) { console.log(`✗ p132 有 ${failures} 处不符合预期`); process.exit(1); }

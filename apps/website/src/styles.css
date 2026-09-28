@@ -1010,7 +1010,11 @@ background:radial-gradient(120% 80% at 50% 0%,rgb(255 60 90 / 26%),transparent 6
    颜色跟着版权那行的浅白走，别给它们上强调色 —— 这一行是合规信息，不是入口。
    窄屏自动折成两行、仍然居中（flex-wrap + justify-content:center，不用另写媒体查询）。 */
 .site-footer .ft-filings{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 14px;margin-top:12px;color:rgb(255 255 255 / 46%);font-size:11px}
-.site-footer .ft-filings a{color:inherit;text-decoration:none;transition:color .3s ease-out}
+.site-footer .ft-filings a{display:inline-flex;align-items:center;gap:5px;color:inherit;text-decoration:none;transition:color .3s ease-out}
+/* 公安备案徽标（用户 2026-09-28 给的图，36×40）：只给高度、宽度 auto ——
+   不写死成整数对，免得把这张非整数比例的图压扁（徽标被拉变形比"少两像素"难看得多）。
+   flex:none：窄屏折行时不许它自己被压小。 */
+.site-footer .ft-filings__icon{height:14px;width:auto;flex:none}
 .site-footer .ft-filings a:hover{color:#fff;text-decoration:underline}
 @media(max-width:980px){.site-footer .foot{grid-template-columns:repeat(2,1fr);gap:34px 22px}}
 @media(max-width:700px){.site-footer{padding:52px 18px 22px}.site-footer .foot{grid-template-columns:repeat(2,1fr);gap:30px 16px}.site-footer .ft-brand{display:grid;gap:16px}.site-footer .ft-legal{display:grid;gap:6px}}

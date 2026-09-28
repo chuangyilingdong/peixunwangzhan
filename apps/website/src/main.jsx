@@ -124,11 +124,13 @@ function Footer(){return <footer className="site-footer">
     </div>
     {/* 页脚最底部、居中：两条**备案**（用户 2026-09-28 给的号与链接，逐字照抄）。
         这是监管要求对外展示的，别删、别降级成纯文本、别把公安那条的 `code=` 查询参数弄丢。
-        ⚠️ ICP 那条用户只给了号码，链接按工信部的通用要求补到查询站（beian.miit.gov.cn）。
-        ⚠️ **没有**配警徽图标：官网没这个素材、用户也没要求（页脚口径：我们没有的东西别放）。 */}
+        ⚠️ ICP 那条用户只给了号码，链接按工信部的通用要求补到查询站（beian.miit.gov.cn）——
+        工信部那条**没有**图标，只有公安这条有（用户 2026-09-28 后来把徽标图发过来了）。
+        ⚠️ 徽标走**本站静态资源**（`public/assets/`），不许外链到别处：站点 CSP 是 `default-src 'self'`，
+        外链图片会被直接挡掉；而且这类图标不该依赖第三方的可用性。 */}
     <div className="ft-filings">
       <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">鄂ICP备2025162545号-2</a>
-      <a href="https://beian.mps.gov.cn/#/query/webSearch?code=42011102006378" target="_blank" rel="noreferrer">鄂公网安备42011102006378号</a>
+      <a href="https://beian.mps.gov.cn/#/query/webSearch?code=42011102006378" target="_blank" rel="noreferrer"><img className="ft-filings__icon" src="/assets/beian-gongan.png" alt="" />鄂公网安备42011102006378号</a>
     </div>
   </div>
 </footer>}
