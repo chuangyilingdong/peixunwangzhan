@@ -79,6 +79,65 @@ if (!/fitView=\{[^}]*hasStoredViewport[^}]*\}/.test(canvas)) {
   }
 }
 
+// ④ ⭐⭐ 2026-09-28 生产事故（P0，学生**进不了画布课堂**：整页白屏）
+//    `Cannot read properties of null (reading 'canvasSnapshot')`。
+//    ③ 那次修复把 `latestCanvasRef` 挪到了"所有提前 return 之前"——**钩子顺序挪对了**
+//    （p34 挡下的正是这个），但那一行由此变成**渲染期第一次就跑**，而那时 `project` 还在
+//    loading（`useData` 初始态 `{loading:true, data:null}`）→ `project.data` 是 null →
+//    读 `.canvasSnapshot` 直接抛。**"提前 return 之前"= 每次 render 都会跑 = 必须空安全。**
+//    所以这条网盯两件事：那个区间里组件体那一层不许出现 `project.data.<字段>`（要用 `?.`）；
+//    以及 `latestCanvasRef.current =` 那一行的兜底表达式必须带 `?.`。
+//    ⚠️ 已知盲区：只扫"组件体那一层"（2 空格缩进）与它的续行；hook 回调体（≥4 空格）里
+//       有自己的 `if (!project.data) return` 守卫，不在此网范围内。
+{
+  const guardPath = 'packages/shared/src/canvasWorkspace.jsx';
+  const source = fs.readFileSync(path.join(root, guardPath), 'utf8');
+  const cut = source.indexOf('if (project.loading) return');
+  if (cut < 0) {
+    findings.push(`${guardPath}: 找不到加载态的提前返回（if (project.loading) return）—— `
+      + '无法确认"提前返回之前"那段是否空安全，请同步更新这条守卫。');
+  } else {
+    const lines = source.slice(0, cut).split('\n');
+    const offenders = [];
+    lines.forEach((line, index) => {
+      const text = line.replace(/\/\/.*$/, '');
+      if (!/project\.data\.[A-Za-z_$]/.test(text) || /project\.data\?\.[A-Za-z_$]/.test(text)) return;
+      // 同一行里就有短路守卫的写法是安全的（`Boolean(project.data) && … project.data.status`）。
+      if (/(!\s*project\.data\b)|(Boolean\(project\.data\))|(project\.data\s*\?\?)|(project\.data\s*&&)/.test(text)) return;
+      const indent = text.match(/^ */)[0].length;
+      // 组件体那一层：2 空格缩进，或者它的**续行**（多行表达式）。
+      // 判"续行"的办法：往上找到第一个缩进更小的行 —— 若它是 2 空格且**不是开块的那一行**
+      // （`…=> {` / `…{`），说明当前行只是那句组件体语句的下一行，同样每次 render 都会跑。
+      let atComponentLevel = indent === 2;
+      if (!atComponentLevel && indent > 2) {
+        for (let i = index - 1; i >= 0; i -= 1) {
+          const above = lines[i];
+          if (!above.trim()) continue;
+          const aboveIndent = above.match(/^ */)[0].length;
+          if (aboveIndent < indent) {
+            atComponentLevel = aboveIndent === 2 && !/(=>|\{)\s*$/.test(above.replace(/\/\/.*$/, ''));
+            break;
+          }
+        }
+      }
+      if (atComponentLevel) offenders.push(index + 1);
+    });
+    for (const line of offenders) {
+      findings.push(`${guardPath}:${line}: "提前 return 之前"（每次 render 都会跑）直接读了 `
+        + '`project.data.<字段>` —— 那一档 `project` 还在 loading、`project.data` 是 **null**，'
+        + '会抛 `Cannot read properties of null` 让整个画布课堂白屏（2026-09-28 线上事故）。'
+        + '请写成 `project.data?.<字段>`。');
+    }
+    const refAssignment = source.match(/latestCanvasRef\.current\s*=\s*([^\n]*)/);
+    if (!refAssignment) {
+      findings.push(`${guardPath}: 找不到 latestCanvasRef.current 的赋值，无法确认它空安全。`);
+    } else if (/project\.data\./.test(refAssignment[1])) {
+      findings.push(`${guardPath}: latestCanvasRef.current 的兜底表达式里 \`project.data.\` 少了 \`?\` —— `
+        + '这一行在渲染期先跑，加载中取它就是 null 解引用（画布课堂整页白屏）。');
+    }
+  }
+}
+
 const result = { name: 'canvas-dirty-guard', pass: findings.length === 0, scannedFiles: 2, findings };
 console.log(JSON.stringify(result, null, 2));
 if (!result.pass) process.exit(1);

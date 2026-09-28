@@ -245,8 +245,14 @@ export function CanvasWorkspace({ api, ...props }) {
   //    （`patchNode` 对已经不在的节点什么都不做 → 删掉的就是删掉了）。
   // ⚠️ 这个 ref 与 commitCanvas 必须放在**所有提前 return 之前**（p34 钩子顺序守卫盯着）：
   //    下面有 `if (!project) return …` 之类的提前返回，hook 落在后面会抛 React #300 白屏。
+  // ⚠️⚠️ 2026-09-28 生产事故（P0，学生进画布课堂**整页白屏**）：上面那句"挪到提前返回之前"——
+  //    挪对了钩子顺序，却让这一行**在渲染期第一次就跑**，而那时 `project` 还在 loading
+  //    （`useData` 初始态 `{loading:true, data:null}`），`project.data` 是 **null** →
+  //    读 `.canvasSnapshot` 抛 `Cannot read properties of null (reading 'canvasSnapshot')`。
+  //    下面的兜底字面量本来就是给"还没有数据"这一档准备的，所以这里必须用 **`?.`**。
+  //    ⚠️ 改这一行别把 `?.` 去掉：这是"提前返回之前"的唯一一条约束，p39 盯着它。
   const latestCanvasRef = useRef(null);
-  latestCanvasRef.current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
+  latestCanvasRef.current = draft || canvasSnapshot || project.data?.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
   const commitCanvas = (next) => {
     latestCanvasRef.current = next;
     setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
