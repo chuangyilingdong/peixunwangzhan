@@ -122,6 +122,14 @@ function Footer(){return <footer className="site-footer">
       <Logo />
       <div className="ft-legal">© 2026 {BRAND_NAME}</div>
     </div>
+    {/* 页脚最底部、居中：两条**备案**（用户 2026-09-28 给的号与链接，逐字照抄）。
+        这是监管要求对外展示的，别删、别降级成纯文本、别把公安那条的 `code=` 查询参数弄丢。
+        ⚠️ ICP 那条用户只给了号码，链接按工信部的通用要求补到查询站（beian.miit.gov.cn）。
+        ⚠️ **没有**配警徽图标：官网没这个素材、用户也没要求（页脚口径：我们没有的东西别放）。 */}
+    <div className="ft-filings">
+      <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">鄂ICP备2025162545号-2</a>
+      <a href="https://beian.mps.gov.cn/#/query/webSearch?code=42011102006378" target="_blank" rel="noreferrer">鄂公网安备42011102006378号</a>
+    </div>
   </div>
 </footer>}
 function Button({children,to='/demo',soft=false}){return <Link to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}

@@ -84,6 +84,28 @@ check('④ 底色是**渐变红**（用户：「页脚现在是纯黑，可以�
 check('⑤ 页脚样式一律带 `.site-footer` 前缀（这张表全站共用，漏出去会打到别人的页面上）',
   count(css, '.site-footer') >= 16, `带前缀的出现 ${count(css, '.site-footer')} 次`);
 
+/* ── ⑥ 页脚最底部的两条**备案**（用户 2026-09-28 给的号码与链接）─────────────────
+   这不是普通文案，是**监管要求对外展示**的信息：号码、链接、以及"在页脚最底部且居中"都得钉住。
+   ⚠️ 号与链接**逐字**照用户给的抄（公安那条的 `code=` 查询参数弄丢就查不到备案）。
+   ⚠️ 判之前先剥注释 —— 这个文件头就警告过：注释里常原样引用刚写进去的东西。 */
+const ICP_NO = '鄂ICP备2025162545号-2';
+const POLICE_NO = '鄂公网安备42011102006378号';
+const POLICE_HREF = 'https://beian.mps.gov.cn/#/query/webSearch?code=42011102006378';
+const footerCode = stripComments(footerJsx);
+check('⑥ 域名备案（ICP）在页脚里，且是指向工信部查询站的链接',
+  footerCode.includes('href="https://beian.miit.gov.cn/"') && footerCode.includes(`>${ICP_NO}</a>`));
+check('⑥ 公安备案的文案与链接与用户给的逐字一致（含 code= 查询参数）',
+  footerCode.includes(`href="${POLICE_HREF}"`) && footerCode.includes(`>${POLICE_NO}</a>`));
+check('⑥ 两条外链都带 target="_blank" 与 rel="noreferrer"',
+  count(footerCode, 'target="_blank" rel="noreferrer"') >= 2,
+  `实际 ${count(footerCode, 'target="_blank" rel="noreferrer"')} 处`);
+check('⑥ 备案行在**页脚最底部**（排在品牌行 .ft-brand 之后）',
+  footerCode.indexOf('className="ft-filings"') > footerCode.indexOf('className="ft-brand"'));
+check('⑥ 备案行是**居中**的（CSS 里 justify-content:center）',
+  /\.site-footer \.ft-filings\{[^}]*justify-content:center/.test(css));
+check('⑥ 备案行不放图片/图标（官网没有警徽素材，不放假图 —— 同 ③ 那条口径）',
+  !/<img[^>]*ft-filings/.test(footerCode));
+
 console.log('');
 if (failures) { console.log(`✗ p132 有 ${failures} 处不符合预期`); process.exit(1); }
 console.log('✓ p132 页脚（含首页）：全部通过');
