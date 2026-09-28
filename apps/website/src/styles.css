@@ -936,6 +936,31 @@
 .hb-policy__card p{margin:0;color:#6b675e;font-size:.82rem;line-height:1.6}
 @media(prefers-reduced-motion:reduce){.hb-policy__card{transition:none}.hb-policy__card:hover{transform:none}}
 
+/* 「跨学科知识融合，综合能力培养」（2026-09-28 用户口径：加在海报那段上方）：
+   纸色底上**两列** —— 左边学科表（学科领域 / 具体知识点）、右边能力清单（带序号）。
+   上窄屏折成一列。配色沿用页内那套（--hb-ink / --hb-paper / --hb-accent），不另起一套；
+   面板小标题的**第二行走描边**，与 .hb-outline 同一套观感（用户给的那两张图就是这么排的）。 */
+.hb-skills{display:flex;flex-direction:column;gap:clamp(1.6rem,3vw,2.6rem);padding:clamp(3rem,7vw,6rem) var(--hb-pad);color:var(--hb-ink);background:var(--hb-paper)}
+.hb-skills__head{max-width:56rem}
+.hb-skills__head h2{margin:.9rem 0 1.1rem;font-family:var(--hb-display);font-weight:900;font-size:clamp(1.9rem,3.4vw,3.6rem);line-height:1.16;letter-spacing:.01em}
+.hb-skills__head h2 span{display:block}
+.hb-skills__head p{max-width:46rem;margin:0;color:#4b4943;font-size:clamp(1rem,1.3vw,1.2rem);line-height:1.9}
+.hb-skills__cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:clamp(1.2rem,2.6vw,2.4rem)}
+.hb-skills__panel{display:flex;flex-direction:column;gap:1.1rem;padding:clamp(1.2rem,2.4vw,2rem);border:1px solid rgb(9 9 9 / 10%);background:#fff}
+.hb-skills__label{margin:0;font-family:var(--hb-display);font-weight:900;font-size:clamp(1.25rem,2.2vw,1.95rem);line-height:1.14;letter-spacing:.02em}
+.hb-skills__label span{display:block;color:transparent;-webkit-text-stroke:1.2px var(--hb-accent)}
+.hb-skills__table{margin:0;display:flex;flex-direction:column}
+.hb-skills__row{display:grid;grid-template-columns:6.5rem minmax(0,1fr);gap:.5rem 1rem;padding:.7rem 0;border-top:1px solid rgb(9 9 9 / 8%)}
+.hb-skills__row:first-child{border-top:0;padding-top:0}
+.hb-skills__row dt{margin:0;font-weight:800;font-size:.93rem}
+.hb-skills__row dd{margin:0;color:#4b4943;font-size:.93rem;line-height:1.7}
+.hb-skills__list{margin:0;padding:0;list-style:none;counter-reset:hb-skill;display:flex;flex-direction:column;gap:.9rem}
+.hb-skills__list li{position:relative;padding-left:2.1rem}
+.hb-skills__list li:before{counter-increment:hb-skill;content:counter(hb-skill);position:absolute;left:0;top:.05rem;display:grid;place-items:center;width:1.5rem;height:1.5rem;border-radius:999px;color:var(--hb-paper);background:var(--hb-ink);font-size:.76rem;font-weight:800}
+.hb-skills__list strong{display:block;font-size:.95rem}
+.hb-skills__list span{display:block;margin-top:.15rem;color:#6b675e;font-size:.86rem;line-height:1.65}
+@media(max-width:901px){.hb-skills__cols{grid-template-columns:minmax(0,1fr)}.hb-skills__row{grid-template-columns:minmax(0,1fr);gap:.2rem}}
+
 /* 横滑区：外层高度由 JS 按"一屏 + 轨道多出来的宽度"设（.hb-work 是滚动预算），
    里层 sticky 钉住一屏，滚动进度 → translateX。窄屏全部让位给竖排（见下面的 media query）。 */
 .hb-work{position:relative;background:var(--hb-ink)}

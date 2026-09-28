@@ -13,6 +13,7 @@
  *    `.tmp/then-work-gallery.mjs` / `.tmp/then-audio-player.mjs` 在真浏览器里核（见第二十八轮交接 §六）。
  */
 import fs from 'node:fs';
+import { stripComments } from './lib/sourceText.mjs';
 
 const read = (p) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 let failures = 0;
@@ -62,7 +63,6 @@ check('② 音乐框体用上了它（不再是原生 <audio controls>）',
 // 用户报的就是这个现象。作品读面那边同理（卡片里更是塞不下原生控件）。
 // ⚠️ 判之前要**去掉注释**：这两份文件里恰好都写了「原生 `<audio controls>` 做不到…」这句说明，
 //    直接 grep 会命中注释、报一条假红（第一版就是这么栽的）。
-const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 check('【反向自检】两处都不许再用原生 `<audio controls>`（它在窄容器里就是把进度条压没的那个原因）',
   !/<audio[^>]*controls/.test(stripComments(gallery)) && !/<audio[^>]*controls/.test(stripComments(canvasIndex)));
 check('② 播放器样式：纵向两行（.cv-audio 是 flex column），进度条占满整行',

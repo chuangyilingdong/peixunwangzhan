@@ -20,6 +20,7 @@
  *   ④ 那句「该模型还没有配置可用比例」只对**图片/视频**显示（音乐本来就没有比例这回事）。
  */
 import fs from 'node:fs';
+import { stripComments } from './lib/sourceText.mjs';
 
 const root = new URL('..', import.meta.url);
 const read = (p) => fs.readFileSync(new URL(p, root), 'utf8');
@@ -28,7 +29,6 @@ const check = (label, ok, detail = '') => {
   if (ok) console.log(`  ✓ ${label}`);
   else { failures += 1; console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`); }
 };
-const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 const isShape = (value) => Boolean(value)
   && Array.isArray(value.aspectRatios) && Array.isArray(value.resolutions) && Array.isArray(value.durations)
   && typeof value.audio === 'boolean';

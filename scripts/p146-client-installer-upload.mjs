@@ -26,6 +26,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { stripComments } from './lib/sourceText.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p146-installer-'));
@@ -64,7 +65,6 @@ console.log('① 源码：流式、挂在读 body 之前、权限与客户端更
 // ⚠️ 判"某段代码在不在"之前先剥注释：这个路由的**文件头注释正原样写着** readBodyBuffer /
 //    parseMultipartFormData（说明"为什么不走通用管线"），不剥的话第一条断言永远红 ——
 //    p132/p130 都在这一脚上踩过，别第三遍。
-const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 const route = read('apps/server/src/routes/admin/clientInstallerUpload.js');
 const routeCode = stripComments(route);
 const index = read('apps/server/src/index.js');

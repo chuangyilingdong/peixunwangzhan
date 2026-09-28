@@ -2,7 +2,7 @@ import { useAdminConfirm } from '../components/AdminConfirm.jsx';
 import { readSession, errorText } from '@platform/shared';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Empty, ErrorState, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, HANDBOOK_POLICY_DEFAULT, formatDate, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
+import { Empty, ErrorState, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, HANDBOOK_POLICY_DEFAULT, HANDBOOK_SKILLS_DEFAULT, formatDate, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
 import { WEBSITE_CONTENT_LABELS } from '../shared.jsx';
 
 export function parseWebsiteDraft(value) {
@@ -52,6 +52,12 @@ export function WebsitePreview({ content, selectedKey }) {
       {(() => {
         const policyCards = cmsListOf(content.policy?.cards).length ? cmsListOf(content.policy.cards) : cmsListOf(HANDBOOK_POLICY_DEFAULT.cards);
         return <p>政策地区卡 {policyCards.length} 张：{policyCards.map((card) => card.region).filter(Boolean).join(' / ') || '（未配置）'}</p>;
+      })()}
+      {/* 跨学科与综合能力：同样是"草稿里没有就用官网那份默认值" */}
+      {(() => {
+        const subjects = cmsListOf(content.skills?.subjects).length ? cmsListOf(content.skills.subjects) : cmsListOf(HANDBOOK_SKILLS_DEFAULT.subjects);
+        const abilities = cmsListOf(content.skills?.abilities).length ? cmsListOf(content.skills.abilities) : cmsListOf(HANDBOOK_SKILLS_DEFAULT.abilities);
+        return <p>跨学科与综合能力：{subjects.length} 个学科（{subjects.map((row) => row.subject).filter(Boolean).join(' / ') || '—'}）· {abilities.length} 项能力</p>;
       })()}
       {content.compare?.body ? <p>对比区：{content.compare.body}</p> : null}
       {content.cta?.headline ? <p>结尾行动：{content.cta.headline}</p> : null}
@@ -224,6 +230,31 @@ export function WebsiteContent({ api }) {
   }
   function removePolicyCard(index) { updatePolicy({ cards: policyCards.filter((_, cardIndex) => cardIndex !== index) }); }
   function addPolicyCard() { updatePolicy({ cards: [...policyCards, { region: '', title: '', note: '', imageUrl: '', imageAlt: '' }] }); }
+  // ── 机构手册「跨学科知识融合，综合能力培养」一栏（2026-09-28 用户口径：加在海报上方）──
+  // 同样是"草稿里没有就用内置默认预填"，理由与政策那一栏完全一样（不让运营一改就把默认冲掉）。
+  // 内容是**排出来的文字**（学科表 + 能力清单），所以没有图片字段。
+  const skillsBlock = structured?.skills && typeof structured.skills === 'object' ? structured.skills : HANDBOOK_SKILLS_DEFAULT;
+  const skillSubjects = Array.isArray(skillsBlock.subjects) ? skillsBlock.subjects : [];
+  const skillAbilities = Array.isArray(skillsBlock.abilities) ? skillsBlock.abilities : [];
+  function updateSkills(patch) { updateStructured({ skills: { ...skillsBlock, ...patch } }); }
+  function updateSkillSubject(index, patch) { updateSkills({ subjects: skillSubjects.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)) }); }
+  function moveSkillSubject(index, direction) {
+    const items = [...skillSubjects]; const next = index + direction;
+    if (next < 0 || next >= items.length) return;
+    [items[index], items[next]] = [items[next], items[index]];
+    updateSkills({ subjects: items });
+  }
+  function removeSkillSubject(index) { updateSkills({ subjects: skillSubjects.filter((_, rowIndex) => rowIndex !== index) }); }
+  function addSkillSubject() { updateSkills({ subjects: [...skillSubjects, { subject: '', points: '' }] }); }
+  function updateSkillAbility(index, patch) { updateSkills({ abilities: skillAbilities.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)) }); }
+  function moveSkillAbility(index, direction) {
+    const items = [...skillAbilities]; const next = index + direction;
+    if (next < 0 || next >= items.length) return;
+    [items[index], items[next]] = [items[next], items[index]];
+    updateSkills({ abilities: items });
+  }
+  function removeSkillAbility(index) { updateSkills({ abilities: skillAbilities.filter((_, itemIndex) => itemIndex !== index) }); }
+  function addSkillAbility() { updateSkills({ abilities: [...skillAbilities, { title: '', desc: '' }] }); }
   // 视频上传：与配图同一条路（file-assets），只是 category 用 MEDIA_ASSET（语义更准，且公开口认它）。
   // ⚠️ 生产上限 200MB（FILE_UPLOAD_MAX_BYTES），而且会过病毒扫描 —— 官网展示用的片段请压到 10MB 内。
   async function uploadVideo(file, apply, key) {
@@ -548,6 +579,24 @@ export function WebsiteContent({ api }) {
               <div className="row-actions top-gap"><label className="inline-file-upload">{uploading === `hb-policy-${index}` ? '上传中…' : '上传卡片图'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url) => updatePolicyCard(index, { imageUrl: url }), `hb-policy-${index}`); }} /></label></div>
             </div>)}</div>
             <button type="button" className="secondary-button top-gap" onClick={addPolicyCard}>新增地区</button>
+            {/* 「跨学科知识融合，综合能力培养」（2026-09-28）：两列 —— 学科表 + 能力清单，全是文字。 */}
+            <div className="cms-section-heading top-gap"><strong>跨学科与综合能力一栏</strong><span>左：学科领域 / 具体知识点；右：能力清单（带序号）。全文字，没有配图</span></div>
+            <div className="form-grid">
+              <label>眉题<input value={skillsBlock.eyebrow || ''} onChange={(event) => updateSkills({ eyebrow: event.target.value })} maxLength={24} placeholder="例如 跨学科 · 综合能力" /></label>
+              <label>标题第 1 行<input value={cmsListOf(skillsBlock.headingLines)[0] || ''} onChange={(event) => updateSkills({ headingLines: [event.target.value, cmsListOf(skillsBlock.headingLines)[1] || ''] })} maxLength={30} /></label>
+              <label>标题第 2 行<input value={cmsListOf(skillsBlock.headingLines)[1] || ''} onChange={(event) => updateSkills({ headingLines: [cmsListOf(skillsBlock.headingLines)[0] || '', event.target.value] })} maxLength={30} /></label>
+            </div>
+            <label>导语<textarea value={skillsBlock.intro || ''} onChange={(event) => updateSkills({ intro: event.target.value })} maxLength={400} /></label>
+            <div className="cms-section-heading top-gap"><strong>左列：学科领域 / 具体知识点</strong><span>逐行一条；窄屏会自动折成一列</span></div>
+            <div className="cms-faq-list">{skillSubjects.map((row, index) => <div className="cms-faq-item" key={`hb-subject-${index}`}><div className="cms-faq-heading"><strong>{(row.subject || '未填学科')} · 第 {index + 1} 条</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveSkillSubject(index, -1)} aria-label={`第 ${index + 1} 条上移`}>↑</button><button type="button" className="text-button" disabled={index === skillSubjects.length - 1} onClick={() => moveSkillSubject(index, 1)} aria-label={`第 ${index + 1} 条下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeSkillSubject(index)}>删除</button></div></div>
+              <div className="form-grid"><label>学科领域<input value={row.subject || ''} onChange={(event) => updateSkillSubject(index, { subject: event.target.value })} maxLength={20} placeholder="例如 语文" /></label><label>具体知识点<input value={row.points || ''} onChange={(event) => updateSkillSubject(index, { points: event.target.value })} maxLength={120} /></label></div>
+            </div>)}</div>
+            <button type="button" className="secondary-button top-gap" onClick={addSkillSubject}>新增学科</button>
+            <div className="cms-section-heading top-gap"><strong>右列：综合能力清单</strong><span>标题 + 一句话说明；官网按顺序带序号</span></div>
+            <div className="cms-faq-list">{skillAbilities.map((item, index) => <div className="cms-faq-item" key={`hb-ability-${index}`}><div className="cms-faq-heading"><strong>能力 {index + 1}</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveSkillAbility(index, -1)} aria-label={`能力 ${index + 1} 上移`}>↑</button><button type="button" className="text-button" disabled={index === skillAbilities.length - 1} onClick={() => moveSkillAbility(index, 1)} aria-label={`能力 ${index + 1} 下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeSkillAbility(index)}>删除</button></div></div>
+              <div className="form-grid"><label>标题<input value={item.title || ''} onChange={(event) => updateSkillAbility(index, { title: event.target.value })} maxLength={40} /></label><label>一句话说明<input value={item.desc || ''} onChange={(event) => updateSkillAbility(index, { desc: event.target.value })} maxLength={160} /></label></div>
+            </div>)}</div>
+            <button type="button" className="secondary-button top-gap" onClick={addSkillAbility}>新增能力</button>
             <div className="cms-section-heading top-gap"><strong>对比区（粒子背景）</strong><span>眉题 + 两行标题（第 2 行描边）+ 正文</span></div>
             <div className="form-grid">
               <label>眉题<input value={structured?.compare?.eyebrow || ''} onChange={(event) => updateSection('compare', { eyebrow: event.target.value })} maxLength={24} /></label>

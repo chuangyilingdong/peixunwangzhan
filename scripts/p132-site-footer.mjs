@@ -19,6 +19,7 @@
  *    （注释里常原样引用被删的代码，直接 includes 会永远命中 —— 这一轮 p130/p132 各踩过一次）。
  */
 import fs from 'node:fs';
+import { stripComments } from './lib/sourceText.mjs';
 
 const read = (p) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 let failures = 0;
@@ -27,15 +28,21 @@ const check = (label, ok, detail = '') => {
   else { failures += 1; console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`); }
 };
 const count = (haystack, needle) => haystack.split(needle).length - 1;
-const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 const site = read('apps/website/src/main.jsx');
 const css = read('apps/website/src/styles.css');
 const pkg = read('package.json');   // 官网没有自己的 package.json（依赖声明在仓库根那份）
 
 /* ── ① 首页要有页脚 ─────────────────────────────────────────────────── */
-check('① 首页也有页脚了（原来那句把首页排除了 —— 用户报的正是这个）',
-  site.includes('{!isFullPage && <Footer/>}') && !stripComments(site).includes("loc.pathname !== '/'"));
+check('① 首页也有页脚了（页脚由 !isFullPage 控制，不是「首页除外」）',
+  site.includes('{!isFullPage && <Footer/>}'));
+// ⚠️ 2026-09-28：这一条原来是"剥注释后的文本里不许出现 `loc.pathname !== '/'`" —— 那是**启发式**，
+//    注释里提到它就够触发；而两个版本的剥器各有一个盲区（朴素的会被字符串里的 `/*`（`accept="image/*"`）
+//    骗得吞掉几千字符；`lib/sourceText.mjs` 那个逐字符的不认识**正则字面量**、遇到带引号的正则就以为
+//    进了字符串）。所以改成**直接钉真实条件**：页脚只由 `!isFullPage` 控制，而 `isFullPage`
+//    只由画布路由决定 —— "把首页排除掉"这件事只可能以这两种形式回来，钉这两个比剥注释稳。
+check('① 「首页除外」这件事回不来：isFullPage 只由 /learn/canvas 决定（没有 pathname 与 \'/\' 的比较）',
+  /const isFullPage = loc\.pathname\.startsWith\('\/learn\/canvas'\)/.test(site));
 
 /* ── ② 两列六个入口 + 品牌行只剩 logo 与版权 ──────────────────────────
    2026-09-25 用户口径：「条款与隐私下方那几项全部删除，其他的选型对比、机构方案、机构手册好多
