@@ -1,5 +1,6 @@
 import { CreateCourseModal, MaterialPreview } from './CourseForms.jsx';
 // 平台课包管理：列表视图 + 课包详情（标签页）+ 课时编辑抽屉
+import { resolveCapabilities } from '../courseCapabilities.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
@@ -223,10 +224,18 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
     return alias && alias !== model ? `${alias}（${model}）` : model;
   }
   // 某模态下选定模型的有效能力（比例/清晰度/时长/音频）；未单独配置时用模态默认值。
+  // ⚠️ 2026-09-28 线上白屏事故就在这一行：原来是"整对象兜底"，可 **模态默认**（音乐是
+  //    `{ modes: [...] }`，压根没有那三个列表）与"刚加进来还没配的模型"（`{}`）**都是真值**，
+  //    兜底链于是不生效 → `caps.aspectRatios` 是 undefined → 界面上 `!caps.aspectRatios.length`
+  //    当场抛错 → **后台整页白屏**（运营「选 bgm 的模型就白屏」那次）。
+  //    现在**逐项归一化**（`resolveCapabilities`，单独一个 .js 就是为了能被守卫测到）。
   function capabilitiesFor(modality, modelId) {
     const channel = channelOf(modality);
     const model = String(modelId || '').trim() || String(channel?.model || '').trim();
-    return channel?.modelCapabilities?.[model] || capabilityDefaults[modality] || { aspectRatios: [], resolutions: [], durations: [], audio: false };
+    return resolveCapabilities({
+      configured: channel?.modelCapabilities?.[model],
+      fallback: capabilityDefaults[modality],
+    });
   }
   const deliveryMode = edit.deliveryMode ?? lesson.deliveryMode ?? 'CANVAS';
   // 上课类型改成可多选（画布 + VibeCoding，学生端两个入口并列）。老数据只有单值 → 读成单元素数组。
@@ -539,13 +548,16 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
                 {modality === 'IMAGE' || modality === 'VIDEO' ? <div className="lesson-field-row">
                   <LessonField label="比例"><select value={box.aspectRatio || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, aspectRatio: event.target.value }))}><option value={STUDENT_CHOICE}>学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.aspectRatios, box.aspectRatio).map((value) => <option key={value} value={value}>{value}</option>)}</select></LessonField>
                   <LessonField label="清晰度"><select value={box.resolution || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, resolution: event.target.value }))}><option value={STUDENT_CHOICE}>学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.resolutions, box.resolution).map((value) => <option key={value} value={value}>{value}</option>)}</select></LessonField>
-                  {modality !== 'TEXT' && !caps.aspectRatios.length ? null : null}
                 </div> : null}
                 {modality === 'VIDEO' ? <div className="lesson-field-row">
                   <LessonField label="时长（秒）"><select value={box.durationSeconds === null || box.durationSeconds === undefined ? '' : String(box.durationSeconds)} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, durationSeconds: event.target.value === '' ? null : Number(event.target.value) }))}><option value="">学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.durations.map(String), box.durationSeconds === null || box.durationSeconds === undefined ? '' : String(box.durationSeconds)).map((value) => <option key={value} value={value}>{value} 秒</option>)}</select></LessonField>
                   <LessonField label="生成音频" hint={caps.audio ? '' : '当前模型不支持生成音频'}><select value={box.audio === true ? 'YES' : box.audio === false ? 'NO' : ''} disabled={!caps.audio} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, audio: event.target.value === '' ? null : event.target.value === 'YES' }))}><option value="">学生自选（课堂里由学生挑）</option><option value="YES">带音频</option><option value="NO">不带音频</option></select></LessonField>
                 </div> : null}
-                {modality !== 'TEXT' && !caps.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「模型与算力 → 渠道与模型配置」里填写。</p> : null}
+                {/* ⚠️ 这句只对**图片/视频**有意义：音乐/文本模型本来就没有"比例"这回事
+                    （服务端的模态默认里也没有 aspectRatios）。原来写成 `modality !== 'TEXT'`，
+                    于是音乐框体也会显示"该模型还没有配置可用比例，请先到…去填" ——
+                    既误导运营（音乐没比例可填），也是那次白屏最先炸的地方。 */}
+                {modality === 'IMAGE' || modality === 'VIDEO' ? (caps.aspectRatios.length ? null : <p className="muted">该模型还没有配置可用比例，请先到「模型与算力 → 渠道与模型配置」里填写。</p>) : null}
                                               </> : <>
                                 {isText
                   ? <LessonField label={material.materialType === 'PROMPT' ? '提示词内容' : '文字内容'}><textarea rows={3} value={snapshot.content || ''} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { snapshot: { ...snapshot, content: event.target.value } })} /></LessonField>
