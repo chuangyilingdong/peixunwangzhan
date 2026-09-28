@@ -593,6 +593,25 @@ async function markJobFailed({ jobId, orgId, userId, project, modality, provider
  */
 export async function reconcileStrandedGenerations({ jobIds = null, limit = 10, minAgeMs = 60_000, maxAgeMs = 14 * 24 * 3600_000, dryRun = false, log = null } = {}) {
   const say = (message) => { if (typeof log === 'function') log(message); };
+  // ⚠️ **一轮只能有一个**（2026-09-28 上线当天实测出来的）：每条候选都要去上游取一次产物
+  //    再写盘，24MB 的视频一条就要一分钟上下 —— 一轮 10 条会跑十几分钟，而定时器是每 3 分钟一次。
+  //    不加这道闸，两轮会重叠着处理**同一条**候选（A 轮查到了、正在归档，B 轮又查一次），
+  //    素材就会重复落两份。这里的闸是进程内的（就够：调用方只有这个进程的定时器和运维脚本）。
+  if (reconcileInFlight) {
+    say('[RECONCILE] 上一轮还没跑完，跳过这一轮');
+    return { scanned: 0, results: [], skipped: 'BUSY' };
+  }
+  reconcileInFlight = true;
+  try {
+    return await runReconcileSweep({ jobIds, limit, minAgeMs, maxAgeMs, dryRun, log: say });
+  } finally {
+    reconcileInFlight = false;
+  }
+}
+
+let reconcileInFlight = false;
+
+async function runReconcileSweep({ jobIds, limit, minAgeMs, maxAgeMs, dryRun, log: say }) {
   const nowMs = Date.now();
   const conditions = ["job.status='FAILED'", "job.modality <> 'TEXT'", "attempt.task_id IS NOT NULL", "attempt.task_id <> ''"];
   const params = [];
@@ -639,7 +658,13 @@ export async function reconcileStrandedGenerations({ jobIds = null, limit = 10, 
             requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {} }
         : selection;
       const provider = getGenerationProvider(scoped);
-      if (typeof provider.queryTask !== 'function') { results.push({ jobId, state: 'UNSUPPORTED' }); continue; }
+      if (typeof provider.queryTask !== 'function') {
+        // 静默跳过是最难查的一种"没反应"（2026-09-28 上线当天就差一点被它骗过：以为对账没跑，
+        // 其实只是这一轮还在处理别的候选）。所以这里必须留一句话。
+        say(`[RECONCILE] job=${jobId} 这个渠道的适配器不支持按任务号查询，跳过`);
+        results.push({ jobId, state: 'UNSUPPORTED' });
+        continue;
+      }
       const queried = await provider.queryTask({
         taskId: candidate.task_id, modality: candidate.modality,
         title: String(candidate.prompt || '').trim().slice(0, 40),

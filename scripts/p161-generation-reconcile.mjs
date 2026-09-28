@@ -194,6 +194,16 @@ check('⭐ 整轮对账对上游一个非 GET 请求都没有', posts.length ===
 check('⭐ 查的确实是那两条任务号', seen.filter((item) => item.url.includes(TASK_ID) || item.url.includes('task_p161_pending')).length >= 2,
   JSON.stringify(seen.slice(0, 8)));
 
+/* ────────── ⑥ 并发闸：一轮要跑十几分钟，定时器却是每 3 分钟一次 ────────── */
+console.log('\n⑥ 并发闸：两轮重叠时，第二轮直接跳过（否则同一条会被查两次、素材重复落两份）');
+const [sweepA, sweepB] = await Promise.all([
+  reconcileStrandedGenerations({ jobIds: [jobIdPending], minAgeMs: 0, log: () => {} }),
+  reconcileStrandedGenerations({ jobIds: [jobIdPending], minAgeMs: 0, log: () => {} }),
+]);
+const busy = [sweepA, sweepB].filter((item) => item.skipped === 'BUSY');
+check('⑥ 两轮里有一轮被判 BUSY 跳过', busy.length === 1, JSON.stringify([sweepA.skipped || sweepA.scanned, sweepB.skipped || sweepB.scanned]));
+check('⑥ 跑起来的那一轮照常扫到候选', [sweepA, sweepB].some((item) => item.scanned >= 1), JSON.stringify([sweepA, sweepB]));
+
 await new Promise((resolve) => { upstream.closeAllConnections?.(); upstream.close(resolve); });
 
 console.log(JSON.stringify({
