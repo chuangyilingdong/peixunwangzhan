@@ -231,8 +231,16 @@ function failedPayload(payload) {
 }
 
 function providerFailureMessage(payload) {
+  // ⚠️ 2026-09-28：**也要看 task 里面** —— MiniMax V2 把状态与结果都包在 `{ task: {...} }` 里
+  //    （`payloadStatus` 就是从 `task.status` 取的），可这里原来只看 `payload.data.*`，
+  //    于是 V2 形状的失败**状态认得、原因却丢了**，学生只看到笼统的「AI 供应商生成失败」
+  //    （p161 的对账日志里实测到：上游明明给了「内容安全」这类原因）。
+  const task = taskNode(payload);
   return String(
     payload?.data?.fail_reason
+      || task?.fail_reason
+      || task?.error?.message
+      || task?.message
       || payload?.data?.error?.message
       || payload?.error?.message
       || payload?.error
@@ -651,6 +659,37 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
         clearTimeout(timer);
         if (signal) signal.removeEventListener('abort', abortFromCaller);
       }
+    },
+    /**
+     * 对账用：拿一个**已知的上游任务号**查一次结果 —— **不提交任何东西**（2026-09-28）。
+     *
+     * 为什么要有它：到点放弃（超时）或服务重启被打断时，上游任务其实**已经受理**，
+     * 会继续跑、会成功、会按已受理计费；只要我们保存了任务号（落库在 `compute_attempts.task_id`），
+     * 就还能把它查回来。这与 `generate()` 里那段教条同源：
+     * 「能查就别重发……未收到公共任务 ID 时，不要推断提交失败或盲目重提 —— **重发会双扣**」。
+     *
+     * ⚠️ **只查一次、不等待**：结果还没出来就如实回 `PENDING`，由调用方决定什么时候再查
+     *    （对账是"过一会儿再来看一眼"，不是"站在这里再等 5 分钟"）。
+     * ⚠️ 判"完成没有"的判据与正常轮询**逐字一致**（`failedPayload` / `pendingPayload`+`mediaCandidate`），
+     *    否则会出现"正常路径认得、对账路径不认得"的第二种结果。
+     */
+    async queryTask({ taskId, modality, title = '', timeoutMs = 20000 } = {}) {
+      const normalizedModality = String(modality || '').trim().toUpperCase() || 'IMAGE';
+      const wanted = String(taskId || '').trim();
+      if (!wanted) throw providerError('缺少上游任务号，无法对账', PROVIDER_ERROR_CODES.CONFIG_INVALID);
+      const requestUrl = modalityEndpoint(endpoint, normalizedModality, modalityEndpoints, requestPaths);
+      const pollUrl = pollUrlFromPayload({ task_id: wanted }, requestUrl, pollPaths[normalizedModality] || '');
+      if (!pollUrl) throw providerError('这个渠道没有配置查询路径，无法按任务号对账', PROVIDER_ERROR_CODES.CONFIG_INVALID);
+      const response = await fetchWithTimeout(pollUrl, { method: 'GET', apiKey, timeout: Math.max(1000, Number(timeoutMs) || 20000), modality: normalizedModality });
+      const payload = await parseResponse(response, normalizedModality);
+      if (!response.ok) throw providerHttpError(response, payload);
+      if (failedPayload(payload)) return { state: 'FAILED', message: providerFailureMessage(payload) };
+      // 与 pollForAsset 的循环退出判据一致：状态还说在跑、且找不到可用素材 → 还没好。
+      if (pendingPayload(payload) && !mediaCandidate(payload, normalizedModality)) return { state: 'PENDING' };
+      return {
+        state: 'SUCCEEDED',
+        asset: assetFromResponse({ payload, binary: payload?.binary, contentType: payload?.contentType, modality: normalizedModality, title, providerName, model: providerModel }),
+      };
     },
   };
 }

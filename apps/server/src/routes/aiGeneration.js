@@ -573,6 +573,137 @@ async function markJobFailed({ jobId, orgId, userId, project, modality, provider
   });
 }
 
+/**
+ * 生成对账（2026-09-28，用户口径：「按 task_id 对账，而不是调超时」「一起捞」「只补素材不计费」）。
+ *
+ * 把「**已经提交给上游、上游可能已经出片并计费，而我们这边判了失败**」的任务，按保存下来的
+ * 上游任务号（`compute_attempts.task_id`）查回来。两类来源都会掉进这个坑：
+ *   · `GENERATION_PROVIDER_TIMEOUT`：上游调用有 5 分钟硬顶（两处 `Math.min(300000,…)`），到点我们走人；
+ *   · `GENERATION_INTERRUPTED`：服务重启时 `interruptOrphanedJobs` 把在跑的 RUNNING 全部收掉。
+ * 两种情况下上游任务**都已经受理**、会继续跑、成功、按已受理计费，可我们从此**再没人拿这个号回去查过**
+ * —— 学生看不到素材、钱照花。教条与它同源：`pollForAsset` 上方那段
+ * 「能查就别重发……未收到公共任务 ID 时，不要推断提交失败或盲目重提 —— **重发会双扣**」。
+ *
+ * ⚠️ **只补素材、不计费**：这条天生成立 —— `recordAiUsage` 的 `credits_charged` / `cost_fen` 是
+ *    **硬编码 0** 的观测账本（见 `services/creditUsage.js`），这里不会有任何学生侧扣费；
+ *    usage 记录额外带 `reconciled:true`，报表里能和正常成功区分开。
+ * ⚠️ **幂等**：收成 SUCCEEDED 之后就不再是候选；素材进了 `media_assets`，框体占用
+ *    （`assertBoxNotGenerated` 数 media_assets）随之生效 → 同一条不会既捞回来又让学生再点一次生成。
+ * ⚠️ **不抛错**：单条失败只记日志 —— 调用它的是启动流程/定时器，绝不能被一条烂任务带下去。
+ */
+export async function reconcileStrandedGenerations({ jobIds = null, limit = 10, minAgeMs = 60_000, maxAgeMs = 14 * 24 * 3600_000, dryRun = false, log = null } = {}) {
+  const say = (message) => { if (typeof log === 'function') log(message); };
+  const nowMs = Date.now();
+  const conditions = ["job.status='FAILED'", "job.modality <> 'TEXT'", "attempt.task_id IS NOT NULL", "attempt.task_id <> ''"];
+  const params = [];
+  if (Array.isArray(jobIds) && jobIds.length) {
+    conditions.push(`job.id IN (${jobIds.map(() => '?').join(',')})`);
+    params.push(...jobIds.map((value) => String(value)));
+  } else {
+    // 太新：上游多半还在跑，下一轮再看（对账是"过一会儿再来看一眼"，不是站在这里等）。
+    conditions.push('job.created_at <= ?');
+    params.push(new Date(nowMs - Math.max(0, Number(minAgeMs) || 0)).toISOString());
+    // 太老：上游多半已经清掉了，别再每次启动都去问一遍。
+    conditions.push('job.created_at >= ?');
+    params.push(new Date(nowMs - Math.max(0, Number(maxAgeMs) || 0)).toISOString());
+  }
+  const limitValue = Math.max(1, Math.min(200, Number(limit) || 10));
+  const rowsFound = await arows(`
+    SELECT job.id job_id, job.project_id, job.org_id, job.user_id, job.modality, job.model, job.prompt,
+           attempt.attempt attempt_no, attempt.task_id, attempt.channel_id, attempt.model attempt_model, attempt.call_id
+    FROM generation_jobs job
+    JOIN compute_attempts attempt ON attempt.generation_job_id = job.id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY job.created_at DESC
+    LIMIT ?`, [...params, limitValue]);
+  // 一条任务可能有多条 attempt（重试过）→ 每个 job 只认**最后一次**带任务号的那条。
+  const byJob = new Map();
+  for (const item of rowsFound) {
+    const previous = byJob.get(item.job_id);
+    if (!previous || Number(item.attempt_no || 0) > Number(previous.attempt_no || 0)) byJob.set(item.job_id, item);
+  }
+  const candidates = [...byJob.values()];
+  const policy = candidates.length ? await getAiProviderPolicy() : null;
+  const results = [];
+  for (const candidate of candidates) {
+    const jobId = candidate.job_id;
+    try {
+      const selection = providerSelectionForModality(policy, candidate.modality, candidate.attempt_model || candidate.model || '');
+      // 查上游必须用**当时那条任务实际走的渠道**（和现在路由表里是哪条无关）——
+      // 否则会拿着 A 家的接口地址去问 B 家的任务号，只会得到"查不到"。
+      const channel = (policy?.channels || []).find((item) => item.id === candidate.channel_id);
+      const scoped = channel
+        ? { ...selection, provider: channel.provider || selection.provider, model: candidate.attempt_model || channel.model || selection.model,
+            endpoint: channel.endpoint || selection.endpoint, channelId: channel.id,
+            requestPaths: channel.requestPaths || {}, pollPaths: channel.pollPaths || {},
+            requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {} }
+        : selection;
+      const provider = getGenerationProvider(scoped);
+      if (typeof provider.queryTask !== 'function') { results.push({ jobId, state: 'UNSUPPORTED' }); continue; }
+      const queried = await provider.queryTask({
+        taskId: candidate.task_id, modality: candidate.modality,
+        title: String(candidate.prompt || '').trim().slice(0, 40),
+      });
+      if (queried.state === 'PENDING') {
+        say(`[RECONCILE] job=${jobId} 上游还在跑（task=${candidate.task_id}），下一轮再看`);
+        results.push({ jobId, state: 'PENDING' });
+        continue;
+      }
+      if (queried.state !== 'SUCCEEDED') {
+        say(`[RECONCILE] job=${jobId} 上游判定 ${queried.state}${queried.message ? `：${queried.message}` : ''}`);
+        results.push({ jobId, state: queried.state, message: queried.message || '' });
+        continue;
+      }
+      if (dryRun) {
+        say(`[RECONCILE] job=${jobId} 上游有成品（dryRun，未落库）`);
+        results.push({ jobId, state: 'SUCCEEDED', dryRun: true });
+        continue;
+      }
+      const archived = await archiveGeneratedAssets([queried.asset], {
+        modality: candidate.modality, jobId, ownerUserId: candidate.user_id, ownerOrgId: candidate.org_id,
+        log: (message) => say(`[RECONCILE] job=${jobId} ${message}`),
+      });
+      const asset = archived[0] || queried.asset;
+      const assetId = id('asset');
+      await aq(`INSERT INTO media_assets(id,job_id,org_id,user_id,project_id,modality,label,mime_type,asset_url,preview_url,metadata,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [
+        assetId, jobId, candidate.org_id, candidate.user_id, candidate.project_id, candidate.modality,
+        String(asset.label || `${MODALITY_LABELS[candidate.modality] || candidate.modality} 1`).slice(0, 120),
+        asset.mimeType || null, String(asset.assetUrl || ''), asset.previewUrl || null,
+        json({ ...(asset.metadata || {}), reconciled: true, reconciledAt: nowIso(), upstreamTaskId: candidate.task_id }), nowIso()]);
+      await assertTransition(null, 'generationJob', 'FAILED', 'SUCCEEDED', {
+        targetType: 'GENERATION_JOB', targetId: jobId, before: { status: 'FAILED' },
+        details: { reconciled: true, taskId: candidate.task_id },
+      });
+      await aq("UPDATE generation_jobs SET status='SUCCEEDED',worker_id=NULL,completed_at=?,error_code=NULL,error_message=NULL WHERE id=? AND status='FAILED'", [nowIso(), jobId]);
+      await recordAiUsage({
+        orgId: candidate.org_id, userId: candidate.user_id, projectId: candidate.project_id, generationJobId: jobId,
+        modality: candidate.modality, model: scoped.model || candidate.model || '', status: 'SUCCESS',
+        pricing: { source: 'generation-reconcile', reconciled: true, charged: false, taskId: candidate.task_id,
+          compute: candidate.call_id ? { callId: candidate.call_id } : null },
+      });
+      await audit({ method: 'SYSTEM', pathname: '/internal/generation-reconcile' }, 'AI_GENERATION_RECONCILED', 'GENERATION_JOB', jobId,
+        { status: 'FAILED' }, { status: 'SUCCEEDED', taskId: candidate.task_id, assetId, charged: false }, { orgId: candidate.org_id });
+      say(`[RECONCILE] job=${jobId} ✓ 已按 task=${candidate.task_id} 找回素材（只补素材、不计费）`);
+      results.push({ jobId, state: 'SUCCEEDED', assetId });
+    } catch (error) {
+      const message = String(error?.message || error).slice(0, 300);
+      say(`[RECONCILE] job=${jobId} 对账失败：${message}`);
+      results.push({ jobId, state: 'ERROR', message });
+    }
+  }
+  return { scanned: candidates.length, results };
+}
+
+// 对账定时器：每 3 分钟看一眼「已受理但被判失败」的任务。
+// ⚠️ `unref()`：不能因为它把进程吊住（验收脚本会 in-process import 这个模块，见 p161）。
+const reconcileTimer = setInterval(() => {
+  reconcileStrandedGenerations({ limit: 10, log: (message) => console.log(message) })
+    .then((outcome) => { if (outcome.results.length) console.log(`[RECONCILE] 本轮扫了 ${outcome.scanned} 条`); })
+    .catch((error) => console.error('[RECONCILE ERROR]', error));
+}, 180000);
+reconcileTimer.unref?.();
+
 async function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext = null, usage = null }) {
   await atransaction(async () => {
     const user = await arow("SELECT * FROM users WHERE id = ? AND org_id = ? AND status = 'ACTIVE'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);

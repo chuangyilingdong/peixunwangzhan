@@ -95,7 +95,12 @@ export const DOMAIN_TRANSITIONS = Object.freeze({
   }),
   workPublishRequest: Object.freeze({ PENDING: Object.freeze(['APPROVED', 'REJECTED', 'WITHDRAWN']), APPROVED: Object.freeze([]), REJECTED: Object.freeze([]), WITHDRAWN: Object.freeze([]) }),
   usage: Object.freeze({ SUCCESS: Object.freeze([]), FAILED: Object.freeze([]), BLOCKED: Object.freeze([]) }),
-  generationJob: Object.freeze({ QUEUED: Object.freeze(['RUNNING', 'FAILED']), RUNNING: Object.freeze(['SUCCEEDED', 'FAILED']), SUCCEEDED: Object.freeze([]), FAILED: Object.freeze([]) }),
+  // ⚠️ `FAILED → SUCCEEDED` 只给**对账**（services 里的 reconcileStrandedGenerations）用：
+  //    我们这边到点放弃/重启打断时把任务判了 FAILED，可上游其实已经出片并计费 —— 拿保存下来的
+  //    上游任务号查回来之后，这条任务的**事实**是"成功了，只是发现得晚"。留着 FAILED 不翻，
+  //    学生就永远看不到那份已经付过钱的素材（2026-09-28 用户报的就是这个）。
+  //    别的路径不许用这一条：正常生成链路仍然是 QUEUED/RUNNING → SUCCEEDED。
+  generationJob: Object.freeze({ QUEUED: Object.freeze(['RUNNING', 'FAILED']), RUNNING: Object.freeze(['SUCCEEDED', 'FAILED']), SUCCEEDED: Object.freeze([]), FAILED: Object.freeze(['SUCCEEDED']) }),
   notification: Object.freeze({ DRAFT: Object.freeze(['PUBLISHED', 'RECALLED']), PUBLISHED: Object.freeze(['RECALLED']), RECALLED: Object.freeze([]) }),
   notificationTemplate: Object.freeze({ ACTIVE: Object.freeze(['DISABLED']), DISABLED: Object.freeze(['ACTIVE']) }),
   notificationRecipient: Object.freeze({ PENDING: Object.freeze(['DELIVERED', 'FAILED']), DELIVERED: Object.freeze(['FAILED']), FAILED: Object.freeze(['PENDING', 'DELIVERED']) }),
