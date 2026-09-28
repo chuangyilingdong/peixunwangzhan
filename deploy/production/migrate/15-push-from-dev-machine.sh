@@ -53,7 +53,7 @@ echo "  ✓ 两边 HEAD 一致：$REMOTE_HEAD"
 
 if [[ "${1:-}" == "--build" ]]; then
   log "5. 构建 + 切 release + 重启 + 验收（04 脚本，在服务器上跑）"
-  # 04 会：读 production.env 拿域名 → 备份库 → 构建 → 切软链 → 重启 → 03 验收（38 项）
+  # 04 会：读 production.env 拿域名 → 备份库 → 构建 → 切软链 → 重启 → 03 验收（39 项）
   ssh -o BatchMode=yes "$SSH_ALIAS" "cd $SRC && bash deploy/production/migrate/04-build-and-switch-release.sh"
 else
   log "5. 跳过构建（没给 --build）"
