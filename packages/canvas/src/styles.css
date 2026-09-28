@@ -164,13 +164,27 @@
 .cv-audio__progress:focus-visible { outline: 2px solid var(--cv-primary); outline-offset: 2px; }
 .cv-audio__progress:disabled { opacity: .4; cursor: not-allowed; }
 /* 第二行：按钮 + 时间 */
-.cv-audio__row { display: flex; align-items: center; gap: 8px; }
+.cv-audio__row { display: flex; align-items: center; gap: 8px; /* ⚠️ wrap：窄框体里音量滑杆展开时宁可折一行，也别把下载按钮挤出可视区（节点是 overflow:hidden，挤出去就是看不见）。 */ flex-wrap: wrap; }
 .cv-audio__btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: 0 0 auto; padding: 0; border: 1px solid var(--cv-border); border-radius: 999px; color: var(--cv-text); background: rgb(255 255 255 / 6%); cursor: pointer; }
 .cv-audio__btn:hover:not(:disabled) { border-color: var(--cv-primary); color: var(--cv-primary); }
 .cv-audio__btn:disabled { opacity: .4; cursor: not-allowed; }
 /* 「下载到本地」按钮是个 <a>（要有 download 属性才存得成文件）：按钮那套样式里没有 text-decoration，
    不加就是一条带下划线的圆钮。悬停/聚焦沿用上面 .cv-audio__btn 那两条（<a> 不会命中 :disabled）。 */
 .cv-audio__btn--download { text-decoration: none; }
+/* 音量（用户 2026-09-28：「鼠标移动到音量这里…应该可以调整音量大小」）：
+   按钮旁边挂一条滑杆，**平时宽度 0**（不占地方），鼠标移到这一带或键盘聚焦时才展开。
+   ⚠️ 必须是**内联展开**、不能做成绝对定位的弹层 —— 画布节点 `overflow: hidden`，弹层会被切一半。 */
+.cv-audio__vol { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.cv-audio__vol-slider { width: 0; opacity: 0; height: 16px; margin: 0; padding: 0; appearance: none; background: transparent; cursor: pointer; transition: width .22s ease-out, opacity .22s ease-out; }
+.cv-audio__vol:hover .cv-audio__vol-slider, .cv-audio__vol:focus-within .cv-audio__vol-slider { width: 56px; opacity: 1; }
+.cv-audio__vol-slider::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: linear-gradient(to right, var(--cv-primary) var(--cv-audio-vol, 100%), rgb(255 255 255 / 16%) var(--cv-audio-vol, 100%)); }
+.cv-audio__vol-slider::-webkit-slider-thumb { appearance: none; width: 11px; height: 11px; margin-top: -3.5px; border: 0; border-radius: 999px; background: var(--cv-primary); }
+.cv-audio__vol-slider::-moz-range-track { height: 4px; border-radius: 999px; background: rgb(255 255 255 / 16%); }
+.cv-audio__vol-slider::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--cv-primary); }
+.cv-audio__vol-slider::-moz-range-thumb { width: 11px; height: 11px; border: 0; border-radius: 999px; background: var(--cv-primary); }
+.cv-audio__vol-slider:focus-visible { outline: 2px solid var(--cv-primary); outline-offset: 2px; }
+.cv-audio__vol-slider:disabled { opacity: .4; cursor: not-allowed; }
+@media(prefers-reduced-motion:reduce){ .cv-audio__vol-slider { transition: none; } }
 .cv-audio__error { display: block; min-width: 0; overflow-wrap: anywhere; color: #ffb4b4; font-size: 10px; line-height: 1.45; }
 .cv-audio__time { color: var(--cv-text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 /* 只有图片/视频跟着节点尺寸伸缩，其余区块保持自己的高度（拖高拖矮都看得见效果） */

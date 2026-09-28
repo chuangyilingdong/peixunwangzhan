@@ -63,6 +63,9 @@ export function AudioPlayer({ src, fallbackSrc = '', label = '', className = '',
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
   const [muted, setMuted] = useState(false);
+  // 音量（2026-09-28 用户口径：「鼠标移动到音量这里，目前只有开关音量，应该可以调整音量大小的」）。
+  // 值存在这个播放器上、写到同一个 `<audio>` 元素的 `volume`；拖到 0 就等于静音（图标跟着变）。
+  const [volume, setVolume] = useState(1);
   const [failed, setFailed] = useState(false);
   const [usingFallback, setUsingFallback] = useState(false);
   const activeSrc = usingFallback ? fallbackSrc : src;
@@ -113,11 +116,23 @@ export function AudioPlayer({ src, fallbackSrc = '', label = '', className = '',
     setCurrent(value);
     if (element && Number.isFinite(value)) element.currentTime = value;
   };
+  const changeVolume = (event) => {
+    const value = Math.min(1, Math.max(0, Number(event.target.value)));
+    setVolume(value);
+    const element = audioRef.current;
+    if (element) { element.volume = value; element.muted = value === 0; }
+    setMuted(value === 0);
+  };
   const toggleMute = () => {
     const element = audioRef.current;
     if (!element) return;
-    element.muted = !element.muted;
-    setMuted(element.muted);
+    // ⚠️ 音量被拖到 0 之后再点"取消静音"，必须把音量**抬回来**（否则 unmute 了还是没声音，
+    //    学生会以为播放器坏了）。正常静音/取消静音就是把 muted 翻过来。
+    if (element.muted || volume === 0) {
+      const restored = volume === 0 ? 1 : volume;
+      element.volume = restored; element.muted = false;
+      setVolume(restored); setMuted(false);
+    } else { element.muted = true; setMuted(true); }
   };
 
   return <div className={`cv-audio ${className}`.trim()}>
@@ -139,7 +154,23 @@ export function AudioPlayer({ src, fallbackSrc = '', label = '', className = '',
     <div className="cv-audio__row">
       <button type="button" className="cv-audio__btn nodrag" onClick={toggle} disabled={failed || !activeSrc} aria-label={playing ? '暂停' : '播放'}>{<PlayIcon playing={playing} />}</button>
       <span className="cv-audio__time">{formatTime(current)} / {formatTime(duration)}</span>
-      <button type="button" className="cv-audio__btn nodrag" onClick={toggleMute} disabled={failed || !activeSrc} aria-label={muted ? '取消静音' : '静音'}><VolumeIcon muted={muted} /></button>
+      <span className="cv-audio__vol">
+        {/* 音量滑杆：平时宽度 0（不占地方），鼠标移到音量这一带或键盘聚焦时展开 —— 见 styles.css。
+            ⚠️ 用**内联展开**而不是绝对定位的弹层：画布节点是 `overflow:hidden`，弹层会被切掉一半。 */}
+        <input
+          className="cv-audio__vol-slider"
+          type="range"
+          min="0"
+          max="1"
+          step="0.05"
+          value={muted ? 0 : volume}
+          disabled={failed || !activeSrc}
+          onChange={changeVolume}
+          aria-label={label ? `${label} 音量` : '音量'}
+          style={{ '--cv-audio-vol': `${Math.round((muted ? 0 : volume) * 100)}%` }}
+        />
+        <button type="button" className="cv-audio__btn nodrag" onClick={toggleMute} disabled={failed || !activeSrc} aria-label={muted ? '取消静音' : '静音'}><VolumeIcon muted={muted || volume === 0} /></button>
+      </span>
       {href ? <a
         className="cv-audio__btn cv-audio__btn--download nodrag"
         href={href}

@@ -107,7 +107,7 @@ check('老工作台的两个文件已删除', !fs.existsSync(path.join(root, 'pa
 check('shared 不再导出它们', !/vibecodingWorkspace\.jsx/.test(sharedIndex) && !/vibecodingStream\.js/.test(sharedIndex));
 check('网站不再有 /learn/vibecoding 路由（否则「抛弃」只是嘴上说说）',
   !/learn\/vibecoding/.test(siteMain) && !/VibeCodingWorkspace|VibeCodingClassroom/.test(siteMain));
-check('VibeCoding 的入口只把学生送到客户端（打开创作客户端），网页不拉起任何创作环境',
+check('VibeCoding 的入口只把学生送到客户端（进入VibeCoding课堂），网页不拉起任何创作环境',
   /\{offersVibe \? <ClientEntryActions lesson=\{lesson\} canEnter=\{canEnterVibe\} \/> : null\}/.test(classroom));
 check('平台里不再有「建对话再跳页面」这条入口（老工作台的路）',
   !/student\/vibecoding\/conversations/.test(classroom) && !/learn\/vibecoding/.test(classroom));
@@ -123,9 +123,13 @@ check('网页不再拉起创作环境：没有 launch / deliverables / submit，
 // 只拿**代码行**判（注释里会提到"原来那个下载按钮"这件事，不算违反）。
 const clientEntryCode = read('packages/shared/src/clientEntry.jsx')
   .split('\n').filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join('\n');
-check('「打开创作客户端」走的是 lingdong:// 深链；课时卡片上不再有下载引导',
+check('「进入VibeCoding课堂」走的是 lingdong:// 深链；课时卡片上不再有下载引导',
   /CLIENT_DEEP_LINK = 'lingdong:\/\/open'/.test(clientEntryCode)
   && !/下载客户端/.test(clientEntryCode));
+// 2026-09-28 用户口径：这个按钮的文案由「打开创作客户端」改成「**进入VibeCoding课堂**」。
+// 钉住字面量：改文案是有意为之，改成别的字要连这条一起改（别让它悄悄漂回去）。
+check('课时卡片上 VibeCoding 入口的文案 = 「进入VibeCoding课堂」',
+  clientEntryCode.includes('进入VibeCoding课堂') && !clientEntryCode.includes('打开创作客户端'));
 
 // 预览仍在沙箱 iframe 里：它现在服务的是**作品广场与机构端课堂详情**（学生工作台已删）
 const frame = read('packages/shared/src/console/PreviewFrame.jsx');

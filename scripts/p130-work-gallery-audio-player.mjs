@@ -98,6 +98,25 @@ check('③ 下载的文件名：从地址里认扩展名（认不出按 mp3）�
 check('③ 下载按钮补了 <a> 需要的 text-decoration:none（不然是个带下划线的圆钮）',
   /\.cv-audio__btn--download \{ text-decoration: none; \}/.test(canvasCss));
 
+/* ── 第 4 条：音量**可调**（用户 2026-09-28）────────────────────────────────
+   原话：「画布音乐框体鼠标移动到音量这里，目前只有开关音量，应该可以调整音量大小的」。
+   所以音量按钮旁边要挂一条滑杆，且**必须是内联展开**（画布节点 `overflow:hidden`，
+   绝对定位的弹层会被切一半）。另外盯一条容易漏的：音量拖到 0 之后再点"取消静音"，
+   必须把音量抬回来，否则 unmute 了还是没声音、学生会以为播放器坏了。 */
+check('④ 播放器有音量滑杆（type=range），并且真的写到 <audio> 的 volume 上',
+  /cv-audio__vol-slider/.test(playerCode) && /type="range"/.test(playerCode)
+  && /element\.volume = value/.test(playerCode));
+check('④ 音量拖到 0 = 静音；再点「取消静音」要把音量**抬回来**（否则没声音像坏了）',
+  /element\.muted = value === 0/.test(playerCode)
+  && /volume === 0 \? 1 : volume/.test(playerCode));
+check('④ 滑杆平时不占地方、鼠标移到音量这一带（或键盘聚焦）才展开',
+  /\.cv-audio__vol-slider \{ width: 0; opacity: 0;/.test(canvasCss)
+  && /\.cv-audio__vol:hover \.cv-audio__vol-slider, \.cv-audio__vol:focus-within \.cv-audio__vol-slider \{ width: 56px; opacity: 1; \}/.test(canvasCss));
+check('④ 滑杆是**内联展开**、不是绝对定位弹层（节点 overflow:hidden 会把弹层切一半）',
+  !/\.cv-audio__vol[^{]*\{[^}]*position: absolute/.test(canvasCss));
+check('④ 操作行允许折行（窄框体里滑杆展开时，宁可折一行也别把下载按钮挤出可视区）',
+  /\.cv-audio__row \{[^}]*flex-wrap: wrap/.test(canvasCss));
+
 console.log('');
 if (failures) { console.log(`✗ p130 有 ${failures} 处不符合预期`); process.exit(1); }
 console.log('✓ p130 作品读面卡片化 + 两行式播放器：全部通过');

@@ -52,7 +52,7 @@ function lessonStateBadge(lesson) {
  * 画布入口按钮的文案：按**本场课堂的项目**到哪一步了分三种。
  *   · 有草稿 → 「继续创作」；
  *   · 本场课堂已提交过（`sessionProject.status = SUBMITTED/GRADED`）→ **「查看作品」**；
- *   · 本场还没建过项目 → 「进入课堂」。
+ *   · 本场还没建过项目 → 「进入画布课堂」（2026-09-28 用户口径：原「进入课堂」）。
  * ⚠️ 只判草稿的旧写法有个坑（用户 2026-09-21 报的）：提交之后「找不到项目」→ 显示「进入课堂」→
  *    点下去**新开一个空画布**。所以这里必须看 sessionProject（服务端下发的本场项目）。
  * ⚠️ 2026-09-24 增量提交口径：**提交之后画布不锁**（学生还要接着做没做完的任务），
@@ -63,7 +63,9 @@ function lessonStateBadge(lesson) {
 function canvasEntryLabel(lesson) {
   if (lesson.continueProject) return '继续创作';
   if (lesson.sessionProject) return lesson.participationStatus === 'ACTIVE' ? '继续创作' : '查看作品';
-  return '进入课堂';
+  // 2026-09-28 用户口径：首次进入那档的文案由「进入课堂」改成「**进入画布课堂**」
+  // （与 VibeCoding 那条「进入VibeCoding课堂」成对；另外两档「继续创作 / 查看作品」不动）。
+  return '进入画布课堂';
 }
 
 // 画布上课入口（课程包卡片 + 课时卡片，亮的课才能进入）

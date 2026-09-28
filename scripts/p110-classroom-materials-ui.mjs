@@ -216,14 +216,16 @@ check('④ 画布会盯「老师还在不在上课」：轮询 session-state，�
 check('③ 顶栏按钮改叫「课程中心」且去 `/learn`（不再跳那个旧页面 `/learn/canvas`）',
   /onClick=\{\(\) => navigate\('\/learn'\)\}>课程中心</.test(workspace)
   && !/navigate\('\/learn\/canvas'\)/.test(workspace));
-check('① 课时按钮按「本场课堂的项目」分三种文案：草稿→继续创作 / 已提交→查看作品（本场还在上则是继续创作） / 没有→进入课堂',
+check('① 课时按钮按「本场课堂的项目」分三种文案：草稿→继续创作 / 已提交→查看作品（本场还在上则是继续创作） / 没有→进入画布课堂',
   /function canvasEntryLabel\(lesson\)/.test(classroom)
   && classroom.includes("if (lesson.continueProject) return '继续创作';")
   // ⚠️ 2026-09-24 增量提交口径：提交之后画布**不锁**（学生接着做没做完的任务），
   //    所以"作品已提交 + 本场课堂还在上"这一步也该是「继续创作」；只有课堂结束、
   //    学生已经进不去画布了，「查看作品」才是准的说法。见 canvasWorkspace.jsx 的 submitWork。
   && classroom.includes("return lesson.participationStatus === 'ACTIVE' ? '继续创作' : '查看作品';")
-  && classroom.includes("return '进入课堂';")
+  // ⚠️ 2026-09-28 用户口径：首次进入那档的文案由「进入课堂」改成「**进入画布课堂**」
+  //    （与 VibeCoding 那条「进入VibeCoding课堂」成对）。改成别的字要连这条一起改。
+  && classroom.includes("return '进入画布课堂';")
   // 两处入口（画布上课页 + 学生课程中心）都要用它，别只改一处
   // ⚠️ 数**调用点**（都写成 `… ? canvasEntryLabel(lesson)`），别把函数定义那一行也算进来
   && (classroom.split('? canvasEntryLabel(lesson)').length - 1) === 2);

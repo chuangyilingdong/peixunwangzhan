@@ -13,6 +13,8 @@
 // ⚠️ 2026-09-25 用户口径：课时卡片上**只留「打开创作客户端」** —— 原来并排的「下载客户端」
 //    按钮和「打开没反应？先下载客户端。」那句引导文案一起删掉。
 //    （客户端下载在官网导航与页脚还留着，只是不再挂在课时卡片上。）
+// ⚠️ 2026-09-28 用户口径：这个按钮的**文案改成「进入VibeCoding课堂」**（口径不变：还是那条
+//    `lingdong://` 深链、还是"网页只负责把人送到客户端"）。上面那句是当天的原话，留着存档。
 export const CLIENT_DEEP_LINK = 'lingdong://open';
 
 /**
@@ -27,6 +29,6 @@ export function ClientEntryActions({ lesson, canEnter }) {
     : lesson?.hasGrant === false ? '未授权'
       : '等待开课';
   return canEnter
-    ? <a className="primary-button" href={CLIENT_DEEP_LINK}>打开创作客户端</a>
+    ? <a className="primary-button" href={CLIENT_DEEP_LINK}>进入VibeCoding课堂</a>
     : <button className="secondary-button" disabled>{reason}</button>;
 }
