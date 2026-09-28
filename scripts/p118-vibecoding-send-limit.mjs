@@ -334,7 +334,9 @@ try {
     ]);
     assert.equal(blocked.status, 429);
     const body = await blocked.json();
-    assert.equal(body.error.code, 'SEND_LIMIT_EXCEEDED');
+    // ⚠️ 2026-09-28：错误码按**客户端契约**（《平台接口契约-zcode.md》「发送次数」一节）改成
+    //    `SEND_QUOTA_EXCEEDED`（原来是 SEND_LIMIT_EXCEEDED）。客户端按这个码判定"这节课次数用完了"。
+    assert.equal(body.error.code, 'SEND_QUOTA_EXCEEDED');
     assert.match(body.error.message, /发送次数用完/);
   });
   await check('⭐ 被拦下的这一次**不新增 usage_records**（门禁在上游之前，既不花算力也不进账）', async () => {

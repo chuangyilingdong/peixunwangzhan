@@ -138,17 +138,30 @@ export function reportedCost(payload) {
 function tokenUsage(payload) {
   const usage = payload?.usage;
   if (!usage || typeof usage !== 'object') return null;
-  const pick = (...keys) => {
+  const numberIn = (source, keys) => {
     for (const key of keys) {
-      const value = Number(usage[key]);
+      const value = Number(source?.[key]);
       if (Number.isFinite(value) && value >= 0) return Math.round(value);
     }
     return null;
   };
-  const input = pick('prompt_tokens', 'input_tokens');
-  const output = pick('completion_tokens', 'output_tokens');
+  const details = usage.prompt_tokens_details && typeof usage.prompt_tokens_details === 'object' ? usage.prompt_tokens_details : {};
+  const input = numberIn(usage, ['prompt_tokens', 'input_tokens']);
+  const output = numberIn(usage, ['completion_tokens', 'output_tokens']);
   if (input === null && output === null) return null;
-  return { inputTokens: input || 0, outputTokens: output || 0, totalTokens: pick('total_tokens') ?? (input || 0) + (output || 0) };
+  // ⭐ 缓存 token（2026-09-28 客户端契约要点）：上游两套命名都要认 ——
+  //    DeepSeek 系走 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`（顶层），
+  //    OpenAI 系走 `prompt_tokens_details.cached_tokens`（嵌套）。
+  //    ⚠️ 取不到就**不带这几个键**（别填 0：0 与"上游没报"在账单里是两件事）。
+  const cacheHit = numberIn(usage, ['prompt_cache_hit_tokens', 'cache_hit_tokens']) ?? numberIn(details, ['cached_tokens']);
+  const cacheMiss = numberIn(usage, ['prompt_cache_miss_tokens', 'cache_miss_tokens']);
+  return {
+    inputTokens: input || 0,
+    outputTokens: output || 0,
+    totalTokens: numberIn(usage, ['total_tokens']) ?? (input || 0) + (output || 0),
+    ...(cacheHit === null ? {} : { cacheHitTokens: cacheHit }),
+    ...(cacheMiss === null ? {} : { cacheMissTokens: cacheMiss }),
+  };
 }
 
 function responseText(payload) {
@@ -328,7 +341,13 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy', options 
     if (Array.isArray(messages) && messages.length && !JSON.stringify(template).includes('{{messages}}')) {
       if (Array.isArray(rendered?.messages)) rendered.messages = messages;
     }
-    if (stream) rendered.stream = true;
+    if (stream) {
+      rendered.stream = true;
+      // 客户端（ZCode）可能带 `stream_options: { include_usage: true }` —— **原样转发**（只在流式时）：
+      // 不转发的话上游就不发那个用量分片，平台这边（以及回给客户端的）usage 会缺一段。
+      // ⚠️ 只转发这一样，别把客户端的任意 body 透传到上游（渠道模板才是请求体的唯一出处）。
+      if (options.streamOptions && typeof options.streamOptions === 'object') rendered.stream_options = options.streamOptions;
+    }
     // 工具调用（2026-09-16 打通）：渠道模板的合法占位符里**没有** tools，不能靠模板渲染，
     // 只能在渲染**之后**挂上去。不挂的后果不是「少个功能」，而是模型把工具调用写进正文
     // （DSML 标记），学生看到的是「AI 说一句就停」。
@@ -563,9 +582,11 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
     // 多轮对话流式生成：上游返回 text/event-stream 时逐块回调；上游不支持流式则退化为整段返回。
     // signal：调用方中断（学生点「停止」或连接断开）时中止上游请求；onReasoning：推理型模型
     // 的思考增量（reasoning_content），用于给学生显示「正在思考」的进度。
-    async generateStream({ messages, prompt = '', title, options, onDelta, onReasoning, onToolCalls, signal, clientRequestId, onEvidence, tools = null, toolChoice = null } = {}) {
+    async generateStream({ messages, prompt = '', title, options, streamOptions = null, onDelta, onReasoning, onToolCalls, signal, clientRequestId, onEvidence, tools = null, toolChoice = null } = {}) {
       const url = modalityEndpoint(endpoint, 'TEXT', modalityEndpoints, requestPaths);
-      const body = requestBody({ modality: 'TEXT', model: providerModel, prompt, title, voice, options, requestTemplates, modelRequestTemplates, messages, stream: true, tools, toolChoice });
+      // `streamOptions`（客户端带的 `stream_options`）只做转发：挂进 options 让 requestBody 原样带给上游。
+      const requestOptions = streamOptions ? { ...(options || {}), streamOptions } : options;
+      const body = requestBody({ modality: 'TEXT', model: providerModel, prompt, title, voice, options: requestOptions, requestTemplates, modelRequestTemplates, messages, stream: true, tools, toolChoice });
       const controller = new AbortController();
       let callerAborted = false;
       const abortFromCaller = () => { callerAborted = true; controller.abort(); };

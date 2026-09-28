@@ -356,6 +356,48 @@ export function searchUpstreamCredentials(channel, selection = {}) {
   return { endpoint, apiKey };
 }
 
+/**
+ * 对外 usage 用**客户端契约里的键名**（2026-09-28 客户端给的《平台接口契约-zcode.md》要点 ④）。
+ *
+ * ZCode 那边要按这几个键取「缓存命中/未命中」：DeepSeek 系用顶层的
+ * `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`，OpenAI 系用嵌套的
+ * `prompt_tokens_details.cached_tokens` —— 两套名字**都发**（同一个数），客户端用哪套都取得到。
+ * ⚠️ 上游没报缓存字段时**不带这几个键**（别填 0：0 与"上游没报"在账单里是两件事）。
+ */
+function publicUsage(usage) {
+  const prompt = Number(usage?.inputTokens) || 0;
+  const completion = Number(usage?.outputTokens) || 0;
+  const payload = {
+    prompt_tokens: prompt,
+    completion_tokens: completion,
+    total_tokens: Number.isFinite(Number(usage?.totalTokens)) ? Number(usage.totalTokens) : prompt + completion,
+  };
+  const hit = Number(usage?.cacheHitTokens);
+  if (Number.isFinite(hit)) {
+    payload.prompt_cache_hit_tokens = hit;
+    payload.prompt_tokens_details = { cached_tokens: hit };
+  }
+  const miss = Number(usage?.cacheMissTokens);
+  if (Number.isFinite(miss)) payload.prompt_cache_miss_tokens = miss;
+  return payload;
+}
+
+/**
+ * 每一轮网关调用的**耗时与路由**日志（同一份契约的要点 ④）。
+ * 为什么要有它：客户端一轮 agent 循环会发很多次请求，出问题时得能一眼看出
+ * 「哪个渠道/模型、首 token 等了多久、整轮多久、有没有重试、什么错误码」。
+ * 只写日志、**不改响应**——契约要的就是"平台内部日志继续记录"。
+ * ⚠️ `retry_count` 在这条路上恒为 0：网关不给流式请求做候选渠道回退（回退由 config 层的
+ *    primary/backup 在非流式那条路做）。真加了回退，这里要跟着变成真实的计数。
+ */
+function logGatewayRound({ provider, model, channelId, mode, startedAt, firstTokenAt = null, status, errorCode = '', retryCount = 0 }) {
+  const total = Date.now() - startedAt;
+  const ttft = firstTokenAt ? firstTokenAt - startedAt : null;
+  console.log(`[runtimeGateway] provider=${provider} model=${model} channel=${channelId || '-'} mode=${mode || '-'}`
+    + ` time_to_first_token_ms=${ttft ?? '-'} total_upstream_ms=${total} retry_count=${retryCount}`
+    + ` status=${status} error_code=${errorCode || '-'}`);
+}
+
 export async function handleRuntimeGateway(ctx) {
   const path = String(ctx.pathname || '');
   if (path !== '/api/gateway/v1/chat/completions' || ctx.method !== 'POST') return null;
@@ -372,12 +414,15 @@ export async function handleRuntimeGateway(ctx) {
   const sendGate = await enforceVibecodingSendLimit({ sessionId: session.id, studentId: payload.u, lessonId: session.lesson_id || '', messages });
   if (!sendGate.allowed) {
     // 对外仍要说 OpenAI 方言（dsh 只认这个），客户端把 message 原样显示给学生
+    // ⚠️ 2026-09-28：错误码按客户端契约（《平台接口契约-zcode.md》「发送次数」一节）改成
+    //    **`SEND_QUOTA_EXCEEDED`** —— 客户端按这个码判定"这节课次数用完了"（原来是
+    //    `SEND_LIMIT_EXCEEDED`）。`type` 跟着对齐，语义不变（仍是 429 + 原样的话术）。
     ctx.res.writeHead(429, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     ctx.res.end(JSON.stringify({
       error: {
         message: `这节课的发送次数用完了（共 ${sendGate.limit} 次）。先把自己的想法写下来，或者请老师再开一次课堂。`,
-        type: 'send_limit_exceeded',
-        code: 'SEND_LIMIT_EXCEEDED',
+        type: 'send_quota_exceeded',
+        code: 'SEND_QUOTA_EXCEEDED',
       },
     }));
     return { __streamed: true };
@@ -424,7 +469,12 @@ export async function handleRuntimeGateway(ctx) {
   //    非流式那条路会踩暂时性死区（ReferenceError → 500），被 p97 当场抓住。
   const tools = Array.isArray(body?.tools) && body.tools.length ? body.tools : null;
   const toolChoice = body?.tool_choice ?? null;
+  // 客户端可能带 `stream_options: { include_usage: true }`（OpenAI 方言）：只做**转发**，
+  // 平台自己不依赖它（用量分片我们一直发，见下面的收尾分片）。
+  const streamOptions = body?.stream_options && typeof body.stream_options === 'object' ? body.stream_options : null;
 
+  // 这一轮的起始时刻：两条分支（非流式 / 流式）共用，用来算「首 token 等了多久、整轮多久」。
+  const roundStartedAt = Date.now();
   if (!stream) {
     try {
       const result = await provider.generate({ modality: 'TEXT', messages, model: body.model || undefined, tools, toolChoice });
@@ -436,12 +486,14 @@ export async function handleRuntimeGateway(ctx) {
       ctx.res.end(JSON.stringify({
         id: completionId, object: 'chat.completion', created, model: effectiveModel,
         choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: usage?.inputTokens || 0, completion_tokens: usage?.outputTokens || 0, total_tokens: (usage?.inputTokens || 0) + (usage?.outputTokens || 0) },
+        usage: publicUsage(usage),
       }));
+      logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, status: 'SUCCESS' });
       return { __streamed: true };
     } catch (error) {
       const normalized = normalizeProviderError(error) || {};
       await record('FAILED', { failCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });
+      logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, status: 'FAILED', errorCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });
       throw error;
     }
   }
@@ -464,16 +516,21 @@ export async function handleRuntimeGateway(ctx) {
   const dsml = createDsmlStripper({ onStrip: (chars) => { dsmlStripped += chars; } });
   // 这一轮里上游有没有返回工具调用 —— 决定最后那个分片的 finish_reason。
   let sawToolCalls = false;
+  // 首 token 时刻（契约要的 time_to_first_token_ms）：**第一个内容分片或第一个工具调用分片**都算，
+  // 因为对客户端的 agent 循环来说，工具调用的第一个分片同样是"上游开始出声了"。
+  let firstTokenAt = null;
   try {
     const result = await provider.generateStream({
       messages,
       model: body.model || undefined,
       tools,
       toolChoice,
+      streamOptions,
       // 工具调用：按 OpenAI 方言原样转给客户端（dsh 就是靠这个才知道该去执行什么）。
       // ⚠️ 这条**不能**过 DSML 过滤器 —— 它要的就是结构化字段，不是正文。
       onToolCalls: (toolCallDelta, finishReason) => {
         sawToolCalls = true;
+        if (!firstTokenAt) firstTokenAt = Date.now();
         sseWrite(res, {
           id: completionId, object: 'chat.completion.chunk', created, model: effectiveModel,
           choices: [{ index: 0, delta: { tool_calls: toolCallDelta }, finish_reason: finishReason || null }],
@@ -482,6 +539,7 @@ export async function handleRuntimeGateway(ctx) {
       onDelta: (delta) => {
         const piece = dsml.push(delta);
         if (!piece) return;
+        if (!firstTokenAt) firstTokenAt = Date.now();
         streamed += piece;
         sseWrite(res, {
           id: completionId, object: 'chat.completion.chunk', created, model: effectiveModel,
@@ -506,14 +564,16 @@ export async function handleRuntimeGateway(ctx) {
     sseWrite(res, { id: completionId, object: 'chat.completion.chunk', created, model: effectiveModel, choices: [{ index: 0, delta: {}, finish_reason: sawToolCalls ? 'tool_calls' : 'stop' }] });
     sseWrite(res, {
       id: completionId, object: 'chat.completion.chunk', created, model: effectiveModel, choices: [],
-      usage: { prompt_tokens: usage?.inputTokens || 0, completion_tokens: usage?.outputTokens || 0, total_tokens: (usage?.inputTokens || 0) + (usage?.outputTokens || 0) },
+      usage: publicUsage(usage),
     });
     sseWrite(res, '[DONE]');
+    logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, firstTokenAt, status: 'SUCCESS' });
   } catch (error) {
     const normalized = normalizeProviderError(error) || {};
     await record('FAILED', { failCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });
     sseWrite(res, { error: { message: String(error?.message || '上游调用失败'), type: 'upstream_error', code: normalized.code || 'UPSTREAM_ERROR' } });
     sseWrite(res, '[DONE]');
+    logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, firstTokenAt, status: 'FAILED', errorCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });
   } finally {
     clearInterval(heartbeat);
     if (!res.writableEnded) res.end();

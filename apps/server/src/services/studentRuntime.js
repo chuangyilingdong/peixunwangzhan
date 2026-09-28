@@ -19,6 +19,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { connect } from 'node:net';
 import { errors, row, arow } from '../lib.js';
+import { PUBLIC_SITE_URL } from '../config.js';
 import { issueRuntimeKey, assertRuntimeClassroomActive } from '../routes/runtimeGateway.js';
 
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
@@ -43,7 +44,12 @@ function config() {
     stopScript: String(process.env.DSH_RUNTIME_STOP_SCRIPT
       || (mode === 'container' ? '/opt/dsh-host/stop-student-container.sh' : '/opt/dsh-host-user/stop-student-user.sh')).trim(),
     // 学生环境从宿主里访问我们网关的地址：用户版与平台同机，走公网域名（TLS 与容器版同一条路）。
-    gatewayUrl: String(process.env.DSH_RUNTIME_GATEWAY_URL || 'https://iicili.cyou/api/gateway/v1').trim(),
+    // ⚠️ 2026-09-28：默认值原来硬写着**老域名** `https://iicili.cyou/api/gateway/v1` ——
+    //    生产靠 env 覆盖着（`DSH_RUNTIME_GATEWAY_URL`），但只要哪个环境忘了设，客户端拿到的
+    //    就是一条打不通的老地址（客户端契约里 gateway.baseUrl 就是取这里的）。
+    //    现在**跟着本站域名推**（PUBLIC_SITE_URL），形态不变：`<站点>/api/gateway/v1`，
+    //    客户端在它后面拼 `/chat/completions`（裸 base 是 404，见契约 §网关请求契约）。
+    gatewayUrl: String(process.env.DSH_RUNTIME_GATEWAY_URL || `${PUBLIC_SITE_URL.replace(/\/+$/, '')}/api/gateway/v1`).trim(),
     // 入口前缀：用户版是「域名:端口」（dsh 硬注入 <base href="/">，挂不了子路径 —— 实测过），
     // 所以脚本直接给完整 EDGE_URL，这里留空即表示「用脚本给的地址」。
     edgeBase: String(process.env.DSH_RUNTIME_EDGE_BASE || '').trim(),
