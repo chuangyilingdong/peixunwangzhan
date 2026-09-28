@@ -53,6 +53,32 @@ if (!/fitView=\{[^}]*hasStoredViewport[^}]*\}/.test(canvas)) {
   findings.push(`${canvasPath}: 没有看到 \`fitView={...hasStoredViewport...}\`，无法确认是否只在「没存过视角」时适配。`);
 }
 
+// ③ ⭐ 2026-09-28 用户报「拖动了很多外部文件进画布，删了又出现删了又出现」。
+//    上传是**异步**的（几秒到几十秒），这期间用户完全能把刚拖进来的框体删掉。
+//    所以上传流程必须"每次写回都基于**最新那份**快照 + 只 patch 这一个节点" ——
+//    一旦退回"把上传开始那一刻的整份快照存进 current、每传完一个就整份写回"，
+//    用户删掉的框体就会被**每个文件的完成事件一次次带回来**（6 个文件 = 回来 6 次）。
+{
+  const uploadPath = 'packages/shared/src/canvasWorkspace.jsx';
+  const uploadSource = fs.readFileSync(path.join(root, uploadPath), 'utf8');
+  const body = readFunctionBody(uploadSource, 'uploadFiles');
+  if (!body) {
+    findings.push(`${uploadPath}: 找不到 uploadFiles()，无法确认"上传期间删掉的框体会不会被写回来"。`);
+  } else {
+    if (/setCanvasSnapshot\(current\)/.test(body) || /setDraft\(current\)/.test(body)) {
+      findings.push(`${uploadPath}: uploadFiles() 里出现了整份写回（setCanvasSnapshot(current)/setDraft(current)）—— `
+        + 'current 是上传开始那一刻的旧快照，每传完一个文件就把它整份盖回去 = "删了又出现"。');
+    }
+    if (!/patchNode\(latestCanvasRef\.current/.test(body)) {
+      findings.push(`${uploadPath}: uploadFiles() 没有基于 latestCanvasRef.current 做 patch —— `
+        + '离开"最新快照 + 只改这个节点"这个口径，删掉的框体又会被带回来。');
+    }
+    if (!/const latestCanvasRef = useRef\(null\)/.test(uploadSource) || !/const commitCanvas = \(next\) =>/.test(uploadSource)) {
+      findings.push(`${uploadPath}: 没看到 latestCanvasRef / commitCanvas —— 画布写回没有"最新快照"这个单一出处。`);
+    }
+  }
+}
+
 const result = { name: 'canvas-dirty-guard', pass: findings.length === 0, scannedFiles: 2, findings };
 console.log(JSON.stringify(result, null, 2));
 if (!result.pass) process.exit(1);

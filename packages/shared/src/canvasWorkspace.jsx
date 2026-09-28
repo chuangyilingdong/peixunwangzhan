@@ -237,6 +237,20 @@ export function CanvasWorkspace({ api, ...props }) {
   // 提交与自动保存的互斥闸门：提交期间冻结新保存，并让**在途的旧保存响应**失效
   // （口径与三条规则见 canvasOutput.js 的 createSaveGate）。
   const saveGateRef = useRef(createSaveGate());
+  // ⭐ 2026-09-28 用户报「拖动了很多外部文件进画布，删了又出现删了又出现」：
+  //    上传是"几秒到几十秒"的异步过程，**这期间用户完全可以把刚拖进来的框体删掉**。
+  //    原来 uploadFiles 把"上传开始那一刻的整份快照"存进 current、每传完一个就**整份写回** ——
+  //    于是每个文件传完都会把用户删掉的那些框体一起带回来（6 个文件 = 反复回来 6 次）。
+  //    现在的口径：**每次写回都基于"最新那份"快照，而且只 patch 这一个节点**
+  //    （`patchNode` 对已经不在的节点什么都不做 → 删掉的就是删掉了）。
+  // ⚠️ 这个 ref 与 commitCanvas 必须放在**所有提前 return 之前**（p34 钩子顺序守卫盯着）：
+  //    下面有 `if (!project) return …` 之类的提前返回，hook 落在后面会抛 React #300 白屏。
+  const latestCanvasRef = useRef(null);
+  latestCanvasRef.current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
+  const commitCanvas = (next) => {
+    latestCanvasRef.current = next;
+    setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
+  };
   useEffect(() => {
     if (!editable || !draft || !changed) return undefined;
     const signature = canvasContentSignature(draft);
@@ -455,18 +469,17 @@ export function CanvasWorkspace({ api, ...props }) {
     if (!editable) { setMessage('课堂已结束，不能再修改画布。'); return; }
     const seed = Date.now().toString(36);
     const items = [...(files || [])].map((file, index) => ({ file, id: `upload-${seed}-${index}` }));
-    const base = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
+    const base = latestCanvasRef.current;
     // ① 先落占位框体（只有能识别的类型才落，别的交给下面逐个提示「已跳过」）
     const placeholders = items
       .map((item, index) => ({ ...item, kind: mediaKindOfFile(item.file), index }))
       .filter((item) => item.kind);
-    let current = { ...base, nodes: [...(base.nodes || []), ...placeholders.map((item) => ({
+    commitCanvas({ ...base, nodes: [...(base.nodes || []), ...placeholders.map((item) => ({
       id: item.id,
       type: item.kind,
       position: { x: (position?.x || 200) + item.index * 40, y: (position?.y || 160) + item.index * 30 },
       data: { title: item.file.name, uploading: true, caption: '', text: '' },
-    }))] };
-    setCanvasSnapshot(current); setDraft(current); setCanvasRevision((value) => value + 1);
+    }))] });
     setMessage(placeholders.length ? `正在上传 ${placeholders.length} 个文件…` : '这些文件不是图片/视频/音频，已跳过（支持 jpg/png/webp/gif、mp4/webm、mp3/wav/ogg）。');
     // ② 逐个上传
     let placed = 0;
@@ -477,18 +490,16 @@ export function CanvasWorkspace({ api, ...props }) {
         const asset = await api.upload('student/file-assets/upload', item.file, { category: 'MEDIA_ASSET', visibility: 'PRIVATE' });
         const url = String(asset?.proxyRoute || asset?.storageUrl || '');
         if (!url) throw new Error('上传后没有拿到文件地址');
-        current = patchNode(current, item.id, {
+        // ⚠️ 用 latestCanvasRef.current（此刻最新的那份）而不是循环外那份底座
+        commitCanvas(patchNode(latestCanvasRef.current, item.id, {
           title: item.file.name, caption: '', text: '',
           assetUrl: url, previewUrl: url, uploading: false,
           uploaded: true, fileAssetId: asset.id || null, mimeType: asset.mimeType || String(item.file.type || ''),
-        });
+        }));
         placed += 1;
-        // 每传完一个就写回去，学生能一个个看着落地
-        setCanvasSnapshot(current); setDraft(current); setCanvasRevision((value) => value + 1);
       } catch (error) {
         // 上传失败：撤掉「上传中」并在框体上写明原因（不让它一直转、也不静默吞掉）
-        current = patchNode(current, item.id, { uploading: false, uploadError: error.message });
-        setCanvasSnapshot(current); setDraft(current); setCanvasRevision((value) => value + 1);
+        commitCanvas(patchNode(latestCanvasRef.current, item.id, { uploading: false, uploadError: error.message }));
         setMessage(`「${item.file.name}」上传失败：${error.message}`);
       }
     }

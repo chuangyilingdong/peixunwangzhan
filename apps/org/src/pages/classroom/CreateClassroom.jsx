@@ -66,7 +66,7 @@ export function CreateClassroom({ api, isAdmin, onCancel, onCreated, parentLabel
         <Panel title="课堂基础信息">
           <p className="muted">第一阶段只建立课堂，不在此页添加学生。</p>
           <form onSubmit={submit}>
-            <label>课堂名称 *<input value={form.title} maxLength={50} placeholder="例如：未来城市设计"
+            <label>课堂名称 *<input value={form.title} maxLength={50} placeholder="例如：周六14：00张老师班级"
               onChange={(event) => setForm({ ...form, title: event.target.value })} />
               <small className="muted">{titleLength}/50，可留空由系统按课程自动生成。</small></label>
 
