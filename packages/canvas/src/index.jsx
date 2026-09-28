@@ -835,16 +835,40 @@ function NoteNode({ id, data, selected }) {
 // 音频节点按本课开放的音频能力提供生成入口（音乐 / 播客 / 配音）。
 const AUDIO_MODALITIES = [['MUSIC', '生成音乐']];
 
+/**
+ * 「下载到本地」用哪个地址（用户 2026-09-28：音乐框体要能下载）。
+ *
+ * 三种情况，按可靠性排：
+ *   · `/api/...` → 用**原始地址**：同源、自动带 cookie，服务端那条下载口本来就带
+ *     `Content-Disposition: attachment`，而且**只有同源才认 `download` 属性**（能按我们给的名字存）。
+ *     用 resolve 出来的 blob: 反而多一次内存副本，没必要。
+ *   · 已经取回内存的 `blob:`（跨域签名地址那种解析成功的）→ 用它，`download` 属性对 blob: 是认的。
+ *   · 其余（跨域 http 直链）只能给原地址：浏览器可能直接播放而不是下载 —— 那是浏览器的限制
+ *     （跨域时 `download` 属性会被忽略），不是我们少写了什么。
+ */
+function downloadHrefFor(raw, resolved) {
+  const rawUrl = String(raw || '');
+  if (rawUrl.startsWith('/api/')) return rawUrl;
+  const shown = String(resolved || '');
+  if (shown.startsWith('blob:')) return shown;
+  return rawUrl || shown;
+}
+
 function AudioNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
-  const audioUrl = useDisplayUrl(data.previewUrl || data.assetUrl);
+  // ⚠️ 原始地址（`data.*`）与"给标签用的地址"（resolve 后的 blob / 原样）要分开留：
+  //    前者拿去下载（同源才认 download 属性），后者留给 <audio> 播放。
+  const rawAudioUrl = String(data.previewUrl || data.assetUrl || '');
+  const audioUrl = useDisplayUrl(rawAudioUrl);
   return <NodeFrame icon="♫" tone="audio" aspectRatio={boxDisplayRatio(data)} processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__audio-placeholder" data={data} />
       : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__audio-placeholder" modality="MUSIC" startedAt={data.generationStartedAt} />
       : audioUrl
         // 用户 2026-09-22：「播放器进度条被压缩很小了，有没有可能是两行，第一行是进度条、
         // 第二行才是操作按钮」—— 原生 <audio controls> 的内部布局改不了，所以换成自己画的两行式。
-        ? <AudioPlayer className="learning-node__audio" src={audioUrl} label={data.title} />
+        // ⚠️ 换掉原生控件的同时也换掉了浏览器右键的「音频另存为」→ 所以播放器里那个
+        //    「下载到本地」按钮是**必须**的（用户 2026-09-28 报的正是"右键也没有"）。
+        ? <AudioPlayer className="learning-node__audio" src={audioUrl} label={data.title} downloadHref={downloadHrefFor(rawAudioUrl, audioUrl)} />
         : <div className="learning-node__audio-placeholder learning-node__art--illustration"><img src={BOX_EMPTY_ART} alt="还没生成 —— 在底部面板写歌词或描述，生成音乐" loading="lazy" /></div>}
   </NodeFrame>;
 }

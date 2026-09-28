@@ -69,6 +69,35 @@ check('② 播放器样式：纵向两行（.cv-audio 是 flex column），进�
   /\.cv-audio \{ display: flex; flex-direction: column;/.test(canvasCss)
   && /\.cv-audio__progress \{ display: block; width: 100%/.test(canvasCss));
 
+/* ── 第 3 条：音乐框体要能**下载到本地**（用户 2026-09-28）───────────────────
+   原话：「画布的音乐框体不能下载音乐到本地，右键也没有，可否像视频框体那样可以有个下载按钮」。
+   真因记在 `AudioPlayer.jsx`：视频框体用的是原生 `<video controls>`，浏览器右键自带「视频另存为」；
+   而音乐框体在 **2026-09-22 按第 ② 条换成了自绘的两行式**（`<audio>` 是 hidden 的）——
+   原生右键菜单跟着一起没了。所以这条网盯四件事（**判之前同样先剥注释**）：
+     ① 播放器里**真有**「下载到本地」的入口；
+     ② 画布的音乐框体**真的接上了**（组件有、入口不显示 = 学生还是看不到，白改）；
+     ③ 它必须是带 `download` 的 `<a>`（`<button>` + `window.open` 那种存不成文件、还可能直接播放）；
+     ④ 地址与文件名的口径（同源 `/api/` 优先、blob 兜底、名字带扩展名）。 */
+const playerCode = stripComments(player);
+const canvasCode = stripComments(canvasIndex);
+check('③ 播放器里有「下载到本地」入口，且是带 download 的 <a>（不是 button / window.open）',
+  /cv-audio__btn--download/.test(playerCode)
+  && /<a[\s\S]{0,500}?download=\{downloadFileName\(/.test(playerCode)
+  && !/window\.open\([^)]*download/i.test(playerCode));
+check('③ 画布的音乐框体接上了下载地址（组件有、入口不显示 = 白改）',
+  /<AudioPlayer[^>]*downloadHref=\{downloadHrefFor\(rawAudioUrl, audioUrl\)\}/.test(canvasCode));
+check('③ 下载地址优先用**原始 /api/ 地址**（同源才认 download 属性；服务端那条口带 attachment）',
+  /function downloadHrefFor/.test(canvasCode)
+  && /rawUrl\.startsWith\('\/api\/'\)\) return rawUrl;/.test(canvasCode));
+check('③ 已取回内存的 blob: 走 blob（跨域签名地址那条路），别退回原地址',
+  /shown\.startsWith\('blob:'\)\) return shown;/.test(canvasCode));
+check('③ 下载的文件名：从地址里认扩展名（认不出按 mp3），并去掉不能进文件名的字符',
+  /function downloadFileName/.test(playerCode)
+  && /\.\(mp3\|wav\|m4a\|aac\|ogg\|opus\|flac\|mp4\)/.test(playerCode)
+  && /replace\([^)]*,\s*'_'\)/.test(playerCode));
+check('③ 下载按钮补了 <a> 需要的 text-decoration:none（不然是个带下划线的圆钮）',
+  /\.cv-audio__btn--download \{ text-decoration: none; \}/.test(canvasCss));
+
 console.log('');
 if (failures) { console.log(`✗ p130 有 ${failures} 处不符合预期`); process.exit(1); }
 console.log('✓ p130 作品读面卡片化 + 两行式播放器：全部通过');

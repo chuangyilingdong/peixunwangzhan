@@ -38,7 +38,26 @@ function VolumeIcon({ muted }) {
   </svg>;
 }
 
-export function AudioPlayer({ src, fallbackSrc = '', label = '', className = '' }) {
+function DownloadIcon() {
+  return <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M12 4.5v10m0 0 3.8-3.8M12 14.5 8.2 10.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    <path d="M5.5 18.5h13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" fill="none" />
+  </svg>;
+}
+
+/** 下载到本地时用的文件名：框体标题 + 从地址里看出来的扩展名（看不出来就按 mp3）。 */
+function downloadFileName(label, url) {
+  const clean = String(label || '音乐').replace(/[\\/:*?"<>|\r\n\t]/g, '_').trim() || '音乐';
+  const matched = String(url || '').match(/\.(mp3|wav|m4a|aac|ogg|opus|flac|mp4)(?:\?|#|$)/i);
+  return `${clean.slice(0, 60)}.${matched ? matched[1].toLowerCase() : 'mp3'}`;
+}
+
+// ⚠️ 用户 2026-09-28：「音乐框体不能下载音乐到本地，右键也没有，可否像视频框体那样可以有个下载按钮」。
+//    真因是**播放器被我们换掉了**：视频框体用的是原生 `<video controls>`，浏览器右键自带「视频另存为」；
+//    而音乐框体在 2026-09-22 按口径换成了自绘的两行式（`<audio>` 是 hidden 的）——
+//    原生右键菜单跟着一起没了。所以这里把「下载到本地」显式补成一个按钮。
+// ⚠️ 传 `downloadHref` 才显示这个按钮：画布的音乐框体传了；作品读面没传（要的话同样传一个即可）。
+export function AudioPlayer({ src, fallbackSrc = '', label = '', className = '', downloadHref = '' }) {
   const audioRef = useRef(null);
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
@@ -47,6 +66,7 @@ export function AudioPlayer({ src, fallbackSrc = '', label = '', className = '' 
   const [failed, setFailed] = useState(false);
   const [usingFallback, setUsingFallback] = useState(false);
   const activeSrc = usingFallback ? fallbackSrc : src;
+  const href = String(downloadHref || '');
 
   useEffect(() => { setPlaying(false); setCurrent(0); setDuration(0); setFailed(false); setUsingFallback(false); }, [src, fallbackSrc]);
 
@@ -120,6 +140,14 @@ export function AudioPlayer({ src, fallbackSrc = '', label = '', className = '' 
       <button type="button" className="cv-audio__btn nodrag" onClick={toggle} disabled={failed || !activeSrc} aria-label={playing ? '暂停' : '播放'}>{<PlayIcon playing={playing} />}</button>
       <span className="cv-audio__time">{formatTime(current)} / {formatTime(duration)}</span>
       <button type="button" className="cv-audio__btn nodrag" onClick={toggleMute} disabled={failed || !activeSrc} aria-label={muted ? '取消静音' : '静音'}><VolumeIcon muted={muted} /></button>
+      {href ? <a
+        className="cv-audio__btn cv-audio__btn--download nodrag"
+        href={href}
+        download={downloadFileName(label, href)}
+        title="下载到本地"
+        aria-label={label ? `下载「${label}」到本地` : '下载到本地'}
+        onClick={(event) => event.stopPropagation()}
+      ><DownloadIcon /></a> : null}
     </div>
     <audio ref={audioRef} src={activeSrc} preload="metadata" hidden />
   </div>;

@@ -168,6 +168,9 @@
 .cv-audio__btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: 0 0 auto; padding: 0; border: 1px solid var(--cv-border); border-radius: 999px; color: var(--cv-text); background: rgb(255 255 255 / 6%); cursor: pointer; }
 .cv-audio__btn:hover:not(:disabled) { border-color: var(--cv-primary); color: var(--cv-primary); }
 .cv-audio__btn:disabled { opacity: .4; cursor: not-allowed; }
+/* 「下载到本地」按钮是个 <a>（要有 download 属性才存得成文件）：按钮那套样式里没有 text-decoration，
+   不加就是一条带下划线的圆钮。悬停/聚焦沿用上面 .cv-audio__btn 那两条（<a> 不会命中 :disabled）。 */
+.cv-audio__btn--download { text-decoration: none; }
 .cv-audio__error { display: block; min-width: 0; overflow-wrap: anywhere; color: #ffb4b4; font-size: 10px; line-height: 1.45; }
 .cv-audio__time { color: var(--cv-text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 /* 只有图片/视频跟着节点尺寸伸缩，其余区块保持自己的高度（拖高拖矮都看得见效果） */
