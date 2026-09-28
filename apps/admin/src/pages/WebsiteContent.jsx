@@ -2,7 +2,7 @@ import { useAdminConfirm } from '../components/AdminConfirm.jsx';
 import { readSession, errorText } from '@platform/shared';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Empty, ErrorState, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, formatDate, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
+import { Empty, ErrorState, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, HANDBOOK_POLICY_DEFAULT, formatDate, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
 import { WEBSITE_CONTENT_LABELS } from '../shared.jsx';
 
 export function parseWebsiteDraft(value) {
@@ -48,6 +48,11 @@ export function WebsitePreview({ content, selectedKey }) {
       {poster.imageUrl ? <details><summary>{poster.title || '海报'}</summary><img src={poster.imageUrl} alt={poster.imageAlt || ''} style={PREVIEW_IMAGE_STYLE} /></details> : null}
       <p>横滑卡片 {cards.length} 张：{cards.map((card) => card.title).filter(Boolean).join(' / ') || '（未配置）'}</p>
       {lines(work.introLines).length ? <p>卡片区大标题：{lines(work.introLines).join(' ')}</p> : null}
+      {/* 政策一栏：草稿里还没有这一块时，预览也用官网那份默认值 —— 与官网页面看到的保持一致 */}
+      {(() => {
+        const policyCards = cmsListOf(content.policy?.cards).length ? cmsListOf(content.policy.cards) : cmsListOf(HANDBOOK_POLICY_DEFAULT.cards);
+        return <p>政策地区卡 {policyCards.length} 张：{policyCards.map((card) => card.region).filter(Boolean).join(' / ') || '（未配置）'}</p>;
+      })()}
       {content.compare?.body ? <p>对比区：{content.compare.body}</p> : null}
       {content.cta?.headline ? <p>结尾行动：{content.cta.headline}</p> : null}
     </div>;
@@ -202,6 +207,23 @@ export function WebsiteContent({ api }) {
   function updateVideo(index, patch) { updateVideos({ items: videoItems.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)) }); }
   function removeVideo(index) { updateVideos({ items: videoItems.filter((_, itemIndex) => itemIndex !== index) }); }
   function addVideo() { updateVideos({ items: [...videoItems, { tag: '', title: '', desc: '', videoUrl: '', posterUrl: '' }] }); }
+  // ── 机构手册「政策」一栏（2026-09-28 用户口径：给了各地公告截图，形状定成**地区卡（按地区排）**）──
+  // 与「三步一栏」同一条做法：草稿里**还没有这一块**时，用官网内置默认（HANDBOOK_POLICY_DEFAULT，
+  // 与官网兜底、数据库种子同一份）预填 —— 运营打开就看到官网正在显示的那 11 张卡，改哪张写哪张。
+  // ⚠️ 千万别退回"直接从草稿取列表"：草稿里没有这一块时，列表是空的，
+  //    运营点一下「新增地区」保存后会把内置的 11 张全冲掉（官网那一段就只剩一张空卡）。
+  const policyBlock = structured?.policy && typeof structured.policy === 'object' ? structured.policy : HANDBOOK_POLICY_DEFAULT;
+  const policyCards = Array.isArray(policyBlock.cards) ? policyBlock.cards : [];
+  function updatePolicy(patch) { updateStructured({ policy: { ...policyBlock, ...patch } }); }
+  function updatePolicyCard(index, patch) { updatePolicy({ cards: policyCards.map((card, cardIndex) => (cardIndex === index ? { ...card, ...patch } : card)) }); }
+  function movePolicyCard(index, direction) {
+    const items = [...policyCards]; const next = index + direction;
+    if (next < 0 || next >= items.length) return;
+    [items[index], items[next]] = [items[next], items[index]];
+    updatePolicy({ cards: items });
+  }
+  function removePolicyCard(index) { updatePolicy({ cards: policyCards.filter((_, cardIndex) => cardIndex !== index) }); }
+  function addPolicyCard() { updatePolicy({ cards: [...policyCards, { region: '', title: '', note: '', imageUrl: '', imageAlt: '' }] }); }
   // 视频上传：与配图同一条路（file-assets），只是 category 用 MEDIA_ASSET（语义更准，且公开口认它）。
   // ⚠️ 生产上限 200MB（FILE_UPLOAD_MAX_BYTES），而且会过病毒扫描 —— 官网展示用的片段请压到 10MB 内。
   async function uploadVideo(file, apply, key) {
@@ -511,6 +533,21 @@ export function WebsiteContent({ api }) {
               <div className="row-actions top-gap"><label className="inline-file-upload">{uploading === `hb-card-${index}` ? '上传中…' : '上传配图'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url) => updateSectionList('work', 'cards', index, { imageUrl: url }), `hb-card-${index}`); }} /></label></div>
             </div>)}</div>
             <button type="button" className="secondary-button top-gap" onClick={() => addSectionList('work', 'cards', { title: '', desc: '', imageUrl: '', imageAlt: '' })}>新增卡片</button>
+            {/* 「政策」一栏（2026-09-28）：地区卡，按地区排。字段 = 地区 / 文件全名 / 一行注 / 卡片图。
+                ⚠️ 卡片图是**公告截图的裁切版**（1200×676，官网按 16:9 铺满、从顶部对齐），
+                   换图要重裁 —— 直接丢一张竖图进来会被裁得只剩中间一条。 */}
+            <div className="cms-section-heading top-gap"><strong>政策一栏（地区卡）</strong><span>角标 + 两行标题 + 正文；下面每张卡 = 一个地区，卡片图建议 1200×676</span></div>
+            <div className="form-grid">
+              <label>眉题<input value={policyBlock.eyebrow || ''} onChange={(event) => updatePolicy({ eyebrow: event.target.value })} maxLength={24} placeholder="例如 政策" /></label>
+              <label>标题第 1 行<input value={cmsListOf(policyBlock.headingLines)[0] || ''} onChange={(event) => updatePolicy({ headingLines: [event.target.value, cmsListOf(policyBlock.headingLines)[1] || ''] })} maxLength={30} /></label>
+              <label>标题第 2 行<input value={cmsListOf(policyBlock.headingLines)[1] || ''} onChange={(event) => updatePolicy({ headingLines: [cmsListOf(policyBlock.headingLines)[0] || '', event.target.value] })} maxLength={30} /></label>
+            </div>
+            <label>正文<textarea value={policyBlock.body || ''} onChange={(event) => updatePolicy({ body: event.target.value })} maxLength={800} /></label>
+            <div className="cms-faq-list">{policyCards.map((card, index) => <div className="cms-faq-item" key={`hb-policy-${index}`}><div className="cms-faq-heading"><strong>{(card.region || '未填地区')} · 第 {index + 1} 张</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => movePolicyCard(index, -1)} aria-label={`第 ${index + 1} 张上移`}>↑</button><button type="button" className="text-button" disabled={index === policyCards.length - 1} onClick={() => movePolicyCard(index, 1)} aria-label={`第 ${index + 1} 张下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removePolicyCard(index)}>删除</button></div></div>
+              <div className="form-grid"><label>地区<input value={card.region || ''} onChange={(event) => updatePolicyCard(index, { region: event.target.value })} maxLength={12} placeholder="例如 北京" /></label><label>文件全名<input value={card.title || ''} onChange={(event) => updatePolicyCard(index, { title: event.target.value })} maxLength={120} /></label><label>一行注（时间 · 编号或要点）<input value={card.note || ''} onChange={(event) => updatePolicyCard(index, { note: event.target.value })} maxLength={80} /></label><label>卡片图地址<input value={card.imageUrl || ''} onChange={(event) => updatePolicyCard(index, { imageUrl: event.target.value })} /></label><label>图说（无障碍用）<input value={card.imageAlt || ''} onChange={(event) => updatePolicyCard(index, { imageAlt: event.target.value })} maxLength={160} /></label></div>
+              <div className="row-actions top-gap"><label className="inline-file-upload">{uploading === `hb-policy-${index}` ? '上传中…' : '上传卡片图'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url) => updatePolicyCard(index, { imageUrl: url }), `hb-policy-${index}`); }} /></label></div>
+            </div>)}</div>
+            <button type="button" className="secondary-button top-gap" onClick={addPolicyCard}>新增地区</button>
             <div className="cms-section-heading top-gap"><strong>对比区（粒子背景）</strong><span>眉题 + 两行标题（第 2 行描边）+ 正文</span></div>
             <div className="form-grid">
               <label>眉题<input value={structured?.compare?.eyebrow || ''} onChange={(event) => updateSection('compare', { eyebrow: event.target.value })} maxLength={24} /></label>

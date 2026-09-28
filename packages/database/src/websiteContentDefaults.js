@@ -169,6 +169,28 @@ export const WEBSITE_CONTENT_DEFAULTS = {
       imageUrl: '/assets/handbook/about.webp',
       imageAlt: 'AI 创意思维与数据面板',
     },
+    // 「政策」一栏（2026-09-28 用户口径：给了各地公告截图，形状定成**地区卡（按地区排）**）。
+    // ⚠️ 与 `packages/shared/src/siteDefaults.js` 的 `HANDBOOK_POLICY_DEFAULT` **逐字段一致**
+    //    （守卫 `scripts/p162-handbook-policy.mjs` 钉着）：那份供官网兜底与后台表单预填。
+    // 顺序：先「北上广深浙」（率先落地），再其余地区按发布时间排 —— 与用户给材料时的分组一致。
+    policy: {
+      eyebrow: '政策',
+      headingLines: ['国家在推，', '各地都在落'],
+      body: '教育部办公厅印发《关于加强中小学人工智能教育的通知》之后，北京、上海、广东、深圳、浙江率先落地，江苏、山东、天津、福建、重庆、西安等地陆续跟进，都把人工智能课写进了中小学课表。下面是各地已公开的文件。',
+      cards: [
+        { region: '北京', title: '《北京市推进中小学人工智能教育工作方案（2025—2027年）》', note: '2025-03-08 · 2025 年秋季学期起每学年不少于 8 课时', imageUrl: '/assets/handbook/policy-beijing.webp', imageAlt: '北京市推进中小学人工智能教育工作方案（2025—2027年）公告' },
+        { region: '上海', title: '《上海市推进实施人工智能赋能基础教育高质量发展的行动方案（2024—2026年）》', note: '2024-10-09 · 上海市教育委员会', imageUrl: '/assets/handbook/policy-shanghai.webp', imageAlt: '上海市推进实施人工智能赋能基础教育高质量发展的行动方案（2024—2026年）通知' },
+        { region: '广东', title: '《广东省基础教育课程教学改革深化行动实施方案（2024—2027年）》', note: '2024-07-25 · 广东省教育厅', imageUrl: '/assets/handbook/policy-guangdong.webp', imageAlt: '广东省基础教育课程教学改革深化行动实施方案（2024—2027年）通知' },
+        { region: '深圳', title: '《深圳市推进中小学人工智能教育工作方案》', note: '2024-11-20 · 立体化场景建设与应用', imageUrl: '/assets/handbook/policy-shenzhen.webp', imageAlt: '深圳市推进中小学人工智能教育工作方案问答' },
+        { region: '浙江', title: '《浙江省推进"人工智能+教育"行动方案（2025—2029年）》', note: '2025-04-29 · 浙教技〔2025〕24号', imageUrl: '/assets/handbook/policy-zhejiang.webp', imageAlt: '浙江省推进"人工智能+教育"行动方案（2025—2029年）通知' },
+        { region: '天津', title: '《关于加强中小学人工智能教育的实施意见（试行）》', note: '2025-03-31 · 津教政办〔2025〕33号', imageUrl: '/assets/handbook/policy-tianjin.webp', imageAlt: '天津市关于加强中小学人工智能教育的实施意见（试行）通知' },
+        { region: '重庆', title: '《关于加快推进人工智能赋能职业院校关键办学能力提升的通知》', note: '2025-05-07 · 重庆市教委', imageUrl: '/assets/handbook/policy-chongqing.webp', imageAlt: '重庆市加快推进人工智能赋能职业院校关键办学能力提升的通知' },
+        { region: '江苏', title: '《人工智能赋能教育高质量发展行动方案（2025—2027年）》', note: '2025-05-09 · 苏教高〔2025〕1号', imageUrl: '/assets/handbook/policy-jiangsu.webp', imageAlt: '江苏省人工智能赋能教育高质量发展行动方案（2025—2027年）通知' },
+        { region: '福建', title: '《关于推进"人工智能+教育"十条措施的通知》', note: '2025-06-20 · 闽教科〔2025〕7号', imageUrl: '/assets/handbook/policy-fujian.webp', imageAlt: '福建省关于推进"人工智能+教育"十条措施的通知' },
+        { region: '山东', title: '《山东省"人工智能+教育"实施方案》', note: '2025-07-03 · 鲁教数字〔2025〕2号', imageUrl: '/assets/handbook/policy-shandong.webp', imageAlt: '山东省"人工智能+教育"实施方案通知' },
+        { region: '西安', title: '《西安市推进中小学人工智能教育专项行动方案（2025—2027年）》', note: '2025-08-05 · 西安市教育局', imageUrl: '/assets/handbook/policy-xian.webp', imageAlt: '西安市推进中小学人工智能教育专项行动方案（2025—2027年）' },
+      ],
+    },
     // 用户 2026-09-19：「图1可以找个合适的放」。这张是**信息图**（字很密），
     // 所以放在纸色底上整张显示（不裁不灰），点开可看大图。
     poster: {

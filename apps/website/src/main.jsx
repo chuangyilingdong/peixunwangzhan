@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, CONTACT_DEFAULT, Icon, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, CONTACT_DEFAULT, HANDBOOK_POLICY_DEFAULT, Icon, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { StudentAccountPage } from './pages/AccountSecurity.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
 // 学生个人主页（对外公开，路由 /u/:token）—— 用户口径 2026-09-27：「学生创建了账号应该就有个主页的专属链接」
@@ -1089,11 +1089,15 @@ function Handbook() {
   const fallback = CMS_FALLBACK.HANDBOOK;
   const hero = { ...fallback.hero, ...(stored.hero || {}) };
   const about = { ...fallback.about, ...(stored.about || {}) };
+  // 「政策」一栏（2026-09-28）：**后加的**一段 —— 库里还没有这一块时用共享默认值
+  // （HANDBOOK_POLICY_DEFAULT，与后台表单预填、数据库种子同一份），所以不用先给生产补数据。
+  const policy = { ...(fallback.policy || {}), ...(stored.policy || {}) };
   const poster = { ...fallback.poster, ...(stored.poster || {}) };
   const work = { ...fallback.work, ...(stored.work || {}) };
   const compare = { ...fallback.compare, ...(stored.compare || {}) };
   const cta = { ...fallback.cta, ...(stored.cta || {}) };
   const cards = cmsList(stored.work?.cards).length ? cmsList(stored.work.cards) : cmsList(fallback.work.cards);
+  const policyCards = cmsList(stored.policy?.cards).length ? cmsList(stored.policy.cards) : cmsList(fallback.policy?.cards);
   const workLines = hbLines(work.introLines);
   const compareLines = hbLines(compare.headingLines);
 
@@ -1243,6 +1247,28 @@ function Handbook() {
         <p className="hb-reveal">{about.body}</p>
       </div>
     </section>
+
+    {/* 「政策」一栏（2026-09-28 用户口径）：**地区卡，按地区排** —— 一眼看出哪些省市已经出了。
+        顺序是「先北上广深浙（率先落地），再其余地区按发布时间」；卡片图是各地公告截图的裁切版
+        （`public/assets/handbook/policy-*.webp`，自托管：CSP 是 default-src 'self'，热链会被挡成空白）。
+        与上面几段一样**逐字段与兜底合并**，所以库里还是老内容时这一段也照常显示。 */}
+    {policyCards.length ? <section className="hb-policy hb-reveal" id="hb-policy">
+      <div className="hb-policy__head">
+        {policy.eyebrow ? <span className="hb-eyebrow">{policy.eyebrow}</span> : null}
+        <h2>{hbLines(policy.headingLines).map((line, index) => <span key={index}>{line}</span>)}</h2>
+        {policy.body ? <p>{policy.body}</p> : null}
+      </div>
+      <div className="hb-policy__grid">
+        {policyCards.map((card, index) => <article className="hb-policy__card" key={`${card.region || 'region'}-${index}`}>
+          <div className="hb-policy__shot">
+            {card.imageUrl ? <img src={card.imageUrl} alt={card.imageAlt || ''} loading="lazy" /> : null}
+            {card.region ? <span className="hb-policy__region">{card.region}</span> : null}
+          </div>
+          <h3>{card.title}</h3>
+          {card.note ? <p>{card.note}</p> : null}
+        </article>)}
+      </div>
+    </section> : null}
 
     {/* 海报（用户 2026-09-19 让「找个合适的放」）：它是**信息图**，密密麻麻全是字，
         所以在纸色底上**整张显示**（object-fit: contain），不裁不灰 —— 放进上面那个
@@ -1438,7 +1464,7 @@ const CMS_FALLBACK = {
     teacher: [{ question: '上课前需要做什么准备？', answer: '学生用机构账号登录，浏览器打开课堂即可开始；机房电脑不需要额外安装环境。' }, { question: '学生的作品和用量在哪里看？', answer: '机构后台可以查看学生的用量记录与作品，并把优秀作品发布到作品展厅。' }],
     org: [{ question: '学生需要自己买账号或自备 API Key 吗？', answer: '不需要。机构账号分级，学生无需自备 Key，由机构统一开通与管理。' }, { question: '平台提供哪些课程？', answer: '课程中心提供标准课包（含 PPT 与 HTML 互动课件），机构可按课包直接排课。' }],
   },
-  HANDBOOK: {"hero":{"line1":"让AI创作课、编程课","line2":"真正进课堂","loaderWord":"让Ai真正进入课堂","imageUrl":"/assets/handbook/hero.webp","imageAlt":"暗色科技氛围中的创作路径主视觉"},"about":{"index":"01 / 关于","headingLines":["从试点走向普及，","机构需要的不只是工具"],"body":"国家和教育部门连续推动中小学人工智能教育，课程要能开齐开足，生成式AI要可用、可管。机构真正需要的是：能进课表、能管住账号与用量、每节课都有作品的完整方案。","imageUrl":"/assets/handbook/about.webp","imageAlt":"AI 创意思维与数据面板"},"poster":{"eyebrow":"一页看懂","title":"为什么现在就是开 AI 课的好时机","caption":"政策、家长认知、市场供给与窗口期判断 —— 一页看完。","imageUrl":"/assets/handbook/poster.webp","imageAlt":"AI 时代的孩子从这里起步：政策层面 / 家长认知 / 市场供给 / 窗口期判断"},"work":{"introLines":["开课管课","沉作品","一体化交付"],"cards":[{"title":"中文对话创作","desc":"学生与 AI 伙伴「阿飞」对话，做出可运行的作品","imageUrl":"/assets/handbook/card-1.webp","imageAlt":"学生在 AI 辅助下创作"},{"title":"课堂即开即用","desc":"标准课包与互动课件直接进课堂","imageUrl":"/assets/handbook/card-2.webp","imageAlt":"课件与课堂流程"},{"title":"账号用量可控","desc":"分级账号、授权次数、用量记录","imageUrl":"/assets/handbook/card-3.webp","imageAlt":"统一平台下的多端能力"},{"title":"作品进展厅","desc":"校区案例库与招生素材自动沉淀","imageUrl":"/assets/handbook/card-4.webp","imageAlt":"作品与案例展台"},{"title":"体验课转正班","desc":"90 分钟出作品，家长当场看得见","imageUrl":"/assets/handbook/card-5.webp","imageAlt":"一步一步的成长路径"}]},"compare":{"eyebrow":"对比","headingLines":["别再","东拼西凑"],"body":"对话用一家、写代码换一个编译器、课件散在网盘和群聊里——老师每换一门课就要重新教学生用哪个网站。灵动AI课堂把对话创作、代码运行、课件管理、作品沉淀整合在同一平台。"},"cta":{"headline":"把 AI 课开起来","text":"联系我们，我们会按你的班型给出课包与开通方案。","buttonLabel":"点击进入常见问题","buttonTo":"/faq"}},
+  HANDBOOK: {"hero":{"line1":"让AI创作课、编程课","line2":"真正进课堂","loaderWord":"让Ai真正进入课堂","imageUrl":"/assets/handbook/hero.webp","imageAlt":"暗色科技氛围中的创作路径主视觉"},"about":{"index":"01 / 关于","headingLines":["从试点走向普及，","机构需要的不只是工具"],"body":"国家和教育部门连续推动中小学人工智能教育，课程要能开齐开足，生成式AI要可用、可管。机构真正需要的是：能进课表、能管住账号与用量、每节课都有作品的完整方案。","imageUrl":"/assets/handbook/about.webp","imageAlt":"AI 创意思维与数据面板"},"policy":HANDBOOK_POLICY_DEFAULT,"poster":{"eyebrow":"一页看懂","title":"为什么现在就是开 AI 课的好时机","caption":"政策、家长认知、市场供给与窗口期判断 —— 一页看完。","imageUrl":"/assets/handbook/poster.webp","imageAlt":"AI 时代的孩子从这里起步：政策层面 / 家长认知 / 市场供给 / 窗口期判断"},"work":{"introLines":["开课管课","沉作品","一体化交付"],"cards":[{"title":"中文对话创作","desc":"学生与 AI 伙伴「阿飞」对话，做出可运行的作品","imageUrl":"/assets/handbook/card-1.webp","imageAlt":"学生在 AI 辅助下创作"},{"title":"课堂即开即用","desc":"标准课包与互动课件直接进课堂","imageUrl":"/assets/handbook/card-2.webp","imageAlt":"课件与课堂流程"},{"title":"账号用量可控","desc":"分级账号、授权次数、用量记录","imageUrl":"/assets/handbook/card-3.webp","imageAlt":"统一平台下的多端能力"},{"title":"作品进展厅","desc":"校区案例库与招生素材自动沉淀","imageUrl":"/assets/handbook/card-4.webp","imageAlt":"作品与案例展台"},{"title":"体验课转正班","desc":"90 分钟出作品，家长当场看得见","imageUrl":"/assets/handbook/card-5.webp","imageAlt":"一步一步的成长路径"}]},"compare":{"eyebrow":"对比","headingLines":["别再","东拼西凑"],"body":"对话用一家、写代码换一个编译器、课件散在网盘和群聊里——老师每换一门课就要重新教学生用哪个网站。灵动AI课堂把对话创作、代码运行、课件管理、作品沉淀整合在同一平台。"},"cta":{"headline":"把 AI 课开起来","text":"联系我们，我们会按你的班型给出课包与开通方案。","buttonLabel":"点击进入常见问题","buttonTo":"/faq"}},
   // 灵动课程（/marketplace）的页头：大标题 + 副标题。用户在后台「官网内容 → 灵动课程」可改
   // （用户口径 2026-09-18 晚：这两句要能后台配置）。
   MARKETPLACE: { title: '灵动Ai学院课包展示', lead: '灵动Ai坚持自研国内精品Ai课程，持续探索适合青少年Ai培训体系。' },

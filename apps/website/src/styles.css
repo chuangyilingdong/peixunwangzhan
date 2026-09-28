@@ -917,6 +917,25 @@
 .hb-poster__frame img{width:100%;height:auto;object-fit:contain}
 .hb-poster__cap{max-width:56rem;margin:0;color:#777268;font-size:.86rem;line-height:1.7;text-align:center}
 
+/* 「政策」一栏（2026-09-28 用户口径）：**地区卡，按地区排** —— 一眼看出哪些省市已经出了。
+   底色与上下两段（about / poster）同一块纸色，所以单独看是"接着上一段"的，不会切成断层。
+   卡片图是各地公告截图的裁切版（1200×676，object-position:top 保证标题在最上面那截里）。 */
+.hb-policy{display:flex;flex-direction:column;gap:clamp(1.6rem,3vw,2.6rem);padding:clamp(3rem,7vw,6rem) var(--hb-pad);color:var(--hb-ink);background:var(--hb-paper)}
+.hb-policy__head{max-width:56rem}
+.hb-policy__head h2{margin:.9rem 0 1.1rem;font-family:var(--hb-display);font-weight:900;font-size:clamp(1.9rem,3.4vw,3.6rem);line-height:1.16;letter-spacing:.01em}
+.hb-policy__head h2 span{display:block}
+.hb-policy__head p{max-width:46rem;margin:0;color:#4b4943;font-size:clamp(1rem,1.3vw,1.2rem);line-height:1.9}
+.hb-policy__grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:clamp(1rem,2vw,1.6rem)}
+.hb-policy__card{display:flex;flex-direction:column;gap:.65rem;transition:transform .3s ease-out}
+.hb-policy__card:hover{transform:translateY(-4px)}
+.hb-policy__shot{position:relative;overflow:hidden;aspect-ratio:1200/676;border:1px solid rgb(23 6 10 / 12%);background:#fff}
+.hb-policy__shot img{display:block;width:100%;height:100%;object-fit:cover;object-position:top center}
+/* 地区角标：与作品卡的角标同一条做法（深底浅字，压在图上） */
+.hb-policy__region{position:absolute;left:.6rem;top:.6rem;padding:.3rem .55rem;color:var(--hb-paper);background:var(--hb-ink);font-size:.74rem;font-weight:800;letter-spacing:.08em}
+.hb-policy__card h3{margin:0;font-size:.95rem;font-weight:800;line-height:1.5}
+.hb-policy__card p{margin:0;color:#6b675e;font-size:.82rem;line-height:1.6}
+@media(prefers-reduced-motion:reduce){.hb-policy__card{transition:none}.hb-policy__card:hover{transform:none}}
+
 /* 横滑区：外层高度由 JS 按"一屏 + 轨道多出来的宽度"设（.hb-work 是滚动预算），
    里层 sticky 钉住一屏，滚动进度 → translateX。窄屏全部让位给竖排（见下面的 media query）。 */
 .hb-work{position:relative;background:var(--hb-ink)}
