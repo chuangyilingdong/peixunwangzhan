@@ -116,6 +116,14 @@ check('④ 滑杆是**内联展开**、不是绝对定位弹层（节点 overflo
   !/\.cv-audio__vol[^{]*\{[^}]*position: absolute/.test(canvasCss));
 check('④ 操作行允许折行（窄框体里滑杆展开时，宁可折一行也别把下载按钮挤出可视区）',
   /\.cv-audio__row \{[^}]*flex-wrap: wrap/.test(canvasCss));
+// ⚠️ 2026-09-28 用户口径：「音量我无法拖动这个圆圈来控制音量，只能点击进度条的某个位置才能」——
+//    真因是**滑杆没带 `nodrag`**：画布节点（react-flow）会抢指针，按住圆圈拖动被当成"拖框体"，
+//    只有"点击"能落到滑杆上。同一文件里那几个按钮本来就有 `nodrag`，两个滑杆当时都漏了
+//    （进度条那条其实是**更早就在**的老毛病，只是没人报）。这条网盯住两条滑杆都别再漏。
+check('④ 两条滑杆都带 nodrag（不带它：拖圆圈会变成拖框体，只能点击跳一下）',
+  /const DRAG_SAFE = 'nodrag nowheel';/.test(playerCode)
+  && /className=\{`cv-audio__progress \$\{DRAG_SAFE\}`\}/.test(playerCode)
+  && /className=\{`cv-audio__vol-slider \$\{DRAG_SAFE\}`\}/.test(playerCode));
 
 console.log('');
 if (failures) { console.log(`✗ p130 有 ${failures} 处不符合预期`); process.exit(1); }

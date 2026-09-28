@@ -14,6 +14,16 @@
  */
 import { useEffect, useRef, useState } from 'react';
 
+/**
+ * 画布节点（react-flow）会**抢指针**：滑杆上不带 `nodrag` 的话，按住圆圈拖动会被当成**拖框体** ——
+ * 表现就是"拖不动这个圆圈、只能点一下轨道跳过去"（用户 2026-09-28 报的正是这个；同一文件里
+ * 那几个按钮本来就有 `nodrag`，两个滑杆当时漏了）。
+ * `nowheel` 顺带挡掉"滚轮在滑杆上变成缩放画布"；键盘左右键仍可调（原生 range 自带）。
+ * ⚠️ 这两个类名与 `index.jsx` 的 `NO_WHEEL_ZOOM_CLASS` 是同一套 react-flow 约定；
+ *    那边**不能 import 过来**（index.jsx 反过来 import 了本文件，会循环依赖），所以本地留一份。
+ */
+const DRAG_SAFE = 'nodrag nowheel';
+
 function formatTime(seconds) {
   const value = Number(seconds);
   if (!Number.isFinite(value) || value < 0) return '0:00';
@@ -139,7 +149,7 @@ export function AudioPlayer({ src, fallbackSrc = '', label = '', className = '',
     {failed ? <p className="cv-audio__error">音频已失效，暂时无法播放</p> : null}
     {/* 第一行：进度条（原生 input[range]，所以键盘左右键也能调） */}
     <input
-      className="cv-audio__progress"
+      className={`cv-audio__progress ${DRAG_SAFE}`}
       type="range"
       min="0"
       max={duration || 0}
@@ -158,7 +168,7 @@ export function AudioPlayer({ src, fallbackSrc = '', label = '', className = '',
         {/* 音量滑杆：平时宽度 0（不占地方），鼠标移到音量这一带或键盘聚焦时展开 —— 见 styles.css。
             ⚠️ 用**内联展开**而不是绝对定位的弹层：画布节点是 `overflow:hidden`，弹层会被切掉一半。 */}
         <input
-          className="cv-audio__vol-slider"
+          className={`cv-audio__vol-slider ${DRAG_SAFE}`}
           type="range"
           min="0"
           max="1"
