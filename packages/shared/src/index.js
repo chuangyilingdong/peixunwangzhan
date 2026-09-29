@@ -10,6 +10,8 @@ export * from './worksState.jsx';
 // 头像的 8 个预设键 + 显示字符（2026-09-27）。服务端直接 import 那个文件去校验白名单，前端用这里这份渲染。
 export * from './avatars.js';
 export * from './classroom.jsx';
+// 三端入口的**渲染兜底**（2026-09-29）：渲染期抛错时换成兜底页，不再整页白 —— 见该文件头的三条边界。
+export * from './errorBoundary.jsx';
 // 搜索防抖（自由输入的"查询值"）—— 见该文件头的注释：列表页原来"每敲一个字重取一次"
 export * from './useDebounced.js';
 export * from './canvasWorkspace.jsx';

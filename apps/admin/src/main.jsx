@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
-import { ApiError, clearSession, createApiClient, LoginPanel, readSession, writeSession } from '@platform/shared';
+import { ApiError, AppErrorBoundary, clearSession, createApiClient, LoginPanel, readSession, writeSession } from '@platform/shared';
 import { CourseSeriesDetailPage, CourseSeriesListPage } from './components/CourseManagement.jsx';
 import { ModelCompute } from './pages/ModelCompute.jsx';
 import { AdminPermissionGate, visibleNavigation } from './shared.jsx';
@@ -73,5 +73,6 @@ export function App() {
   </AdminShell>;
 }
 
-createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);
+// 兜底放在**最外层**（BrowserRouter 之外）：路由渲染期抛错也归它管 —— 后台白屏见 §六十一。
+createRoot(document.getElementById('root')).render(<AppErrorBoundary><BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter></AppErrorBoundary>);
 

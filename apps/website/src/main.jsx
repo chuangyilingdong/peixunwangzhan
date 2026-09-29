@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, CONTACT_DEFAULT, HANDBOOK_POLICY_DEFAULT, HANDBOOK_SKILLS_DEFAULT, Icon, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { AppErrorBoundary, LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, CONTACT_DEFAULT, HANDBOOK_POLICY_DEFAULT, HANDBOOK_SKILLS_DEFAULT, Icon, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { StudentAccountPage } from './pages/AccountSecurity.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
 // 学生个人主页（对外公开，路由 /u/:token）—— 用户口径 2026-09-27：「学生创建了账号应该就有个主页的专属链接」
@@ -1918,4 +1918,6 @@ export function App(){
   );
 }
 
-createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);
+// 兜底放在**最外层**（BrowserRouter 之外）：路由渲染期抛错也归它管 —— 官网是未登录访客也会到的页面，
+// 白屏在这里最不该出现。
+createRoot(document.getElementById('root')).render(<AppErrorBoundary><BrowserRouter><App /></BrowserRouter></AppErrorBoundary>);
