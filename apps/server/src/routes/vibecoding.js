@@ -1362,6 +1362,75 @@ export async function recordRuntimeSubmission({ ctx, auth, conversation, entryFi
 }
 
 /**
+ * 把一条提交投影成「我的作品」里的那一条 —— **`/api/student/works` 与 `submit-upload` 的 `works`
+ * 共用这一份**。
+ *
+ * 为什么抽出来：客户端交完作品要**直接回显"交上来了哪几条"**（契约《平台接口契约-zcode.md》
+ * 「作品提交」一节要 `warnings` / `missing` / `works`），而它在 /我的作品 里拿到的又是另一种
+ * 投影。两条路各写一遍的话，形状迟早只在一半上对上（本文件上面那条纪律的同一条理由）。
+ *
+ * ⚠️ 入参是**库里的原始行**（snake_case）—— 与 `/student/works` 的查询结果同一个形状；
+ *    `lessonTitle` / `seriesTitle` / `classSessionId` 由调用方按自己手上的查询补
+ *    （列表那条路是 JOIN 出来的，提交那条路直接用课堂上下文）。
+ */
+export function vibecodingWorkItem(submission, { lessonTitle = null, seriesTitle = null, classSessionId = null } = {}) {
+  const isPublic = Number(submission.is_public || 0) === 1;
+  return {
+    id: submission.id,
+    projectId: null,
+    studentId: submission.student_id,
+    studentName: null,
+    orgId: submission.org_id,
+    classId: submission.class_id || null,
+    className: null,
+    courseLessonId: submission.lesson_id || null,
+    courseLessonTitle: lessonTitle || null,
+    title: submission.title,
+    description: submission.description || '',
+    status: submission.status,
+    teacherComment: null,
+    unpublishReason: submission.unpublish_reason || null,
+    submittedAt: submission.submitted_at,
+    plazaPublished: isPublic,
+    shareToken: submission.share_token || null,
+    source: 'VIBECODING',
+    seriesTitle: seriesTitle || null,
+    entryFile: submission.entry_file || 'index.html',
+    classSessionId: classSessionId || null,
+    submissionRound: Number(submission.round || 1),
+    submissions: [],
+    publishRequests: [],
+    pendingPublishRequest: null,
+    latestPublishRequest: null,
+    actions: {},
+    sharing: {
+      scope: isPublic ? 'PUBLIC' : 'ORGANIZATION',
+      isPublic,
+      shareToken: isPublic ? submission.share_token : null,
+      publicUrl: isPublic && submission.share_token ? `/works/${submission.share_token}` : null,
+    },
+  };
+}
+
+/**
+ * 刚提交完那一条的回显：按**主键**取这一条（连带它挂到的课时/课包标题），形状与列表逐字一致。
+ * 找不到就返回 null（调用方给空数组，不因为它把一次已经成功的提交判成失败）。
+ */
+export async function runtimeSubmissionWorkItem(submissionId, { classSessionId = null } = {}) {
+  const row = await arow(
+    `SELECT submission.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
+            series.title AS series_title
+     FROM vibecoding_submissions submission
+     LEFT JOIN course_lessons lesson ON lesson.id = submission.lesson_id
+     LEFT JOIN course_series series ON series.id = lesson.series_id
+     WHERE submission.id = ?`,
+    [submissionId],
+  );
+  if (!row) return null;
+  return vibecodingWorkItem(row, { lessonTitle: row.lesson_title, seriesTitle: row.series_title, classSessionId });
+}
+
+/**
  * 这个学生在这节课上的「创作会话」身份 —— dsh 那条路没有平台内的聊天，
  * 但提交记录必须挂在一条会话上（表结构如此：conversation_id NOT NULL + 外键），
  * 作品广场也按「会话 × 产物」去重。所以按「学生 + 课 + 本次课堂」找一条现成的，

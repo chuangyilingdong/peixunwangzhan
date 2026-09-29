@@ -14,7 +14,7 @@ import { issueRuntimeKey } from './runtimeGateway.js';
 import { vibecodingPresetPrompts, vibecodingSendLimit, vibecodingSendUsage } from '../services/vibecodingLessonSettings.js';
 import { isSubmittableArtifactKind, kindForName } from '../services/vibecodingArtifacts.js';
 import { documentMime } from '../services/ooxml/documents.js';
-import { ensureRuntimeConversation, recordRuntimeSubmission, rewriteLocalReferences, textDefaultModel, textModelOptions } from './vibecoding.js';
+import { ensureRuntimeConversation, recordRuntimeSubmission, rewriteLocalReferences, runtimeSubmissionWorkItem, textDefaultModel, textModelOptions } from './vibecoding.js';
 import { storeStudentArtifactAsset } from './fileAssets.js';
 
 // 客户端运行时（dsh / VibeCoding）**只认"这节课声明了 VibeCoding"**。
@@ -559,6 +559,14 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
     ctx, auth, conversation, entryFile, files, artifacts, title,
     description: String(body.description || '').slice(0, 1000),
   });
-  // 拍平改名 / 丢了素材这些事要让学生看见 —— 提交成功了但作品缺了东西，比提交失败更糟
-  return { ...submission, warnings, missing: collected.missing || [] };
+  // 拍平改名 / 丢了素材这些事要让学生看见 —— 提交成功了但作品缺了东西，比提交失败更糟。
+  // ⭐ 2026-09-29（客户端契约《平台接口契约-zcode.md》「作品提交」）：除了 `warnings` / `missing`
+  //    还要回 **`works`** —— 客户端拿它直接回显"这次交上来了哪几条"，省掉一次「我的作品」往返。
+  //    形状与 `/api/student/works` 的 VIBECODING 条目**同一份投影**（`vibecodingWorkItem`）：
+  //    两边各拼一份的话，客户端回显的条目和列表里的迟早对不上（本文件上面那条纪律同理）。
+  //    ⚠️ 查不到那一条就给空数组 —— **不能**因此把一次已经成功的提交报成失败（与"封面失败不阻断"同一条纪律）。
+  const submittedWork = submission?.id
+    ? await runtimeSubmissionWorkItem(submission.id, { classSessionId: classroom.id })
+    : null;
+  return { ...submission, warnings, missing: collected.missing || [], works: submittedWork ? [submittedWork] : [] };
 }

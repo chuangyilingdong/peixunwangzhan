@@ -10,7 +10,7 @@ import { isAvatarKey } from '../../../../packages/shared/src/avatars.js';
 import { computePoolSummary } from '../services/computePool.js';
 // 「我的作品」点开一件要读 VibeCoding 产物的快照（产物清单 / 图片 fileId / 正文），
 // 与 org 端「课堂作品」同一套解析函数 —— 两处口径必须一致，别再抄一份。
-import { normalizeSubmission, parseSnapshotArtifacts, snapshotImageFileIds } from './vibecoding.js';
+import { normalizeSubmission, parseSnapshotArtifacts, snapshotImageFileIds, vibecodingWorkItem } from './vibecoding.js';
 
 const EMPTY_CANVAS = Object.freeze({ nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
 
@@ -1364,44 +1364,13 @@ export async function handleStudent(ctx) {
        LEFT JOIN vibecoding_conversations conversation ON conversation.id = submission.conversation_id
        WHERE submission.student_id = ? AND submission.org_id = ?`,
       [auth.user.id, auth.user.orgId],
-    )).map((submission) => {
-      const isPublic = Number(submission.is_public || 0) === 1;
-      return {
-        id: submission.id,
-        projectId: null,
-        studentId: submission.student_id,
-        studentName: null,
-        orgId: submission.org_id,
-        classId: submission.class_id || null,
-        className: null,
-        courseLessonId: submission.lesson_id || null,
-        courseLessonTitle: submission.lesson_title || null,
-        title: submission.title,
-        description: submission.description || '',
-        status: submission.status,
-        teacherComment: null,
-        unpublishReason: submission.unpublish_reason || null,
-        submittedAt: submission.submitted_at,
-        plazaPublished: isPublic,
-        shareToken: submission.share_token || null,
-        source: 'VIBECODING',
-        seriesTitle: submission.series_title || null,
-        entryFile: submission.entry_file || 'index.html',
-        classSessionId: submission.class_session_id || null,
-        submissionRound: Number(submission.round || 1),
-        submissions: [],
-        publishRequests: [],
-        pendingPublishRequest: null,
-        latestPublishRequest: null,
-        actions: {},
-        sharing: {
-          scope: isPublic ? 'PUBLIC' : 'ORGANIZATION',
-          isPublic,
-          shareToken: isPublic ? submission.share_token : null,
-          publicUrl: isPublic && submission.share_token ? `/works/${submission.share_token}` : null,
-        },
-      };
-    });
+    )).map((submission) => vibecodingWorkItem(submission, {
+      // ⚠️ 形状由 `vibecodingWorkItem()` 统一给（`submit-upload` 的 `works` 回显用的是同一份）——
+      //    这里只负责把本次查询带出来的标题/课堂塞进去，别再就地拼一份对象字面量。
+      lessonTitle: submission.lesson_title,
+      seriesTitle: submission.series_title,
+      classSessionId: submission.class_session_id,
+    }));
     // 两类来源合并后**统一按提交时间排序再分页**：单独分页会让「最新作品」被来源顺序盖住。
     const merged = [...items, ...vibeItems]
       .sort((left, right) => String(right.submittedAt || '').localeCompare(String(left.submittedAt || '')));
