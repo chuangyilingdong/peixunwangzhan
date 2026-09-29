@@ -278,6 +278,51 @@ try {
   const runtimeSource = stripComments(fs.readFileSync(path.join(root, 'apps/server/src/services/studentRuntime.js'), 'utf8'));
   check('④ 源码里不再硬写老域名 iicili.cyou', !runtimeSource.includes('iicili.cyou'));
   check('④ 默认值是 `${PUBLIC_SITE_URL}/api/gateway/v1`', /\$\{PUBLIC_SITE_URL\.replace\([^)]*\)\}\/api\/gateway\/v1/.test(runtimeSource));
+  /* ── ⑤ 历史上限：默认 80、可配、**截断时不再静默**（2026-09-29 契约第二版 待办 2）────── */
+  console.log('\n⑤ 历史上限：可配 + 截断时给显式标记');
+  const historyModule = await import('../apps/server/src/routes/runtimeGateway.js');
+  check('⑤ 默认上限 **80** 条（原来是 40 条 ≈ 13 轮，客户端报"第 15 轮突然忘事、界面看不出原因"）',
+    historyModule.maxHistoryMessages() === 80, String(historyModule.maxHistoryMessages()));
+  const savedLimit = process.env.RUNTIME_GATEWAY_MAX_HISTORY;
+  process.env.RUNTIME_GATEWAY_MAX_HISTORY = '20';
+  check('⑤ 可配：RUNTIME_GATEWAY_MAX_HISTORY=20 生效', historyModule.maxHistoryMessages() === 20, String(historyModule.maxHistoryMessages()));
+  process.env.RUNTIME_GATEWAY_MAX_HISTORY = 'abc';
+  check('⑤ 配了非法值回默认（不是 NaN、不是 0 —— 那是"每次只带 0 条"的地狱）',
+    historyModule.maxHistoryMessages() === 80, String(historyModule.maxHistoryMessages()));
+  if (savedLimit === undefined) delete process.env.RUNTIME_GATEWAY_MAX_HISTORY; else process.env.RUNTIME_GATEWAY_MAX_HISTORY = savedLimit;
+
+  // 造一段 agent 形状的长历史：user → assistant(tool_calls) → tool 来回 40 轮 = 120 条
+  const longHistory = [];
+  for (let i = 1; i <= 40; i += 1) {
+    longHistory.push({ role: 'user', content: `第${i}轮：改一下 a.txt` });
+    longHistory.push({ role: 'assistant', content: '', tool_calls: [{ id: `call_${i}`, type: 'function', function: { name: 'write_file', arguments: '{}' } }] });
+    longHistory.push({ role: 'tool', tool_call_id: `call_${i}`, content: `第${i}轮完成` });
+  }
+  const meta = historyModule.normalizeMessagesWithMeta({ messages: longHistory });
+  check('⑤ 超限时算得出丢了多长（120 条 → 丢 40、留 80 + 1 条标记）',
+    meta.dropped === 40 && meta.messages.length === 81, JSON.stringify({ dropped: meta.dropped, kept: meta.messages.length }));
+  check('⑤ 切完的开头**不是孤儿 tool 消息**（上游会因为配对不上直接拒）',
+    meta.messages[1]?.role !== 'tool', JSON.stringify(meta.messages[1]).slice(0, 120));
+
+  const longResponse = await gatewayPost(key, { model: 'p166-model', stream: true, messages: longHistory });
+  check('⑤ 真请求：响应头 x-platform-history-dropped / -limit 告诉客户端丢了多少（界面才能说清原因）',
+    Number(longResponse.headers.get('x-platform-history-dropped')) === 40
+    && Number(longResponse.headers.get('x-platform-history-limit')) === 80,
+    JSON.stringify([...longResponse.headers].filter(([name]) => name.startsWith('x-platform-'))));
+  await readSse(longResponse);
+  const forwardedLong = seenBodies.at(-1)?.body?.messages || [];
+  check('⑤ 真请求：上游收到的**第一条**是那条 system 说明（模型因此知道"更早的不在我手上"）',
+    forwardedLong[0]?.role === 'system' && String(forwardedLong[0]?.content).includes('已省略') && forwardedLong.length === 81,
+    JSON.stringify(forwardedLong[0]).slice(0, 160));
+
+  // ⚠️ 反向对照：短历史**不许**带标记、也不许带响应头 —— 否则就是"每轮都在说丢了东西"，标记会失去意义
+  const shortResponse = await gatewayPost(key, { model: 'p166-model', stream: true, messages: [{ role: 'user', content: '你好' }] });
+  check('⑤ 反向对照：短历史不带 x-platform-history-dropped 响应头',
+    shortResponse.headers.get('x-platform-history-dropped') === null, String(shortResponse.headers.get('x-platform-history-dropped')));
+  await readSse(shortResponse);
+  const forwardedShort = seenBodies.at(-1)?.body?.messages || [];
+  check('⑤ 反向对照：短历史里上游看不到那条 system 说明',
+    !String(forwardedShort[0]?.content || '').includes('已省略'), JSON.stringify(forwardedShort[0]).slice(0, 120));
 } catch (error) {
   failures += 1;
   console.error('P166 抛错：', error?.message || error);

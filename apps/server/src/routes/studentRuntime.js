@@ -109,19 +109,33 @@ async function resolvePendingClassroom(studentId) {
 }
 
 /**
- * 「你现在能进哪几节课 + 这次算哪一节」。
+ * 「一个学生全局最多属于一个未终态课堂」是产品口径（加人/开课两处都拦），但**种子与历史数据绕过过校验**。
+ * 出现 >1 时打一条警告：让运维去清（脚本 `deploy/production/dissolve-duplicate-active-sessions.mjs`），
+ * 而不是让"多选"看起来像个正常功能 —— 客户端契约第二版点名了这一点。
+ */
+function logDirtyClassroomCandidates(studentId, candidates) {
+  if (!Array.isArray(candidates) || candidates.length <= 1) return;
+  console.warn(`[client-context] 学生 ${studentId} 同时挂着 ${candidates.length} 场 ACTIVE 课堂（口径：最多 1 场）——`
+    + ` 属于历史/种子数据，请收口：${candidates.map((item) => item.id).join(', ')}`);
+}
+
+/**
+ * 「这次算哪一节」（附带把候选一并返回，**只为把脏数据暴露出来**）。
  *
- * 为什么会有"好几节"：口径上「一个学生全局最多属于一个未终态课堂」（docs/README.md），加人时也会被拒
- * （`IN_OTHER_SESSION`，守卫 p66/p78）—— 但**库里不一定干净**：种子/历史数据能绕过那条校验，
- * **线上实测就有一个学生同时挂着两场 ACTIVE 课堂**。而这里原来只取"最近开始的那一场"，
- * 于是学生做 A 课作业、拿到的却是 B 课的**次数上限与预设**，界面上还看不出任何异常。
+ * ⚠️ **产品口径（2026-09-29 客户端契约第二版点名，与 docs/README.md 一致）：一个学生全局
+ *    最多属于一个未终态课堂** —— 加人时会被拒（`IN_OTHER_SESSION`，守卫 p66/p78），
+ *    开课时也会被拦（`STUDENT_IN_OTHER_SESSION`）。所以**正常情况下候选恒 ≤1 节**，
+ *    "让客户端在几节课里选"**不是**一个功能。
  *
- * 所以：**候选全给出来**（客户端据此显示"你现在能进的课"），**选择可以被指定**
- * （`?sessionId=`，只认这个学生自己那几场 ACTIVE 的）；不指定时仍取最近一场 —— 老客户端不变。
+ * 那为什么还留着 `candidates` / `?sessionId=`：**种子与历史数据绕过过校验**（线上实测有一个学生
+ * 同时挂着两场 ACTIVE 课堂），而这里原来只取"最近开始的那一场" —— 于是学生做 A 课作业、拿到的却是
+ * B 课的**次数上限与预设**，界面上还看不出任何异常。留着候选与 `?sessionId=` 是给**脏数据**兜底
+ * （让客户端至少能落到正确那节），并且 `>1` 时**打一条警告**（见上面 logDirtyClassroomCandidates），
+ * 让运维看见"这学生该清一下"，而不是当成正常状态。
  * 选的那节不可用（结束/被移除/不是他的）时**明说**，绝不默默换一节。
  *
  * 返回：`session` 保持库行形状（`id / lesson_id / title`，下游动作读它）、`classroom` 是给客户端看的
- * 同一节（带课包/课时/老师）、`candidates` 是全部候选（同形状）。
+ * 同一节（带课包/课时/老师）、`candidates` 是全部候选（同形状，正常 ≤1）。
  */
 async function resolveClassroomEntry(studentId, requestedSessionId) {
   const raw = await arows(
@@ -131,7 +145,7 @@ async function resolveClassroomEntry(studentId, requestedSessionId) {
        JOIN session_students part ON part.session_id = session.id
        LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
       WHERE part.student_id = ? AND part.status = 'ACTIVE' AND session.status = 'ACTIVE'
-      ORDER BY session.started_at DESC, session.created_at DESC`,
+      ORDER BY session.started_at DESC, session.created_at DESC, session.id DESC`,
     [studentId],
   );
   const publicOf = async (session) => ({
@@ -239,15 +253,13 @@ export async function handleStudentRuntime(ctx) {
   //     **按课时**配的，学生只看到课堂名（「上午班」）对不上是哪个课包哪一节；
   //   · 没有在上的课时给 `upcoming`（名下那节 PENDING 课堂的同组信息）—— 至少让他知道"接下来上哪节"，
   //     但**仍然不发密钥**，闸门不动。
-  //   · ⭐ **`classrooms` 列出"你现在能进的课"，并接受 `?sessionId=` 指定**：
-  //     口径上「一个学生全局最多属于一个未终态课堂」（docs/README.md）、加人时也会被拒
-  //     （`IN_OTHER_SESSION`，p66/p78）——**但库里不一定干净**：线上实测就有一个学生同时挂着
-  //     两场 ACTIVE 课堂（种子/历史数据绕过了校验）。以前这里只取"最近开始的那一场"，
-  //     于是学生做 A 课作业、拿到的却是 B 课的上限与预设，界面上看不出任何异常。
-  //     现在：多于一节时客户端**让学自己选**（选哪节，预设/次数上限/密钥就按哪节走）。
-  //     不传 `sessionId` 时行为与以前一致（最近一场），老客户端不会坏。
+  //   · `classrooms` / `?sessionId=`：**只为脏数据兜底，不是功能** —— 口径见 `resolveClassroomEntry()`
+  //     的头注释（一个学生全局最多一场未终态课堂，加人/开课两处都拦）。正常情况候选 ≤1；
+  //     `>1` 说明库里有绕过过校验的旧数据，这时打一条警告（下面 logDirtyClassroomCandidates），
+  //     并让客户端可以指定哪一节，免得学生上错课、拿到别的课时的次数上限与预设。
   if (part === '/client-context' && method === 'GET') {
     const entry = await resolveClassroomEntry(auth.user.id, ctx.search.get('sessionId'));
+    logDirtyClassroomCandidates(auth.user.id, entry.candidates);
     const classroom = entry.classroom;
     if (!classroom) {
       // 还没开始上课（或选的那节已经结束）：把「接下来是哪节课」也告诉客户端，

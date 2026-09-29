@@ -138,7 +138,28 @@ function normalizeContentParts(content) {
   return parts.every((part) => part.type === 'text') ? parts.map((part) => part.text).join('\n') : parts;
 }
 
-function normalizeMessages(body) {
+/**
+ * 一次请求实际带了多少历史、丢了多长 —— 给响应头、日志与守卫用；`messages` 就是发给上游的那份。
+ *
+ * ⚠️ 2026-09-29（ZCode 客户端契约第二版「平台侧待办 2」）：**40 条对 agent 循环太短** ——
+ *    一趟循环约 3 条消息（user + assistant(tool_calls) + tool），40 条约等于 **13 轮**，
+ *    再长的会话早期上下文被**静默**丢掉：学生第 15 轮开始"忘事"而界面上看不出任何原因。
+ *    所以三件事一起做：① 默认抬到 **80**；② 走 env **可配**（`RUNTIME_GATEWAY_MAX_HISTORY`）；
+ *    ③ **截断时给显式标记**（下面那条 system 说明 + 一个响应头）—— 别再有"静默丢"。
+ *    ⚠️ 代价是**上游 token 成本**（80 条 ≈ 两倍历史），所以是"可配"而不是写死一个大数。
+ */
+const DEFAULT_MAX_HISTORY = 80;
+function maxHistoryMessages() {
+  const configured = Number(process.env.RUNTIME_GATEWAY_MAX_HISTORY || DEFAULT_MAX_HISTORY);
+  // 上下界都要有：太小会把工具配对切碎（也能切出孤儿 tool 消息），太大等于每次把整段会话发上去
+  return Number.isInteger(configured) && configured >= 4 && configured <= 2000 ? configured : DEFAULT_MAX_HISTORY;
+}
+/** 截断发生时插在最前面的那条 system 说明（措辞要让**模型**看懂，不是给学生看的）。 */
+const truncatedHistoryNote = (dropped, limit) =>
+  `（更早的 ${dropped} 条历史已省略：平台每次只带最近 ${limit} 条。`
+  + `需要更早的信息时，请重新读取工作区里的文件，或让学生补充说明。）`;
+
+function normalizeMessagesWithMeta(body) {
   const raw = Array.isArray(body?.messages) ? body.messages : [];
   let messages = raw
     .map((item) => {
@@ -163,17 +184,29 @@ function normalizeMessages(body) {
   if (!messages.length) throw errors.badRequest('messages 不能为空', 'VALIDATION_REQUIRED');
   // ⚠️ 截断必须**保住工具调用的配对**（2026-09-16 实测踩到）：
   // 上游要求「带 tool_calls 的 assistant 消息后面必须紧跟对应的工具结果」。
-  // agent 干活时历史里全是这种成对消息（一次任务几十轮 Bash），从中间 `slice(-40)` 切开，
+  // agent 干活时历史里全是这种成对消息（一次任务几十轮 Bash），从中间 `slice(-limit)` 切开，
   // 开头就会剩下一堆「孤儿工具结果」，上游直接拒 → 学生看到「AI 供应商调用失败」。
   // 所以切完之后要把开头的孤儿 tool 消息丢掉（它的 assistant 已经被切走了）。
-  const MAX_HISTORY = 40;
-  if (messages.length > MAX_HISTORY) {
-    let start = messages.length - MAX_HISTORY;
+  const limit = maxHistoryMessages();
+  let dropped = 0;
+  if (messages.length > limit) {
+    let start = messages.length - limit;
     while (start < messages.length && messages[start].role === 'tool') start += 1;
     // 兜底：万一丢光了（极端情况：一整段全是工具结果），至少留最后一条
-    messages = start >= messages.length ? messages.slice(-1) : messages.slice(start);
+    const kept = start >= messages.length ? messages.slice(-1) : messages.slice(start);
+    dropped = messages.length - kept.length;
+    // ⭐ 显式标记（客户端契约 2026-09-29）：一条 system 说明插在最前面 ——
+    //    模型因此知道"更早的不在我手上"，不会把"我没看到"当成"没发生过"；
+    //    客户端还会从响应头拿到条数（见 handleRuntimeGateway），可以在界面上说清"这一轮丢了上下文"。
+    //    ⚠️ 它**不占** limit 的名额（limit 说的是**对话消息**保留多少条），所以上游会看到 limit+1 条。
+    messages = [{ role: 'system', content: truncatedHistoryNote(dropped, limit) }, ...kept];
   }
-  return boundHistoryImages(messages);
+  return { messages: boundHistoryImages(messages), dropped, limit };
+}
+
+/** 老签名（返回 messages 数组）—— `normalizeRuntimeMessages` 与既有调用方一个字都不用改。 */
+function normalizeMessages(body) {
+  return normalizeMessagesWithMeta(body).messages;
 }
 
 /**
@@ -218,6 +251,7 @@ function boundHistoryImages(messages) {
 // 给守卫脚本直接断言这几个纯函数（它们决定「学生的图有没有被压扁」、名字解析到哪条渠道、
 // 以及搜索要打到哪里 —— 都是**纯函数**，能脱离网络断言，所以守卫钉的是真逻辑而不是文案）。
 export const normalizeRuntimeMessages = normalizeMessages;
+export { normalizeMessagesWithMeta, maxHistoryMessages };
 export { resolveRuntimeSelection };
 
 const hasImageParts = (messages) => messages.some((item) => Array.isArray(item.content) && item.content.some((part) => part.type === 'image_url'));
@@ -405,7 +439,16 @@ export async function handleRuntimeGateway(ctx) {
   const payload = verifyRuntimeKey(readRuntimeToken(ctx));
   const session = await assertRuntimeClassroomActive(payload);
   const body = ctx.body || {};
-  const messages = normalizeMessages(body);
+  const history = normalizeMessagesWithMeta(body);
+  const messages = history.messages;
+  if (history.dropped) {
+    // 显式标记的第二半（客户端契约 2026-09-29）：客户端读这两个头就知道"这一轮丢了上下文"，
+    // 可以在界面上把原因说清楚（学生第 15 轮"突然忘事"不该没有解释）。纯增量：老客户端无视即可。
+    ctx.res.setHeader('x-platform-history-dropped', String(history.dropped));
+    ctx.res.setHeader('x-platform-history-limit', String(history.limit));
+    console.warn(`[runtimeGateway] 历史超过上限：省略最早 ${history.dropped} 条（上限 ${history.limit}，`
+      + `可用 RUNTIME_GATEWAY_MAX_HISTORY 调），已在上游请求里插一条 system 说明`);
+  }
   const stream = body.stream === true;
 
   // VibeCoding 发送次数上限（2026-09-19 用户口径，机制见 services/vibecodingLessonSettings.js）。

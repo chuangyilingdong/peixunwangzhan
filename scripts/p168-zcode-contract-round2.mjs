@@ -146,12 +146,14 @@ try {
   const login = await api('/api/auth/login', { method: 'POST', body: { login: enrolled.login, password: 'study123' } });
   const token = login.data?.token;
   assert.ok(token, JSON.stringify(login.raw).slice(0, 200));
-  // ③ 要配的就是**这个学生的默认课堂**那节课：照服务端那条 SQL 独立算一遍（顺序也一样），
-  //    下面的 ② 会断言 client-context 报的 lessonId 与它相同 —— 等于把"默认课堂 = 最近开始的那一节"钉住。
+  // ③ 要配的就是**这个学生的默认课堂**那节课：照服务端那条 SQL 独立算一遍
+  //    ⚠️ **连 `session.id DESC` 这个决胜键也必须一致** —— 夹具那 5 场课堂的 `started_at` 完全相同
+  //    （同一毫秒写入），少了决胜键就会和平台选出**不同的**那一场：这一条第一次进套件就是这么红的
+  //    （单跑碰巧同序才绿）。两条探针口径不一致 = 假红，这条教训今天已经中过一次（p13）。
   const defaultSession = await arow(`SELECT session.lesson_id FROM class_sessions session
        JOIN session_students part ON part.session_id = session.id
       WHERE part.student_id = ? AND part.status = 'ACTIVE' AND session.status = 'ACTIVE'
-      ORDER BY session.started_at DESC, session.created_at DESC LIMIT 1`, [enrolled.student_id]);
+      ORDER BY session.started_at DESC, session.created_at DESC, session.id DESC LIMIT 1`, [enrolled.student_id]);
   lessonId = defaultSession?.lesson_id || '';
   assert.ok(lessonId, '这个学生的默认课堂没有课时');
 
@@ -306,6 +308,47 @@ try {
   console.log('\n⑥ /submit（服务器去学生盒子取产物那条老路）不受影响');
   await check('⑥ 未登录 → 401（不是 500、不是 404）',
     async () => { const result = await api('/api/student/runtime/submit', { method: 'POST', body: {} }); assert.equal(result.status, 401, String(result.status)); });
+  /* ── ⑦ 课堂占用口径：脏数据要**被看见**（契约第二版 待办 4）──────────────────────── */
+  console.log('\n⑦ 课堂占用口径：候选与警告必须把"脏数据"暴露出来（不许静默"让客户端选"）');
+  // ⚠️ 说明两件事，别把这一节读成"平台保证 ≤1"：
+  //   ① **写路径**那道闸（加人 / 开课）早就有守卫钉着（p66 ②d / p78 ②d / p62 的 IN_OTHER_SESSION），
+  //      新建数据不该出现两场 —— 这一节**不重复**验它；
+  //   ② 本文件的**夹具自己就是脏数据形状**（`ensureClassroom` 把学生放进 5 节课的 5 场 ACTIVE 课堂），
+  //      所以这里断言的是**平台怎么对待脏数据**：候选照给（客户端能落到正确那节）+ **日志里有警告**
+  //      （运维才看得见，见 `logDirtyClassroomCandidates`）。真正把线上收口要靠清理脚本。
+  const dirtyBefore = await arow(`SELECT COUNT(*) n FROM session_students part
+       JOIN class_sessions session ON session.id = part.session_id AND session.status='ACTIVE'
+      WHERE part.student_id = ? AND part.status='ACTIVE'`, [enrolled.student_id]);
+  const before = Number(dirtyBefore?.n || 0);
+  await check('⑦ 夹具确实是多课堂（≥2 场）—— 正好用来验"脏数据被看见"',
+    () => assert.ok(before >= 2, `夹具给了 ${before} 场，这一节的前提不成立`));
+
+  const cleanContext = (await api('/api/student/runtime/client-context', { token })).data || {};
+  await check('⑦ 脏数据下**候选照给**（客户端至少能落到正确那一节，不是静默换课）',
+    () => assert.equal((cleanContext.classrooms || []).length, before, JSON.stringify(cleanContext.classrooms)));
+  await check('⑦ ⭐ 脏数据被**说出来**：服务端日志有警告、且带上要收口的 session id',
+    () => assert.ok(serverLog.includes('同时挂着') && serverLog.includes(`学生 ${enrolled.student_id}`),
+      serverLog.split('\n').filter((line) => line.includes('[client-context]')).slice(-2).join(' | ')));
+
+  // 再插一条 started_at 更新的（更晚开始）：默认解析必须切到它 —— 这条是"学生别拿到别的课时的上限/预设"的判据
+  const source = await arow("SELECT org_id, series_id, teacher_id FROM class_sessions WHERE id=? AND status='ACTIVE'", [cleanContext.classroom?.id || '']);
+  assert.ok(source, '夹具没给出可复制的课堂');
+  const stamp = new Date().toISOString();
+  const dirtySessionId = 'session_p168_dirty';
+  await aq("INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,started_at,created_at,updated_at) VALUES (?,?,?,?,?,?, 'ACTIVE','VIBECODING',?,?,?)",
+    [dirtySessionId, 'P168 脏数据课堂', source.org_id, source.series_id, lessonId, source.teacher_id, stamp, stamp, stamp]);
+  await aq("INSERT OR IGNORE INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) VALUES (?,?,?,?,?,?, 'ACTIVE',?,?,?)",
+    ['part_p168_dirty', dirtySessionId, enrolled.student_id, source.org_id, lessonId, source.series_id, enrolled.student_id, stamp, stamp]);
+  const dirtyContext = (await api('/api/student/runtime/client-context', { token })).data || {};
+  await check('⑦ 多了一场之后候选 +1（平台不吞掉它、也不假装只有一节）',
+    () => assert.equal((dirtyContext.classrooms || []).length, before + 1, JSON.stringify(dirtyContext.classrooms)));
+  await check('⑦ 默认解析 = **最近开始的那一场**（学生做 A 课作业不会被塞 B 课的上限与预设）',
+    () => assert.equal(dirtyContext.classroom?.id, dirtySessionId, JSON.stringify(dirtyContext.classroom)));
+  await check('⑦ 警告里带上了这条新的 session id（运维照着清）',
+    () => assert.ok(serverLog.includes(dirtySessionId), serverLog.split('\n').filter((line) => line.includes('[client-context]')).slice(-1).join('')));
+  // 用完撤掉这条脏数据：后面的读法（若有）不该继续看到它
+  await aq("UPDATE session_students SET status='REMOVED' WHERE session_id=?", [dirtySessionId]);
+  await aq("UPDATE class_sessions SET status='ENDED' WHERE id=?", [dirtySessionId]);
 } catch (error) {
   console.error('P168 抛错：', error?.message || error);
   console.error(serverLog.split('\n').slice(-15).join('\n'));
