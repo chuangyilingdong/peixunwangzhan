@@ -7,6 +7,9 @@ export async function recordAiUsage({
   costFen = 0, seriesId = null, workId = null,
   // Provider-reported token usage remains available for audit.
   inputTokens = 0, outputTokens = 0,
+  // ⭐ 2026-09-29（客户端对账口径，用户口径「要做」）：上游 prompt caching 的命中/未命中。
+  //    它是 input_tokens 的**拆分**（hit + miss ≈ input）—— 对账时别把 hit 再加到 input 上。
+  cacheHitTokens = 0, cacheMissTokens = 0,
   // 上游用量回执（P90）：调用方拿到 result.usage 就传进来，等价于 inputTokens/outputTokens；
   // 只是把「回执」这一件事收在一处，不改学生侧语义。
   // usageSnapshot 是**整份证据**（upstreamCost.collectUsageEvidence 的形状），只在调用方要补记时传。
@@ -17,6 +20,8 @@ export async function recordAiUsage({
   orgId = session?.org_id || orgId;
   const reportedInput = usage?.inputTokens ?? inputTokens;
   const reportedOutput = usage?.outputTokens ?? outputTokens;
+  const reportedCacheHit = usage?.cacheHitTokens ?? cacheHitTokens;
+  const reportedCacheMiss = usage?.cacheMissTokens ?? cacheMissTokens;
   if (pricing?.compute?.callId) {
     // COALESCE：provider 侧在成功分支已经写过用量证据，这里只补空、不覆盖。
     await aq('UPDATE compute_attempts SET org_id=?,class_session_id=COALESCE(class_session_id,?),lesson_id=COALESCE(lesson_id,?),usage_snapshot=COALESCE(usage_snapshot,?) WHERE call_id=?',
@@ -25,14 +30,15 @@ export async function recordAiUsage({
   const usageRecordId = id('usage');
   await aq(
     `INSERT INTO usage_records(
-       id,org_id,user_id,class_session_id,project_id,generation_job_id,work_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,cost_fen,series_id,input_tokens,output_tokens,created_at,compute_call_id
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       id,org_id,user_id,class_session_id,project_id,generation_job_id,work_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,cost_fen,series_id,input_tokens,output_tokens,cache_hit_tokens,cache_miss_tokens,created_at,compute_call_id
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       usageRecordId, orgId, userId, sessionId, projectId, generationJobId, workId, modality, model, 0,
       status, failCode,
       json(pricing || { modality, status, failCode, generationJobId }),
       0, seriesId || null,
       Math.max(0, Math.round(Number(reportedInput) || 0)), Math.max(0, Math.round(Number(reportedOutput) || 0)),
+      Math.max(0, Math.round(Number(reportedCacheHit) || 0)), Math.max(0, Math.round(Number(reportedCacheMiss) || 0)),
       nowIso(), pricing?.compute?.callId || null,
     ],
   );

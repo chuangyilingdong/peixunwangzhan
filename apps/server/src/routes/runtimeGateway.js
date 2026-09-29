@@ -424,12 +424,15 @@ function publicUsage(usage) {
  * ⚠️ `retry_count` 在这条路上恒为 0：网关不给流式请求做候选渠道回退（回退由 config 层的
  *    primary/backup 在非流式那条路做）。真加了回退，这里要跟着变成真实的计数。
  */
-function logGatewayRound({ provider, model, channelId, mode, startedAt, firstTokenAt = null, status, errorCode = '', retryCount = 0 }) {
+function logGatewayRound({ provider, model, channelId, mode, startedAt, firstTokenAt = null, status, errorCode = '', retryCount = 0, cacheHit = null, cacheMiss = null }) {
   const total = Date.now() - startedAt;
   const ttft = firstTokenAt ? firstTokenAt - startedAt : null;
+  // 缓存命中/未命中也进这一行（2026-09-29 客户端对账口径）：对账时要能从日志里直接看出来，
+  // 不然账本与客户端观察对不上时无从下手。上游没返回就整段不打（老样子）。
+  const cache = cacheHit === null && cacheMiss === null ? '' : ` cache_hit=${cacheHit ?? '-'} cache_miss=${cacheMiss ?? '-'}`;
   console.log(`[runtimeGateway] provider=${provider} model=${model} channel=${channelId || '-'} mode=${mode || '-'}`
     + ` time_to_first_token_ms=${ttft ?? '-'} total_upstream_ms=${total} retry_count=${retryCount}`
-    + ` status=${status} error_code=${errorCode || '-'}`);
+    + ` status=${status} error_code=${errorCode || '-'}${cache}`);
 }
 
 export async function handleRuntimeGateway(ctx) {
@@ -492,6 +495,9 @@ export async function handleRuntimeGateway(ctx) {
       orgId: payload.o, userId: payload.u, sessionId: session.id,
       modality: 'TEXT', model: selection.model, status, failCode,
       inputTokens: usage?.inputTokens || 0, outputTokens: usage?.outputTokens || 0,
+      // ⭐ 缓存拆分也进账本（2026-09-29 客户端对账口径，用户口径「要做」）：
+      //    `usage_records.cache_hit_tokens / cache_miss_tokens`，未上报时为 0。
+      cacheHitTokens: usage?.cacheHitTokens, cacheMissTokens: usage?.cacheMissTokens,
       costFen: provider.compute?.saleSnapshot?.unitFen ?? await priceFenFor({ modality: 'TEXT', model: selection.model }),
       pricing: {
         compute: provider.compute, source: 'dsh-runtime-gateway', provider: providerName, mode: selection.provider,
@@ -531,7 +537,7 @@ export async function handleRuntimeGateway(ctx) {
         choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
         usage: publicUsage(usage),
       }));
-      logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, status: 'SUCCESS' });
+      logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, status: 'SUCCESS', cacheHit: usage?.cacheHitTokens ?? null, cacheMiss: usage?.cacheMissTokens ?? null });
       return { __streamed: true };
     } catch (error) {
       const normalized = normalizeProviderError(error) || {};
@@ -610,7 +616,7 @@ export async function handleRuntimeGateway(ctx) {
       usage: publicUsage(usage),
     });
     sseWrite(res, '[DONE]');
-    logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, firstTokenAt, status: 'SUCCESS' });
+    logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, firstTokenAt, status: 'SUCCESS', cacheHit: usage?.cacheHitTokens ?? null, cacheMiss: usage?.cacheMissTokens ?? null });
   } catch (error) {
     const normalized = normalizeProviderError(error) || {};
     await record('FAILED', { failCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });

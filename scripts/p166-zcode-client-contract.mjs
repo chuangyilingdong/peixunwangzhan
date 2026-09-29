@@ -323,6 +323,26 @@ try {
   const forwardedShort = seenBodies.at(-1)?.body?.messages || [];
   check('⑤ 反向对照：短历史里上游看不到那条 system 说明',
     !String(forwardedShort[0]?.content || '').includes('已省略'), JSON.stringify(forwardedShort[0]).slice(0, 120));
+  /* ── ⑦ 缓存拆分：进账本 + 报表看得见（2026-09-29 客户端对账口径，用户口径「要做」）────── */
+  console.log('\n⑦ 缓存 token 的账本与报表');
+  // 假上游在 usage 里固定回 hit=64 / miss=56、prompt_tokens=120（见本文件上面的夹具）
+  const lastUsage = await arow("SELECT cache_hit_tokens, cache_miss_tokens, input_tokens, output_tokens FROM usage_records WHERE user_id=(SELECT id FROM users WHERE login='student-1') ORDER BY created_at DESC LIMIT 1");
+  check('⑦ 网关这一轮的用量落进账本，且带缓存拆分（hit=64 / miss=56）',
+    Number(lastUsage?.cache_hit_tokens) === 64 && Number(lastUsage?.cache_miss_tokens) === 56, JSON.stringify(lastUsage));
+  check('⑦ 缓存是 input 的**拆分**（hit + miss == input_tokens —— 对账时不能重复计）',
+    Number(lastUsage?.cache_hit_tokens) + Number(lastUsage?.cache_miss_tokens) === Number(lastUsage?.input_tokens), JSON.stringify(lastUsage));
+  const adminLogin = await (await api('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ login: 'root', password: 'admin123' }) })).json();
+  const adminToken = adminLogin?.data?.token;
+  check('⑦ 平台超管能登录（下面报表那一步要用）', Boolean(adminToken), JSON.stringify(adminLogin).slice(0, 160));
+  if (adminToken) {
+    const report = await (await api('/api/admin/billing/usage-records?limit=8', { headers: { authorization: `Bearer ${adminToken}` } })).json();
+    const reportRow = (report?.data?.items || []).find((item) => Number(item.cacheHitTokens) === 64);
+    check('⑦ 平台用量报表里能读到 cacheHitTokens / cacheMissTokens（对账要看得见，不然加列也白加）',
+      Boolean(reportRow) && Number(reportRow.cacheMissTokens) === 56 && Number(reportRow.inputTokens) === 120,
+      JSON.stringify((report?.data?.items || []).slice(0, 2)).slice(0, 300));
+  }
+  check('⑦ 每轮日志行带上 cache_hit / cache_miss（对账对不上时能从日志上看）',
+    serverLog.split('\n').some((line) => line.includes('[runtimeGateway]') && /cache_hit=64/.test(line) && /cache_miss=56/.test(line)));
 } catch (error) {
   failures += 1;
   console.error('P166 抛错：', error?.message || error);

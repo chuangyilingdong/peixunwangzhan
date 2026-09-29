@@ -776,6 +776,9 @@ export async function handleOverview(ctx, part, method) {
       attempts: item.compute_call_id ? await arows('SELECT id,attempt,channel_id channelId,provider,model,status,task_id taskId,cost_source costSource,upstream_cost_fen upstreamCostFen,error_code errorCode,error_message errorMessage,output_started outputStarted FROM compute_attempts WHERE call_id=? ORDER BY attempt', [item.compute_call_id]) : [],
       // C3 前置：上游返回过就带上（多数多模态接口不返回，所以允许为 0）
       inputTokens: Number(item.input_tokens || 0), outputTokens: Number(item.output_tokens || 0),
+      // ⭐ 2026-09-29 客户端对账口径：缓存命中/未命中（是 input_tokens 的**拆分**，对账时别再加到 input 上）。
+      //    没这两列的老库/老数据读出来是 0；客户端拿它们与自己的观察对账。
+      cacheHitTokens: Number(item.cache_hit_tokens || 0), cacheMissTokens: Number(item.cache_miss_tokens || 0),
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
     }));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };

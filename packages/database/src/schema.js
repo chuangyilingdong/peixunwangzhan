@@ -735,6 +735,13 @@ CREATE TABLE IF NOT EXISTS usage_records (
   -- input/output_tokens 未采集：上游图片/视频接口不返回 token 用量，报表已不再读取这两个字段
   input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
+  -- ⭐ 2026-09-29（客户端对账口径，用户口径「要做」）：上游 prompt caching 的**命中/未命中**拆分。
+  --    ⚠️ 它是 input_tokens 的**拆分**（hit + miss ≈ input），对账时**别把 hit 再加到 input 上**。
+  --    ⚠️ 客户端契约里那第三套命名 prompt_tokens_details.cached_tokens 与 prompt_cache_hit_tokens
+  --    是**同一个数**（平台从同一个上游字段映射出去），所以只存这一列、不重复存第三列；
+  --    total_tokens 是派生的（input+output），也不存。
+  cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'SUCCESS' CHECK (status IN ('SUCCESS','FAILED','BLOCKED')),
   fail_code TEXT,
   pricing_snapshot TEXT NOT NULL DEFAULT '{}',
@@ -1428,7 +1435,12 @@ db.exec(`CREATE TABLE IF NOT EXISTS compute_attempts (
 );
 CREATE INDEX IF NOT EXISTS idx_compute_attempts_call ON compute_attempts(call_id, attempt);
 CREATE INDEX IF NOT EXISTS idx_compute_attempts_org ON compute_attempts(org_id, created_at);`);
-for (const [table, column, type] of [['generation_jobs', 'compute_snapshot', 'TEXT'], ['usage_records', 'compute_call_id', 'TEXT']]) {
+for (const [table, column, type] of [
+  ['generation_jobs', 'compute_snapshot', 'TEXT'], ['usage_records', 'compute_call_id', 'TEXT'],
+  // 缓存拆分两列（2026-09-29）：老库靠这里补列；**生产 RDS 侧要手工 ALTER**（固定动作第 4 条）。
+  ['usage_records', 'cache_hit_tokens', 'INTEGER NOT NULL DEFAULT 0'],
+  ['usage_records', 'cache_miss_tokens', 'INTEGER NOT NULL DEFAULT 0'],
+]) {
   addColumnIfMissing(table, column, type);
 }
 
