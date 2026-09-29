@@ -129,9 +129,11 @@ async function ensureCover(seriesId) {
 const existing = await api('/api/admin/course-series?limit=200', { token: root.token });
 const found = (existing.data?.items || []).find((item) => item.title === SERIES_TITLE);
 let series = found || null;
+let isNewSeries = false;
 if (series) {
   log(`课包「${SERIES_TITLE}」已存在（${series.id}），复用`);
 } else {
+  isNewSeries = true;
   const created = await api('/api/admin/course-series', {
     method: 'POST', token: root.token,
     body: {
@@ -152,37 +154,42 @@ if (series) {
   log(`课包已建：${series.id}`);
 }
 {
-  // 封面 / 发布 / 授权：三样都**按当前状态补**（半成品重跑也能救回来 —— 第一次跑就是在"发布缺封面"
-  // 那一步停下的，这条修复路径就是它逼出来的）
-  const coverError = await ensureCover(series.id);
-  check('课包封面就绪（发布的前置）', !coverError, coverError || '');
   const detail0 = await api(`/api/admin/course-series/${series.id}/detail`, { token: root.token });
   // ⚠️ 形状是 `{ series, assignedOrgs, usage, … }`（不是把 series 摊平）—— 第一版按摊平写，
   //    于是状态读成 undefined → 又去发布一次 → 报 "PUBLISHED 不允许 publish"。
-  if (detail0.data?.series?.status !== 'PUBLISHED') {
-    const published = await api(`/api/admin/course-series/${series.id}/status`, { method: 'POST', token: root.token, body: { action: 'publish' } });
-    check('课包已发布', published.status === 200, JSON.stringify(published.data || published.error).slice(0, 200));
-  } else {
-    log('课包已是发布状态，跳过发布');
-  }
-  // ⚠️ 授权这一步平台会**写一条许可购买记录**（`license_purchase_batches`：成交额/币种/收款状态/订单号/
-  //    合同号/幂等键，且必须 PAID）。这里是联调环境，所以：**成交额填 0**、订单号与合同号都带 `FIXTURE-`
-  //    前缀、幂等键固定 —— 重跑不会重复写；台账上也能一眼认出这是测试单（要清理就删这几条）。
-  //    已经授权给本机构时**整步跳过**（不产生任何购买记录）。
   const assignedNow = (detail0.data?.assignedOrgs || []).some((item) => item.orgId === org.organization.id && !item.expired);
-  if (assignedNow) {
-    log('课包已授权给本机构，跳过（不会写任何许可购买记录）');
+  if (isNewSeries) {
+    // 自己新建的课包：封面 / 发布 / 授权三样按当前状态补（半成品重跑也能救回来）。
+    // ⚠️ 授权会**写一条许可购买记录**（`license_purchase_batches`：成交额/币种/收款状态/订单号/合同号/幂等键，
+    //    且必须 PAID）—— 联调环境用「成交额 0 + `FIXTURE-` 订单号/合同号 + 固定幂等键」，重跑不重复。
+    // ⚠️⚠️ **复用线上已有课包时（本轮的用法）：这一整块一个字都不写** —— 用户口径是
+    //    「0 元测试单不留、其他别动」，所以复用模式下我们**只读**、不建课包、不发布、不授权。
+    const coverError = await ensureCover(series.id);
+    check('课包封面就绪（发布的前置）', !coverError, coverError || '');
+    if (detail0.data?.series?.status !== 'PUBLISHED') {
+      const published = await api(`/api/admin/course-series/${series.id}/status`, { method: 'POST', token: root.token, body: { action: 'publish' } });
+      check('课包已发布', published.status === 200, JSON.stringify(published.data || published.error).slice(0, 200));
+    } else {
+      log('课包已是发布状态，跳过发布');
+    }
+    if (assignedNow) {
+      log('课包已授权给本机构，跳过（不会写任何许可购买记录）');
+    } else {
+      const assigned = await api(`/api/admin/course-series/${series.id}/assignments`, {
+        method: 'POST', token: root.token,
+        body: {
+          orgIds: [org.organization.id], quotaTotal: 20,
+          amountMinor: 0, currency: 'CNY', paymentStatus: 'PAID',
+          orderNo: `FIXTURE-ZCODE-IT-${series.id}`, contractNo: 'FIXTURE-ZCODE-IT',
+          idempotencyKey: `fixture-zcode-it-${series.id}`,
+        },
+      });
+      check('课包已授权给本机构（留一条 0 元 FIXTURE 测试购买记录）', assigned.status === 200, JSON.stringify(assigned.data || assigned.error).slice(0, 200));
+    }
   } else {
-    const assigned = await api(`/api/admin/course-series/${series.id}/assignments`, {
-      method: 'POST', token: root.token,
-      body: {
-        orgIds: [org.organization.id], quotaTotal: 20,
-        amountMinor: 0, currency: 'CNY', paymentStatus: 'PAID',
-        orderNo: `FIXTURE-ZCODE-IT-${series.id}`, contractNo: 'FIXTURE-ZCODE-IT',
-        idempotencyKey: `fixture-zcode-it-${series.id}`,
-      },
-    });
-    check('课包已授权给本机构（留一条 0 元 FIXTURE 测试购买记录）', assigned.status === 200, JSON.stringify(assigned.data || assigned.error).slice(0, 200));
+    log(`复用模式：**只看不改**（不建课包、不发布、不授权、不写任何购买记录）`);
+    check('该课包本来就已发布', detail0.data?.series?.status === 'PUBLISHED', String(detail0.data?.series?.status));
+    check('该课包本来就已授权给本机构（否则本脚本拒绝继续，绝不自己建授权）', assignedNow, JSON.stringify(detail0.data?.assignedOrgs || []).slice(0, 200));
   }
 }
 const detail = await api(`/api/admin/course-series/${series.id}/detail`, { token: root.token });
@@ -231,8 +238,12 @@ const studentLogin = await login({ login: STUDENT_LOGIN, password: STUDENT_PASSW
 const context = (await api('/api/student/runtime/client-context', { token: studentLogin.token })).data || {};
 check('学生登录后 client-context 给出了 VibeCoding 课堂', Boolean(context.classroom?.id), JSON.stringify(context).slice(0, 240));
 check('client-context 给出了网关基址与运行时密钥', Boolean(context.gateway?.baseUrl && context.gateway?.key), JSON.stringify(context.gateway || {}).slice(0, 200));
-check('sends 是配好的（limit=20）', Number(context.sends?.limit) === SEND_LIMIT, JSON.stringify(context.sends || {}));
-check('presets 有两条（客户端可以点它插草稿）', (context.presets || []).length === 2, JSON.stringify(context.presets || []).slice(0, 200));
+check('sends 的形状合法（`limit` 要么 `null`（不限）要么正整数 —— 平台从不下发 0）',
+  context.sends && (context.sends.limit === null || (Number.isInteger(context.sends.limit) && context.sends.limit > 0)),
+  JSON.stringify(context.sends || {}));
+log(`sends: ${JSON.stringify(context.sends || {})}${context.sends?.limit === null ? '（这节课没配上上限 = 不限）' : ''}`);
+check('presets 是数组（客户端可以点它插草稿；空数组也合法）', Array.isArray(context.presets), JSON.stringify(context.presets || []).slice(0, 200));
+log(`presets: ${(context.presets || []).length} 条`);
 
 console.log('\n──────── 交给客户端的东西（照抄这一段）────────');
 console.log(`  平台地址        ${BASE}`);
