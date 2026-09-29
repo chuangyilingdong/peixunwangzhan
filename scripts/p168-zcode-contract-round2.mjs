@@ -233,6 +233,14 @@ try {
     assert.equal(zero.limit, null, `平台下发了 0：${JSON.stringify(zero)}`);
     assert.equal(zero.remaining, null, JSON.stringify(zero));
   });
+  // ⭐ 用户口径（2026-09-30）：**"0 次课堂"不允许存在 —— 最少 1 次**。
+  //    负数同样要落成"不限"：`vibecodingSendLimit` 把任何非正值都当"没配"，
+  //    于是 `limit` 恒为 `null`(不限) 或 ≥1，**永远不会是 0**。
+  //    （真出现 0 的话判据是 `seen > limit` → 第 1 次就超限，整节课全拦 —— 所以这条必须钉死。）
+  await setSendLimit(-5);
+  const negative = await readSends();
+  await check('③ 配负数 → 也是 null（不限）—— 保证"最少 1 次"这条不变量',
+    () => { assert.equal(negative.limit, null, JSON.stringify(negative)); assert.equal(negative.remaining, null, JSON.stringify(negative)); });
   await setSendLimit(2);
   const two = await readSends();
   await check('③ 配 2 → limit=2、used=0、remaining=2', () => {
