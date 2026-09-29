@@ -113,12 +113,25 @@ let browser;
 try {
   await vite.listen();
   const url = `http://127.0.0.1:${port}/.tmp/p167-boundary/index.html`;
+  // ⚠️ 先**把 vite 热起来**再开浏览器：vite dev 的第一次请求要现场转 JSX + 预打包依赖
+  //    （esbuild），在跑全量时机器很忙，这一步能超过 30 秒 —— 上一轮全量里就是这里
+  //    `page.goto: Timeout 30000ms exceeded` 判红的（是这条守卫脆，不是产品坏了）。
+  //    这里先用 fetch 把入口模块拉一遍（它会把依赖链都打出来），成功后再导航。
+  let warmed = false;
+  for (let attempt = 0; attempt < 90 && !warmed; attempt += 1) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/.tmp/p167-boundary/harness.jsx`);
+      if (response.ok) { await response.text(); warmed = true; }
+    } catch { /* 还没起来 */ }
+    if (!warmed) await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  check('② vite dev 起来了（入口模块能取到）', warmed, warmed ? '' : '90 秒内没热起来');
   browser = await chromium.launch({ executablePath: CHROME, headless: true });
   const page = await browser.newPage();
   const consoleLines = [];
   page.on('console', (message) => consoleLines.push(message.text()));
   page.on('pageerror', (error) => consoleLines.push(`pageerror: ${error.message}`));
-  await page.goto(url, { waitUntil: 'load' });
+  await page.goto(url, { waitUntil: 'load', timeout: 60000 });
 
   // A) 兜底页出现（等它真渲染，不靠 sleep 猜）
   await page.waitForFunction(
