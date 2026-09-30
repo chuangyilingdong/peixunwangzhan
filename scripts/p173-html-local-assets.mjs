@@ -136,6 +136,17 @@ try {
   const artifacts = JSON.parse(filesRow?.artifacts || '[]');
   const entryArtifact = artifacts.find((item) => item.name === 'index.html') || {};
 
+  // ⭐⭐ 2026-09-30（生产 P1：老师端预览一张图都取不到、分享卡同样 —— 用户报「为什么视频这些还是不展示」）：
+  //    字节在本地盘还是 OSS 的**唯一判据**是 `metadata.storageBackend`（缺省一律当本地盘）。
+  //    `storeStudentArtifactAsset`（学生工作区素材 = 客户端随作品交上来的本地图/视频）原来**漏写了它**：
+  //    字节进了 OSS、读面却 stat 本地盘 → `404 FILE_STORAGE_NOT_FOUND`。这一条把它钉住。
+  await (async () => {
+    const row = await arow("SELECT metadata FROM file_assets WHERE file_name='character_mecha.png'");
+    let meta = {};
+    try { meta = JSON.parse(row?.metadata || '{}') || {}; } catch { meta = {}; }
+    check('① ⭐ 素材行必须记下 storageBackend（漏了读面按本地盘找 → 线上就是取不到字节）',
+      meta.storageBackend === 'local' || meta.storageBackend === 'oss', JSON.stringify(meta).slice(0, 200));
+  })();
   check('① 二进制的字节真进了 file_assets（文件名只留 basename，路径不落盘名）', await (async () => {
     const image = await arow("SELECT id, file_name, mime_type, file_size FROM file_assets WHERE mime_type='image/png' AND file_name='character_mecha.png'");
     const video = await arow("SELECT id, file_name, mime_type, file_size FROM file_assets WHERE mime_type='video/mp4' AND file_name='transform.mp4'");

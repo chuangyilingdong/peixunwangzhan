@@ -497,7 +497,14 @@ export async function storeStudentArtifactAsset({ buffer, mimeType, fileName, ow
     [fileId, 'USER', ownerOrgId, ownerUserId, 'INTERNAL_PROXY', null, stored.storageKey,
       `/api/student/file-assets/${fileId}/download`, null, stored.fileName, stored.mimeType, stored.fileSize,
       stored.checksum, 'GENERAL', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null,
-      json({ ...metadata, source: 'STUDENT_RUNTIME', security: stored.security }), ownerUserId, now, now],
+      // ⚠️⚠️ 2026-09-30（生产 P1，用户报「图片/视频还是不展示」）：
+      //    **`storageBackend` 必须记下来** —— 它是"这一行的字节在本地盘还是 OSS"的**唯一判据**
+      //    （见 `fileStorage.js` 的 `rowStorageBackend`：缺省一律当**本地盘**）。
+      //    这里原来漏了这个字段：字节被 `persistUploadBytes` 写进了 OSS，而读面按"本地盘"去找
+      //    → `stat` 找不到 → `404 FILE_STORAGE_NOT_FOUND`（老师端预览一张图都取不到、分享卡同样）。
+      //    生成产物那条路（上面 `createUploadedFileAsset` / `storeGeneratedAsset`）都带着它，只有
+      //    **学生工作区素材**（客户端交作品随带的本地图/视频）这一条漏了。
+      json({ ...metadata, source: 'STUDENT_RUNTIME', security: stored.security, storageBackend: stored.storageBackend || 'local' }), ownerUserId, now, now],
   );
   return {
     id: fileId,
