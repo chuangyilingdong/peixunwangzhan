@@ -1,7 +1,7 @@
 // 课堂里「只读作品预览」弹窗（2026-09-17 从 pages/Classrooms.jsx 原样搬进来，逻辑未改）。
 import { useEffect, useState } from 'react';
 import { CanvasEditor } from '@platform/canvas';
-import { buildPreviewDocument, Empty, ErrorState, formatDate, Loading, Notice, ReplayDocument, ReplayFiles, ReplayPreview, WorkMediaGallery, resolveWorkMediaUrl, useData } from '@platform/shared';
+import { buildPreviewDocument, Empty, ErrorState, formatDate, Loading, Notice, ReplayDocument, ReplayFiles, ReplayPreview, WorkMediaGallery, resolveWorkMediaUrl, useData, WorkSharePanel, shareablePiecesOf } from '@platform/shared';
 import { Modal } from './ui.jsx';
 
 export function previewHref(value) {
@@ -20,8 +20,9 @@ export function previewHref(value) {
  *     用课堂作用域根本打不开）。
  * 服务端两种作用域返回同一套图片 / 文件地址前缀，所以这里只换前缀、渲染逻辑一个字不动。
  */
-export function ClassroomWork({ api, workBase, work = {}, onClose }) {
+export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = false, shareCreate = null }) {
   const detail = useData(() => api.get(`${workBase}/${encodeURIComponent(work.source)}/${encodeURIComponent(work.id)}`), [api, workBase, work.source, work.id]);
+  const [shareOpen, setShareOpen] = useState(false);
   const [activeName, setActiveName] = useState('');
   // 作品先看**做出来的东西**（图/视频/音频）；画布放到「创作画布」那一档（用户 2026-09-21 口径）。
   const [workView, setWorkView] = useState('media');
@@ -77,6 +78,9 @@ export function ClassroomWork({ api, workBase, work = {}, onClose }) {
   return <Modal title={`只读作品 · ${work.title || '未命名作品'}`} wide onClose={onClose}
     footer={<>
       {documentFile?.download ? <a className="secondary-button" href={documentFile.download}>下载原文件</a> : null}
+      {/* ⭐ 2026-09-30 用户口径：机构/老师端也要能分享。这个弹窗是**共用组件**（页眉没有插槽），
+          所以分享入口放在底部按钮行 —— 画布作品那条在预览面板的右上角。 */}
+      {canShare && shareCreate && data ? <button type="button" className="secondary-button" data-testid="work-share" onClick={() => setShareOpen(true)}>分享</button> : null}
       <button className="secondary-button" onClick={onClose}>关闭预览</button>
     </>}>
     {detail.loading ? <Loading label="正在读取私有作品…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : data ? <>
@@ -120,5 +124,13 @@ export function ClassroomWork({ api, workBase, work = {}, onClose }) {
           <details className="top-gap"><summary>查看作品源文件</summary><ReplayFiles files={files} entryFile={entry} /></details>
         </div>}
     </> : null}
+
+    {/* 分享面板（与网站端同一个 `@platform/shared` 组件）：选哪一件 + 二维码 */}
+    {shareOpen && data && shareCreate ? <WorkSharePanel
+      title={work.title || '作品'}
+      pieces={shareablePiecesOf(data, data.source || work.source || 'VIBECODING')}
+      createShare={shareCreate}
+      onClose={() => setShareOpen(false)}
+    /> : null}
   </Modal>;
 }

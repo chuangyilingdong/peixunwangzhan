@@ -1,6 +1,8 @@
 import { audit, clearAuthCookies, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arows, arow, aq, acount, atransaction, amap, likeKeyword, likeEscapeClause } from '../lib.js';
 import { normalizeLesson, canvasMediaFrom } from '../lib.js';
 import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
+// ⭐ 2026-09-30：作品分享码（与学生端**同一份实现** —— 件的定位与幂等口径两处各写一套，迟早只在一半上生效）
+import { assertSharePiece, ensureWorkShareLink, shareLinkUrl } from '../services/workShare.js';
 import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from './fileAssets.js';
 import { hashPassword, isUniqueViolation } from '@platform/database';
 
@@ -835,7 +837,7 @@ export async function handleOrg(ctx) {
     const imageUrls = Object.fromEntries([...allowedImages].map((fileId) => [fileId, `${scope.base}/${source}/${encodeURIComponent(work.id)}/images/${encodeURIComponent(fileId)}`]));
     // 作品页要展示的**媒体**（图/视频/音频）——老师端预览也要看"做出来的东西"，不是画布
     // （用户 2026-09-21：「应该显示的是图片/视频/音频等等，而不是画布」）。
-    if (source === 'CANVAS') return { ...base, canvasSnapshot, imageUrls, media: canvasMediaFrom(canvasSnapshot) };
+    if (source === 'CANVAS') return { ...base, canvasSnapshot, imageUrls, media: canvasMediaFrom(canvasSnapshot).map((item) => ({ ...item, pieceKey: `media:${item.fileId || item.url}` })) };
     const content = normalizeSubmission(work, { includeContent: true });
     // 真文件产物（学生创作环境交上来的 PPT/Word/Excel）的取用地址也在服务端拼好：
     // 前端不该自己去拼路由（前缀/编码错一处就是 404，而且两边都没法测）。
@@ -847,7 +849,8 @@ export async function handleOrg(ctx) {
         download: `${workBase}/files/${encodeURIComponent(item.name)}/download`,
       }]));
     // Keep private references intact; the authenticated viewer resolves them to local blob URLs.
-    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: content.artifacts, preview: content.preview, imageUrls, fileUrls };
+    // ⭐ 2026-09-30：每件产物带 `pieceKey`（机构/老师端也要"点进作品 → 右上角分享 → 选哪一件"）
+    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: (content.artifacts || []).map((item) => ({ ...item, pieceKey: `artifact:${item.name}` })), preview: content.preview, imageUrls, fileUrls };
   }
 
   if (part === '/sessions' && method === 'GET') {
@@ -1206,6 +1209,30 @@ export async function handleOrg(ctx) {
     } catch { /* 提醒失败不影响主流程 */ }
     return (await workReportRows('report.id=?', [report.id]))[0];
   }
+  // ⭐ 2026-09-30 用户口径：「机构端/老师端也需要有」（分享入口）。
+  //    范围与下面「学生学习结果与作品」那张表**逐字同一套**：本机构 + （老师）只限自己课堂。
+  //    码归**作品的作者（学生）** —— 分享卡上显示的是那个学生与他的机构；"是谁替学生分享的"由审计记
+  //    （actor = 当前登录的机构管理员/老师，`via: 'ORG'`）。
+  if (part === '/share-links' && method === 'POST') {
+    const source = String(ctx.body?.source || '').toUpperCase();
+    if (!['CANVAS', 'VIBECODING'].includes(source)) throw errors.badRequest('来源只能是 CANVAS / VIBECODING', 'SHARE_SOURCE_INVALID');
+    const workId = String(ctx.body?.workId || '').trim();
+    const pieceKey = String(ctx.body?.pieceKey || '').trim().slice(0, 240);
+    if (!workId || !pieceKey) throw errors.badRequest('缺少作品或产出物标识', 'SHARE_TARGET_REQUIRED');
+    const params = [currentOrgId, workId];
+    const row = source === 'CANVAS'
+      ? await arow(`SELECT work.id, work.student_id, work.org_id, work.canvas_snapshot FROM works work
+          WHERE work.org_id=? AND work.id=?${sessionOwnedByTeacherExists('work.class_session_id', auth, params, { orgColumn: 'work.org_id' })}`, params)
+      : await arow(`SELECT submission.id, submission.student_id, submission.org_id, submission.files, submission.artifacts
+          FROM vibecoding_submissions submission
+          WHERE submission.org_id=? AND submission.id=?${sessionOwnedByTeacherExists('(SELECT class_session_id FROM vibecoding_conversations conv WHERE conv.id=submission.conversation_id)', auth, params, { orgColumn: 'submission.org_id' })}`, params);
+    if (!row) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
+    assertSharePiece(source, row, pieceKey);
+    const { code, created } = await ensureWorkShareLink({ source, workId, studentId: row.student_id, orgId: row.org_id, pieceKey });
+    if (created) await audit(ctx, 'WORK_SHARE_LINK_CREATE', source === 'CANVAS' ? 'WORK' : 'VIBECODING_SUBMISSION', workId, null, { code, pieceKey, via: 'ORG' });
+    return { code, url: shareLinkUrl(code), created };
+  }
+
   if (part === '/works' && method === 'GET') {
     const status = String(ctx.search.get('status') || '').trim();
     // 批次 D：按**课堂**筛（旧参数 classId 保留兼容，但班级退场后它已经没用）
@@ -1224,7 +1251,14 @@ export async function handleOrg(ctx) {
     }
     // 教师范围：作品挂在我创建的课堂（班级退场后不再按 class 圈定）
     where += sessionOwnedByTeacherExists('work.class_session_id', auth, params, { orgColumn: 'work.org_id' });
-    const canvasItems = await amap((await arows(`SELECT work.*,student.display_name student_name,lesson.title lesson_title,series.title series_title,session.title session_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id LEFT JOIN class_sessions session ON session.id=work.class_session_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN course_series series ON series.id=lesson.series_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE ${where} ORDER BY CASE WHEN work.featured_at IS NULL THEN 1 ELSE 0 END, work.featured_at DESC, work.submitted_at DESC LIMIT 200`, params)), async (work) => ({ ...await normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' }), seriesTitle: work.series_title || null, sessionTitle: work.session_title || null, pendingReportCount: Number(work.pending_report_count || 0) }));
+    const canvasItems = await amap((await arows(`SELECT work.*,student.display_name student_name,lesson.title lesson_title,series.title series_title,session.title session_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id LEFT JOIN class_sessions session ON session.id=work.class_session_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN course_series series ON series.id=lesson.series_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE ${where} ORDER BY CASE WHEN work.featured_at IS NULL THEN 1 ELSE 0 END, work.featured_at DESC, work.submitted_at DESC LIMIT 200`, params)), async (work) => ({
+      ...await normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' }),
+      seriesTitle: work.series_title || null, sessionTitle: work.session_title || null, pendingReportCount: Number(work.pending_report_count || 0),
+      // ⭐ 2026-09-30：每件产出物带 `pieceKey` —— 机构/老师端在这个列表上点"查看作品"后要**逐件分享**
+      //    （键由服务端算，与 `services/workShare.js` 同一套；前端别自己拼）
+      media: canvasMediaFrom(parseJson(work.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }))
+        .map((item) => ({ ...item, pieceKey: `media:${item.fileId || item.url}` })),
+    }));
 
     // VibeCoding 提交（2026-09-20）：**这个列表原来只读 `works`（画布）**，于是学生从创作环境交上来的
     // 网页 / PPT 作品在「作品管理」里根本不出现 —— 平台端看得到、机构端看不到

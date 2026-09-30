@@ -22,6 +22,8 @@ export { materialVisual, materialToneClass } from './materialTypes.js';
 export * from './markdown.jsx';
 export * from './vibecodingProject.js';
 export * from './workMedia.jsx';
+// 作品分享面板（二维码 + 选哪一件）：学生端与机构/老师端**同一套 UI**（2026-09-30）
+export { WorkSharePanel, qrSvgText, shareablePiecesOf } from './workShare.jsx';
 // 控制台设计系统（含 CSS）。组件会被 tree-shake，但 CSS 是副作用导入会留在包里，
 // 所以没用到控制台的那一端会多背约 8.5KB gzip 的样式——换来的是不用谁单独记着引 CSS。
 export * from './console/index.js';

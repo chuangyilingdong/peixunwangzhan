@@ -10,7 +10,9 @@ import { isAvatarKey } from '../../../../packages/shared/src/avatars.js';
 import { computePoolSummary } from '../services/computePool.js';
 // 「我的作品」点开一件要读 VibeCoding 产物的快照（产物清单 / 图片 fileId / 正文），
 // 与 org 端「课堂作品」同一套解析函数 —— 两处口径必须一致，别再抄一份。
-import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactNames, snapshotImageFileIds, vibecodingWorkItem } from './vibecoding.js';
+import { normalizeSubmission, parseSnapshotArtifacts, snapshotImageFileIds, vibecodingWorkItem } from './vibecoding.js';
+// 作品分享码（学生端与机构/老师端共用同一份实现）
+import { assertSharePiece, ensureWorkShareLink, shareLinkUrl } from '../services/workShare.js';
 
 const EMPTY_CANVAS = Object.freeze({ nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
 
@@ -1393,17 +1395,12 @@ export async function handleStudent(ctx) {
       ? await arow('SELECT id, canvas_snapshot FROM works WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId])
       : await arow('SELECT id, files, artifacts FROM vibecoding_submissions WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId]);
     if (!row) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
-    if (!sharePieceKeysOf(source, row).includes(pieceKey)) throw errors.badRequest('这一件不在最新版本里', 'SHARE_PIECE_NOT_FOUND');
-    // 幂等：一个 (学生, 作品, 那一件) 只有一枚码 —— 重复点"分享"给的是同一枚，二维码不会满天飞
-    const existing = await arow('SELECT code FROM work_share_links WHERE student_id=? AND source=? AND work_id=? AND piece_key=?', [auth.user.id, source, workId, pieceKey]);
-    const code = existing?.code || `shs_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
-    if (!existing) {
-      await aq('INSERT INTO work_share_links(code,student_id,org_id,source,work_id,piece_key,created_at) VALUES (?,?,?,?,?,?,?)',
-        [code, auth.user.id, auth.user.orgId, source, workId, pieceKey, nowIso()]);
-      // 分享码是"对外的链接"，留一条审计（谁在什么时候把哪一件分享了出去）
-      await audit(ctx, 'WORK_SHARE_LINK_CREATE', source === 'CANVAS' ? 'WORK' : 'VIBECODING_SUBMISSION', workId, null, { code, pieceKey });
-    }
-    return { code, url: `/s/${code}`, created: !existing };
+    // 件的定位与"发码"都在 `services/workShare.js` 一份（机构/老师端共用同一套，别各写一套）
+    assertSharePiece(source, row, pieceKey);
+    const { code, created } = await ensureWorkShareLink({ source, workId, studentId: auth.user.id, orgId: auth.user.orgId, pieceKey });
+    // 分享码是"对外的链接"，留一条审计（谁在什么时候把哪一件分享了出去）
+    if (created) await audit(ctx, 'WORK_SHARE_LINK_CREATE', source === 'CANVAS' ? 'WORK' : 'VIBECODING_SUBMISSION', workId, null, { code, pieceKey, via: 'STUDENT' });
+    return { code, url: shareLinkUrl(code), created };
   }
   // 主页要靠它知道"哪几件已经分享过"（按钮上显示对应状态，别让同一件反复点）
   if (part === '/share-links' && method === 'GET') {
@@ -1420,19 +1417,6 @@ export async function handleStudent(ctx) {
 }
 
 /**
- * 一件作品里**每一件产出物**的稳定标识（分享码就是按它定位的）。
- *   · 画布作品：快照里的每个图/视频/音频 → `media:<fileId|url>`（优先 fileId，它是资产 id，跨版本稳定）
- *   · VibeCoding：产物清单里的每一项 → `artifact:<文件名>`（`index.html` / `deck.pptx` …）
- * ⚠️ 打开分享页时按同一个键去**最新那一版**里找 → 学生再交一版，旧码自动指向最新内容
- *    （用户口径：「不存在重做的说法，提交了作品就是最新的」）。
+ * 一件作品里**每一件产出物**的稳定标识 —— 实现在 `services/workShare.js`（机构/老师端共用同一份）。
+ * ⚠️ 别再把它复制回来：两边各一套的话，"主页看得见的那一件"可能发不了码（写守卫时实测踩到）。
  */
-function sharePieceKeysOf(source, row) {
-  if (source === 'CANVAS') {
-    return canvasMediaFrom(parseJson(row.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }))
-      .map((item) => `media:${item.fileId || item.url}`)
-      .filter((key) => !key.endsWith(':'));
-  }
-  // ⚠️ 用**和主页产物清单同一份**名字（files ∪ artifacts）—— 各枚举一套的话，
-  //    "主页上看得见的那一件"可能发不了码（写守卫时实测踩到）。
-  return snapshotArtifactNames(row).map((name) => `artifact:${name}`);
-}

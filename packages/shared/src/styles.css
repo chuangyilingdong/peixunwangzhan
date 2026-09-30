@@ -1554,3 +1554,18 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .c-replay .work-media__player .cv-audio__time, .cv-shell .work-media__player .cv-audio__time { color: var(--cv-text-dim); }
 .c-replay .work-media__player .cv-audio__progress::-webkit-slider-runnable-track, .cv-shell .work-media__player .cv-audio__progress::-webkit-slider-runnable-track { background: linear-gradient(to right, var(--cv-primary) var(--cv-audio-progress, 0%), rgb(255 255 255 / 16%) var(--cv-audio-progress, 0%)); }
 .c-replay .work-media__player .cv-audio__progress::-webkit-slider-thumb, .cv-shell .work-media__player .cv-audio__progress::-webkit-slider-thumb { background: var(--cv-primary); }
+
+/* ── 作品分享面板（二维码 + 「选哪一件」）────────────────────────────────────────
+   放在 shared：**学生端（自己主页）与机构/老师端（学生学习结果与作品）用同一套** ——
+   两份实现的话，弹窗文案、二维码尺寸、"选哪一件"的位置迟早有一边先走样。
+   ⚠️ 没有公众号 → 不做微信 JS-SDK（面板里给"复制链接 + 微信里点右上角 ···"的手动路径）。 */
+.share-modal { position: fixed; inset: 0; background: rgba(28, 20, 55, 0.45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 80; }
+.share-modal__panel { background: #fff; border-radius: 18px; padding: 18px 20px 20px; width: min(360px, 100%); box-shadow: 0 20px 50px rgba(30, 18, 70, 0.28); text-align: center; }
+.share-modal__head { display: flex; align-items: center; justify-content: space-between; }
+.share-modal__title { margin: 6px 0 12px; color: #4b3f72; font-size: 14px; }
+.share-modal__pick { display: flex; align-items: center; gap: 8px; justify-content: center; margin: 0 0 12px; color: #4b3f72; font-size: 14px; }
+.share-modal__pick select { border: 1px solid #ddd6f5; border-radius: 10px; padding: 6px 10px; font: inherit; max-width: 200px; }
+.share-modal__qr { display: flex; justify-content: center; margin: 10px 0; }
+.share-modal__qr svg { width: 200px; height: 200px; }
+.share-modal__hint { margin: 6px 0 0; color: #8a83a3; font-size: 13px; line-height: 1.6; }
+.share-modal__actions { display: flex; gap: 10px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }

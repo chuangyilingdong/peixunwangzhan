@@ -210,6 +210,46 @@ try {
   const canvasKeys = (canvasItem?.media || []).map((item) => item.pieceKey).filter(Boolean);
   check('⑦ 画布侧主页清单也带 pieceKey（1 图 + 1 视频两件）',
     canvasKeys.includes('media:file_p171_img') && canvasKeys.includes('media:file_p171_vid'), JSON.stringify(canvasKeys));
+
+  /* ── ⑧ 机构/老师端（用户口径：「机构端/老师端也需要有」）────────────────────
+     范围要与「学生学习结果与作品」那张表**同一套**：本机构 + （老师）只限自己课堂。
+     码归**作品的作者（学生）** → 老师与学生拿到的必须是**同一枚码**（幂等跨端一致）。 */
+  const loginAs = async (name, password) => (await api('/api/auth/login', { method: 'POST', body: { login: name, password } })).data?.token;
+  const orgSession = await arow("SELECT id, teacher_id, org_id FROM class_sessions WHERE status='ACTIVE' LIMIT 1");
+  const ownerTeacher = orgSession?.teacher_id ? await arow('SELECT login FROM users WHERE id=?', [orgSession.teacher_id]) : null;
+  const otherTeacher = await arow("SELECT login FROM users WHERE role='TEACHER' AND org_id=? AND id<>? LIMIT 1", [orgSession?.org_id || '', orgSession?.teacher_id || 'teacher-none']);
+  const adminOrgToken = await loginAs('org-admin', 'org123');
+  const ownerTeacherToken = ownerTeacher?.login ? await loginAs(ownerTeacher.login, 'teach123') : '';
+  const otherTeacherToken = otherTeacher?.login ? await loginAs(otherTeacher.login, 'teach123') : '';
+  check('⑧ 机构管理员 / 这间课堂的老师 / 同机构另一个老师，都能登录',
+    Boolean(adminOrgToken && ownerTeacherToken && otherTeacherToken), JSON.stringify({ org: Boolean(adminOrgToken), owning: Boolean(ownerTeacherToken), other: Boolean(otherTeacherToken) }));
+
+  const orgShare = await api('/api/org/share-links', { method: 'POST', token: adminOrgToken, body: { source: 'VIBECODING', workId, pieceKey: 'artifact:index.html' } });
+  check('⑧ ⭐ 机构管理员能替学生分享，拿到的**与学生自己那枚是同一枚**（幂等跨端一致）',
+    orgShare.status === 200 && orgShare.data?.code === html.data?.code,
+    JSON.stringify({ org: orgShare.data?.code, student: html.data?.code }));
+  const teacherShare = await api('/api/org/share-links', { method: 'POST', token: ownerTeacherToken, body: { source: 'VIBECODING', workId, pieceKey: 'artifact:notes.txt' } });
+  check('⑧ 老师（这间课堂是他的）也能发码', teacherShare.status === 200 && Boolean(teacherShare.data?.code), JSON.stringify(teacherShare.raw).slice(0, 160));
+  const foreign = await api('/api/org/share-links', { method: 'POST', token: otherTeacherToken, body: { source: 'VIBECODING', workId, pieceKey: 'artifact:notes.txt' } });
+  check('⑧ ⚠️ **不是他课堂的**老师 → 404（范围卡住，与作品表同一套判据）', foreign.status === 404, `status=${foreign.status}`);
+  const teacherCard = await api(`/api/public/share-links/${teacherShare.data?.code}`);
+  check('⑧ 老师分享出去的卡面上仍是**学生与他的机构**（码归作者，不归分享者）',
+    teacherCard.status === 200 && Boolean(teacherCard.data?.student?.name) && Boolean(teacherCard.data?.org?.name),
+    JSON.stringify(teacherCard.data).slice(0, 200));
+
+  /* ── ⑨ 机构端的载荷也要带 pieceKey（老师那条路同样要"选哪一件"）────────────── */
+  const orgWorks = await api('/api/org/works?includeSnapshot=true', { token: adminOrgToken });
+  const orgItem = (orgWorks.data?.items || []).find((item) => item.id === canvasWorkId);
+  const orgKeys = (orgItem?.media || []).map((item) => item.pieceKey).filter(Boolean);
+  check('⑨ 机构端作品**列表**里每件带 pieceKey（画布 1 图 + 1 视频）',
+    orgKeys.includes('media:file_p171_img') && orgKeys.includes('media:file_p171_vid'), JSON.stringify(orgKeys));
+  const orgDetail = await api(`/api/org/works/VIBECODING/${encodeURIComponent(workId)}`, { token: adminOrgToken });
+  const orgArtifactKeys = (orgDetail.data?.artifacts || []).map((item) => item.pieceKey).filter(Boolean);
+  check('⑨ 机构端作品**详情**（老师点开的那一屏）也带 pieceKey',
+    orgArtifactKeys.includes('artifact:deck.pptx') && orgArtifactKeys.includes('artifact:index.html'),
+    JSON.stringify(orgArtifactKeys).slice(0, 200));
+  const orgFromDetail = await api('/api/org/share-links', { method: 'POST', token: adminOrgToken, body: { source: 'VIBECODING', workId, pieceKey: 'artifact:deck.pptx' } });
+  check('⑨ 机构端详情给的键，机构端发码接口**照单接受**', orgFromDetail.status === 200, JSON.stringify(orgFromDetail.raw).slice(0, 160));
 } catch (error) {
   failures += 1;
   console.error('P171 抛错：', error?.message || error);
