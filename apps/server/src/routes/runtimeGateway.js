@@ -445,10 +445,11 @@ export async function handleRuntimeGateway(ctx) {
   const history = normalizeMessagesWithMeta(body);
   const messages = history.messages;
   if (history.dropped) {
-    // 显式标记的第二半（客户端契约 2026-09-29）：客户端读这两个头就知道"这一轮丢了上下文"，
-    // 可以在界面上把原因说清楚（学生第 15 轮"突然忘事"不该没有解释）。纯增量：老客户端无视即可。
+    // 显式标记（客户端契约 2026-09-29，2026-09-30 定稿）：**只发这一个头** ——
+    // 客户端读它就能在界面上把原因说清楚（学生第 15 轮"突然忘事"不该没有解释）。
+    // ⚠️ 曾经还发过一个 `x-platform-history-limit`：客户端 2026-09-30 明确**不需要**（他们只要知道"丢了多少"），
+    //    所以撤掉了 —— 别再把它加回来（p166 有一条反向断言盯着"不许再发"）。
     ctx.res.setHeader('x-platform-history-dropped', String(history.dropped));
-    ctx.res.setHeader('x-platform-history-limit', String(history.limit));
     console.warn(`[runtimeGateway] 历史超过上限：省略最早 ${history.dropped} 条（上限 ${history.limit}，`
       + `可用 RUNTIME_GATEWAY_MAX_HISTORY 调），已在上游请求里插一条 system 说明`);
   }

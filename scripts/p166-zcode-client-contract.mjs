@@ -305,10 +305,11 @@ try {
     meta.messages[1]?.role !== 'tool', JSON.stringify(meta.messages[1]).slice(0, 120));
 
   const longResponse = await gatewayPost(key, { model: 'p166-model', stream: true, messages: longHistory });
-  check('⑤ 真请求：响应头 x-platform-history-dropped / -limit 告诉客户端丢了多少（界面才能说清原因）',
-    Number(longResponse.headers.get('x-platform-history-dropped')) === 40
-    && Number(longResponse.headers.get('x-platform-history-limit')) === 80,
+  check('⑤ 真请求：响应头 x-platform-history-dropped 告诉客户端丢了多少（界面才能说清原因）',
+    longResponse.headers.get('x-platform-history-dropped') === '40',
     JSON.stringify([...longResponse.headers].filter(([name]) => name.startsWith('x-platform-'))));
+  check('⑤ 客户端 2026-09-30 口径：**不再发** x-platform-history-limit（他们不需要"上限"，只要"丢了多少"）',
+    longResponse.headers.get('x-platform-history-limit') === null, String(longResponse.headers.get('x-platform-history-limit')));
   await readSse(longResponse);
   const forwardedLong = seenBodies.at(-1)?.body?.messages || [];
   check('⑤ 真请求：上游收到的**第一条**是那条 system 说明（模型因此知道"更早的不在我手上"）',
