@@ -33,6 +33,38 @@ const PROMPT_SLOT_ACTION = { text: '写文字', prompt: '写文字', image: '生
  */
 const WORK_PUBLISHED_LOCK_MESSAGE = '这份作品已经发布到作品广场，不能再重新提交了。想接着补充内容：请老师或平台先在作品管理里把它「下架」，下架后这里就能继续提交。';
 
+/**
+ * 等一条生成任务出结果。
+ *
+ * 2026-09-30 用户口径（原话）：「除非上游真的报错，不然应该一直等到上游出结果。每个框体都一样。」
+ * 这里原来写的是 `for (attempt < 150) { 等 2 秒; 查一次 }` = **5 分钟**上限，到点就抛
+ * 「生成仍在进行中，请稍后刷新查看」—— 而生产实测一条 15 秒的视频上游跑了 **425 秒**，
+ * 于是学生看到的就是"失败"（服务端那边还跟着在 5 分钟处把任务判死，两处正好一起砍）。
+ *
+ * 现在结束只有两种可能：任务 **SUCCEEDED** / **FAILED**（上游真报错时服务端把任务收成 FAILED 并带原因）。
+ * 单次查询失败（网络抖一下、服务端正忙）**不算上游报错** → 忽略它、下一轮接着问；
+ * 但要是**连着** 1 分钟一次都问不到，那就如实抛出去 —— 服务端整个不可用时，这个框体不该永远转圈。
+ */
+async function waitForGenerationJob(api, jobId) {
+  const path = `ai/generations/history/${encodeURIComponent(jobId)}`;
+  let missesInARow = 0;
+  for (;;) {
+    let job = null;
+    try {
+      // 单次查询自己带 30 秒超时：查询挂住时掐掉这一轮再问（与"等多久"无关）。
+      job = await api.get(path, { timeoutMs: 30000 });
+      missesInARow = 0;
+    } catch (error) {
+      // 任务记录都没了（换了账号 / 被清理）→ 再问也没有意义，如实抛给调用方。
+      if (Number(error?.status) === 404) throw error;
+      missesInARow += 1;
+      if (missesInARow >= 30) throw error;
+    }
+    if (job && ['SUCCEEDED', 'FAILED'].includes(String(job.status))) return job;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+}
+
 // Signatures and helpers (原独立学生端逻辑，已并入官网学习页)
 // 快照的「内容」用于判断有没有未保存改动。**必须包含节点位置**：
 // 漏掉位置时，学生把框体挪来挪去不会算成改动 → 不触发自动保存 → 一刷新位置全复原（用户反馈过）。
@@ -401,11 +433,7 @@ export function CanvasWorkspace({ api, ...props }) {
     // 比例/清晰度/时长/音频：框体定了的以框体为准，框体留空的用学生在画布上选的值
     // （params 里就是学生选的；服务端仍会按模型能力再校验一次）。
     const queued = await api.post('ai/generations/async', { projectId: project.data.id, modality, prompt, title, sourceAssetUrl, lastFrameAssetUrl, referenceAssets, boxId, ...(params || {}) });
-    let result = queued.job;
-    for (let attempt = 0; attempt < 150 && !['SUCCEEDED', 'FAILED'].includes(result.status); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      result = await api.get(`ai/generations/history/${encodeURIComponent(result.id)}`);
-    }
+    const result = await waitForGenerationJob(api, queued.job.id);
     if (result.status !== 'SUCCEEDED') throw new Error(result.errorMessage || '生成仍在进行中，请稍后刷新查看');
     const asset = result.assets?.[0];
     if (!asset) throw new Error('AI 未返回可用素材');
@@ -418,11 +446,7 @@ export function CanvasWorkspace({ api, ...props }) {
     setGenerating(true);
     try {
       const queued = await api.post('ai/generations/async', { projectId: project.data.id, ...generationForm });
-      let result = queued.job;
-      for (let attempt = 0; attempt < 150 && !['SUCCEEDED', 'FAILED'].includes(result.status); attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        result = await api.get(`ai/generations/history/${encodeURIComponent(result.id)}`);
-      }
+      const result = await waitForGenerationJob(api, queued.job.id);
       if (result.status !== 'SUCCEEDED') throw new Error(result.errorMessage || '生成仍在进行中，请稍后刷新查看');
       const asset = result.assets?.[0];
       if (asset) addGeneratedAsset(asset, generationForm.prompt, generationForm.modality);

@@ -12,6 +12,12 @@ export const AI_PROVIDER_ENDPOINT = String(process.env.AI_PROVIDER_ENDPOINT || '
 // Read only on the server; never accept this value from request payloads.
 export const AI_PROVIDER_API_KEY = String(process.env.AI_PROVIDER_API_KEY || '').trim();
 export const AI_PROVIDER_TIMEOUT_MS = Math.max(1000, Math.min(300000, Number(process.env.AI_PROVIDER_TIMEOUT_MS || 120000)));
+// 「上游已经受理、我们等它出结果」的兜底上限（毫秒；**0 = 不限**）—— 2026-09-30 用户口径：
+// 「除非上游真的报错，不然应该一直等到上游出结果。每个框体都一样。」
+// ⚠️ 这不是「到点就判失败」的超时闸（那条已被删掉，见 openaiCompatibleProvider 的 pollForAsset）：
+//    它只管"上游自己也一直不给结果"这种防呆，默认 30 分钟 ≈ 生产实测最慢视频（425 秒）的 4 倍多。
+//    真到了这一刻，任务号已经在 compute_attempts.task_id 里，对账会继续按号找回（只补素材、不计费）。
+export const AI_PROVIDER_MAX_WAIT_MS = Math.max(0, Number(process.env.AI_PROVIDER_MAX_WAIT_MS ?? 1800000));
 export const AI_PROVIDER_POLL_INTERVAL_MS = Math.max(250, Math.min(10000, Number(process.env.AI_PROVIDER_POLL_INTERVAL_MS || 2000)));
 export const AI_PROVIDER_VOICE = String(process.env.AI_PROVIDER_VOICE || 'alloy').trim() || 'alloy';
 

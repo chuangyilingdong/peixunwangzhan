@@ -1,9 +1,12 @@
-import { AI_PROVIDER_TIMEOUT_MS } from '../config.js';
+import { AI_PROVIDER_TIMEOUT_MS, AI_PROVIDER_MAX_WAIT_MS } from '../config.js';
 import { PROVIDER_ERROR_CODES } from './providerContract.js';
 
 const MAX_TEXT_RESULT_CHARS = 50000;
 const MAX_ASSET_URL_CHARS = 20000000;
 const DEFAULT_POLL_INTERVAL_MS = 2000;
+// 单次「查询上游任务」这条 GET 自己的超时（与"等多久"无关）：查询接口挂住时，
+// 掐掉这一次、下一轮再问即可 —— 任务本身还在上游跑。
+const POLL_QUERY_TIMEOUT_MS = 30000;
 const DEFAULT_MODALITY_PATHS = Object.freeze({
   TEXT: '/chat/completions',
   IMAGE: '/image/generations',
@@ -470,7 +473,8 @@ function assetFromResponse({ payload, binary, contentType, modality, title, prov
  * 2026-09-21 实测：两条走队列的真跑都由这里判失败，而上游两条其实都 `succeeded`
  * （`task_Bwr3…` / `task_KYB0…`），钱已经花了、片也出来了，学生却只看到「AI 服务响应超时」。
  *
- * 所以把这类**瞬时**错误按退避重试到总 deadline；其余（4xx、内容安全、响应格式错…）照旧立刻抛。
+ * 所以把这类**瞬时**错误按退避**一直重试**（只有 maxWaitMs 那个防呆兜底能喊停，见下）；其余
+ * （4xx、内容安全、响应格式错…）照旧立刻抛。
  */
 function isTransientPollFailure(error) {
   const status = Number(error?.status || 0);
@@ -481,34 +485,60 @@ function isTransientPollFailure(error) {
   return !code;
 }
 
-async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, timeout, pollIntervalMs, title, providerName, model, pollPath = '', clientRequestId, onEvidence }) {
+/** 「等过头了没有」——`maxWaitMs <= 0` 表示不限（见 config 里的 AI_PROVIDER_MAX_WAIT_MS）。 */
+function waitedOut(startedAt, maxWaitMs) {
+  return Number(maxWaitMs) > 0 && Date.now() - startedAt >= Number(maxWaitMs);
+}
+
+/**
+ * 等上游出结果 —— **我们自己不掐表判死**。
+ *
+ * 2026-09-30 用户口径（原话）：「除非上游真的报错，不然应该一直等到上游出结果。每个框体都一样。」
+ * 生产实据：一条 15 秒的视频上游实际跑了 **425 秒**（上游耗时截图），学生这边却是「AI 服务响应超时」。
+ * 根因就在这个循环原来那句 `const deadline = Date.now() + timeout`：`timeout` 被两处
+ * `Math.min(300000,…)` 封在 5 分钟，到点就走人 —— 而上游的任务还在跑、还会成功、还会计费，
+ * 结果再没人拿 `compute_attempts.task_id` 回去查（§56/§57 那 17 条的成因）。
+ *
+ * 现在只有两条判据：
+ *   · **上游说还在跑**（pending）→ 继续等，查询间隔按渠道配置，单次查询自己 30 秒超时；
+ *   · **上游真的报错**（任务 failed / 4xx / 内容安全 / 查不到这条任务）→ 立刻抛。
+ * 「网络抖一下 / 上游 5xx / 429」既不是"还在跑"也不是"真的报错" → 按退避重试，不判死。
+ *
+ * ⚠️ 仍留一个 `maxWaitMs` 兜底（默认 30 分钟），它**不是超时闸、是防呆**：生成队列是**串行**的，
+ *    一条上游永远不结束的任务会把全班后面的生成顶在后面。真到那一刻任务号已经落库，
+ *    对账（`reconcileStrandedGenerations`）会继续按号找回、只补素材不计费。
+ */
+async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, maxWaitMs, pollIntervalMs, title, providerName, model, pollPath = '', clientRequestId, onEvidence }) {
   let payload = initialPayload;
-  const deadline = Date.now() + timeout;
+  const startedAt = Date.now();
   // 退避：正常时按渠道配的间隔，连续失败就翻倍（封顶 30 秒），成功一次立刻回到常规间隔。
   let waitMs = pollIntervalMs;
   let transientFailures = 0;
   while (pendingPayload(payload) && !mediaCandidate(payload, modality)) {
     const pollUrl = pollUrlFromPayload(payload, requestUrl, pollPath);
     if (!pollUrl) break;
-    const wait = Math.min(waitMs, Math.max(0, deadline - Date.now()));
-    if (wait <= 0) throw providerError('AI 服务响应超时', PROVIDER_ERROR_CODES.TIMEOUT);
-    await new Promise((resolve) => setTimeout(resolve, wait));
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
     let next = null;
     try {
-      const response = await fetchWithTimeout(pollUrl, { method: 'GET', apiKey, timeout: Math.max(1000, Math.min(30000, deadline - Date.now())), modality, clientRequestId, onEvidence });
+      const response = await fetchWithTimeout(pollUrl, { method: 'GET', apiKey, timeout: POLL_QUERY_TIMEOUT_MS, modality, clientRequestId, onEvidence });
       next = await parseResponse(response, modality);
       if (!response.ok) throw providerHttpError(response, next);
     } catch (error) {
       if (!isTransientPollFailure(error)) throw error;
-      if (Date.now() >= deadline) {
-        throw providerError(`查询上游任务时一直不稳定（${String(error?.message || error).slice(0, 80)}）—— 这条任务可能还在上游跑，稍后可以重试`, PROVIDER_ERROR_CODES.TIMEOUT);
-      }
       transientFailures += 1;
       waitMs = Math.min(waitMs * 2, 30000);
+      if (waitedOut(startedAt, maxWaitMs)) {
+        throw providerError(`查询上游任务时一直不稳定（${String(error?.message || error).slice(0, 80)}）—— 这条任务可能还在上游跑，平台会继续按任务号找回它`, PROVIDER_ERROR_CODES.TIMEOUT);
+      }
+      // 查不通是"看不见"，不是"失败"：每 5 次留一句话，免得运维只能看到一个不动的进度条。
+      if (transientFailures % 5 === 0) console.warn(`[上游轮询] ${modality} 任务连续 ${transientFailures} 次查不通（${String(error?.message || error).slice(0, 80)}），继续重试`);
       continue;
     }
     payload = next;
     waitMs = pollIntervalMs;
+    if (pendingPayload(payload) && waitedOut(startedAt, maxWaitMs)) {
+      throw providerError(`上游任务跑了 ${Math.round(Number(maxWaitMs) / 60000)} 分钟还没结束（任务号已保存，平台会继续按任务号找回结果）`, PROVIDER_ERROR_CODES.TIMEOUT);
+    }
   }
   if (failedPayload(payload)) {
     throw providerError(providerFailureMessage(payload), PROVIDER_ERROR_CODES.UPSTREAM);
@@ -516,10 +546,16 @@ async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, time
   return assetFromResponse({ payload, modality, title, providerName, model });
 }
 
-export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeoutMs = AI_PROVIDER_TIMEOUT_MS, modalityEndpoints = {}, voice = 'alloy', pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, requestTemplates = {}, modelRequestTemplates = {}, requestPaths = {}, pollPaths = {}, mediaUploadPath = defaultMediaUploadPath(endpoint), selfOrigins = [] } = {}) {
+export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeoutMs = AI_PROVIDER_TIMEOUT_MS, maxWaitMs = AI_PROVIDER_MAX_WAIT_MS, modalityEndpoints = {}, voice = 'alloy', pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, requestTemplates = {}, modelRequestTemplates = {}, requestPaths = {}, pollPaths = {}, mediaUploadPath = defaultMediaUploadPath(endpoint), selfOrigins = [] } = {}) {
   const providerName = String(name || 'openai-compatible').trim();
   const providerModel = String(model || '').trim();
+  // 单次 HTTP 请求（提交、上游素材镜像上传）的超时：**封顶 5 分钟不变** —— 它管的是"一条请求挂死了多久算死"，
+  // 与"等上游出结果"是两件事。⚠️ 别把它跟等待上限合并：提交那次**没有任务号可捞**（还没受理或被拒），
+  // 一条挂死的连接必须有人掐断；而"上游还在跑"只可能发生在**轮询**阶段（生产那 5 条 303–309 秒的
+  // 「AI 服务响应超时」`task_id` 都已落库，就是证据：提交成功、死在轮询的上限上）。
   const timeout = Math.max(1000, Math.min(300000, Number(timeoutMs) || AI_PROVIDER_TIMEOUT_MS));
+  // 「已受理的任务等多久」的兜底（默认 30 分钟，0 = 不限）：与单请求超时**分开**，见 pollForAsset 上方那段口径。
+  const waitCeiling = Number.isFinite(Number(maxWaitMs)) ? Math.max(0, Number(maxWaitMs)) : Math.max(0, Number(AI_PROVIDER_MAX_WAIT_MS) || 0);
   const pollInterval = Math.max(250, Math.min(10000, Number(pollIntervalMs) || DEFAULT_POLL_INTERVAL_MS));
   // 素材镜像地址：`/v1/files/upload` 这类路径按上游 origin 拼绝对地址。
   const mediaUploadUrl = mediaUploadPath ? absoluteEndpoint(endpoint, mediaUploadPath) : '';
@@ -567,12 +603,12 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
         // 上游还给了 `Retry-After: 5`，头一次查询按它等（封顶 30 秒），别立刻去撞。
         const retryAfterMs = Number(response.headers?.get('retry-after')) > 0 ? Math.min(30000, Number(response.headers.get('retry-after')) * 1000) : 0;
         onSubmitted?.(retryTaskId);
-        return { assets: [await pollForAsset({ initialPayload: { task_id: retryTaskId }, requestUrl: url, modality: normalizedModality, apiKey, timeout, pollIntervalMs: Math.max(pollInterval, retryAfterMs), title, providerName, model: providerModel, pollPath: pollPaths[normalizedModality] || '', clientRequestId, onEvidence })] };
+        return { assets: [await pollForAsset({ initialPayload: { task_id: retryTaskId }, requestUrl: url, modality: normalizedModality, apiKey, maxWaitMs: waitCeiling, pollIntervalMs: Math.max(pollInterval, retryAfterMs), title, providerName, model: providerModel, pollPath: pollPaths[normalizedModality] || '', clientRequestId, onEvidence })] };
       }
       if (!response.ok) throw providerHttpError(response, parsed);
       if (normalizedModality !== 'TEXT' && !parsed?.binary && pendingPayload(parsed)) {
         onSubmitted?.(payloadTaskId(parsed));
-        return { assets: [await pollForAsset({ initialPayload: parsed, requestUrl: url, modality: normalizedModality, apiKey, timeout, pollIntervalMs: pollInterval, title, providerName, model: providerModel, pollPath: pollPaths[normalizedModality] || '', clientRequestId, onEvidence })] };
+        return { assets: [await pollForAsset({ initialPayload: parsed, requestUrl: url, modality: normalizedModality, apiKey, maxWaitMs: waitCeiling, pollIntervalMs: pollInterval, title, providerName, model: providerModel, pollPath: pollPaths[normalizedModality] || '', clientRequestId, onEvidence })] };
       }
       // 用量回执（P90）：文本把上游的 token 用量提到顶层 usage，调用方不用再翻产物 metadata。
       // 非文本上游没有 token 回执，usage 为 null（图片/视频按张数、秒数在调用侧按请求参数记）。

@@ -13,6 +13,10 @@ process.env.AI_PROVIDER_API_KEY = 'test-only';
 //    （挂的是"p75(超时)"，而它在套件外面单跑其实是绿的）。调到 4 秒后整条脚本几秒就跑完、
 //    断言一条不少（那条验的是"至少提交 + 轮询一次"，不是"重试多少次"）。
 process.env.AI_PROVIDER_TIMEOUT_MS = '4000';
+// ⚠️ 2026-09-30 口径变更（不是测试漂移）：轮询**不再按"单请求超时"掐表**了 —— 上游没报错就一直等，
+//    能喊停的只剩 `AI_PROVIDER_MAX_WAIT_MS` 这个兜底（默认 30 分钟，见 openaiCompatibleProvider 的 pollForAsset）。
+//    下面那条"429 一直被重试"的用例必须把**兜底**也调到 4 秒，否则它会老老实实轮 30 分钟。
+process.env.AI_PROVIDER_MAX_WAIT_MS = '4000';
 const load = p => import(pathToFileURL(path.resolve(p)).href);
 const { getGenerationProvider } = await load('apps/server/src/services/generationProvider.js');
 const { rows, arows } = await load('apps/server/src/lib.js');

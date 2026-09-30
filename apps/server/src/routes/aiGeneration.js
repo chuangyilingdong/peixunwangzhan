@@ -578,7 +578,8 @@ async function markJobFailed({ jobId, orgId, userId, project, modality, provider
  *
  * 把「**已经提交给上游、上游可能已经出片并计费，而我们这边判了失败**」的任务，按保存下来的
  * 上游任务号（`compute_attempts.task_id`）查回来。两类来源都会掉进这个坑：
- *   · `GENERATION_PROVIDER_TIMEOUT`：上游调用有 5 分钟硬顶（两处 `Math.min(300000,…)`），到点我们走人；
+ *   · `GENERATION_PROVIDER_TIMEOUT`：上游一直不给结果、到了兜底上限（`AI_PROVIDER_MAX_WAIT_MS`，
+ *     默认 30 分钟；2026-09-30 之前是 5 分钟硬顶，那条"到点就走人"已删，见 pollForAsset 上方）；
  *   · `GENERATION_INTERRUPTED`：服务重启时 `interruptOrphanedJobs` 把在跑的 RUNNING 全部收掉。
  * 两种情况下上游任务**都已经受理**、会继续跑、成功、按已受理计费，可我们从此**再没人拿这个号回去查过**
  * —— 学生看不到素材、钱照花。教条与它同源：`pollForAsset` 上方那段
