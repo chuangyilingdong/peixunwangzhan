@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { ApiError, AppErrorBoundary, AppShell, clearSession, createApiClient, Empty, ErrorState, formatDate, formatYuan, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, useDebouncedValue, WorkPlazaStatus, Status, useData, writeSession, WorkMediaGallery, resolveWorkMediaUrl, errorText, WorkSharePanel, shareablePiecesOf } from '@platform/shared';
+import { ApiError, AppErrorBoundary, AppShell, CLIENT_DEEP_LINK, clearSession, createApiClient, Empty, ErrorState, formatDate, formatYuan, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, useDebouncedValue, WorkPlazaStatus, Status, useData, writeSession, WorkMediaGallery, resolveWorkMediaUrl, errorText, WorkSharePanel, shareablePiecesOf } from '@platform/shared';
 import { StudentGrants } from './pages/StudentGrants.jsx';
+import { LessonPrep } from './pages/LessonPrep.jsx';
 import { AccountSecurity } from './pages/AccountSecurity.jsx';
 import { SeriesOverview } from './pages/SeriesOverview.jsx';
 import { Classrooms } from './pages/Classrooms.jsx';
@@ -537,6 +538,28 @@ function OrgCourses({ api }) {
         <div className="drawer-panel" onClick={(event) => event.stopPropagation()}>
           <header className="drawer-head"><div><span className="eyebrow">课时详情</span><h2>{lessonDetail.title}</h2></div><button type="button" className="drawer-close" onClick={() => setLessonDetail(null)}>×</button></header>
           <div className="drawer-body">
+            {/* ⭐ 2026-09-30 用户口径：「老师端可以自由无限制进入对应的课时课堂，画布/VibeCoding，
+                他们可以走流程，但是无法生成」——按这节课**发布的入口类型**出按钮（两种都发就两个都出）。 */}
+            <section className="drawer-section">
+              <h3>备课入口</h3>
+              {(() => {
+                const modes = Array.isArray(lessonDetail.deliveryModes) && lessonDetail.deliveryModes.length
+                  ? lessonDetail.deliveryModes
+                  : [String(lessonDetail.deliveryMode || 'CANVAS').toUpperCase()];
+                if (!modes.includes('CANVAS') && !modes.includes('VIBECODING')) return <p className="muted">这节课还没有发布课堂入口。</p>;
+                return <>
+                  <div className="row-actions">
+                    {modes.includes('CANVAS') ? <button type="button" className="primary-button" onClick={() => navigate(`/lesson-prep/${encodeURIComponent(lessonDetail.id)}`)}>画布备课</button> : null}
+                    {modes.includes('VIBECODING') ? <a className="primary-button" href={`${CLIENT_DEEP_LINK}?prep=1&lesson=${encodeURIComponent(lessonDetail.id)}`}>VibeCoding备课</a> : null}
+                  </div>
+                  <p className="muted" style={{ marginTop: 8 }}>
+                    {modes.includes('CANVAS') ? '画布备课：在自己浏览器里打开，和学生画布同一套界面，能拖能连能写提示词，不生成、不落库。' : ''}
+                    {modes.includes('CANVAS') && modes.includes('VIBECODING') ? ' ' : ''}
+                    {modes.includes('VIBECODING') ? 'VibeCoding备课：在桌面客户端里打开（发送按钮会被隐藏，走一遍学生的流程；没装客户端请先到官网下载）。' : ''}
+                  </p>
+                </>;
+              })()}
+            </section>
             <section className="drawer-section">
               <h3>课时信息</h3>
               <p className="muted">{lessonDetail.summary || '暂无简介'}</p>
@@ -726,7 +749,7 @@ export function App() {
   const visibleNavigation = session.user.role === 'TEACHER' ? [{ to: '/dashboard', icon: '◈', label: '教师工作台' }, { to: '/courses', icon: '◇', label: '课程备课' }, { to: '/classrooms', icon: '▦', label: '我的课堂' }, { to: '/works', icon: '✦', label: '学生学习结果与作品' }, { to: '/account', icon: '🔑', label: '账号安全' }] : navigation;
   // 改密成功后所有会话都失效（服务端撤销），所以这里只能清本地会话回登录页 —— 不装还在登录。
   const signedOutByPasswordChange = () => { clearSession(); setSession(null); navigate('/login'); };
-  return <AppShell product="灵动ai学院" orgName={session.organization?.name || session.organization?.shortName || ''} roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout} onChangePassword={() => navigate('/account')}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/account" element={<AccountSecurity api={api} user={session.user} onSignedOut={signedOutByPasswordChange} />} /><Route path="/classrooms" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId/students/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/members" element={session.user.role === 'ORG_ADMIN' ? <Members api={api} user={session.user} /> : <Navigate to="/classrooms" replace />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={session.user.role === 'ORG_ADMIN' ? <SeriesOverview api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={session.user.role === 'ORG_ADMIN' ? <EnrollmentPage api={api} user={session.user} /> : <Navigate to="/series-overview" replace />} /><Route path="/usage" element={session.user.role === 'ORG_ADMIN' ? <UsagePage api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/grants" element={session.user.role === 'ORG_ADMIN' ? <StudentGrants api={api} /> : <Navigate to="/series-overview" replace />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="灵动ai学院" orgName={session.organization?.name || session.organization?.shortName || ''} roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout} onChangePassword={() => navigate('/account')}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/account" element={<AccountSecurity api={api} user={session.user} onSignedOut={signedOutByPasswordChange} />} /><Route path="/classrooms" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId/students/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/members" element={session.user.role === 'ORG_ADMIN' ? <Members api={api} user={session.user} /> : <Navigate to="/classrooms" replace />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={session.user.role === 'ORG_ADMIN' ? <SeriesOverview api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/lesson-prep/:lessonId" element={<LessonPrep api={api} />} /><Route path="/enrollment" element={session.user.role === 'ORG_ADMIN' ? <EnrollmentPage api={api} user={session.user} /> : <Navigate to="/series-overview" replace />} /><Route path="/usage" element={session.user.role === 'ORG_ADMIN' ? <UsagePage api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/grants" element={session.user.role === 'ORG_ADMIN' ? <StudentGrants api={api} /> : <Navigate to="/series-overview" replace />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 // 兜底放在**最外层**（BrowserRouter 之外）：路由渲染期抛错也归它管。
 createRoot(document.getElementById('root')).render(<AppErrorBoundary><BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter></AppErrorBoundary>);

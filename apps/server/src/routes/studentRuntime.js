@@ -8,7 +8,8 @@
 //   · services/studentRuntime.js —— 门禁 → 签密钥 → 调宿主脚本（开 / 收 / 列产物 / 取产物）；
 //   · 本文件的 /submit —— 把取回来的产物按**现有作品链路**落进 vibecoding_submissions；
 //     网页里的本地图片存成私有文件资产并改写引用（见 fileAssets.js 的 storeStudentArtifactAsset）。
-import { deliveryModesOf, errors, requireRole, row, rows, arow, arows, amap } from '../lib.js';
+import { deliveryModesOf, errors, normalizeLesson, requireRole, row, rows, arow, arows, amap } from '../lib.js';
+import { accessibleLesson } from './adminOrg.js';
 import { collectStudentDeliverable, launchStudentRuntime, listStudentDeliverables, runtimeGatewayUrl, stopStudentRuntime, studentRuntimeAvailability } from '../services/studentRuntime.js';
 import { issueRuntimeKey } from './runtimeGateway.js';
 import { vibecodingPresetPrompts, vibecodingSendLimit, vibecodingSendUsage } from '../services/vibecodingLessonSettings.js';
@@ -250,8 +251,14 @@ function mimeForArtifact(name) {
 export async function handleStudentRuntime(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/student/runtime')) return null;
-  const auth = requireRole(ctx, ['STUDENT']);
+  // ⚠️ 2026-09-30：这道角色门**放宽到老师/机构管理员**，但只为「客户端备课上下文」那一条
+  //    （老师的 VibeCoding 备课也在客户端里，客户端要能问到"这是备课模式、哪一节课、不能发送"）。
+  //    其余端点（launch / stop / deliverables / submit…）照旧**只认学生** —— 紧接着就拦回去，
+  //    错误码与文案与原来 `requireRole(ctx, ['STUDENT'])` 抛的一字不差（守卫照旧钉得住）。
+  const auth = requireRole(ctx, ['STUDENT', 'TEACHER', 'ORG_ADMIN']);
   const part = pathname.slice('/api/student/runtime'.length);
+  const isPrepContext = part === '/client-context' && method === 'GET' && auth.user.role !== 'STUDENT';
+  if (auth.user.role !== 'STUDENT' && !isPrepContext) throw errors.forbidden('当前角色无权访问该资源', 'FORBIDDEN');
   const orgId = auth.session?.org_id || auth.user.orgId;
 
   if (part === '/status' && method === 'GET') {
@@ -281,6 +288,46 @@ export async function handleStudentRuntime(ctx) {
   //     `>1` 说明库里有绕过过校验的旧数据，这时打一条警告（下面 logDirtyClassroomCandidates），
   //     并让客户端可以指定哪一节，免得学生上错课、拿到别的课时的次数上限与预设。
   if (part === '/client-context' && method === 'GET') {
+    // ⭐ 2026-09-30 用户口径：「老师端可以自由无限制进入对应的课时课堂（画布 / VibeCoding），
+    //    他们可以走流程，但是**无法生成**」。
+    //    VibeCoding 那一半只能落在客户端里（学生的创作环境就在客户端），所以这里给老师一份
+    //    **备课上下文**：告诉客户端"这是备课模式、是哪一节课、不能发送"。
+    //
+    //    ⚠️ 三条纪律：
+    //      ① **不发 `gateway` 密钥** —— 客户端拿不到运行密钥就调不动上游，这是服务端兜底
+    //        （客户端就算忘了隐藏发送按钮，也发不出去）；
+    //      ② 只给**已发布 + 课包仍授权给本机构**的课时（与机构端建课堂同一条准入）；
+    //      ③ 老师/机构管理员一律走这一支 —— 学生课堂那套是学生作用域的，老师本来就没有课堂，
+    //        以前会掉进「老师还没有开始上课」那句里。
+    if (auth.user.role !== 'STUDENT') {
+      const prepLessonId = String(ctx.search.get('lessonId') || '').trim();
+      let prepLesson = prepLessonId
+        ? await arow("SELECT * FROM course_lessons WHERE id=? AND status='PUBLISHED'", [prepLessonId])
+        : null;
+      if (prepLessonId && !prepLesson) throw errors.notFound('课时不存在或未发布', 'LESSON_NOT_FOUND');
+      if (prepLesson && !await accessibleLesson((auth.session?.org_id || auth.user.orgId), prepLessonId)) {
+        throw errors.forbidden('这个课包还没有授权给本机构', 'COURSE_NOT_ASSIGNED');
+      }
+      if (prepLesson) prepLesson = await normalizeLesson(prepLesson, { asPublished: true });
+      const prepSeries = prepLesson?.seriesId ? await arow('SELECT title FROM course_series WHERE id=?', [prepLesson.seriesId]) : null;
+      return {
+        prep: true,
+        classroom: null,
+        classrooms: [],
+        upcoming: null,
+        reason: 'TEACHER_PREP',
+        message: '备课模式：可以走一遍学生的界面流程，但不能生成内容',
+        user: { id: auth.user.id, name: auth.user.displayName || auth.user.display_name || null, role: auth.user.role },
+        lesson: prepLesson ? {
+          id: prepLesson.id, title: prepLesson.title, seriesTitle: prepSeries?.title || null,
+          deliveryMode: prepLesson.deliveryMode, deliveryModes: prepLesson.deliveryModes,
+          capabilities: prepLesson.capabilities || [],
+        } : null,
+        presets: prepLesson ? await vibecodingPresetPrompts(prepLesson.id) : [],
+        models: await textModelOptions(),
+        defaultModel: await textDefaultModel(),
+      };
+    }
     const entry = await resolveClassroomEntry(auth.user.id, ctx.search.get('sessionId'));
     logDirtyClassroomCandidates(auth.user.id, entry.candidates);
     const classroom = entry.classroom;

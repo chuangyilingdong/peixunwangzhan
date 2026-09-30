@@ -171,16 +171,23 @@ check('生成方式要显示出来：配置胶囊带中文标签、素材面板�
   const canvas = read('packages/canvas/src/index.jsx');
   assert.match(canvas, /const modeChip = String\(data\.inputModeLabel \|\| ''\)/);
   assert.match(canvas, /if \(modeChip\) params\.push\(modeChip\)/);
+  // ⚠️ 2026-09-30：这两段（面板副标题 + 节点 data）搬到了 `canvasBoxNode.js` ——
+  //    备课画布要与学生画布用**同一份**框体→节点映射，所以抽了出来（学生画布 import 它）。
+  //    断言跟着搬家后的位置走，并且**加一条"学生画布确实 import 了它"**：不然抽完没人用，
+  //    这条守卫照样绿、而学生画布悄悄退回老实现。
+  const nodes = read('packages/shared/src/canvasBoxNode.js');
+  assert.match(nodes, /const modeLabel = box\??\.inputModeLabel \|\| ''/);
+  assert.match(nodes, /if \(modeLabel\) params\.unshift\(modeLabel\)/);
+  assert.match(nodes, /inputModeLabel: box\??\.inputModeLabel \|\| ''/, '节点 data 也要带上标签');
   const workspace = read('packages/shared/src/canvasWorkspace.jsx');
-  assert.match(workspace, /const modeLabel = box\.inputModeLabel \|\| ''/);
-  assert.match(workspace, /if \(modeLabel\) params\.unshift\(modeLabel\)/);
-  assert.match(workspace, /inputModeLabel: box\.inputModeLabel \|\| ''/, '节点 data 也要带上标签');
+  assert.match(workspace, /import \{ boxParamsLabel, buildBoxNode \} from '\.\/canvasBoxNode\.js'/, '学生画布要用共用那一份');
 });
 check('标签由服务端算（客户端不抄一份标签表）', () => {
   const lib = read('apps/server/src/lib.js');
   assert.match(lib, /box\.inputModeLabel = inputModeShortLabel\(box\.inputMode, modality\)/);
-  const workspace = read('packages/shared/src/canvasWorkspace.jsx');
-  assert.doesNotMatch(workspace, /INPUT_MODE_LABELS|INPUT_MODE_SHORT_LABELS/, '客户端不该有第二份标签表');
+  for (const file of ['packages/shared/src/canvasWorkspace.jsx', 'packages/shared/src/canvasBoxNode.js']) {
+    assert.doesNotMatch(read(file), /INPUT_MODE_LABELS|INPUT_MODE_SHORT_LABELS/, `${file} 不该有第二份标签表`);
+  }
 });
 
 console.log('⑧ 后台「生成方式」下拉只留两种（用户 2026-09-21 口径：视频只留文生/全能参考、图片只留文生图/图生图）');
@@ -223,8 +230,9 @@ check('画布读面：音频那行要标出用法 + 对口型时给"台词写进
   assert.match(canvas, /音频只作声音参考（不驱动画面）/, '声音参考也要写出来');
   assert.match(canvas, /口型跟随 <Audio 1>，说：<d>\[中文\] 你好呀。<\/d>/, '台词那句要给出上游文档的写法');
   assert.match(canvas, /lockedAudioRole=\{videoInputPlan\.audioRole\}/, '角色要传进那一行');
-  const workspace = read('packages/shared/src/canvasWorkspace.jsx');
-  assert.match(workspace, /audioRole: box\.audioRole === 'VOICE_REFERENCE' \? 'VOICE_REFERENCE' : 'LIP_SYNC'/, '节点数据要带上（漏了面板就永远显示对口型）');
+  // 同上：节点数据那段现在住在 canvasBoxNode.js（学生画布与备课画布共用）
+  const nodes = read('packages/shared/src/canvasBoxNode.js');
+  assert.match(nodes, /audioRole: box\??\.audioRole === 'VOICE_REFERENCE' \? 'VOICE_REFERENCE' : 'LIP_SYNC'/, '节点数据要带上（漏了面板就永远显示对口型）');
 });
 
 if (failures) { console.log(`\n❌ P122 不通过：${failures} 项`); process.exit(1); }

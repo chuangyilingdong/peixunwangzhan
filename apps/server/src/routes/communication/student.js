@@ -106,6 +106,11 @@ export async function handleStudentCommunication(ctx) {
   if (!pathname.startsWith('/api/student/')) return null;
   // /api/student/billing-config 由独立路由处理
   if (pathname.startsWith('/api/student/billing-config')) return null;
+  // ⚠️ 2026-09-30：`/api/student/runtime/**` 也交给独立路由（`handleStudentRuntime`）。
+  //    不跳过的话，上面这道 `requireRole(['STUDENT'])` 会把**老师**挡在门外 ——
+  //    而老师的客户端备课上下文（`client-context?prep=1`）正是 runtime 那一条。
+  //    这条前缀下其余端点仍然是"只认学生"（见 studentRuntime.js 开头那道 `isPrepContext`）。
+  if (pathname.startsWith('/api/student/runtime')) return null;
   const auth = requireRole(ctx, ['STUDENT']);
   const currentOrgId = orgId(auth);
   const part = pathname.slice('/api/student'.length);

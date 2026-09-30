@@ -655,6 +655,42 @@ export async function handleOrg(ctx) {
     // 与「没更新发布就还按上一版给机构看」的口径正好相反。判据只留一处。
     return detail;
   }
+
+  // ⭐ 2026-09-30 用户口径：「老师端可以自由无限制进入对应的课时课堂（画布 / VibeCoding），
+  //    他们可以走流程，但是**无法生成**」。
+  //    这是**画布备课**那一半的数据面：这一节课配了哪些生成框体 + 学生进来时那张初始画布。
+  //    ⚠️ 只读、**不落库**：老师在这个页面上拖节点 / 写提示词 / 连参考线，都不产生任何学生作品；
+  //    生成按钮也不会出现（前端不传 `onGenerateNode`，画布自己就不渲染它 —— 见 canvas/index.jsx 的 canGenerate）。
+  //    ⚠️ 准入与"建课堂"同一条：课时已发布 + 课包仍授权给本机构（`accessibleLesson`）。
+  let orgLessonPrepMatch = part.match(/^\/lessons\/([^/]+)\/prep$/);
+  if (orgLessonPrepMatch && method === 'GET') {
+    const prepLessonId = orgLessonPrepMatch[1];
+    const prepLesson = await arow("SELECT * FROM course_lessons WHERE id=? AND status='PUBLISHED'", [prepLessonId]);
+    if (!prepLesson) throw errors.notFound('课时不存在或未发布', 'LESSON_NOT_FOUND');
+    if (!await accessibleLesson(currentOrgId, prepLessonId)) throw errors.forbidden('这个课包还没有授权给本机构', 'COURSE_NOT_ASSIGNED');
+    const publishedPrep = await normalizeLesson(prepLesson, { asPublished: true });
+    // 前端会按这节课的类型只请求对应那一档；请求了没发布的入口一律拒（与建课堂同一句文案）
+    const prepMode = String(ctx.search.get('mode') || 'CANVAS').trim().toUpperCase();
+    if (!['CANVAS', 'VIBECODING'].includes(prepMode) || !publishedPrep.deliveryModes.includes(prepMode)) {
+      throw errors.badRequest('该课时未发布此入口类型', 'INVALID_DELIVERY_MODE');
+    }
+    const prepSeries = prepLesson.series_id ? await arow('SELECT title FROM course_series WHERE id=?', [prepLesson.series_id]) : null;
+    return {
+      mode: prepMode,
+      lesson: {
+        id: publishedPrep.id, title: publishedPrep.title, summary: publishedPrep.summary || '',
+        seriesId: publishedPrep.seriesId || null, seriesTitle: prepSeries?.title || null,
+        durationMinutes: publishedPrep.durationMinutes || 0,
+        deliveryMode: publishedPrep.deliveryMode, deliveryModes: publishedPrep.deliveryModes,
+        capabilities: publishedPrep.capabilities || [],
+      },
+      // 学生进来时那张初始画布（课时模板）；没配模板就是空画布 —— 与 `student.js` 建项目时取的**同一份**字段
+      canvasSnapshot: publishedPrep.canvasTemplateSnapshot || {},
+      // 课时配的生成框体（备课画布左侧"加到画布"用的清单）；显示名/参数胶囊都已由服务端打好标签
+      generationBoxes: publishedPrep.generationBoxes || [],
+    };
+  }
+
   /* ─────────────── 课堂（2026-09-13 批次 B：班级退场，课堂成为主对象）───────────────
    *
    * 四态：待上课（创建即此）→ 上课中（老师点开始）→ 已结束（老师点结束）；
