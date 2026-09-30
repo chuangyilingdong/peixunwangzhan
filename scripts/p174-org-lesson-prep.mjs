@@ -166,12 +166,16 @@ try {
 
   /* ───────── ⑤ 静态：按钮与"不生成" ───────── */
   const orgMain = fs.readFileSync(path.join('apps', 'org', 'src', 'main.jsx'), 'utf8');
-  check('⑤ 课时详情按 deliveryModes 出「画布备课」按钮', /画布备课/.test(orgMain) && /lesson-prep\//.test(orgMain));
+  check('⑤ 课时详情按 deliveryModes 出「画布备课」按钮（新标签打开学生的画布课堂）',
+    /画布备课/.test(orgMain) && orgMain.includes('/learn/prep/') && /target="_blank"/.test(orgMain)
+    && !/lesson-prep\//.test(orgMain), '机构端不该再有内部备课页路由');
   check('⑤ VibeCoding 那一档走客户端深链，且带 prep=1&lesson=', /\$\{CLIENT_DEEP_LINK\}\?prep=1&lesson=/.test(orgMain));
-  const prepPage = fs.readFileSync(path.join('apps', 'org', 'src', 'pages', 'LessonPrep.jsx'), 'utf8');
+  const prepPage = fs.readFileSync(path.join('apps', 'website', 'src', 'pages', 'CanvasPrep.jsx'), 'utf8');
   // ⚠️ 只认**真的把它当 prop 传**（`onGenerateNode={`）—— 注释里也会提到这个名字（"不传它就隐藏生成按钮"），
   //    用裸词匹配会被自己的注释骗过去（本守卫第一版就栽在这上面）。
   check('⑤ ⭐ 备课画布**不传 onGenerateNode**（生成按钮因此不出现）', !/onGenerateNode[=:]/.test(prepPage));
+  check('⑤ 备课页挂在网站域（全屏画布课堂），路由是 /learn/prep/:lessonId',
+    /\/learn\/prep\/:lessonId/.test(fs.readFileSync(path.join('apps', 'website', 'src', 'main.jsx'), 'utf8')));
   check('⑤ 备课画布与学生画布同一套受控形态（allowNodeCreation=false + showStarter=false）',
     /allowNodeCreation=\{false\}/.test(prepPage) && /showStarter=\{false\}/.test(prepPage));
   check('⑤ 备课不落库：只写本机 localStorage（没有 api.post / 项目接口）',

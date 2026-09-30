@@ -11,6 +11,7 @@ import { WorkDetailPage } from './pages/WorkDetail.jsx';
 import { CreatorHomePage } from './pages/CreatorHome.jsx';
 // 作品分享页（/s/<分享码>）—— 学生主页侧发的码，与作品广场两条链路（2026-09-30）
 import { WorkSharePage } from './pages/WorkShare.jsx';
+import { CanvasPrepPage } from './pages/CanvasPrep.jsx';
 import { MyHomeRedirect } from './components/MyHomeRedirect.jsx';
 
 /**
@@ -1852,7 +1853,9 @@ export function App(){
   // 所以 /learn（我的课程）是**普通页面**——顶栏 + 页脚都在。
   // ⚠️ 只有真正的课堂（/learn/canvas、/learn/canvas/:projectId）才当全屏页：那是学生干活的环境，
   //    要让出整屏高度、不能再叠一层站内导航。
-  const isFullPage = loc.pathname.startsWith('/learn/canvas');
+  // ⚠️ 老师的「画布备课」（/learn/prep/<课时 id>）也是**全屏画布课堂**（用户 2026-09-30 口径：
+  //    「我是说可以直接进入到画布课堂啊」）—— 与学生课堂同一个全屏待遇，不叠站内导航。
+  const isFullPage = loc.pathname.startsWith('/learn/canvas') || loc.pathname.startsWith('/learn/prep');
   return (
     <div className='site'>
       {INTERNAL_TEST && <div className='internal-test-banner' role='status'>内部测试环境 · 不代表正式服务</div>}
@@ -1892,6 +1895,8 @@ export function App(){
             改密会撤销该账号所有会话，成功那一刻本地会话也一并清掉、回学生登录页 */}
         <Route path='/account' element={session ? <StudentAccountPage api={api} user={session.user} onSignedOut={() => { removeUserSession(); setSession(null); navigate('/login?as=student'); }} /> : <Navigate to='/login?as=student' replace />}/>
         <Route path='/learn/canvas' element={<LearnCanvasPage api={api}/>}/>
+        {/* ⭐ 2026-09-30：老师的画布备课 = 学生的画布课堂（同一套全屏界面，不生成、不落库） */}
+        <Route path='/learn/prep/:lessonId' element={<CanvasPrepPage api={api}/>}/>
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
         {/* ⚠️ 2026-09-27 改名：「我的作品」→「我的主页」（用户口径「现在不需要『我的作品』了，
             就是叫『我的主页』」），路径一起改成 /my-home。下面两条是老地址的重定向 ——

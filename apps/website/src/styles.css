@@ -1264,3 +1264,30 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 .pl-viewer-head__actions { display: flex; align-items: center; gap: 10px; }
 .pl-viewer-share { border: 1px solid #7c5cff; color: #7c5cff; background: #fff; border-radius: 10px; padding: 6px 16px; font: inherit; cursor: pointer; }
 .pl-viewer-share:disabled { opacity: 0.5; cursor: default; }
+
+/* ── 老师的「画布备课」：**就是学生的画布课堂那一套**（2026-09-30 用户口径
+      「我是说可以直接进入到画布课堂啊」）——全屏、不叠站内导航，见 main.jsx 的 isFullPage。 */
+.prep-page { height: 100vh; display: flex; flex-direction: column; background: #f6f4fb; }
+.prep-state { flex: 1; display: flex; align-items: center; justify-content: center; }
+.prep-top { display: flex; align-items: center; gap: 14px; padding: 10px 18px; background: #fff; border-bottom: 1px solid #ece7fb; flex: none; }
+.prep-top__brand { flex: none; display: flex; align-items: center; }
+.prep-top__who { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.prep-top__who strong { font-size: 16px; }
+.prep-top__actions { flex: none; display: flex; gap: 8px; }
+.prep-chip { background: #efe9ff; color: #5a3bd6; border-radius: 999px; padding: 4px 12px; font-size: 12.5px; font-weight: 700; }
+.prep-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 14px; padding: 14px; }
+@media (max-width: 1000px) { .prep-body { grid-template-columns: 1fr; } }
+.prep-boxes { background: #fff; border: 1px solid #ece7fb; border-radius: 14px; padding: 14px; overflow: auto; }
+.prep-boxes h3 { margin: 0 0 10px; font-size: 14px; }
+.prep-box-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid #f1eef9; }
+.prep-box-row:first-of-type { border-top: 0; }
+.prep-box-visual { flex: none; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: 9px; background: #efeaff; color: #5a3bd6; font-weight: 800; font-size: 12px; }
+.prep-box-visual.is-image { background: #e6f2ff; color: #1f6fd0; }
+.prep-box-visual.is-video { background: #f1e9ff; color: #7a3ce0; }
+.prep-box-visual.is-audio { background: #ffe9f2; color: #c0286a; }
+.prep-box-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.prep-box-text strong { font-size: 13.5px; }
+.prep-box-text small { color: #7b7490; font-size: 12px; line-height: 1.4; }
+.prep-box-row .secondary-button { flex: none; white-space: nowrap; }
+.prep-canvas { background: #fff; border: 1px solid #ece7fb; border-radius: 14px; overflow: hidden; min-height: 0; }
+.prep-hint { flex: none; padding: 0 14px 14px; display: grid; gap: 8px; }

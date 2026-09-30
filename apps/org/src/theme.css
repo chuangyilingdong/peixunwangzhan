@@ -68,23 +68,3 @@ body {
 .units-input::-webkit-outer-spin-button,.units-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .units-input{-moz-appearance:textfield;appearance:textfield}
 
-
-/* ── 「画布备课」页（2026-09-30 用户口径）─────────────────────────────
-   左边是这节课配的生成框体（点一下加到画布），右边是与学生画布**同一套**组件。
-   高度给足：备课就是要在真尺寸里试。 */
-.prep-layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; margin-top: 12px; align-items: start; }
-@media (max-width: 1100px) { .prep-layout { grid-template-columns: 1fr; } }
-.prep-boxes { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
-.prep-boxes h3 { margin: 0 0 10px; font-size: 14px; }
-.prep-box-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid #f1eef9; }
-.prep-box-row:first-of-type { border-top: 0; }
-.prep-box-visual { flex: none; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: 9px; background: #efeaff; color: #5a3bd6; font-weight: 800; font-size: 12px; }
-.prep-box-visual.is-image { background: #e6f2ff; color: #1f6fd0; }
-.prep-box-visual.is-video { background: #f1e9ff; color: #7a3ce0; }
-.prep-box-visual.is-audio { background: #ffe9f2; color: #c0286a; }
-.prep-box-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.prep-box-text strong { font-size: 13.5px; }
-.prep-box-text small { color: #7b7490; font-size: 12px; line-height: 1.4; }
-.prep-box-row .secondary-button { flex: none; white-space: nowrap; }
-/* 画布本体：备课画布要占满可视高度（与学生课堂里的画布一样的尺度） */
-.prep-canvas { background: #fff; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; height: calc(100vh - 320px); min-height: 520px; }
