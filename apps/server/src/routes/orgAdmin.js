@@ -686,8 +686,10 @@ export async function handleOrg(ctx) {
       },
       // 学生进来时那张初始画布（课时模板）；没配模板就是空画布 —— 与 `student.js` 建项目时取的**同一份**字段
       canvasSnapshot: publishedPrep.canvasTemplateSnapshot || {},
-      // 课时配的生成框体（备课画布左侧"加到画布"用的清单）；显示名/参数胶囊都已由服务端打好标签
+      // 课时配的生成框体与素材分组 —— 就是学生画布左侧「课堂素材」面板读的那两份
+      // （显示名/参数胶囊都已由服务端打好标签，见 lib.js 的 withLabels/withGroupLabels）
       generationBoxes: publishedPrep.generationBoxes || [],
+      materialGroups: publishedPrep.materialGroups || [],
     };
   }
 

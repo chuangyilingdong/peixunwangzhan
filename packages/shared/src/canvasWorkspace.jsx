@@ -150,11 +150,29 @@ function mediaKindOfFile(file) {
   return '';
 }
 
-export function CanvasWorkspace({ api, ...props }) {
+/**
+ * @param prep 可选：**老师备课模式**（2026-09-30 用户口径「直接进入到画布课堂」）。
+ *   传 `{ project, draftKey }` 时：
+ *     · 项目/任务数据**不从学生接口取**，而是用注入的 `project`（机构端 `lessons/:id/prep` 那份，
+ *       形状与 `student/projects/:id` 一致：canvasSnapshot / materialGroups / generationBoxes / capabilities）；
+ *     · **不写服务器**：自动保存改成只写本机 `localStorage[draftKey]`（备课草稿，换设备就没了）；
+ *     · **不生成**：不把 `generateCanvasNode` 交给画布 → 生成按钮自己就不渲染；
+ *     · 不做"老师还在不在上课"的轮询、不提交作品（那三件事都是学生的）。
+ *   ⚠️ 界面本身**一个字都不改**：老师看到的就是学生那套画布课堂。
+ */
+export function CanvasWorkspace({ api, prep = null, ...props }) {
   const navigate = useNavigate();
+  const prepMode = Boolean(prep?.project);
+  const prepDraftKey = String(prep?.draftKey || '');
   const paramsFromUrl = useParams(); const projectId = props?.params?.projectId || paramsFromUrl?.projectId;
-  const project = useData(() => api.get(`student/projects/${projectId}`), [api, projectId]);
-  const generations = useData(() => api.get(`ai/generations?projectId=${encodeURIComponent(projectId)}`), [api, projectId]);
+  const project = useData(
+    () => (prepMode ? Promise.resolve(prep.project) : api.get(`student/projects/${projectId}`)),
+    [api, projectId, prepMode, prep?.project],
+  );
+  const generations = useData(
+    () => (prepMode ? Promise.resolve({ items: [] }) : api.get(`ai/generations?projectId=${encodeURIComponent(projectId)}`)),
+    [api, projectId, prepMode],
+  );
   const [draft, setDraft] = useState(null);
   const [canvasSnapshot, setCanvasSnapshot] = useState(null);
   const [canvasVersion, setCanvasVersion] = useState(0);
@@ -291,7 +309,21 @@ export function CanvasWorkspace({ api, ...props }) {
     latestCanvasRef.current = next;
     setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
   };
+  // 备课模式：**不碰服务器**，改动停下来 0.8 秒写一份到本机（刷新不丢；不写任何学生的作品）。
   useEffect(() => {
+    if (!prepMode || !prepDraftKey || !draft || !changed) return undefined;
+    const timer = setTimeout(() => {
+      try {
+        window.localStorage.setItem(prepDraftKey, JSON.stringify(draft));
+        setSavedSignature(canvasContentSignature(draft));
+        setSaveError('');
+      } catch { /* 存不下就只活在内存里 */ }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [prepMode, prepDraftKey, draft, changed]);
+
+  useEffect(() => {
+    if (prepMode) return undefined;   // 备课没有"服务器上的项目"可存
     if (!editable || !draft || !changed) return undefined;
     const signature = canvasContentSignature(draft);
     const timer = setTimeout(async () => {
@@ -386,6 +418,7 @@ export function CanvasWorkspace({ api, ...props }) {
   // 跳转回课程中心**）。每 10 秒问一次极小接口；一旦不是 ACTIVE 就提示一句再回课程中心。
   // ⚠️ 只认服务端的 `active`：没绑定课堂的老项目服务端按"还在上课"处理（不该把人踢出去）。
   useEffect(() => {
+    if (prepMode) return undefined;   // 备课模式没有课堂可结束（老师点开的就是自己的备课画布）
     let stopped = false;
     let leaveTimer = null;
     async function checkSession() {
@@ -719,10 +752,17 @@ export function CanvasWorkspace({ api, ...props }) {
         <img className="cv-brand__logo" src={brandLogo} alt="灵动ai" />
         <small className="cv-brand__name" title="当前登录的账号">{studentName ? `同学：${studentName}` : '同学'}</small>
       </div>
-      <div className="cv-toptitle"><span>正在上课</span><strong>{lessonTitle}</strong>
+      <div className="cv-toptitle">{prepMode
+        ? <><span>备课模式 · 不生成</span><strong>{lessonTitle}</strong></>
+        : <><span>正在上课</span><strong>{lessonTitle}</strong></>}
 
       </div>
-      <div className="cv-actions">
+      {prepMode ? <div className="cv-actions">
+        {/* 备课模式：**没有"保存到服务器"这件事**（草稿在本机），也没有"提交作品"。
+            顶栏只留一个能回到课时详情的出口 —— 其余仍与学生画布一模一样。 */}
+        <span className="cv-save-state" title="备课草稿只保存在这台电脑上">{changed ? '草稿已存本机' : '备课草稿'}</span>
+        <button type="button" className="cv-btn" onClick={() => navigate('/org/courses')}>返回课程备课</button>
+      </div> : <div className="cv-actions">
         <span
           className={`cv-save-state ${saveError ? 'is-error' : changed ? 'is-dirty' : ''}`}
           title={saveError ? `保存失败：${saveError}（改动还没写进服务器，先别刷新；请把这条信息发给老师）` : undefined}
@@ -734,7 +774,7 @@ export function CanvasWorkspace({ api, ...props }) {
         {/* 「已发布」要排在「有没有新产出」前面：否则学生看到的是"按钮亮着、点下去说做完了再说"——
             这次的问题是反过来的（有产出、但作品已发布），两句话都会把人绕进去。 */}
         <button type="button" className="cv-btn cv-btn--primary" disabled={!editable || busy || !draft || !hasSubmittableOutput || workPublished} title={workPublished ? WORK_PUBLISHED_LOCK_MESSAGE : hasSubmittableOutput ? '把这次做出来的作品提交给老师' : '画布上还没有作品产出：先生成图片/文字或上传成品，做好后按钮会亮起来'} onClick={submitWork}>{busy ? '提交中…' : '提交作品'}</button>
-      </div>
+      </div>}
     </header>
     <section className="cv-layout">
       <aside className={`cv-sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
@@ -823,7 +863,7 @@ export function CanvasWorkspace({ api, ...props }) {
             用户 2026-09-17 口径：那两处文案删掉、「已保存」挪到顶部即可，给画布留更多空间。
             所以这条横条整条没了 —— 保存状态在上面的顶栏里（顶栏中间本来就有课时名，
             作品名也随这条横条一起去掉，需要的话说一声再加回来）。 */}
-        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} boxModalities={boxModalities} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} resolveAssetUrl={resolveAssetUrl} onRequestMaterials={openMaterialsPanel} onChange={setDraft} focusRequest={focusRequest} entranceRequest={entranceRequest} placementRef={placementRef} /></div>
+        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} boxModalities={boxModalities} showStarter={false} onGenerateNode={prepMode ? undefined : generateCanvasNode} onUploadFiles={prepMode ? undefined : uploadFiles} resolveAssetUrl={resolveAssetUrl} onRequestMaterials={openMaterialsPanel} onChange={setDraft} focusRequest={focusRequest} entranceRequest={entranceRequest} placementRef={placementRef} /></div>
       </div>
     </section>
     {message && <div className={`cv-toast ${isErrorText(message) ? 'is-error' : ''}`}>{stripNoticeMark(message)}</div>}

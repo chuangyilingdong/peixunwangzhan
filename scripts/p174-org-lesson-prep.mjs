@@ -173,12 +173,18 @@ try {
   const prepPage = fs.readFileSync(path.join('apps', 'website', 'src', 'pages', 'CanvasPrep.jsx'), 'utf8');
   // ⚠️ 只认**真的把它当 prop 传**（`onGenerateNode={`）—— 注释里也会提到这个名字（"不传它就隐藏生成按钮"），
   //    用裸词匹配会被自己的注释骗过去（本守卫第一版就栽在这上面）。
-  check('⑤ ⭐ 备课画布**不传 onGenerateNode**（生成按钮因此不出现）', !/onGenerateNode[=:]/.test(prepPage));
+  // ⭐ 备课页**自己不再画界面**：它必须复用学生的 `CanvasWorkspace`（"就是要进画布课堂"），
+  //    而"生成按钮不出现"这条不变式落在画布组件里：prep 模式不把 generateCanvasNode 交出去。
+  check('⑤ ⭐ 备课页复用学生的画布课堂组件（不是自己画一页）',
+    /<CanvasWorkspace/.test(prepPage) && /prep=\{prep\}/.test(prepPage));
+  const canvasSource = fs.readFileSync(path.join('packages', 'shared', 'src', 'canvasWorkspace.jsx'), 'utf8');
+  check('⑤ ⭐ prep 模式下画布不接 onGenerateNode（生成按钮因此不渲染）',
+    /onGenerateNode=\{prepMode \? undefined : generateCanvasNode\}/.test(canvasSource));
   check('⑤ 备课页挂在网站域（全屏画布课堂），路由是 /learn/prep/:lessonId',
     /\/learn\/prep\/:lessonId/.test(fs.readFileSync(path.join('apps', 'website', 'src', 'main.jsx'), 'utf8')));
-  check('⑤ 备课画布与学生画布同一套受控形态（allowNodeCreation=false + showStarter=false）',
-    /allowNodeCreation=\{false\}/.test(prepPage) && /showStarter=\{false\}/.test(prepPage));
-  check('⑤ 备课不落库：只写本机 localStorage（没有 api.post / 项目接口）',
+  check('⑤ 备课模式不写服务器：画布在 prep 模式下把自动保存改成写本机',
+    /prepMode \?\? false/.test(canvasSource) || /window\.localStorage\.setItem\(prepDraftKey/.test(canvasSource));
+  check('⑤ 备课不落库：备课页自己没有写接口（只读 prep 接口 + 本机草稿）',
     /localStorage/.test(prepPage) && !/api\.post\(|api\.put\(|api\.patch\(/.test(prepPage));
 } finally {
   server.kill();
