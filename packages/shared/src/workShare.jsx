@@ -70,7 +70,6 @@ export function WorkSharePanel({ title, pieces = [], createShare, onClose }) {
       </label> : null}
       {state.busy ? <p className="share-modal__hint">正在生成二维码…</p> : null}
       {state.svg ? <div className="share-modal__qr" dangerouslySetInnerHTML={{ __html: state.svg }} /> : null}
-      {state.svg ? <p className="share-modal__hint">用手机扫这个二维码，就能看到这一件。</p> : null}
       {state.notice ? <p className="share-modal__hint">{state.notice}</p> : null}
       {state.url ? <div className="share-modal__actions">
         <button type="button" className="button" onClick={async () => {
