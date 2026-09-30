@@ -233,9 +233,7 @@ function safeArtifactName(value) {
 /** 二进制素材的 MIME：只列我们真的会遇到的（storeStudentArtifactAsset 还会再验一次魔术字节）。 */
 const MIME_BY_EXTENSION = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
-  // ⚠️ 字体这四行现在**还存不下**（`fileUploadSecurity.MIME_EXTENSIONS` 的白名单里没有 font/*，
-  //    会在 persistSecureUpload 那一步被判 MIME 不允许 → 只回一条 warning）。留在这里是为了
-  //    "认得出来这是字体"，报错时才说得清；哪天真要支持字体，得同时放宽那张白名单。
+  // 字体四个：存储层白名单 2026-10-01 已放开（没有魔术字节可验，靠扩展名+MIME 对齐那一条）。
   woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
   mp3: 'audio/mpeg', mp4: 'video/mp4', webm: 'video/webm',
   // ⭐ 2026-10-01：wav / ogg / pdf 补上 —— 存储层白名单**一直都收**这三种
@@ -243,6 +241,12 @@ const MIME_BY_EXTENSION = {
   //    是这张"扩展名 → MIME"表漏了它们，于是学生交上来的音效（游戏里 wav 很常见）被
   //    「格式还不支持随作品提交」整条丢掉。实测矩阵见 §八十二。
   wav: 'audio/wav', ogg: 'audio/ogg', pdf: 'application/pdf',
+  // ⭐ 2026-10-01 用户口径：「字体 woff/woff2/ttf/otf/svg/PPT word 这些都要能上传呀。」
+  //    svg 与 Office 三种：存储层白名单都收（Office 本来就是"入口产物"的合法类型，
+  //    这里补上是因为它也可能**只作为被引用的附件**出现，例如 HTML 里 `<a href="report.docx">`）。
+  svg: 'image/svg+xml', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
 
 /**

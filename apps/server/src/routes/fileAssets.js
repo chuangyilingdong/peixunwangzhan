@@ -308,7 +308,8 @@ export async function prepareFileDownload(ctx, file) {
 
 export async function prepareWorkImage(ctx, file) {
   const mimeType = String(file?.mime_type || '').toLowerCase();
-  if (file?.storage_kind !== 'INTERNAL_PROXY' || !/^image\/(png|jpeg|gif|webp|avif)$/.test(mimeType)) {
+  // ⭐ 2026-10-01：svg 也走这条（它同样是"作品里的图"）—— 它的 XSS 补偿在下面的 svgLike/attachment。
+  if (file?.storage_kind !== 'INTERNAL_PROXY' || !/^image\/(png|jpeg|gif|webp|avif|svg\+xml)$/.test(mimeType)) {
     throw errors.notFound('作品图片不可用', 'WORK_IMAGE_UNAVAILABLE');
   }
   // Keep previews aligned with the upload policy. The stream below enforces this
@@ -332,8 +333,12 @@ export async function prepareWorkImage(ctx, file) {
   //      （ACAO https://aicyld.com + credentials），所以 fetch 也读得到 ✓（2026-09-25 实测）。
   //    · 大小上限改成看**库里记的字节数**（302 之后没法再拦响应体）：
   //      file_size 是上传时校验过的，且下面这条与流式那条原来是同一个阈值。
+  // ⚠️ 2026-10-01：**svg 一律 `Content-Disposition: attachment`** —— svg 能带脚本，
+  //    而"直接在地址栏打开这个地址"会让浏览器把它当文档渲染、脚本在**我们域**里跑（存储型 XSS）。
+  //    `<img src>` 不受影响（disposition 只作用于顶层导航），所以学生页里的 svg 照常显示。
+  const svgLike = /^image\/svg\+xml/i.test(String(file.mime_type || ''));
   if (rowStorageBackend(file) === 'oss') {
-    const signed = ossRedirectUrl(file, { expires: 900 });
+    const signed = ossRedirectUrl(file, { expires: 900, ...(svgLike ? { contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent('image.svg')}` } : {}) });
     if (!signed) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
     await audit(ctx, 'FILE_WORK_IMAGE_PROXY', 'FILE_ASSET', file.id, null, { storageBackend: 'oss', redirected: true, bytes: file.file_size == null ? null : Number(file.file_size) });
     return { __fileResponse: true, status: 302, redirectUrl: signed };
@@ -362,7 +367,7 @@ export async function prepareWorkImage(ctx, file) {
     headers: {
       'content-type': file.mime_type,
       ...(bytes == null ? {} : { 'content-length': String(bytes) }),
-      'content-disposition': 'inline',
+      'content-disposition': svgLike ? 'attachment' : 'inline',
       'cache-control': 'private, no-store',
       'x-content-type-options': 'nosniff',
     },

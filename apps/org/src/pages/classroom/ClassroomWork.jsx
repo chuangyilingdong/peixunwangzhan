@@ -29,12 +29,22 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
   const [images, setImages] = useState({});
   const [imageError, setImageError] = useState('');
   const data = detail.data;
+  // ⭐ 2026-10-01 用户口径：「老师预览不能走 OSS 吗？」—— 能。服务端随作品详情多给一份
+  //    `ossUrls`（**直连 OSS 的签名地址**：不需要 cookie、支持 Range 流式、字节不经过我们那台机）。
+  //    有直链的**根本不 fetch**（省掉 base64 与几十兆字符串），只有本地盘老数据才走 data: 兜底。
+  //    ⚠️ 沙箱 iframe 的 CSP 要放行那些来源（见下面的 mediaSources）——它仍是 opaque origin，
+  //       拿不到 cookie，但**签名地址本来就不需要 cookie**，所以能直接流。
+  const ossUrls = data?.ossUrls || {};
+  const mediaSources = [...new Set(Object.values(ossUrls).map((url) => {
+    try { return new URL(url).origin; } catch { return ''; }
+  }).filter(Boolean))].map((origin) => `${origin} `).join('');
   useEffect(() => {
     let cancelled = false;
     setImages({});
     setImageError('');
     const prefix = `/api/${workBase}/${encodeURIComponent(work.source)}/${encodeURIComponent(work.id)}/images/`;
-    Promise.allSettled(Object.entries(data?.imageUrls || {}).map(async ([id, path]) => {
+    const pending = Object.entries(data?.imageUrls || {}).filter(([id]) => !ossUrls[id]);
+    Promise.allSettled(pending.map(async ([id, path]) => {
       if (typeof path !== 'string' || !path.startsWith(prefix)) throw new Error('图片地址不属于此作品。');
       return [id, await api.fetchDataUrl(path)];
     })).then((entries) => {
@@ -50,12 +60,15 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
   //    而原始地址是学生域的，机构端取必然 403，缩略图于是先被标成「已失效」（用户报的就是这个）。
   //    现在同步返回服务端备好的**同源代理地址**（`/api/org/works/.../images/<fileId>`）：同源、cookie 就是
   //    老师自己的会话、还能流式边下边显示。拿不到代理地址时返回 null（显示占位），不回退学生域地址。
-  const snapshotImage = (value) => resolveWorkMediaUrl(value, data?.imageUrls);
+  // 画布读面：直链优先（`resolveWorkMediaUrl` 是按 id 查表，两份表合并后 OSS 那份赢）
+  const snapshotImage = (value) => resolveWorkMediaUrl(value, { ...(data?.imageUrls || {}), ...ossUrls });
   // `images`（data:）只剩**沙箱文档**那条路要用（VibeCoding 的 HTML 预览在 opaque origin 里跑，
   // 拿不到 cookie，只能把图片内联进去）—— 见下面的 files / resolveImage。
   const files = Object.fromEntries(Object.entries(data?.files || {}).map(([name, content]) => {
     let resolved = String(content ?? '');
-    for (const [id, url] of Object.entries(images)) {
+    // 先按"直链 → data: 兜底"合成一份，再逐个替换（同一个 id 只会出现一次）
+    const media = { ...images, ...ossUrls };
+    for (const [id, url] of Object.entries(media)) {
       resolved = resolved.split(`/api/student/file-assets/${id}/download`).join(url);
     }
     return [name, resolved];
@@ -73,7 +86,7 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
   const documentFile = document ? (data?.fileUrls?.[selected.name] || null) : null;
   // Run private student code in the existing opaque-origin sandbox, with network access blocked.
   const html = data?.source === 'VIBECODING' && entry && !document
-    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
+    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; ${mediaSources}img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
     : '';
   return <Modal title={`只读作品 · ${work.title || '未命名作品'}`} wide onClose={onClose}
     footer={<>
@@ -113,15 +126,16 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
           </select></label> : null}
           {documentFile ? <iframe className="c-replay__doc" src={documentFile.preview} title={selected.name} />
             : document ? <ReplayDocument artifact={{ ...selected, content: String(files[selected.name] ?? selected.content ?? '') }} resolveImage={(slide, slideIndex) => {
-            const generated = selected.generatedImages?.find((item) => Number(item.slideIndex) === slideIndex && !item.error && images[item.fileId]);
-            if (generated && images[generated.fileId]) return images[generated.fileId];
+            const media = { ...images, ...ossUrls };
+            const generated = selected.generatedImages?.find((item) => Number(item.slideIndex) === slideIndex && !item.error && media[item.fileId]);
+            if (generated && media[generated.fileId]) return media[generated.fileId];
             const ordinal = Number(slide?.image?.attachment ?? slide?.imageAttachment);
-            const attachment = ordinal > 0 && selected.attachmentImages?.find((item) => Number(item.index) === ordinal && images[item.fileId]);
-            if (attachment) return images[attachment.fileId];
+            const attachment = ordinal > 0 && selected.attachmentImages?.find((item) => Number(item.index) === ordinal && media[item.fileId]);
+            if (attachment) return media[attachment.fileId];
             // Embedded HTML images have only fileId; use explicit snapshot references, never an arbitrary image.
             const reference = typeof slide?.image === 'string' ? slide.image : slide?.image?.url || slide?.image?.src;
-            const embedded = selected.embeddedImages?.find((item) => item.fileId === slide?.image?.fileId && images[item.fileId]);
-            return (embedded && images[embedded.fileId]) || snapshotImage(reference);
+            const embedded = selected.embeddedImages?.find((item) => item.fileId === slide?.image?.fileId && media[item.fileId]);
+            return (embedded && media[embedded.fileId]) || snapshotImage(reference);
           }} />
             : entry && Object.hasOwn(files, entry) ? <>
               <Notice tone="info">外部网络资源已禁用；依赖 CDN 或在线接口的内容可能无法运行。</Notice>

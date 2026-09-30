@@ -4,6 +4,7 @@ import { missingLocalAssets, normalizeSubmission, parseSnapshotArtifacts, snapsh
 // ⭐ 2026-09-30：作品分享码（与学生端**同一份实现** —— 件的定位与幂等口径两处各写一套，迟早只在一半上生效）
 import { assertSharePiece, ensureWorkShareLink, shareLinkUrl } from '../services/workShare.js';
 import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from './fileAssets.js';
+import { ossRedirectUrl } from '../services/fileStorage.js';
 import { hashPassword, isUniqueViolation } from '@platform/database';
 
 import { scheduleReminder } from './communication.js';
@@ -866,16 +867,32 @@ export async function handleOrg(ctx) {
     if (imageId) {
       if (!allowedImages.has(imageId)) throw errors.notFound('图片不属于此作品', 'SESSION_WORK_IMAGE_NOT_FOUND');
       const file = await arow('SELECT * FROM file_assets WHERE id=?', [imageId]);
-      if (!file || file.storage_kind !== 'INTERNAL_PROXY' || file.status !== 'ACTIVE' || !['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4', 'video/mp4', 'video/webm'].includes(String(file.mime_type || '').toLowerCase())
+      if (!file || file.storage_kind !== 'INTERNAL_PROXY' || file.status !== 'ACTIVE' || !['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml',
+        // ⭐ 2026-10-01：svg 与字体也放行（用户口径「字体 woff/woff2/ttf/otf/svg 都要能上传」）——
+        //    svg 的 XSS 补偿在**发出去时的 attachment**（见 fileAssets.js 的 svgLike），不在这里挡。
+        'font/woff', 'font/woff2', 'font/ttf', 'font/otf',
+        'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4', 'video/mp4', 'video/webm'].includes(String(file.mime_type || '').toLowerCase())
         || (file.owner_user_id !== work.student_id && !['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility))
         || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品图片不可用', 'SESSION_WORK_IMAGE_NOT_FOUND');
       return String(file.mime_type || '').toLowerCase().startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFileDownload(ctx, file);
     }
     const base = { id: work.id, source, title: work.title, studentId: work.student_id, studentName: work.student_name || null, status: work.status, submittedAt: work.submitted_at };
     const imageUrls = Object.fromEntries([...allowedImages].map((fileId) => [fileId, `${scope.base}/${source}/${encodeURIComponent(work.id)}/images/${encodeURIComponent(fileId)}`]));
+    // ⭐ 2026-10-01 用户口径：「老师预览不能走 OSS 吗？」——**能，而且本该如此**。
+    //    沙箱 iframe 是 opaque origin（带不上 cookie），所以老师端原来把每条媒体都
+    //    `fetchDataUrl` 成 data: 内联进文档（一个 20MB 视频 → 27MB 字符串，几段视频就卡）。
+    //    这里再给一份**直连 OSS 的签名地址**（不需要 cookie、支持 Range 流式、字节不经过我们这台机），
+    //    老师端优先用它；没有 OSS 直链的行（本地盘老数据）仍走 data: 兜底。
+    //    ⚠️ 有效期给 2 小时：老师可能把预览开着看很久（15 分钟那种会在播放中途 403）。
+    const ossUrls = {};
+    for (const fileId of allowedImages) {
+      const row = await arow('SELECT * FROM file_assets WHERE id=?', [String(fileId)]);
+      const signed = row ? ossRedirectUrl(row, { expires: 7200 }) : null;
+      if (signed) ossUrls[fileId] = signed;
+    }
     // 作品页要展示的**媒体**（图/视频/音频）——老师端预览也要看"做出来的东西"，不是画布
     // （用户 2026-09-21：「应该显示的是图片/视频/音频等等，而不是画布」）。
-    if (source === 'CANVAS') return { ...base, canvasSnapshot, imageUrls, media: canvasMediaFrom(canvasSnapshot).map((item) => ({ ...item, pieceKey: `media:${item.fileId || item.url}` })) };
+    if (source === 'CANVAS') return { ...base, canvasSnapshot, imageUrls, ossUrls, media: canvasMediaFrom(canvasSnapshot).map((item) => ({ ...item, pieceKey: `media:${item.fileId || item.url}` })) };
     const content = normalizeSubmission(work, { includeContent: true });
     // 真文件产物（学生创作环境交上来的 PPT/Word/Excel）的取用地址也在服务端拼好：
     // 前端不该自己去拼路由（前缀/编码错一处就是 404，而且两边都没法测）。
@@ -891,7 +908,7 @@ export async function handleOrg(ctx) {
     // ⭐ 2026-09-30：`missingAssets` = 这件作品里**还指着本地文件、但没随作品交上来**的引用
     //    （客户端旧版本只传文本与封面）。老师端要能把这件事说清楚，不然看到的就是"图裂了"、
     //    以为平台坏了 —— 其实就是那几个素材的字节从没上来过。
-    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: (content.artifacts || []).map((item) => ({ ...item, pieceKey: `artifact:${item.name}` })), preview: content.preview, imageUrls, fileUrls, missingAssets: missingLocalAssets(content.files, content.entryFile) };
+    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: (content.artifacts || []).map((item) => ({ ...item, pieceKey: `artifact:${item.name}` })), preview: content.preview, imageUrls, ossUrls, fileUrls, missingAssets: missingLocalAssets(content.files, content.entryFile) };
   }
 
   if (part === '/sessions' && method === 'GET') {

@@ -83,7 +83,7 @@ const api = async (pathname, { method = 'GET', token, body, raw = false } = {}) 
     headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (raw) return { status: response.status, buffer: Buffer.from(await response.arrayBuffer()), type: response.headers.get('content-type') || '' };
+  if (raw) return { status: response.status, buffer: Buffer.from(await response.arrayBuffer()), type: response.headers.get('content-type') || '', disposition: response.headers.get('content-disposition') || '' };
   const payload = await response.json().catch(() => ({}));
   return { status: response.status, data: payload?.data ?? payload };
 };
@@ -156,6 +156,7 @@ try {
   /* ───────── ①b 素材类型矩阵：哪些能带、哪些带不了（2026-10-01 用户问「图视频音频都可以上传了吗」）─────
      用**最小合法字节**把每种类型都塞进一次提交，逐条钉死"能带"的那批。
      ⚠️ 钉的是**平台侧收不收**（存储层白名单 + 魔术字节），不是客户端扫不扫得到。 */
+  let matrixWorkId = '';
   {
     const CASES = [
       ['assets/case.png', PNG, 'image/png'],
@@ -163,6 +164,11 @@ try {
       ['assets/case.wav', Buffer.concat([Buffer.from('52494646', 'hex'), Buffer.from('24000000', 'hex'), Buffer.from('57415645', 'hex'), Buffer.from('666d7420', 'hex'), Buffer.alloc(24)]), 'audio/wav'],
       ['assets/case.ogg', Buffer.concat([Buffer.from('4f676753', 'hex'), Buffer.alloc(32, 0x44)]), 'audio/ogg'],
       ['assets/case.pdf', Buffer.concat([Buffer.from('255044462d312e340a', 'hex'), Buffer.alloc(16, 0x20)]), 'application/pdf'],
+      // ⭐ 2026-10-01 用户口径：「字体 woff/woff2/ttf/otf/svg/PPT word 这些都要能上传呀。」
+      ['assets/case.woff2', Buffer.concat([Buffer.from('774f4632', 'hex'), Buffer.alloc(32, 0x55)]), 'font/woff2'],
+      ['assets/case.ttf', Buffer.concat([Buffer.from('00010000', 'hex'), Buffer.alloc(32, 0x66)]), 'font/ttf'],
+      ['assets/case.svg', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>', 'utf8'), 'image/svg+xml'],
+      ['assets/case.docx', Buffer.concat([Buffer.from('504b0304', 'hex'), Buffer.alloc(32, 0x77)]), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
     ];
     const matrixHtml = ['<!doctype html><html><body>']
       .concat(CASES.map(([name]) => `<img src="${name}">`))
@@ -176,7 +182,8 @@ try {
       files: [{ name: 'matrix.html', content: matrixHtml, binary: false }]
         .concat(CASES.map(([name, buf]) => ({ name, content: buf.toString('base64'), binary: true }))),
     });
-    check('①b 素材矩阵：png/webp/wav/ogg/pdf 一次全收下（2026-10-01 补的 wav/ogg/pdf）',
+    matrixWorkId = matrix.data?.id || '';
+    check('①b 素材矩阵：png/webp/wav/ogg/pdf/字体/svg/docx 一次全收下（2026-10-01 放开的 wav/ogg/pdf/字体/svg/Office）',
       matrix.status === 200 && !(matrix.data?.warnings || []).length,
       JSON.stringify(matrix.data?.warnings || []).slice(0, 240));
     const matrixRow = matrix.data?.id ? await arow('SELECT files FROM vibecoding_submissions WHERE id=?', [matrix.data.id]) : null;
@@ -206,6 +213,35 @@ try {
 
   /* ───────── ④/⑤ 机构端（老师后台）详情 + 取图/取视频 ───────── */
   const orgToken = await login('org-admin', 'org123');
+
+  /* ───────── ①c svg 的读口必须带 attachment（存储型 XSS 的补偿控制）─────────────
+     svg 能带脚本，而"直接在地址栏打开"会让它在**我们域**里渲染执行。两条读口（机构端 image 代理、
+     学生域下载）都要 `Content-Disposition: attachment`；`<img src>` 不受影响（disposition 只作用于顶层导航）。 */
+  {
+    const svgRow = await arow("SELECT id FROM file_assets WHERE file_name='case.svg' ORDER BY created_at DESC LIMIT 1");
+    // ⚠️ 必须用**矩阵那件作品**的 id：svg 是随那次提交交上来的，用第一件会被准入名单拒（404）
+    const orgSvg = svgRow?.id && matrixWorkId ? await api(`/api/org/works/VIBECODING/${encodeURIComponent(matrixWorkId)}/images/${encodeURIComponent(svgRow.id)}`, { token: orgToken, raw: true }) : { status: 0 };
+    check('①c 机构端取 svg：通过准入且带 attachment（不是 inline）',
+      ![404, 403].includes(orgSvg.status) && /attachment/i.test(String(orgSvg.disposition || '')),
+      `status=${orgSvg.status} disposition=${orgSvg.disposition}`);
+    const ownSvg = svgRow?.id ? await api(`/api/student/file-assets/${encodeURIComponent(svgRow.id)}/download`, { token, raw: true }) : { status: 0 };
+    // ⭐ 2026-10-01 用户口径：「老师预览不能走 OSS 吗？」—— 钉住"两端都优先用签名直链 + CSP 放行"：
+  //    没有这条，"又变成全量 base64 内联"会被无声改回去（几十兆字符串、几段视频就卡）。
+  for (const [label, file] of [['机构端', 'apps/org/src/pages/classroom/ClassroomWork.jsx'], ['平台端', 'apps/admin/src/components/WorkPreview.jsx']]) {
+    const source = fs.readFileSync(path.join(file), 'utf8');
+    check(`①d ${label}预览优先用 OSS 签名直链（ossUrls）`,
+      /data\?\.ossUrls/.test(source) && /ossUrls\[id\]/.test(source), file);
+    check(`①d ${label}沙箱 CSP 放行了直链来源（mediaSources）`,
+      /img-src data: blob: \$\{mediaSources\}/.test(source) && /media-src data: blob: \$\{mediaSources\}/.test(source), file);
+  }
+  check('①d 服务端给老师端/平台端的作品详情都带 ossUrls（2 小时有效期）',
+    /ossRedirectUrl\(row, \{ expires: 7200 \}\)/.test(fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'orgAdmin.js'), 'utf8'))
+    && /ossRedirectUrl\(row, \{ expires: 7200 \}\)/.test(fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'admin', 'works.js'), 'utf8')));
+  check('①c 学生域下载口也带 attachment',
+      ![404, 403].includes(ownSvg.status) && /attachment/i.test(String(ownSvg.disposition || '')),
+      `status=${ownSvg.status} disposition=${ownSvg.disposition}`);
+  }
+
   const detail = await api(`/api/org/works/VIBECODING/${encodeURIComponent(workId)}`, { token: orgToken });
   const imageUrls = detail.data?.imageUrls || {};
   check('⑤ 机构端详情把图与视频都列进 imageUrls（老师端才拿得到字节）',

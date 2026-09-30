@@ -24,6 +24,17 @@ const MIME_EXTENSIONS = new Map([
   ['video/mp4', ['.mp4']],
   ['video/webm', ['.webm']],
   ['application/pdf', ['.pdf']],
+  // ⭐ 2026-10-01 用户口径：「字体 woff/woff2/ttf/otf/svg 这些都要能上传呀。」
+  //    字体：没有魔术字节可验（sniffMime 返回 null），靠**扩展名 + MIME 对得上**这一条放行；
+  //    高危那条检查仍留着（x-msdownload 之类照样挡）。
+  ['font/woff', ['.woff']],
+  ['font/woff2', ['.woff2']],
+  ['font/ttf', ['.ttf']],
+  ['font/otf', ['.otf']],
+  // ⚠️ svg 能带脚本：**存储放行、但发出去时一律 `Content-Disposition: attachment`**
+  //    （见 fileAssets.js 的三条读口）——`<img src>` 不受影响（照样渲染），
+  //    而"直接在地址栏打开这个 svg"会变成下载、不会在我们的域里执行它的脚本。
+  ['image/svg+xml', ['.svg']],
   ['text/plain', ['.txt']],
   ['text/csv', ['.csv']],
   ['application/zip', ['.zip']],
@@ -37,7 +48,15 @@ const OOXML_MIMES = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ]);
-const BLOCKED_EXTENSIONS = new Set(['.ade', '.apk', '.app', '.bat', '.cmd', '.com', '.cpl', '.dll', '.dmg', '.exe', '.hta', '.jar', '.js', '.jse', '.msi', '.msp', '.php', '.ps1', '.scr', '.sh', '.svg', '.vbs', '.vbe', '.wsf', '.xll', '.xlsm', '.docm']);
+// ⚠️ 这份黑名单是**扩展名级**的兜底（比 MIME 白名单更粗一层）。2026-10-01：
+//    用户要求「字体 woff/woff2/ttf/otf/**svg**/PPT word 这些都要能上传呀」——
+//    · 字体三种（`.woff/.woff2/.ttf/.otf`）本来就不在黑名单里，只需 MIME 白名单放行（已做）；
+//    · **`.svg` 从这里移出**：它挡的是"svg 里带脚本、被当成文档打开时在**我们域**里执行"。
+//      对应的补偿控制是**发出去时一律 `Content-Disposition: attachment`**（见 fileAssets.js 的
+//      `const svgLike` 那三处）——`<img src>` 照常渲染，地址栏直接打开会变成下载。
+//    `.js` 仍然挡着：文本 .js 走 `files` 那条路（不经过这里），而把它当**二进制素材**存下来
+//    再被 `<script src>` 引到我们的页面里，就是真正的自伤面。
+const BLOCKED_EXTENSIONS = new Set(['.ade', '.apk', '.app', '.bat', '.cmd', '.com', '.cpl', '.dll', '.dmg', '.exe', '.hta', '.jar', '.js', '.jse', '.msi', '.msp', '.php', '.ps1', '.scr', '.sh', '.vbs', '.vbe', '.wsf', '.xll', '.xlsm', '.docm']);
 
 export function maxUploadBytes() {
   const configured = Number(process.env.FILE_UPLOAD_MAX_BYTES || DEFAULT_MAX_BYTES);
@@ -102,7 +121,9 @@ function validateMimeAndExtension(fileName, declaredMime, buffer) {
   if (!MIME_EXTENSIONS.has(mimeType)) throw errors.badRequest('MIME 类型不被允许', 'MIME_TYPE_BLOCKED');
   if (!MIME_EXTENSIONS.get(mimeType).includes(extension)) throw errors.badRequest('MIME 类型与扩展名不匹配', 'MIME_EXTENSION_MISMATCH');
   const detectedMime = sniffMime(buffer);
-  if (detectedMime === 'image/svg+xml' || detectedMime === 'application/x-msdownload') throw errors.badRequest('检测到高风险文件内容', 'MALICIOUS_FILE_BLOCKED');
+  // ⚠️ 2026-10-01：svg 从这里**移出**了（用户要它可上传）——风险改由"发出去时强制 attachment"兜
+  //    （见 fileAssets.js 里三处 content-disposition）。可执行文件那条照旧挡。
+  if (detectedMime === 'application/x-msdownload') throw errors.badRequest('检测到高风险文件内容', 'MALICIOUS_FILE_BLOCKED');
   const isOoxml = OOXML_MIMES.has(mimeType);
   if (isOoxml && detectedMime !== 'application/zip') throw errors.badRequest('无法验证文件内容', 'FILE_SIGNATURE_UNKNOWN');
   if (detectedMime && detectedMime !== mimeType && !(detectedMime === 'audio/wav' && mimeType === 'audio/x-wav') && !(isOoxml && detectedMime === 'application/zip')) throw errors.badRequest('文件内容与 MIME 类型不匹配', 'FILE_SIGNATURE_MISMATCH');

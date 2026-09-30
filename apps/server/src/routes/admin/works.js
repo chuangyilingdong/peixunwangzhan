@@ -17,6 +17,7 @@ import { effectiveCapabilities, normalizeAspectRatio } from '../../services/mode
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
 import { missingLocalAssets, normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from '../vibecoding.js';
 import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from '../fileAssets.js';
+import { ossRedirectUrl } from '../../services/fileStorage.js';
 import {
   ENROLLMENT_STATUSES,
   ORG_MEMBER_ROLES,
@@ -237,7 +238,11 @@ export async function handleWorks(ctx, part, method) {
     const file = await arow('SELECT * FROM file_assets WHERE id=?', [workImageMatch[2]]);
     const mime = String(file?.mime_type || '').toLowerCase();
     if (!file || file.storage_kind !== 'INTERNAL_PROXY' || file.status !== 'ACTIVE'
-      || !['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4', 'video/mp4', 'video/webm'].includes(mime)
+      || !['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml',
+        // ⭐ 2026-10-01：svg 与字体也放行（用户口径「字体 woff/woff2/ttf/otf/svg 都要能上传」）——
+        //    svg 的 XSS 补偿在**发出去时的 attachment**（见 fileAssets.js 的 svgLike），不在这里挡。
+        'font/woff', 'font/woff2', 'font/ttf', 'font/otf',
+        'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4', 'video/mp4', 'video/webm'].includes(mime)
       || (file.owner_user_id !== work.student_id && !['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility))
       || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品图片不可用', 'WORK_IMAGE_NOT_FOUND');
     return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFileDownload(ctx, file);
@@ -272,9 +277,16 @@ export async function handleWorks(ctx, part, method) {
         download: `${workBase}/files/${encodeURIComponent(item.name)}/download`,
       }]));
     const imageUrls = Object.fromEntries([...snapshotImageFileIds(submission)].map((fileId) => [fileId, `${workBase}/images/${encodeURIComponent(fileId)}`]));
+    // 与机构端同款（2026-10-01）：再给一份**直连 OSS 的签名地址**，平台端预览也省掉 base64 内联
+    const ossUrls = {};
+    for (const fileId of snapshotImageFileIds(submission)) {
+      const row = await arow('SELECT * FROM file_assets WHERE id=?', [String(fileId)]);
+      const signed = row ? ossRedirectUrl(row, { expires: 7200 }) : null;
+      if (signed) ossUrls[fileId] = signed;
+    }
     // 与机构端同一条口径：这件作品里**还指着本地文件、但没随作品交上来**的引用（旧客户端不带素材），
     // 平台端预览也要能把它说清楚（见 vibecoding.js 的 missingLocalAssets）。
-    return { ...content, fileUrls, imageUrls, missingAssets: missingLocalAssets(content.files, content.entryFile) };
+    return { ...content, fileUrls, imageUrls, ossUrls, missingAssets: missingLocalAssets(content.files, content.entryFile) };
   }
   let vibeDetailFileMatch = part.match(/^\/vibecoding-works\/([^/]+)\/files\/(.+?)\/(preview|download)$/);
   if (vibeDetailFileMatch && method === 'GET') {

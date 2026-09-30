@@ -93,13 +93,18 @@ export function WorkPreview({ api, workId, title, kind = 'vibecoding', onClose }
   const [images, setImages] = useState({});
   const [imageError, setImageError] = useState('');
   const data = detail.data;
+  // 与机构端同款（2026-10-01）：有 OSS 直链的**不 fetch**，只有本地盘老数据才转 data:
+  const ossUrls = data?.ossUrls || {};
+  const mediaSources = [...new Set(Object.values(ossUrls).map((url) => {
+    try { return new URL(url).origin; } catch { return ''; }
+  }).filter(Boolean))].map((origin) => `${origin} `).join('');
   useEffect(() => {
     let cancelled = false;
     setImages({}); setImageError('');
     const prefix = isCanvas
       ? `/api/admin/works/${encodeURIComponent(workId)}/images/`
       : `/api/admin/vibecoding-works/${encodeURIComponent(workId)}/images/`;
-    Promise.allSettled(Object.entries(data?.imageUrls || {}).map(async ([id, path]) => {
+    Promise.allSettled(Object.entries(data?.imageUrls || {}).filter(([id]) => !ossUrls[id]).map(async ([id, path]) => {
       if (typeof path !== 'string' || !path.startsWith(prefix)) throw new Error('图片地址不属于此作品。');
       return [id, await api.fetchDataUrl(path)];
     })).then((entries) => {
@@ -110,10 +115,11 @@ export function WorkPreview({ api, workId, title, kind = 'vibecoding', onClose }
     return () => { cancelled = true; };
   }, [api, data, isCanvas, workId]);
 
-  const snapshotImage = makeImageResolver({ workId, kind, images, imageUrls: data?.imageUrls });
+  const mergedMedia = { ...images, ...ossUrls };
+  const snapshotImage = makeImageResolver({ workId, kind, images: mergedMedia, imageUrls: data?.imageUrls });
   const files = Object.fromEntries(Object.entries(data?.files || {}).map(([name, content]) => {
     let resolved = String(content ?? '');
-    for (const [id, url] of Object.entries(images)) resolved = resolved.split(`/api/student/file-assets/${id}/download`).join(url);
+    for (const [id, url] of Object.entries(mergedMedia)) resolved = resolved.split(`/api/student/file-assets/${id}/download`).join(url);
     return [name, resolved];
   }));
   const artifacts = data?.artifacts || [];
@@ -129,7 +135,7 @@ export function WorkPreview({ api, workId, title, kind = 'vibecoding', onClose }
   const documentFile = isDocument ? (data?.fileUrls?.[selected.name] || null) : null;
   // 学生代码跑在不带 allow-same-origin 的沙箱里（口径⑧），网络一律禁掉
   const html = !isDocument && entry && Object.hasOwn(files, entry)
-    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
+    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; ${mediaSources}img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
     : '';
 
   return <PreviewDialog title={title || data?.title} onClose={onClose}>
