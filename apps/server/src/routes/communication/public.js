@@ -24,6 +24,7 @@ import { assertTransition } from '../../services/domainState.js';
 import { plazaCategoryLabelOf, plazaCategoryMap, plazaCategoryOf } from '../../services/plazaCategories.js';
 import { WEBSITE_CONTENT_KEYS } from '../../services/websiteContentKeys.js';
 import { prepareFileDownload, prepareFilePreview } from '../fileAssets.js';
+import { kindForName } from '../../services/vibecodingArtifacts.js';
 import {
   missingLocalAssets,
   publicArtifactCatalog,
@@ -411,6 +412,16 @@ export async function handlePublicCommunication(ctx) {
     //      不换成免登录地址图与视频都显示不出来。
     const entryFile = String(submission.entry_file || artifact?.name || '').trim();
     const files = render === 'HTML' ? shareCodeSnapshotFiles(submission, link.code) : null;
+    // ⭐ 2026-09-30 用户口径：「图3打开体验，应该不能这样展示，应该就**直接展示**」——
+    //    他截的那一件是 `notes.txt`：卡片上只有一颗「打开体验」按钮，内容一个字都看不到。
+    //    这里把**人读得懂**的文本类产物（txt/md/csv/json…）的正文一起给出去，卡片直接铺开显示。
+    //    ⚠️ `.pptx/.docx/.xlsx` 的正文是给渲染器看的规格文本（提纲 JSON / Markdown / CSV），
+    //       对人没意义也不该外发 —— 那三类仍走"封面 + 打开体验"。
+    const artifactKind = artifact ? kindForName(artifact.name) : '';
+    const rawText = artifact && SHARE_TEXT_KINDS.has(artifactKind)
+      ? String(parseJson(submission.files, {})?.[artifact.name] ?? '')
+      : '';
+    const textContent = rawText ? rawText.slice(0, MAX_SHARE_TEXT_CHARS) : '';
     return {
       code: link.code, createdAt: link.created_at, source: 'VIBECODING',
       student: { name: publicCreatorName(owner), avatarUrl: avatarUrlOf(owner.avatar_asset_id) },
@@ -430,6 +441,9 @@ export async function handlePublicCommunication(ctx) {
         mediaUrl: mediaUrlFor(artifact.fileId),
         coverUrl: mediaUrlFor(artifact.coverFileId),
         openUrl,
+        // 能直接读的正文（没有就是空串）；`textTruncated` 让卡片如实说明"还有后半截"
+        textContent,
+        textTruncated: Boolean(rawText && rawText.length > MAX_SHARE_TEXT_CHARS),
       } : null,
     };
   }
@@ -757,6 +771,12 @@ export async function handlePublicCommunication(ctx) {
 }
 
 /** 分享卡怎么渲染这一件：网页 / 图片 / 视频 / 音频 / 文档（文档类给封面 + 「打开体验」/下载）。 */
+/** 分享卡里"直接铺开显示"的正文上限（超出截断并如实说明）。 */
+const MAX_SHARE_TEXT_CHARS = 20000;
+
+/** 能**直接给人读**的产物类型（其余如 pptx/docx/xlsx 的正文是给渲染器看的规格文本，不外发）。 */
+const SHARE_TEXT_KINDS = new Set(['text', 'md', 'csv', 'json']);
+
 function shareRenderOf(name) {
   const extension = String(name || '').split('.').pop()?.toLowerCase() || '';
   if (['html', 'htm'].includes(extension)) return 'HTML';

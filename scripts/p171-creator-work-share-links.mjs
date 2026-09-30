@@ -23,6 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { ensureClassroom } from './lib/classroomFixture.mjs';
+import { stripComments } from './lib/sourceText.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p171-share-'));
@@ -206,6 +207,30 @@ try {
   const notesShare = await api('/api/student/share-links', { method: 'POST', token: studentToken, body: { source: 'VIBECODING', workId, pieceKey: 'artifact:notes.txt' } });
   check('⑦ ⭐ 主页给的那个键，发码接口**照单接受**（两边同一套规则，不是各枚举一套）',
     notesShare.status === 200, JSON.stringify(notesShare.raw).slice(0, 160));
+
+  /* ── ⑦b 文本件：分享卡要**直接显示内容**（2026-09-30 用户口径）────────────
+     用户原话：「图3 打开体验，应该不能这样展示，应该就**直接展示**」——他截的那一件是
+     `notes.txt`，卡片上只有一颗「打开体验」按钮。现在服务端把**人读得懂**的正文一起给出去。 */
+  {
+    const card = await api(`/api/public/share-links/${encodeURIComponent(notesShare.data.code)}`);
+    const piece = card.data?.piece || {};
+    check('⑦b ⭐ 文本件的分享卡带正文（卡面直接铺开显示，不再只给按钮）',
+      piece.textContent === 'P171 说明文本' && piece.textTruncated === false,
+      JSON.stringify({ render: piece.render, textContent: piece.textContent, truncated: piece.textTruncated }));
+    const htmlCard = await api(`/api/public/share-links/${encodeURIComponent(html.data.code)}`);
+    check('⑦b 网页件不吃这一套（它的正文走 document，textContent 为空）',
+      !htmlCard.data?.piece?.textContent, JSON.stringify(htmlCard.data?.piece).slice(0, 160));
+    // 静态：删掉的那两句"多余文案"不许回来（用户：「分享按钮这些多余的文案全部删除」）
+    const cardPage = fs.readFileSync(path.join('apps', 'website', 'src', 'pages', 'WorkShare.jsx'), 'utf8');
+    const panel = fs.readFileSync(path.join('packages', 'shared', 'src', 'workShare.jsx'), 'utf8');
+    // ⚠️ 用 stripComments 剥掉注释再判：这两处**注释里**写着"这两句已删"，直接匹配会自己骗自己
+    //    （本守卫第一版就这么假红过一次）。
+    for (const [file, source] of [['WorkShare.jsx', stripComments(cardPage)], ['workShare.jsx', stripComments(panel)]]) {
+      check(`⑦b ${file} 不再有"在微信里打开时…"那类引导文案`, !/在微信里打开时/.test(source));
+      check(`⑦b ${file} 不再有「看 TA 的主页」跳转`, !/看 TA 的主页/.test(source));
+    }
+    check('⑦b 分享卡里文本件走 share-piece__text（就地铺开）', /share-piece__text/.test(cardPage));
+  }
   const canvasItem = (creatorPayload.data?.items || []).find((item) => item.id === canvasWorkId);
   const canvasKeys = (canvasItem?.media || []).map((item) => item.pieceKey).filter(Boolean);
   check('⑦ 画布侧主页清单也带 pieceKey（1 图 + 1 视频两件）',

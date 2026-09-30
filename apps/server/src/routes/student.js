@@ -1013,34 +1013,14 @@ export async function handleStudent(ctx) {
 
   match = part.match(/^\/works\/([^/]+)\/public$/);
   if (match && method === 'PUT') {
-    const work = await getOwnWork(ctx, match[1]);
-    if (typeof ctx.body?.isPublic !== 'boolean') {
-      throw errors.badRequest('isPublic 必须为布尔值', 'INVALID_IS_PUBLIC');
-    }
-    if (ctx.body.isPublic) {
-      if (!['APPROVED', 'PUBLISHED'].includes(work.status)) {
-        throw errors.conflict('作品通过审核后才能公开', 'WORK_NOT_APPROVED_FOR_PUBLIC');
-      }
-      if (!work.copyright_confirmed_at) {
-        throw errors.conflict('请先确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
-      }
-    }
-    const now = nowIso();
-    let shareToken = work.share_token;
-    if (ctx.body.isPublic && !shareToken) {
-      // 生成唯一 share_token（16 字符十六进制）
-      shareToken = 'wst_' + randomUUID().replace(/-/g, '').slice(0, 24);
-      while (await arow('SELECT id FROM works WHERE share_token=?', [shareToken])) {
-        shareToken = 'wst_' + randomUUID().replace(/-/g, '').slice(0, 24);
-      }
-    } else if (!ctx.body.isPublic) {
-      shareToken = null;
-    }
-    await aq('UPDATE works SET is_public=?,share_token=? WHERE id=?', [ctx.body.isPublic ? 1 : 0, shareToken, work.id]);
-    await audit(ctx, ctx.body.isPublic ? 'WORK_PUBLIC_OPEN' : 'WORK_PUBLIC_CLOSE', 'WORK', work.id,
-      { isPublic: Boolean(work.is_public), shareToken: work.share_token },
-      { isPublic: ctx.body.isPublic, shareToken }, { orgId: work.org_id });
-    return { id: work.id, isPublic: ctx.body.isPublic, shareToken };
+    // ⭐ 2026-09-30 用户口径（原话）：「**能不能公开，是平台决定的**。」
+    //    这里原来是一条**学生自助**改公开状态的接口（PUT isPublic → 发/撤 share_token），
+    //    学生主页上那个「公开到广场」按钮也一并删了 —— 学生端不再有任何改公开状态的入口。
+    //    ⚠️ 平台端/机构端的管理口走的是另一条路（作品管理 → 发布 / 下架，见 adminOrg/orgAdmin），
+    //       不受影响；这里封的只是"学生自己给自己公开"。
+    //    ⚠️ 客户端契约里**没有**这条接口（§68 列的五条：login/logout、client-context、
+    //       submit-upload、works），所以封它不影响客户端。
+    throw errors.forbidden('作品是否公开到作品广场由平台决定，学生端不再提供这个操作', 'WORK_PUBLIC_PLATFORM_DECIDES');
   }
 
   match = part.match(/^\/works\/([^/]+)$/);

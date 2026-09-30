@@ -1106,25 +1106,19 @@ try {
   await page.waitForTimeout(800); // 「下一帧再适配」那一步落定 + 容器宽度定下来
   await checkCanvasFit('宽画布（390px 学生自己那页）', '19c-wide-canvas-mobile');
 
-  // ⭐ 「公开到广场」：学生**自己**把未公开的画布作品公开出去。
-  //    ⚠️ 2026-09-27 这个入口搬到了主页的主人模式里（原来那页「我的作品·单件详情」已删）——
-  //    按钮文案就写明"公开到广场"，点它等于公开（不偷偷替学生公开）。
+  // ⭐⭐ 2026-09-30 口径**反转**（用户原话）：「为什么"我的主页"有这个图1的"公开广场"的按钮。
+  //    **能不能公开，是平台决定的**。」
+  //    → 学生主页上那个「公开到广场」按钮已整体删除，学生端不再有任何改公开状态的入口；
+  //      服务端那条 `PUT student/works/:id/public` 也封了（403 WORK_PUBLIC_PLATFORM_DECIDES）。
+  //      平台/机构的管理口（作品管理 → 发布 / 下架）不受影响。
+  //    ⚠️ 上一版这里断言的是"按钮必须在"——那是旧口径的配套，别把它改回去。
   await page.goto(creatorUrl, { waitUntil: 'domcontentloaded' });
   await settle();
   await page.waitForTimeout(700);
-  const publishBefore = await page.locator('[data-testid="publish-work"]').count();
-  console.log(`  · 未公开作品的「公开到广场」按钮：${publishBefore} 个`);
-  if (!publishBefore) problems.push('主页：主人模式下，未公开的画布作品卡上应当有「公开到广场」按钮（学生自己公开作品的入口）');
-  else {
-    await page.locator('[data-testid="publish-work"]').first().click();
-    await settle();
-    await page.waitForTimeout(1200);
-    const publishedNotice = await page.evaluate(() => (document.querySelector('[data-testid="home-public-notice"]')?.textContent || '').trim());
-    const afterCount = await page.locator('[data-testid="publish-work"]').count();
-    console.log(`  · 点「公开到广场」：提示「${publishedNotice.slice(0, 70)}」、剩下的未公开按钮 ${afterCount} 个`);
-    if (!/已公开/.test(publishedNotice)) problems.push(`主页：公开后应当有可见反馈（实际「${publishedNotice.slice(0, 60)}」）`);
-    if (afterCount >= publishBefore) problems.push('主页：公开成功后，那件作品卡上不该再有「公开到广场」按钮');
-  }
+  const publishButtons = await page.locator('[data-testid="publish-work"]').count();
+  console.log(`  · 主页上的「公开到广场」按钮：${publishButtons} 个（应当 0）`);
+  if (publishButtons) problems.push('主页：学生端不该再有任何"公开到广场"入口（口径：能不能公开由平台决定）');
+
   await page.setViewportSize({ width: 390, height: 844 });
   await settle();
   await page.goto(`${base}/u/${creatorUrl.split('/u/')[1]}/w/CANVAS/work_guard_wide`, { waitUntil: 'domcontentloaded' });

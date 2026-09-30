@@ -86,22 +86,10 @@ export function CreatorHomePage({ api, studentApi = null }) {
     finally { setBusy(false); }
   }
 
-  // ⭐ 「公开到广场」：学生自己的入口（原来在已删的「我的作品·单件详情」页上）。
-  //    ⚠️ 按钮文案就写明公开到广场—— 点它等于公开，不做偷偷摸摸的事（孩子的作品要自己点头）。
-  async function publishWork(work) {
-    if (busy) return;
-    setBusy(true); setNotice('');
-    try {
-      const saved = await studentApi.put(`student/works/${encodeURIComponent(work.id)}/public`, { isPublic: true });
-      const token = saved?.shareToken;
-      const link = token ? absoluteUrl(`/works/${token}`) : '';
-      if (link) await copyToClipboard(link);
-      setState((current) => (current.creator ? { ...current, creator: { ...current.creator, items: (current.creator.items || []).map((item) => (item.id === work.id ? { ...item, isPublic: true } : item)) } } : current));
-      setNotice(link ? `已公开到广场，链接已复制：${link}` : '已公开到广场');
-    } catch (error) { setNotice(`没公开成功：${error.message}`); }
-    finally { setBusy(false); }
-  }
-
+  // ⭐ 2026-09-30 用户口径：「**能不能公开，是平台决定的**」——
+  //    这里原来有个「公开到广场」按钮（学生自助把画布作品公开出去），已整体删除：
+  //    学生端不再有任何改公开状态的入口，服务端那条 `PUT student/works/:id/public` 也一起封掉了。
+  //    平台端/机构端的管理口（作品管理 → 发布 / 下架）不受影响。
   async function share() {
     const url = absoluteUrl(`/u/${token}`);
     const copied = await copyToClipboard(url);
@@ -146,7 +134,7 @@ export function CreatorHomePage({ api, studentApi = null }) {
         <strong>主页设置</strong>
         <button type="button" className="text-button" onClick={() => setPanelOpen(false)}>收起</button>
       </div>
-      <p className="sw-home-panel__hint">你的主页是<strong>公开的</strong>：任何拿到链接的人都能看到它，上面列着你<strong>全部</strong>的作品（含还没公开到广场的）。</p>
+      <p className="sw-home-panel__hint">你的主页是<strong>公开的</strong>：拿到链接的人都能看到这里<strong>全部</strong>的作品。</p>
       <div className="sw-home-panel__block">
         <span className="sw-home-panel__label">头像</span>
         <p className="sw-home-panel__hint">可以上传你自己的照片，也可以从下面挑一个预设头像。</p>
@@ -196,7 +184,6 @@ export function CreatorHomePage({ api, studentApi = null }) {
             <span className="sw-card__from">{work.orgName || '灵动ai学院'}</span>
           </div>
         </button>
-        {isOwner && !work.isPublic && (work.source || 'CANVAS') === 'CANVAS' ? <button type="button" className="text-button" data-testid="publish-work" disabled={busy} onClick={() => publishWork(work)}>公开到广场</button> : null}
         {work.unpublishReason && !work.isPublic ? <p className="student-card__desc" data-testid="unpublish-reason"><strong>下架原因：</strong>{work.unpublishReason}</p> : null}
       </article>;
     })}</div> : <div className="student-page-state">

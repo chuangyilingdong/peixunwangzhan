@@ -34,9 +34,8 @@ export function qrSvgText(text, { cell = 4, margin = 2 } = {}) {
  * @param pieces `[{ pieceKey, label }]`（**服务端算好的键**，来自作品详情里的 media / artifacts）
  * @param createShare `async (pieceKey) => ({ code })` —— 由调用方按自己的作用域调接口
  *        （学生端 `student/share-links`、机构端 `org/share-links`；两边拿到的码是同一枚）
- * @param homeUrl 可选：面板底部的"看 TA 的主页"
  */
-export function WorkSharePanel({ title, pieces = [], createShare, onClose, homeUrl = '' }) {
+export function WorkSharePanel({ title, pieces = [], createShare, onClose }) {
   const [state, setState] = useState({ pieceKey: '', url: '', svg: '', busy: true, notice: '' });
 
   async function pick(pieceKey) {
@@ -80,8 +79,8 @@ export function WorkSharePanel({ title, pieces = [], createShare, onClose, homeU
         }}>复制链接</button>
         <a className="button soft" href={state.url} target="_blank" rel="noreferrer">先看看分享页</a>
       </div> : null}
-      {state.url ? <p className="share-modal__hint">在微信里打开时，点右上角「···」也能发给朋友或分享到朋友圈。</p> : null}
-      {homeUrl ? <p className="share-modal__hint"><a href={homeUrl}>看 TA 的主页 · 更多作品 ↗</a></p> : null}
+      {/* ⚠️ 2026-09-30 用户口径「分享按钮这些多余的文案全部删除」：这里原来还有两行
+          （微信"点右上角 ···"的引导 + 「看 TA 的主页 · 更多作品」）。面板只干一件事：给码、给链接。 */}
     </div>
   </div>;
 }

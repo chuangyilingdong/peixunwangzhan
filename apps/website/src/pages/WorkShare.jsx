@@ -22,7 +22,7 @@ async function sharePiece(url, title) {
   } catch { /* 用户取消或浏览器不支持 → 走复制 */ }
   try {
     await navigator.clipboard.writeText(url);
-    return '链接已复制：发给微信好友或贴进朋友圈即可';
+    return '链接已复制';
   } catch {
     return `请手动复制这个地址：${url}`;
   }
@@ -56,7 +56,7 @@ export function WorkSharePage() {
     </div></main>;
   }
 
-  const { student, org, lessonTitle, piece, work, homeUrl } = state.data;
+  const { student, org, lessonTitle, piece, work } = state.data;
   const missingAssets = Array.isArray(state.data.missingAssets) ? state.data.missingAssets : [];
   const glyph = avatarGlyph(student?.avatarKey);
   const initial = String(student?.name || '同学').slice(0, 1);
@@ -95,9 +95,10 @@ export function WorkSharePage() {
         <a className="share-page__btn is-site" href="/">查看官网</a>
       </div>
       {notice ? <p className="share-page__notice">{notice}</p> : null}
-      {/* 没有公众号 → 不做 JS-SDK，给一条手动路径（微信里右上角就是分享入口） */}
-      <p className="share-page__hint">在微信里打开时，点右上角「···」也可以发给朋友或分享到朋友圈。</p>
-      {homeUrl ? <p className="share-page__home"><Link to={homeUrl}>看 TA 的主页 · 更多作品 <b>↗</b></Link></p> : null}
+      {/* ⚠️ 2026-09-30 用户口径：「分享按钮这些多余的文案全部删除」——
+          这里原来有两行：微信里"点右上角 ···"的引导（没有公众号、也不该教用户点哪里），
+          和「看 TA 的主页 · 更多作品」的跳转。**两张卡都不是这一页要干的事**，已删。
+          这一页只做三件：看这一件 → 分享这一件 → 回官网。 */}
     </section>
   </main>;
 }
@@ -105,7 +106,7 @@ export function WorkSharePage() {
 /**
  * 那一件产出物怎么显示（按服务端给的 `render` 分派）：
  *   IMAGE/VIDEO/AUDIO → 就地看/听；HTML → **就地玩**（沙箱 iframe，与作品广场同一套口径）；
- *   DOC（PPT/Word/Excel）→ 给封面 + 「打开体验」/「下载原件」（转 PDF 预览那条路广场已有，这里先不重复造）。
+ *   DOC（PPT/Word/Excel）→ 能直接读的文本件**就地把正文铺开**，其余给封面 + 「打开体验」/「下载原件」。
  *
  * ⚠️ 2026-09-30 用户口径（原话）：「手机扫码能否……**直接显示作品**，点击后立马可以在线看游玩，
  *    **而不是跳转**，跳转又各种无限跳转」。
@@ -135,11 +136,18 @@ function PieceView({ piece, document: doc }) {
       {playable && openUrl ? <p className="share-piece__more"><Link to={openUrl}>在完整页面里打开 ↗</Link></p> : null}
     </>;
   }
-  // 文档类（PPT / Word / Excel）
+  // 文档类（PPT / Word / Excel / 文本件）
+  // ⚠️ 2026-09-30 用户口径（原话）：「图3 打开体验，**应该不能这样展示，应该就直接展示**」——
+  //    他截的那一件是 `notes.txt`：卡片上只有一颗「打开体验」按钮，内容一个字都看不到。
+  //    服务端现在把**人读得懂**的正文一起给过来（`textContent`），这里直接铺开显示、不再给那颗按钮。
+  //    ⚠️ PPT/Word/Excel 的正文是规格文本（给渲染器看的），服务端不给 —— 那三类仍是"封面 + 打开体验"。
+  const text = String(piece.textContent || '');
   return <>
-    {coverUrl ? <img className="share-piece__media" src={coverUrl} alt={name || '文档作品'} /> : null}
+    {text
+      ? <pre className="share-piece__text">{text}{piece.textTruncated ? '…（内容较长，已截断）' : ''}</pre>
+      : (coverUrl ? <img className="share-piece__media" src={coverUrl} alt={name || '文档作品'} /> : null)}
     <p className="share-piece__play">
-      {openUrl ? <Link className="button soft" to={openUrl}>打开体验 <b>↗</b></Link> : null}
+      {!text && openUrl ? <Link className="button soft" to={openUrl}>打开体验 <b>↗</b></Link> : null}
       {mediaUrl ? <a className="button soft" href={mediaUrl}>下载原件</a> : null}
     </p>
   </>;

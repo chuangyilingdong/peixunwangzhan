@@ -88,7 +88,6 @@ export function WorkPreviewModal({ api, studentApi = null, isOwner = false, crea
       pieces={pieces}
       createShare={(pieceKey) => studentApi.post('student/share-links', { source, workId: work.id, pieceKey })}
       onClose={() => setShareOpen(false)}
-      homeUrl={creatorToken ? `/u/${encodeURIComponent(creatorToken)}` : ''}
     /> : null}
   </div>;
 }

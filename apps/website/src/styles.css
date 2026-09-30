@@ -1291,3 +1291,6 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 .prep-box-row .secondary-button { flex: none; white-space: nowrap; }
 .prep-canvas { background: #fff; border: 1px solid #ece7fb; border-radius: 14px; overflow: hidden; min-height: 0; }
 .prep-hint { flex: none; padding: 0 14px 14px; display: grid; gap: 8px; }
+/* 分享卡里**直接铺开**的文本件正文（用户 2026-09-30 口径：不要只给一颗「打开体验」按钮）。
+   长文给个高度上限、内部滚动 —— 卡片本身不该变成一整屏。 */
+.share-piece__text { margin: 0; padding: 14px 16px; max-height: 56vh; overflow: auto; border: 1px solid #ece7fb; border-radius: 14px; background: #faf9ff; color: #3c3557; font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

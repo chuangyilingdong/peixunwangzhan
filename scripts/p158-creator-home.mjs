@@ -155,7 +155,12 @@ console.log('④ 学生侧的设置接口 + 前端页面');
 
   check('⭐ 主页的作品卡点开是**弹窗**（用户口径「改成弹窗那样的」）',
     /data-testid="home-work-card"/.test(myWorks) && /WorkPreviewModal/.test(myWorks));
-  check('⭐ 主人模式才有写操作（isOwner 把门）', /const isOwner = Boolean/.test(myWorks) && /isOwner && \!work\.isPublic/.test(myWorks));
+  // ⚠️ 2026-09-30 口径反转：主人模式**不再有**"改公开状态"的写入口（用户：「能不能公开，是平台决定的」）——
+  //    这里从"断言那个按钮在"改成"断言它不在"，并把口径写在注释里，免得下次有人照着旧断言改回去。
+  check('⭐ 主人模式不再有"公开到广场"入口（能不能公开由平台决定）',
+    /const isOwner = Boolean/.test(myWorks) && !/publish-work/.test(myWorks) && !/publishWork/.test(myWorks));
+  check('⭐ 主页设置面板里那句提示也不再提"公开到广场"',
+    !/含还没公开到广场的/.test(myWorks));
   check('我的作品与公开主页共用同一套封面/类型判定（不许各写一份）',
     /from '\.\.\/components\/workCard\.jsx'/.test(myWorks) && /from '\.\.\/components\/workCard\.jsx'/.test(home));
   const sitemapBlock = /PUBLIC_ROUTES = \[([\s\S]*?)\]/.exec(read('apps/server/src/index.js'));
@@ -256,6 +261,22 @@ console.log('⑤ 真请求：建号就有链接 → 主页只列已公开 → �
     const login = await api('/api/auth/login', { method: 'POST', body: { login: 'student-1', password: 'study123' } });
     const token = login.data?.token;
     check('学生登录成功（下面几条都靠它）', Boolean(token), JSON.stringify(login.data).slice(0, 160));
+
+    // ⭐ 2026-09-30 用户口径：「**能不能公开，是平台决定的**」——
+    //    学生自助公开那条接口必须**封着**（403），而且封的是"学生自己给自己公开"，
+    //    平台/机构的管理口（作品管理 → 发布 / 下架）走的是另一条路，不受影响。
+    {
+      const attempt = await api('/api/student/works/p158_private/public', { method: 'PUT', token, body: { isPublic: true } });
+      check('⭐ 学生端改不了公开状态（PUT student/works/:id/public → 403 WORK_PUBLIC_PLATFORM_DECIDES）',
+        attempt.status === 403 && attempt.data?.error?.code === 'WORK_PUBLIC_PLATFORM_DECIDES',
+        `HTTP ${attempt.status} ${JSON.stringify(attempt.data).slice(0, 160)}`);
+      // 这个脚本用的是**同步** SQLite 句柄（上面那套 db.exec），这里照它的写法读一次
+      const probeDb = new DatabaseSync(path.join(temp, 'platform.db'));
+      const still = probeDb.prepare("SELECT is_public, share_token FROM works WHERE id='p158_private'").get();
+      probeDb.close();
+      check('⭐ 那一件确实还是"没公开"（接口没被绕过写进去）',
+        Number(still?.is_public || 0) === 0 && !still?.share_token, JSON.stringify(still));
+    }
     // 另找一位学生：下面要用他的文件验"不能拿别人的图当头像"
     const login2 = await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } });
     const student2Token = login2.data?.token;
