@@ -137,6 +137,15 @@ function localArtifactReferences(name, content) {
   if (kind === 'html' || kind === 'css' || kind === 'svg') {
     for (const match of text.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) values.push(match[1]);
   }
+  // ⭐ 2026-10-01：**JS 里引用的素材**也要收 —— 学生做的小游戏十有八九是这样写的：
+  //    `new Audio("assets/sfx.wav")` / `fetch("assets/level.json")` / `img.src = "assets/x.png"`。
+  //    只扫 html/css/svg 的话，这些**既不被收集、也不被回写**：音效/关卡文件永远丢
+  //    （用户问「还有什么BUG」时用素材矩阵实测出来的，见 §八十二）。
+  //    ⚠️ 只认**带引号的整段相对路径**（单/双引号、反引号），不做裸词匹配 ——
+  //       正文里随便一句提到 hero.png 不该被当成引用（与上面 html 那条同一套谨慎）。
+  if (kind === 'js' || kind === 'json') {
+    for (const match of text.matchAll(/["'`]([^"'`\n]{1,120})["'`]/g)) values.push(match[1]);
+  }
   return values.map(normalizeLocalReference).filter(Boolean);
 }
 
@@ -1400,6 +1409,19 @@ export function rewriteLocalReferences(content, name, replacements) {
   }
   if (kind === 'html' || kind === 'css' || kind === 'svg') {
     text = text.replace(/(url\(\s*["']?)([^"')]+)(["']?\s*\))/gi, (whole, head, value, tail) => head + rewrite(value) + tail);
+  }
+  // ⭐ 2026-10-01：**带引号的整段素材路径**一律换掉 —— 不管它在独立的 .js/.json 里，
+  //    还是在 **HTML 的内联 <script>** 里（`new Audio("assets/sfx.wav")`：学生做的小游戏
+  //    十有八九是一个 index.html 全套内联；只按 html 的 src/href/url() 扫，这条永远漏）。
+  //    ⚠️ 只认"引号里**整段等于**某个本地素材名"的字符串（不做裸词替换、也不动别的引号内容）——
+  //       正文里提一句 hero.png、或写别的话都不会被改；`replacements` 里只有**真交上来的**素材名。
+  {
+    // 逐个"本地素材名 → 地址"精确替换**带引号的整段**（与扫描侧同一套写法）。
+    // ⚠️ 不做全局字符串替换：注释里随便提一句 `hero.png` 不该被改（与 html 那条同一套口径）。
+    for (const [from, to] of replacements) {
+      const quoted = new RegExp('(["\'`])' + from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\1', 'g');
+      text = text.replace(quoted, (whole, quote) => quote + to + quote);
+    }
   }
   return text;
 }

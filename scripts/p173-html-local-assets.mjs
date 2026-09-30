@@ -153,6 +153,44 @@ try {
     return Boolean(image && Number(image.file_size) === PNG.length && video && Number(video.file_size) === MP4.length);
   })());
 
+  /* ───────── ①b 素材类型矩阵：哪些能带、哪些带不了（2026-10-01 用户问「图视频音频都可以上传了吗」）─────
+     用**最小合法字节**把每种类型都塞进一次提交，逐条钉死"能带"的那批。
+     ⚠️ 钉的是**平台侧收不收**（存储层白名单 + 魔术字节），不是客户端扫不扫得到。 */
+  {
+    const CASES = [
+      ['assets/case.png', PNG, 'image/png'],
+      ['assets/case.webp', Buffer.concat([Buffer.from('52494646', 'hex'), Buffer.from('24000000', 'hex'), Buffer.from('57454250', 'hex'), Buffer.from('56503820', 'hex'), Buffer.alloc(16)]), 'image/webp'],
+      ['assets/case.wav', Buffer.concat([Buffer.from('52494646', 'hex'), Buffer.from('24000000', 'hex'), Buffer.from('57415645', 'hex'), Buffer.from('666d7420', 'hex'), Buffer.alloc(24)]), 'audio/wav'],
+      ['assets/case.ogg', Buffer.concat([Buffer.from('4f676753', 'hex'), Buffer.alloc(32, 0x44)]), 'audio/ogg'],
+      ['assets/case.pdf', Buffer.concat([Buffer.from('255044462d312e340a', 'hex'), Buffer.alloc(16, 0x20)]), 'application/pdf'],
+    ];
+    const matrixHtml = ['<!doctype html><html><body>']
+      .concat(CASES.map(([name]) => `<img src="${name}">`))
+      // ⭐ 内联 <script> 里的引用（学生做的小游戏就长这样）：要能被识别 + 回写
+      .concat(['<script>var a = new Audio("assets/case.wav");</script></body></html>'])
+      .join('');
+    const matrix = await upload({
+      // ⚠️ 入口名**必须与第一件作品不同**：同一次创作 + 同入口文件是**幂等更新**（round+1），
+      //    用 index.html 会把上面那件作品覆盖掉（本守卫第一版就这么把自己的夹具改写了）。
+      name: 'matrix.html', title: 'P173 素材矩阵', copyrightConfirmed: true,
+      files: [{ name: 'matrix.html', content: matrixHtml, binary: false }]
+        .concat(CASES.map(([name, buf]) => ({ name, content: buf.toString('base64'), binary: true }))),
+    });
+    check('①b 素材矩阵：png/webp/wav/ogg/pdf 一次全收下（2026-10-01 补的 wav/ogg/pdf）',
+      matrix.status === 200 && !(matrix.data?.warnings || []).length,
+      JSON.stringify(matrix.data?.warnings || []).slice(0, 240));
+    const matrixRow = matrix.data?.id ? await arow('SELECT files FROM vibecoding_submissions WHERE id=?', [matrix.data.id]) : null;
+    const matrixFiles = JSON.parse(matrixRow?.files || '{}');
+    const saved = String(matrixFiles['matrix.html'] || '');
+    for (const [name] of CASES) {
+      const id = (await arow('SELECT id FROM file_assets WHERE file_name=? ORDER BY created_at DESC LIMIT 1', [name.split('/').pop()]))?.id;
+      check(`①b ${name} 在 HTML 里被改写成私有下载地址`,
+        Boolean(id) && saved.includes(`/api/student/file-assets/${id}/download`), saved.slice(0, 200));
+    }
+    check('⭐ ①b 内联 <script> 里的 `new Audio("assets/case.wav")` 也被改写（只看 src/href/url() 会永远漏）',
+      /new Audio\("\/api\/student\/file-assets\/[\w-]+\/download"\)/.test(saved), saved.slice(-160));
+  }
+
   /* ───────── ② 引用被改写成私有下载地址 ───────── */
   const html = String(files['index.html'] || '');
   check('② 入口 HTML 里的相对引用被改写成私有下载地址（图 + 视频都改到）',
