@@ -14,41 +14,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { AVATAR_KEYS, avatarGlyph } from '@platform/shared';
-// ⭐ 2026-09-30：二维码用仓库里 vendored 的那份实现（`packages/shared/src/vendor/qrcode-generator.mjs`，
-//    MIT，Kazuhiko Arase）—— **零依赖**：服务器没有 npm，发版不该为了一个二维码去下载新包。
-//    ⚠️ 它的正确性是**比对过**的：同一段文本与 npm 上成熟的 `qrcode` 生成结果逐格一致（33×33、0 处不同）。
-//    用法：typeNumber=0（自动选版本）+ 纠错级 M；我们自己按 getModuleCount/isDark 渲染 SVG（不依赖它的渲染 API）。
-import qrcode from '@platform/shared/vendor/qrcode-generator.mjs';
-
-/** 二维码 SVG（黑白两色、带静默边）—— 用来给「分享」弹窗显示。 */
-function qrSvgText(text, { cell = 4, margin = 2 } = {}) {
-  const qr = qrcode(0, 'M');
-  qr.addData(text);
-  qr.make();
-  const count = qr.getModuleCount();
-  const size = (count + margin * 2) * cell;
-  let rects = '';
-  for (let r = 0; r < count; r += 1) {
-    for (let c = 0; c < count; c += 1) {
-      if (qr.isDark(r, c)) rects += `<rect x="${(c + margin) * cell}" y="${(r + margin) * cell}" width="${cell}" height="${cell}"/>`;
-    }
-  }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img" aria-label="分享二维码">`
-    + `<rect width="${size}" height="${size}" fill="#fff"/><g fill="#111">${rects}</g></svg>`;
-}
-
-/**
- * 一件作品里的**每一件产出物**（主页上要**逐件**分享 —— 用户口径：「这节课有 1 个图片和 1 个视频，
- * 每个都可以独立去分享」）。`pieceKey` 是**服务端算好的**（画布 `media:…` / VibeCoding `artifact:…`），
- * 前端别自己拼 —— 两边口径飘了就会出现"主页看得见却分享不了"。
- */
-function shareablePiecesOf(work) {
-  if ((work.source || 'CANVAS') === 'VIBECODING') {
-    return (work.artifacts || []).filter((item) => item?.pieceKey).map((item) => ({ pieceKey: item.pieceKey, label: item.name || '' }));
-  }
-  const labels = { IMAGE: '图片', VIDEO: '视频', AUDIO: '音频' };
-  return (work.media || []).filter((item) => item?.pieceKey).map((item) => ({ pieceKey: item.pieceKey, label: item.caption || labels[item.modality] || '这一件' }));
-}
+// ⚠️ 分享入口在**作品详情弹窗的右上角**（`components/WorkPreviewModal.jsx`），不在列表卡片上
+//    —— 用户 2026-09-30 口径：「点到对应的作品，查看作品的右上方有个分享按钮」才是正常逻辑。
 import { WorkCover, workType } from '../components/workCard.jsx';
 import { absoluteUrl, copyToClipboard } from '../components/clipboard.js';
 import { WorkPreviewModal } from '../components/WorkPreviewModal.jsx';
@@ -62,8 +29,6 @@ export function CreatorHomePage({ api, studentApi = null }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [viewing, setViewing] = useState(null);
-  // ⭐ 2026-09-30：「逐件分享」弹窗（二维码 + 链接）
-  const [shareModal, setShareModal] = useState(null);
   const isOwner = Boolean(home && home.homeToken === token);
 
   useEffect(() => {
@@ -141,22 +106,6 @@ export function CreatorHomePage({ api, studentApi = null }) {
     const url = absoluteUrl(`/u/${token}`);
     const copied = await copyToClipboard(url);
     setNotice(copied ? `链接已复制：${url}` : `请手动复制这个地址：${url}`);
-  }
-
-  // ⭐ 2026-09-30（用户口径）：「每个作品都可以有个分享……每个都可以独立去分享」——
-  //    这里分享的是**一件产出物**（一张图 / 一段视频 / 一个网页…），不是整张卡片。
-  //    码由服务端发（幂等：同一件反复点给的是同一枚）；拿到码后弹二维码 —— 扫它打开 `/s/<码>` 那张分享卡。
-  async function sharePiece(work, piece) {
-    if (busy) return;
-    setBusy(true); setNotice('');
-    try {
-      const saved = await studentApi.post('student/share-links', {
-        source: work.source || 'CANVAS', workId: work.id, pieceKey: piece.pieceKey,
-      });
-      const url = absoluteUrl(`/s/${saved.code}`);
-      setShareModal({ title: `${work.title || '作品'}${piece.label ? ' · ' + piece.label : ''}`, url, svg: qrSvgText(url) });
-    } catch (error) { setNotice(`分享没成功：${error.message}`); }
-    finally { setBusy(false); }
   }
 
   if (state.loading) return <main className="inner"><div className="student-page-state">正在打开主页…</div></main>;
@@ -247,12 +196,6 @@ export function CreatorHomePage({ api, studentApi = null }) {
             <span className="sw-card__from">{work.orgName || '灵动ai学院'}</span>
           </div>
         </button>
-        {/* ⭐ 2026-09-30（用户口径）：**逐件**给「分享」—— 这节课的 1 张图、1 段视频各自独立分享。
-            码在服务端发（幂等），点完弹二维码；不是主人（访客）看不到这一排。 */}
-        {isOwner ? <div className="sw-card__share" data-testid="home-work-pieces">
-          {shareablePiecesOf(work).map((piece) => <button key={piece.pieceKey} type="button" className="text-button"
-            disabled={busy} onClick={() => sharePiece(work, piece)}>分享{piece.label ? ` · ${piece.label}` : ''}</button>)}
-        </div> : null}
         {isOwner && !work.isPublic && (work.source || 'CANVAS') === 'CANVAS' ? <button type="button" className="text-button" data-testid="publish-work" disabled={busy} onClick={() => publishWork(work)}>公开到广场</button> : null}
         {work.unpublishReason && !work.isPublic ? <p className="student-card__desc" data-testid="unpublish-reason"><strong>下架原因：</strong>{work.unpublishReason}</p> : null}
       </article>;
@@ -263,25 +206,6 @@ export function CreatorHomePage({ api, studentApi = null }) {
 
     <div className="student-page-actions"><Link className="button soft" to="/works">看看更多作品 <b>↗</b></Link></div>
 
-    {viewing ? <WorkPreviewModal api={api} creatorToken={token} source={viewing.source || 'CANVAS'} work={viewing} onClose={() => setViewing(null)} /> : null}
-
-    {/* 分享弹窗：二维码 + 链接（扫码打开 `/s/<码>` 那张分享卡）。
-        ⚠️ 目前**没有公众号** → 不做微信 JS-SDK；这里给"复制链接" + "微信里点右上角 ···"的手动路径。 */}
-    {shareModal ? <div className="share-modal" role="dialog" aria-modal="true" data-testid="share-modal">
-      <div className="share-modal__panel">
-        <div className="share-modal__head"><strong>分享作品</strong><button type="button" className="text-button" onClick={() => setShareModal(null)}>关闭</button></div>
-        <p className="share-modal__title">{shareModal.title}</p>
-        <div className="share-modal__qr" dangerouslySetInnerHTML={{ __html: shareModal.svg }} />
-        <p className="share-modal__hint">用手机扫这个二维码，就能看到这件作品。</p>
-        <div className="share-modal__actions">
-          <button type="button" className="button" onClick={async () => {
-            const copied = await copyToClipboard(shareModal.url);
-            setNotice(copied ? `链接已复制：${shareModal.url}` : `请手动复制：${shareModal.url}`);
-          }}>复制链接</button>
-          <a className="button soft" href={shareModal.url} target="_blank" rel="noreferrer">先看看分享页</a>
-        </div>
-        <p className="share-modal__hint">在微信里打开时，点右上角「···」也能发给朋友或分享到朋友圈。</p>
-      </div>
-    </div> : null}
+    {viewing ? <WorkPreviewModal api={api} studentApi={studentApi} isOwner={isOwner} creatorToken={token} source={viewing.source || 'CANVAS'} work={viewing} onClose={() => setViewing(null)} /> : null}
   </main>;
 }
