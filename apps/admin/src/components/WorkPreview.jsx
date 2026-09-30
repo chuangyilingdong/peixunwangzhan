@@ -148,7 +148,7 @@ export function WorkPreview({ api, workId, title, kind = 'vibecoding', onClose }
               {/* 这件作品里**还指着本地文件、但没随作品交上来**的引用（旧客户端只传文本与封面）：
                   先把话说清楚，别让平台端对着"图裂了"猜是不是自己坏了。见 vibecoding.js 的 missingLocalAssets。 */}
               {Array.isArray(data?.missingAssets) && data.missingAssets.length
-                ? <Notice tone="warning">这件作品引用了 {data.missingAssets.length} 个本地素材（{data.missingAssets.slice(0, 3).join('、')}{data.missingAssets.length > 3 ? ' 等' : ''}），但没有随作品一起提交上来 —— 学生在**最新版客户端**里重新提交一次就能看到它们。</Notice>
+                ? <Notice tone="warning">这件作品引用了 {data.missingAssets.length} 个本地素材（{data.missingAssets.slice(0, 3).join('、')}{data.missingAssets.length > 3 ? ' 等' : ''}），但没有随作品一起提交上来 —— 学生在最新版客户端里重新提交一次就能看到它们。</Notice>
                 : null}
               {views.length > 1 ? <label>作品文件<select value={entry || ''} onChange={(event) => setActiveName(event.target.value)}>
                 {views.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}

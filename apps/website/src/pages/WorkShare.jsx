@@ -80,7 +80,7 @@ export function WorkSharePage() {
         <PieceView piece={piece} document={state.data.document} />
         {missingAssets.length ? <Notice tone="warning">
           这件作品里有 {missingAssets.length} 个本地素材（{missingAssets.slice(0, 3).join('、')}{missingAssets.length > 3 ? ' 等' : ''}）
-          没有随作品一起提交上来 —— 让 ta 用最新版客户端**重新提交一次**，这里就能看到图和视频了。
+          没有随作品一起提交上来 —— 让 ta 用最新版客户端重新提交一次，这里就能看到图和视频了。
         </Notice> : null}
       </div>
 
