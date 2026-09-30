@@ -11,7 +11,7 @@
 // + 复制链接兜底（有公众号之后再接 `wx.config` + `updateAppMessageShareData` 即可，结构不用改）。
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { AVATAR_KEYS, avatarGlyph, BrandLogo, createApiClient, Icon } from '@platform/shared';
+import { avatarGlyph, BrandLogo, createApiClient, Icon } from '@platform/shared';
 
 const api = createApiClient();
 
