@@ -106,7 +106,8 @@ export function WorkSharePage() {
 /**
  * 那一件产出物怎么显示（按服务端给的 `render` 分派）：
  *   IMAGE/VIDEO/AUDIO → 就地看/听；HTML → **就地玩**（沙箱 iframe，与作品广场同一套口径）；
- *   DOC（PPT/Word/Excel）→ 能直接读的文本件**就地把正文铺开**，其余给封面 + 「打开体验」/「下载原件」。
+ *   DOC（PPT/Word/Excel）→ 能直接读的文本件**就地把正文铺开**；真文件的 Office 产物**就地 iframe 显示服务端转好的 PDF**；
+ *   两者都拿不到时才退回「封面 + 打开体验」。
  *
  * ⚠️ 2026-09-30 用户口径（原话）：「手机扫码能否……**直接显示作品**，点击后立马可以在线看游玩，
  *    **而不是跳转**，跳转又各种无限跳转」。
@@ -142,12 +143,17 @@ function PieceView({ piece, document: doc }) {
   //    服务端现在把**人读得懂**的正文一起给过来（`textContent`），这里直接铺开显示、不再给那颗按钮。
   //    ⚠️ PPT/Word/Excel 的正文是规格文本（给渲染器看的），服务端不给 —— 那三类仍是"封面 + 打开体验"。
   const text = String(piece.textContent || '');
+  // 真文件类（PPT/Word/Excel）：服务端转成 PDF 再 inline 显示 —— 与作品广场同一条路
+  // （浏览器渲染不了 .pptx，卡片上只给「打开体验」等于没展示）。
+  const docPreview = String(piece.previewUrl || '');
   return <>
     {text
       ? <pre className="share-piece__text">{text}{piece.textTruncated ? '…（内容较长，已截断）' : ''}</pre>
-      : (coverUrl ? <img className="share-piece__media" src={coverUrl} alt={name || '文档作品'} /> : null)}
+      : docPreview
+        ? <div className="share-piece__stage"><iframe className="share-piece__doc" src={docPreview} title={name || '文档预览'} /></div>
+        : (coverUrl ? <img className="share-piece__media" src={coverUrl} alt={name || '文档作品'} /> : null)}
     <p className="share-piece__play">
-      {!text && openUrl ? <Link className="button soft" to={openUrl}>打开体验 <b>↗</b></Link> : null}
+      {!text && !docPreview && openUrl ? <Link className="button soft" to={openUrl}>打开体验 <b>↗</b></Link> : null}
       {mediaUrl ? <a className="button soft" href={mediaUrl}>下载原件</a> : null}
     </p>
   </>;

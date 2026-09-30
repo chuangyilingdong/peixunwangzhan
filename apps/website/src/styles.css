@@ -1294,3 +1294,6 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 /* 分享卡里**直接铺开**的文本件正文（用户 2026-09-30 口径：不要只给一颗「打开体验」按钮）。
    长文给个高度上限、内部滚动 —— 卡片本身不该变成一整屏。 */
 .share-piece__text { margin: 0; padding: 14px 16px; max-height: 56vh; overflow: auto; border: 1px solid #ece7fb; border-radius: 14px; background: #faf9ff; color: #3c3557; font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* 分享卡里**就地显示**的真文件文档（服务端转好的 PDF）：与作品广场同一个渲染方式。
+   ⚠️ 高度写死一档（62vh）：PDF 在 iframe 里自己滚，卡片不该被它撑到几千像素。 */
+.share-piece__doc { width: 100%; height: 62vh; border: 0; background: #fff; display: block; }

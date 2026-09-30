@@ -230,6 +230,28 @@ try {
       check(`⑦b ${file} 不再有「看 TA 的主页」跳转`, !/看 TA 的主页/.test(source));
     }
     check('⑦b 分享卡里文本件走 share-piece__text（就地铺开）', /share-piece__text/.test(cardPage));
+
+    /* ── ⑦c 真文件类产物：分享卡**就地 iframe 预览**（服务端转 PDF，与作品广场同一条路）────
+       用户 2026-09-30 口径：「应该就**直接展示**就像图4那样」——PPT/Word/Excel 的 .pptx 浏览器渲染不了，
+       卡片上只给「打开体验」等于没展示。这一条钉三件事：载荷带 previewUrl、授权边界仍然只认作品里的文件、
+       URL 形状是分享码专属的那条（不误用广场那条）。 */
+    const deckCard = await api(`/api/public/share-links/${encodeURIComponent(deckCode)}`);
+    const deckPiece = deckCard.data?.piece || {};
+    check('⑦c ⭐ 真文件产物（deck.pptx）的分享卡带 previewUrl（就地 iframe 预览）',
+      typeof deckPiece.previewUrl === 'string' && deckPiece.previewUrl.includes('/files/') && deckPiece.previewUrl.endsWith('/preview'),
+      JSON.stringify(deckPiece).slice(0, 220));
+    check('⑦c previewUrl 走的是**分享码专属**那条口（不是广场的 vibecoding-works）',
+      String(deckPiece.previewUrl || '').startsWith(`/api/public/share-links/${deckCode}/files/`),
+      String(deckPiece.previewUrl || ''));
+    // 授权边界：作品快照里没有的文件名 → 404（别拿它当万能文件代理）
+    const foreignDoc = await api(`/api/public/share-links/${encodeURIComponent(deckCode)}/files/not-in-work.pptx/preview`);
+    check('⑦c 作品里没有的文件名 → 404（预览口不是文件代理）',
+      foreignDoc.status === 404, `status=${foreignDoc.status}`);
+    // 形状对的那种：**授权过了**（本地没装 LibreOffice 时转换会失败，所以只钉"不是 404/403"）
+    const realDoc = await api(deckPiece.previewUrl);
+    check('⑦c 作品里真有的那份文件：通过授权（不是 404 / 403）—— 转换本身要服务器上的 LibreOffice',
+      ![404, 403].includes(realDoc.status), `status=${realDoc.status}`);
+    check('⑦c 分享卡里真文件走 share-piece__doc（就地 PDF）', /share-piece__doc/.test(cardPage));
   }
   const canvasItem = (creatorPayload.data?.items || []).find((item) => item.id === canvasWorkId);
   const canvasKeys = (canvasItem?.media || []).map((item) => item.pieceKey).filter(Boolean);

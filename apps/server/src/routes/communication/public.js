@@ -444,6 +444,9 @@ export async function handlePublicCommunication(ctx) {
         // 能直接读的正文（没有就是空串）；`textTruncated` 让卡片如实说明"还有后半截"
         textContent,
         textTruncated: Boolean(rawText && rawText.length > MAX_SHARE_TEXT_CHARS),
+        // 真文件类产物（PPT/Word/Excel）：一条**服务端转 PDF** 的预览地址 —— 分享卡就地 iframe 显示，
+        // 不再只给一颗「打开体验」按钮（用户口径「就直接展示」）。文本/网页件为 null。
+        previewUrl: artifact.fileId ? `${base}/files/${encodeURIComponent(artifact.name)}/preview` : null,
       } : null,
     };
   }
@@ -480,6 +483,32 @@ export async function handlePublicCommunication(ctx) {
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
     return prepareFileDownload(ctx, file);
+  }
+
+  // ⭐ 2026-09-30：分享卡上的**真文件**产物（PPT / Word / Excel）怎么看 —— 与作品广场同一条路子：
+  //    服务端用 LibreOffice 转成 PDF 再 inline 发（浏览器渲染不了 .pptx，卡片上只能下载 = 等于没展示；
+  //    用户 2026-09-30 原话：「应该就**直接展示**就像图4那样」）。
+  //    准入与分享卡那条媒体口同一套：码有效 + 这份文件**真的出现在这件作品的快照里**。
+  const shareDocPreviewMatch = pathname.match(/^\/api\/public\/share-links\/([\w-]+)\/files\/(.+)\/preview$/);
+  if (shareDocPreviewMatch && method === 'GET') {
+    const link = await arow('SELECT * FROM work_share_links WHERE code=?', [shareDocPreviewMatch[1]]);
+    if (!link) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
+    let docName = '';
+    try { docName = decodeURIComponent(shareDocPreviewMatch[2]); } catch { throw errors.badRequest('文件名编码无效', 'INVALID_FILE_NAME_ENCODING'); }
+    // 反斜杠用 charCode 拼（这仓库踩过两次：写进文件的转义常被吃掉一层，直接写就是语法错）
+    const BACKSLASH = String.fromCharCode(92);
+    if (!docName || docName.includes('/') || docName.includes(BACKSLASH) || docName.includes('..')) throw errors.badRequest('文件名不合法', 'INVALID_VIBECODING_FILE_NAME');
+    const docSubmission = await arow('SELECT id, files, artifacts FROM vibecoding_submissions WHERE id=? AND student_id=? AND org_id=?', [link.work_id, link.student_id, link.org_id]);
+    if (!docSubmission) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
+    const docFileId = snapshotArtifactByName(docSubmission, docName)?.fileId;
+    if (!docFileId || !snapshotDocumentFileIds(docSubmission).has(String(docFileId))) {
+      throw errors.notFound('这份作品没有可在线预览的文件', 'PUBLIC_SHARE_FILE_NOT_FOUND');
+    }
+    const docFile = await arow('SELECT * FROM file_assets WHERE id=?', [String(docFileId)]);
+    if (!docFile) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
+    if (docFile.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
+    if (docFile.expires_at && new Date(docFile.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+    return prepareFilePreview(ctx, docFile);
   }
 
   // ⭐ 2026-09-27：个人主页那条链路的**媒体代理**（画布与 VibeCoding 共用）。
