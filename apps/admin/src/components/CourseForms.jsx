@@ -60,5 +60,15 @@ export function MaterialPreview({ url, type, content }) {
   if (content) return <details><summary>预览文字内容</summary><p style={{ whiteSpace: 'pre-wrap' }}>{content}</p></details>;
   if (!url || !/^(https:\/\/|\/api\/)/.test(url)) return null;
   const previewUrl = url.replace(/^\/api\/(student|org)\/file-assets\//, '/api/admin/file-assets/');
-  return <details><summary>预览素材</summary>{type === 'IMAGE' ? <img src={previewUrl} alt="素材预览" style={{ maxWidth: '100%', maxHeight: 200 }} /> : type === 'VIDEO' ? <video src={previewUrl} controls style={{ maxWidth: '100%' }} /> : type === 'AUDIO' ? <audio src={previewUrl} controls /> : <a href={previewUrl} target="_blank" rel="noreferrer">打开文件</a>}</details>;
+  // ⭐ 2026-09-30 用户口径：「给平台管理员一个下载入口，有个下载按钮，在课时编排那」。
+  //    只对**平台自己的文件资产**给这个按钮（`/api/…/file-assets/<id>/download`）——
+  //    粘贴进来的外链本来就有"打开文件"，不给它拼 `/download`。
+  //    ⚠️ 口径边界：**平台管理员**才下得了原件；机构/老师那条口仍然是"只在线看、不提供下载"
+  //    （这是 2026-09-15 用户口径 A）。别把这个链接搬到机构端去 —— 守卫 p170 钉着这条边界。
+  const isPlatformAsset = /^\/api\/(admin|org|student)\/file-assets\/[^/]+\/download$/.test(previewUrl);
+  const downloadUrl = isPlatformAsset ? previewUrl.replace(/^\/api\/[^/]+\//, '/api/admin/') : '';
+  return <div className="material-preview">
+    <details><summary>预览素材</summary>{type === 'IMAGE' ? <img src={previewUrl} alt="素材预览" style={{ maxWidth: '100%', maxHeight: 200 }} /> : type === 'VIDEO' ? <video src={previewUrl} controls style={{ maxWidth: '100%' }} /> : type === 'AUDIO' ? <audio src={previewUrl} controls /> : <a href={previewUrl} target="_blank" rel="noreferrer">打开文件</a>}</details>
+    {downloadUrl ? <a className="text-button" href={downloadUrl} title="下载原件（仅平台管理员）">下载</a> : null}
+  </div>;
 }
