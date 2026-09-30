@@ -38,8 +38,15 @@ let pdfjsPromise = null;
 function loadPdfjs() {
   if (!pdfjsPromise) {
     pdfjsPromise = Promise.all([
-      import('pdfjs-dist'),
-      import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+      // ⚠️⚠️ 必须走 **legacy 构建**（2026-09-30 用户报：同事的电脑上预览报「文档解析失败：Iterator is not defined」）。
+      //    两份构建里都有同一行 `if (typeof Iterator.prototype.join !== "function") { Iterator.prototype.join = … }`，
+      //    而 `Iterator` 是 **Chrome 122 / Safari 17.4 / Firefox 129 才有的新全局** —— 区别在于：
+      //    **legacy 带了 core-js 运行时补丁**，进来先把老浏览器缺的原生 API（含 `Iterator`）装上，
+      //    所以轮到那一行时它已经存在；主构建不带这些补丁（体积考虑），在老浏览器上一 import 就抛
+      //    `ReferenceError: Iterator is not defined` —— 表现就是"我这台（新 Chrome）正常、别人的电脑报错"。
+      //    实测复现与验证都在守卫 p169 里（源码口径 + 无 Iterator 下 import + 真浏览器真渲染一页 PDF）。
+      import('pdfjs-dist/legacy/build/pdf.mjs'),
+      import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'),
     ]).then(([lib, worker]) => {
       lib.GlobalWorkerOptions.workerSrc = worker.default;
       return lib;
