@@ -69,3 +69,7 @@ for (const row of candidates) {
 console.log(`\n[26] 小结：候选 ${candidates.length} 行 → OSS 上真有对象 ${existsInOss} 行、对象不在 ${missing} 行、`
   + `${apply ? `已写回 ${patched} 行` : '（干跑，没写）'}`);
 if (!apply && existsInOss) console.log('[26] 确认上面这些行就是"漏标"的，加 --apply 写回。');
+
+// ⚠️ MySQL 驱动会**吊住事件循环**（连接池不关）—— 不显式退出，脚本跑完会一直挂着，
+//    调用方（ssh / 运维脚本）只能等超时、还看不到输出。
+process.exit(0);
