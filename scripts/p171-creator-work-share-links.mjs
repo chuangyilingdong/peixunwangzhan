@@ -195,6 +195,21 @@ try {
     && imageCard.data?.piece?.render === 'IMAGE' && videoCard.data?.piece?.render === 'VIDEO',
     JSON.stringify({ image: imageCard.data?.piece, video: videoCard.data?.piece }).slice(0, 240));
   check('⑥ 画布侧卡面也带课时标题（作品简介就取它）', Boolean(imageCard.data?.lessonTitle), JSON.stringify(imageCard.data?.lessonTitle));
+
+  /* ── ⑦ 主页清单与分享码**同一套键**（各枚举一套 → "主页上看得见却分享不了"）── */
+  const creatorPayload = await api(`/api/public/creators/${STUDENT_HOME_TOKEN}`);
+  const vibeItem = (creatorPayload.data?.items || []).find((item) => item.id === workId);
+  const vibeKeys = (vibeItem?.artifacts || []).map((item) => item.pieceKey).filter(Boolean);
+  check('⑦ 主页的作品清单里每件产物都带 pieceKey（含**二进制那份 .pptx** —— 它不在 files 里）',
+    vibeKeys.includes('artifact:deck.pptx') && vibeKeys.includes('artifact:index.html') && vibeKeys.includes('artifact:notes.txt'),
+    JSON.stringify(vibeItem?.artifacts || []).slice(0, 260));
+  const notesShare = await api('/api/student/share-links', { method: 'POST', token: studentToken, body: { source: 'VIBECODING', workId, pieceKey: 'artifact:notes.txt' } });
+  check('⑦ ⭐ 主页给的那个键，发码接口**照单接受**（两边同一套规则，不是各枚举一套）',
+    notesShare.status === 200, JSON.stringify(notesShare.raw).slice(0, 160));
+  const canvasItem = (creatorPayload.data?.items || []).find((item) => item.id === canvasWorkId);
+  const canvasKeys = (canvasItem?.media || []).map((item) => item.pieceKey).filter(Boolean);
+  check('⑦ 画布侧主页清单也带 pieceKey（1 图 + 1 视频两件）',
+    canvasKeys.includes('media:file_p171_img') && canvasKeys.includes('media:file_p171_vid'), JSON.stringify(canvasKeys));
 } catch (error) {
   failures += 1;
   console.error('P171 抛错：', error?.message || error);

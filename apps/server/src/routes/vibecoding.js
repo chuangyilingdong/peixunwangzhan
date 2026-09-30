@@ -824,19 +824,28 @@ export function submissionPreview(submission) {
  * 图片地址在这一层拼好（前端不再自己定规则），附件图走**限定在本作品快照内**的代理地址：
  * 学生传的图不是公开素材，只有出现在这份已发布作品里的那几张才允许被公开取到。
  */
-export function publicArtifactCatalog(submission) {
+/**
+ * 一件作品里的**全部产物名**：`files` ∪ `artifacts` 的并集。
+ * ⚠️ 必须取并集：二进制产物（学生交上来的真 .pptx）**不在 files 里**，只以 fileId 存在快照里 ——
+ *    只枚举 files 的话它会从清单里凭空消失（广场看不到、也没法下载，而两边都不报错）。
+ * ⭐ 2026-09-30：**主页产物清单**（publicArtifactCatalog）与**分享码**（sharePieceKeysOf）
+ *    两边共用这一份 —— 各枚举一套的话，"主页上看得到的那一件"可能发不了码（写守卫时实测踩到）。
+ */
+export function snapshotArtifactNames(submission) {
   const files = parseSnapshotFiles(submission?.files);
   const artifacts = parseSnapshotArtifacts(submission);
+  return [...new Set([...Object.keys(files), ...artifacts.map((item) => item.name)])].sort();
+}
+
+export function publicArtifactCatalog(submission) {  const artifacts = parseSnapshotArtifacts(submission);
   const byName = new Map(artifacts.map((item) => [item.name, item]));
-  // 产物名要取**两边的并集**：二进制产物（学生创作环境交上来的真 .pptx）**不在 files 里**，
-  // 只以 fileId 存在快照里 —— 只枚举 files 的话，它会从作品清单里凭空消失
-  // （广场看不到、也没法下载，而两边都不报错）。
-  const names = [...new Set([...Object.keys(files), ...artifacts.map((item) => item.name)])].sort();
   const base = `/api/public/vibecoding-works/${submission.share_token}`;
-  return names.map((name) => {
+  return snapshotArtifactNames(submission).map((name) => {
     const meta = byName.get(name) || {};
     const kind = meta.kind || kindForName(name);
-    const item = { name, kind, document: isDocumentKind(kind), updatedAt: meta.updatedAt || null };
+    // ⭐ 2026-09-30：每件产物带 `pieceKey` —— 学生主页要**逐件**发分享码，键由服务端算
+    //    （与 `sharePieceKeysOf()` 同一套规则；前端别自己拼，两边口径迟早飘）。
+    const item = { name, kind, document: isDocumentKind(kind), updatedAt: meta.updatedAt || null, pieceKey: `artifact:${name}` };
     if (!item.document) return item;
     if (meta.fileId) {
       // 这份是**真文件**：预览用服务端转出来的 PDF（Office 转 PDF，见 materialPreview），

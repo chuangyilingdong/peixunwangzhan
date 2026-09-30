@@ -294,6 +294,8 @@ export async function handlePublicCommunication(ctx) {
     `, [creator.id, creator.org_id, limit])), async (item) => ({ ...await publicVibeCodingWorkRow(item, {
       mediaBase: vibeBase(item.id),
       openUrl: `/u/${token}/w/VIBECODING/${item.id}`,
+      // ⭐ 2026-09-30：主页要**逐件**发分享码 → 带上产物清单（元数据，不含文件内容）
+      includePieces: true,
     }), source: 'VIBECODING', isPublic: Boolean(item.share_token) }));
     // 两条链路合并后**精选优先、再按提交时间倒序**（与广场列表的排序口径一致）
     const items = [...canvasItems, ...vibeItems].sort((a, b) => {
@@ -788,9 +790,13 @@ async function publicWorkRow(row, { mediaBase = '', openUrl = '' } = {}) {
     // ⚠️ 里面但凡是我们**自己的**素材（生成产物归档后就是），地址都得换成这份作品专属的公开代理：
     //    访客没登录，`/api/student/file-assets/<id>/download` 对他是 403（前端也一样转不出 data:，
     //    那条路要 token）。换完前端 `srcOf` 直接用 `item.url` 就能显示，不必再动前端。
-    media: canvasMediaFrom(canvas).map((item) => (item.fileId && urlFor(item.fileId)
-      ? { ...item, url: urlFor(item.fileId) }
-      : item)),
+    // ⭐ 2026-09-30：每件产出物带上 `pieceKey` —— 学生主页要**逐件**发分享码，键必须由服务端算
+    //    （与 `sharePieceKeysOf()` 同一套规则；前端自己拼的话两边口径迟早飘）。
+    media: canvasMediaFrom(canvas).map((item) => ({
+      ...item,
+      ...(item.fileId && urlFor(item.fileId) ? { url: urlFor(item.fileId) } : {}),
+      pieceKey: `media:${item.fileId || item.url}`,
+    })),
     featured: Boolean(row.featured_at),
     submittedAt: row.submitted_at,
     publicUrl: row.share_token ? `/works/${row.share_token}` : (openUrl || null),
@@ -820,7 +826,7 @@ async function publicWorkRow(row, { mediaBase = '', openUrl = '' } = {}) {
 // VibeCoding 作品：官网详情页用 files + entryFile 在 sandbox iframe 里直接运行；
 // 文档产物（PPT/Word/Excel）另给一份清单：能不能下载、配图在哪（见 publicArtifactCatalog）。
 // ⚠️ 「显示哪一份产物」由提交时的 entryFile 明确指定，不能再按时间或种子 index.html 猜。
-async function publicVibeCodingWorkRow(row, { includeFiles = false, mediaBase = '', openUrl = '' } = {}) {
+async function publicVibeCodingWorkRow(row, { includeFiles = false, includePieces = false, mediaBase = '', openUrl = '' } = {}) {
   // 与 publicWorkRow 同一个道理：学生个人主页要列**未公开**的作品，那些没有 share_token，
   // 图片得走 creator 作用域的代理（基路径由调用方给）。
   const base = mediaBase || (row.share_token ? `/api/public/vibecoding-works/${encodeURIComponent(row.share_token)}` : '');
@@ -859,7 +865,9 @@ async function publicVibeCodingWorkRow(row, { includeFiles = false, mediaBase = 
       const first = fromClient || [...snapshotImageFileIds(row)][0];
       return first && base ? `${base}/images/${encodeURIComponent(first)}` : null;
     })(),
-    ...(includeFiles ? { files, artifacts: publicArtifactCatalog(row) } : {}),
+    // ⭐ 2026-09-30：`includePieces` 只给**产物清单（元数据）**、不带文件内容 ——
+    //    学生主页要"逐件分享"，而主页一次可能列 200 件作品，带上 files 内容会白白变胖。
+    ...(includeFiles ? { files, artifacts: publicArtifactCatalog(row) } : includePieces ? { artifacts: publicArtifactCatalog(row) } : {}),
   };
 }
 

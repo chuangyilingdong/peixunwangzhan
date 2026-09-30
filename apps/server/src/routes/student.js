@@ -10,7 +10,7 @@ import { isAvatarKey } from '../../../../packages/shared/src/avatars.js';
 import { computePoolSummary } from '../services/computePool.js';
 // 「我的作品」点开一件要读 VibeCoding 产物的快照（产物清单 / 图片 fileId / 正文），
 // 与 org 端「课堂作品」同一套解析函数 —— 两处口径必须一致，别再抄一份。
-import { normalizeSubmission, parseSnapshotArtifacts, snapshotImageFileIds, vibecodingWorkItem } from './vibecoding.js';
+import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactNames, snapshotImageFileIds, vibecodingWorkItem } from './vibecoding.js';
 
 const EMPTY_CANVAS = Object.freeze({ nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
 
@@ -1432,5 +1432,7 @@ function sharePieceKeysOf(source, row) {
       .map((item) => `media:${item.fileId || item.url}`)
       .filter((key) => !key.endsWith(':'));
   }
-  return parseSnapshotArtifacts(row).map((item) => `artifact:${item.name}`);
+  // ⚠️ 用**和主页产物清单同一份**名字（files ∪ artifacts）—— 各枚举一套的话，
+  //    "主页上看得见的那一件"可能发不了码（写守卫时实测踩到）。
+  return snapshotArtifactNames(row).map((name) => `artifact:${name}`);
 }

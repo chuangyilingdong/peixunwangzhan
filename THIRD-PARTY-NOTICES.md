@@ -42,3 +42,13 @@ OpenSquilla 的 Web UI 是 Vue 3 + TypeScript 实现的（`opensquilla-webui/`�
 Apache-2.0 允许商业使用、修改与再分发，要求保留版权与许可声明（本文件），
 并对其修改过的文件标注修改。若后续从 OpenSquilla 直接拷贝了代码（而非仅参考设计），
 请在对应文件头部补一条来源注释。
+
+## qrcode-generator（二维码生成，MIT）
+
+- **用在哪**：学生主页「分享」弹窗里的二维码、以及作品分享页（扫码打开 `/s/<码>`）。
+- **来源**：npm 包 `qrcode-generator@2.0.4`（`dist/qrcode.mjs`），**原样 vendored** 到
+  `packages/shared/src/vendor/qrcode-generator.mjs`（只加了本仓库的说明注释，代码未改）。
+  为什么不直接依赖它：**生产服务器上没有 npm**，发布链路不该为了一个二维码去下载新包。
+- **许可**：MIT，Copyright (c) 2009 Kazuhiko Arase（原始版权头保留在该文件顶部）。
+- **正确性怎么保证的**（不是"看着像二维码"）：同一段文本分别用这份 vendored 实现与 npm 上成熟的
+  `qrcode` 库各生成一次，**逐格比对模块矩阵**（33×33、0 处不同）才投入使用。
