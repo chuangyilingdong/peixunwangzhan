@@ -1377,5 +1377,60 @@ export async function handleStudent(ctx) {
     return { ...pageResult(merged.slice(offset, offset + limit), { page, limit, total: merged.length }), summary };
   }
 
+  // ⭐ 2026-09-30 用户口径：「这个分享只针对于学生的主页」「每个作品都可以有个分享，比如这节课有 1 个图片
+  //    和 1 个视频，每个都可以独立去分享」。
+  //    ⚠️ 与**作品广场**彻底解耦：广场那套 `works.share_token` 只在"公开到广场"时才发（绑审核/上下架），
+  //       这里的码是"想分享就分享"，**扫它不改变任何公开状态**（不动 is_public、不动 share_token、不进审核）。
+  //    粒度 = **一件产出物**（画布里的每个图/视频/音频；VibeCoding 的每个产物），一枚码指一件。
+  if (part === '/share-links' && method === 'POST') {
+    const source = String(ctx.body?.source || '').toUpperCase();
+    if (!['CANVAS', 'VIBECODING'].includes(source)) throw errors.badRequest('来源只能是 CANVAS / VIBECODING', 'SHARE_SOURCE_INVALID');
+    const workId = String(ctx.body?.workId || '').trim();
+    const pieceKey = String(ctx.body?.pieceKey || '').trim().slice(0, 240);
+    if (!workId || !pieceKey) throw errors.badRequest('缺少作品或产出物标识', 'SHARE_TARGET_REQUIRED');
+    // 只能是**自己的**作品（越权一律 404，不泄露"存在但不是你的"）
+    const row = source === 'CANVAS'
+      ? await arow('SELECT id, canvas_snapshot FROM works WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId])
+      : await arow('SELECT id, files, artifacts FROM vibecoding_submissions WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId]);
+    if (!row) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
+    if (!sharePieceKeysOf(source, row).includes(pieceKey)) throw errors.badRequest('这一件不在最新版本里', 'SHARE_PIECE_NOT_FOUND');
+    // 幂等：一个 (学生, 作品, 那一件) 只有一枚码 —— 重复点"分享"给的是同一枚，二维码不会满天飞
+    const existing = await arow('SELECT code FROM work_share_links WHERE student_id=? AND source=? AND work_id=? AND piece_key=?', [auth.user.id, source, workId, pieceKey]);
+    const code = existing?.code || `shs_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
+    if (!existing) {
+      await aq('INSERT INTO work_share_links(code,student_id,org_id,source,work_id,piece_key,created_at) VALUES (?,?,?,?,?,?,?)',
+        [code, auth.user.id, auth.user.orgId, source, workId, pieceKey, nowIso()]);
+      // 分享码是"对外的链接"，留一条审计（谁在什么时候把哪一件分享了出去）
+      await audit(ctx, 'WORK_SHARE_LINK_CREATE', source === 'CANVAS' ? 'WORK' : 'VIBECODING_SUBMISSION', workId, null, { code, pieceKey });
+    }
+    return { code, url: `/s/${code}`, created: !existing };
+  }
+  // 主页要靠它知道"哪几件已经分享过"（按钮上显示对应状态，别让同一件反复点）
+  if (part === '/share-links' && method === 'GET') {
+    const workId = String(ctx.search.get('workId') || '').trim();
+    const rows = await arows(
+      'SELECT code, source, work_id, piece_key, created_at FROM work_share_links WHERE student_id=? AND org_id=?' + (workId ? ' AND work_id=?' : '')
+      + ' ORDER BY created_at DESC',
+      workId ? [auth.user.id, auth.user.orgId, workId] : [auth.user.id, auth.user.orgId],
+    );
+    return { items: rows.map((item) => ({ code: item.code, source: item.source, workId: item.work_id, pieceKey: item.piece_key, url: `/s/${item.code}`, createdAt: item.created_at })) };
+  }
+
   return null;
+}
+
+/**
+ * 一件作品里**每一件产出物**的稳定标识（分享码就是按它定位的）。
+ *   · 画布作品：快照里的每个图/视频/音频 → `media:<fileId|url>`（优先 fileId，它是资产 id，跨版本稳定）
+ *   · VibeCoding：产物清单里的每一项 → `artifact:<文件名>`（`index.html` / `deck.pptx` …）
+ * ⚠️ 打开分享页时按同一个键去**最新那一版**里找 → 学生再交一版，旧码自动指向最新内容
+ *    （用户口径：「不存在重做的说法，提交了作品就是最新的」）。
+ */
+function sharePieceKeysOf(source, row) {
+  if (source === 'CANVAS') {
+    return canvasMediaFrom(parseJson(row.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }))
+      .map((item) => `media:${item.fileId || item.url}`)
+      .filter((key) => !key.endsWith(':'));
+  }
+  return parseSnapshotArtifacts(row).map((item) => `artifact:${item.name}`);
 }

@@ -353,6 +353,104 @@ export async function handlePublicCommunication(ctx) {
     return await publicVibeCodingWorkRow(submission, { includeFiles: true, mediaBase: base, openUrl: `/u/${token}/w/VIBECODING/${workId}` });
   }
 
+  // ⭐ 2026-09-30 用户口径：「这个分享只针对于学生的主页」「每个作品都可以有个分享，比如这节课有 1 个图片
+  //    和 1 个视频，每个都可以独立去分享」。
+  //    与**作品广场**完全解耦：这些码来自 `work_share_links`（学生自己发的），**不看 is_public / share_token**
+  //    —— 未公开到广场的作品照样能分享，扫它也不改变任何公开状态。
+  //    ⚠️ 码是**不透明**的（`shs_…`）：拿到码只能看**这一件**，看不到学生主页 token 之外的别的东西
+  //      （主页地址照给，因为"学生主页"本来就是对外可分享的 —— 图3 那个「分享这个主页」）。
+  const shareMatch = pathname.match(/^\/api\/public\/share-links\/([\w-]+)$/);
+  if (shareMatch && method === 'GET') {
+    const link = await arow('SELECT * FROM work_share_links WHERE code=?', [shareMatch[1]]);
+    if (!link) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
+    const owner = await arow('SELECT id, display_name, login, avatar_asset_id, home_token FROM users WHERE id=? AND role=? AND deleted_at IS NULL', [link.student_id, 'STUDENT']);
+    if (!owner) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
+    const organization = await arow('SELECT name FROM organizations WHERE id=?', [link.org_id]);
+    const base = `/api/public/share-links/${encodeURIComponent(link.code)}`;
+    const mediaUrlFor = (fileId) => (fileId ? `${base}/media/${encodeURIComponent(fileId)}` : null);
+    const homeToken = String(owner.home_token || '').trim();
+    const openUrl = homeToken ? `/u/${encodeURIComponent(homeToken)}/w/${link.source}/${encodeURIComponent(link.work_id)}` : null;
+    if (link.source === 'CANVAS') {
+      const work = await arow(`SELECT work.id, work.title, work.description, work.canvas_snapshot,
+             COALESCE(lesson.published_title, lesson.title) AS lesson_title
+        FROM works work LEFT JOIN course_lessons lesson ON lesson.id = work.course_lesson_id
+       WHERE work.id=? AND work.student_id=? AND work.org_id=?`, [link.work_id, link.student_id, link.org_id]);
+      if (!work) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
+      const media = canvasMediaFrom(parseJson(work.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }));
+      const piece = media.find((item) => `media:${item.fileId || item.url}` === link.piece_key) || null;
+      return {
+        code: link.code, createdAt: link.created_at, source: 'CANVAS',
+        student: { name: publicCreatorName(owner), avatarUrl: avatarUrlOf(owner.avatar_asset_id) },
+        org: { name: organization?.name || null },
+        lessonTitle: work.lesson_title || null,
+        homeUrl: homeToken ? `/u/${encodeURIComponent(homeToken)}` : null,
+        work: { id: work.id, title: work.title || null, description: work.description || null },
+        // 这一件：画布侧就是一份媒体（图/视频/音频），直接在分享卡里展示
+        piece: piece ? {
+          key: link.piece_key, render: piece.modality, name: piece.caption || null, caption: piece.caption || null,
+          fileId: piece.fileId || null, mediaUrl: mediaUrlFor(piece.fileId), openUrl,
+        } : null,
+      };
+    }
+    const submission = await arow(`SELECT submission.id, submission.title, submission.description, submission.files, submission.artifacts,
+             submission.entry_file, COALESCE(lesson.published_title, lesson.title) AS lesson_title
+        FROM vibecoding_submissions submission LEFT JOIN course_lessons lesson ON lesson.id = submission.lesson_id
+       WHERE submission.id=? AND submission.student_id=? AND submission.org_id=?`, [link.work_id, link.student_id, link.org_id]);
+    if (!submission) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
+    const artifact = parseSnapshotArtifacts(submission).find((item) => `artifact:${item.name}` === link.piece_key) || null;
+    const render = artifact ? shareRenderOf(artifact.name) : null;
+    return {
+      code: link.code, createdAt: link.created_at, source: 'VIBECODING',
+      student: { name: publicCreatorName(owner), avatarUrl: avatarUrlOf(owner.avatar_asset_id) },
+      org: { name: organization?.name || null },
+      lessonTitle: submission.lesson_title || null,
+      homeUrl: homeToken ? `/u/${encodeURIComponent(homeToken)}` : null,
+      work: { id: submission.id, title: submission.title || null, description: submission.description || null },
+      // 这一件：网页/图片/视频/音频可以在卡里直接给（图片优先封面），文档类给封面 + 「打开体验」走既有作品页
+      piece: artifact ? {
+        key: link.piece_key, render, name: artifact.name, caption: artifact.name,
+        fileId: artifact.fileId || artifact.coverFileId || null,
+        mediaUrl: mediaUrlFor(artifact.fileId),
+        coverUrl: mediaUrlFor(artifact.coverFileId),
+        openUrl,
+      } : null,
+    };
+  }
+
+  // 分享卡里那一件的**字节**（准入 = 码有效 + 这个 fileId 真的属于那一件）——
+  // 与个人主页那条媒体代理同一套判据，只是"作品"由**分享码**定位（所以不需要主页 token 也在链接里）。
+  const shareMediaMatch = pathname.match(/^\/api\/public\/share-links\/([\w-]+)\/media\/([\w-]+)$/);
+  if (shareMediaMatch && method === 'GET') {
+    const [code, fileId] = [shareMediaMatch[1], shareMediaMatch[2]];
+    const link = await arow('SELECT * FROM work_share_links WHERE code=?', [code]);
+    if (!link) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
+    let allowed = new Set();
+    if (link.source === 'CANVAS') {
+      const work = await arow('SELECT id, canvas_snapshot FROM works WHERE id=? AND student_id=? AND org_id=?', [link.work_id, link.student_id, link.org_id]);
+      if (!work) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
+      allowed = new Set(canvasMediaFrom(parseJson(work.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }))
+        .map((item) => item.fileId).filter(Boolean));
+    } else {
+      const submission = await arow('SELECT id, files, artifacts FROM vibecoding_submissions WHERE id=? AND student_id=? AND org_id=?', [link.work_id, link.student_id, link.org_id]);
+      if (!submission) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
+      // 这一件的本体 + 它的封面 + 它引用的图（HTML 产物里的配图要显示得出来）
+      allowed = new Set([...snapshotImageFileIds(submission), ...parseSnapshotArtifacts(submission).map((item) => item.coverFileId).filter(Boolean)]);
+      for (const item of parseSnapshotArtifacts(submission)) {
+        if (`artifact:${item.name}` !== link.piece_key) continue;
+        if (item.fileId) allowed.add(item.fileId);
+        for (const image of [...(item.generatedImages || []), ...(item.embeddedImages || []), ...(item.attachmentImages || [])]) {
+          if (image?.fileId) allowed.add(image.fileId);
+        }
+      }
+    }
+    if (!allowed.has(fileId)) throw errors.notFound('这一件里没有这个文件', 'PUBLIC_SHARE_MEDIA_NOT_FOUND');
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
+    if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
+    if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+    return prepareFileDownload(ctx, file);
+  }
+
   // ⭐ 2026-09-27：个人主页那条链路的**媒体代理**（画布与 VibeCoding 共用）。
   //   准入 = 主页 token 有效 + 这件作品属于该学生 + fileId **真的出现在这件作品里**
   //   （与 `/api/public/works/:token/images/:fileId` 同一套判据，只是"作品"的定位方式不同）。
@@ -639,6 +737,21 @@ export async function handlePublicCommunication(ctx) {
   }
 
   return null;
+}
+
+/** 分享卡怎么渲染这一件：网页 / 图片 / 视频 / 音频 / 文档（文档类给封面 + 「打开体验」/下载）。 */
+function shareRenderOf(name) {
+  const extension = String(name || '').split('.').pop()?.toLowerCase() || '';
+  if (['html', 'htm'].includes(extension)) return 'HTML';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif'].includes(extension)) return 'IMAGE';
+  if (['mp4', 'webm', 'mov', 'm4v'].includes(extension)) return 'VIDEO';
+  if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(extension)) return 'AUDIO';
+  return 'DOC';
+}
+
+/** 对外显示的学生名：**机构建号时那个名字**（用户口径「不需要匿名」）—— 与个人主页同一套取值。 */
+function publicCreatorName(user) {
+  return String(user?.display_name || '').trim() || String(user?.login || '').trim() || '同学';
 }
 
 async function publicWorkRow(row, { mediaBase = '', openUrl = '' } = {}) {

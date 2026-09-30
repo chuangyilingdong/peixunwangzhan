@@ -698,6 +698,28 @@ CREATE TABLE IF NOT EXISTS work_feedback_reads (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_work_feedback_reads_annotation ON work_feedback_reads(annotation_id) WHERE annotation_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_work_feedback_reads_work ON work_feedback_reads(work_id, student_id, read_at DESC);
 
+-- 「学生主页」侧的作品分享码（2026-09-30 用户口径）：
+--   ⭐ 口径：**只服务学生主页，与作品广场完全解耦** —— 广场那套 works.share_token 只在"公开到广场"
+--      时才发（绑审核/上下架）；这里的码是"想分享就分享"，**扫它不改变任何公开状态**。
+--   ⭐ 粒度 = **一件产出物**（一节课出了 1 张图 + 1 段视频 → 两枚码，各自独立分享）。
+--   ⚠️ 码是**不透明**的（shs_ + 随机）：**不带学生主页 token** —— 免得"分享一件"等于把整个主页交出去。
+--   piece_key 存"那一件的稳定标识"：画布 media:<fileId|url>、VibeCoding artifact:<文件名>；
+--   打开时按它去**最新那一版**内容里找 → 学生再交一版，旧码自动指向最新内容
+--   （用户口径：「不存在重做的说法，提交了作品就是最新的」）。
+--   ⚠️ 一个 (学生, 作品, 那一件) 只留一枚码（唯一索引）→ 重复点分享给的是同一枚，QR 不会满天飞。
+CREATE TABLE IF NOT EXISTS work_share_links (
+  code TEXT PRIMARY KEY,
+  student_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('CANVAS','VIBECODING')),
+  work_id TEXT NOT NULL,
+  piece_key TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_work_share_links_unique ON work_share_links(student_id, source, work_id, piece_key);
+CREATE INDEX IF NOT EXISTS idx_work_share_links_student ON work_share_links(student_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS work_publish_requests (
   id TEXT PRIMARY KEY,
   work_id TEXT NOT NULL,
