@@ -45,6 +45,10 @@ const baseEnv = {
   AI_PROVIDER_API_KEY: '',
   // 签运行时网关密钥要它（原来这条守卫没走 client-context，所以没配也不影响；现在要下发/验收密钥）
   RUNTIME_GATEWAY_SECRET: 'p119-guard-secret',
+  // ⚠️ 2026-09-30：整单上限改成可配（默认 64MB、生产 100MB，见 studentRuntime 的 MAX_UPLOAD_BYTES）——
+  //    这一道夹具把它压到 8MB，下面「17MB → 我们的中文原因先说话」那条断言才还在
+  //    （口径没变：**高于我们这一档**时报中文原因，再大才轮到传输层的 PAYLOAD_TOO_LARGE）。
+  RUNTIME_UPLOAD_MAX_BYTES: String(8 * 1024 * 1024),
   PORT: String(PORT),
 };
 
@@ -236,6 +240,17 @@ try {
     const huge = 'A'.repeat(17 * 1024 * 1024);
     const result = await bad({ files: [{ name: 'index.html', content: huge }] });
     assert.equal(result.error?.code, 'RUNTIME_UPLOAD_TOO_LARGE', JSON.stringify(result).slice(0, 200));
+  });
+  // ⭐ 2026-09-30（用户口径 + 客户端反馈）：整单上限**可配** —— 原来写死 16MB，
+  //    而一节 VibeCoding 课的 15 秒视频实测 19.6MB，等于学生交不上带视频的作品。
+  //    这一条钉两件事：① 环境变量真的生效；② 我们这一档仍然**先于**传输层报中文原因。
+  await check('⭐ 整单上限可配：RUNTIME_UPLOAD_MAX_BYTES=8MB 时，正好 8MB 收、8MB+1 拒', async () => {
+    const okBody = 'A'.repeat(8 * 1024 * 1024 - 1);
+    const ok = await upload({ name: 'index.html', copyrightConfirmed: true, files: [{ name: 'index.html', content: okBody }] });
+    assert.equal(ok.status, 200, `8MB-1 应当收得下（实际 HTTP ${ok.status}）`);
+    const over = await upload({ name: 'index.html', copyrightConfirmed: true, files: [{ name: 'index.html', content: 'A'.repeat(8 * 1024 * 1024 + 1) }] });
+    assert.equal(over.data?.error?.code, 'RUNTIME_UPLOAD_TOO_LARGE', JSON.stringify(over.data).slice(0, 200));
+    assert.match(String(over.data?.error?.message || ''), /8MB/, '文案里的上限要跟着这一档走');
   });
   await check('再大（超过传输层上限）由框架先挡 —— 这一层不是我们能给中文原因的地方', async () => {
     const beyond = 'A'.repeat(30 * 1024 * 1024);

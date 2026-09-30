@@ -448,15 +448,27 @@ export async function handleStudentRuntime(ctx) {
 /** 一次提交最多带几个文件：正常作品（一个 HTML + 几张图 / 一个 PPT）远用不到这么多。 */
 const MAX_UPLOAD_FILES = 60;
 /**
- * 解出来的字节总量上限（base64 解回来之后的**真实**大小）。
+ * 解出来的字节总量上限（base64 解回来之后的**真实**大小）—— **可配**。
  *
- * ⚠️ 这个数必须**小于传输层的上限**才会先于它报错：`index.js` 给 body 的上限是
- *    `maxUploadBytes() + 1MB`（默认 26MB），而 base64 会胖 4/3 —— 于是单个文件超过约
- *    19MB 时请求根本进不来（框架先给一个 `PAYLOAD_TOO_LARGE`）。取 16MB 的意思是：
- *    「大到不像学生作品」的那一段由我们把话说清楚（学生看到的是中文原因，不是一个裸 413），
- *    再大才轮到传输层。
+ * ⚠️ 2026-09-30 口径变更（用户 + 客户端反馈）：原来是写死的 **16MB** —— 而一节 VibeCoding 课里
+ *    「15 秒 480P 的视频」实测就有 **19.6MB**，等于**学生根本交不上带视频的作品**
+ *    （客户端侧原话：「19.6MB 的视频现在根本交不上去……我倾向让平台放宽」）。
+ *    现在读 `RUNTIME_UPLOAD_MAX_BYTES`：默认 **64MB**，夹在 16MB（老下限）~ 200MB（存储层的
+ *    单文件上限 `FILE_UPLOAD_MAX_BYTES`）之间。**生产设 100MB**（见 §八十一）。
+ *
+ * ⚠️ 这个数必须**小于传输层的上限**才会先于它报错：`index.js` 给这条路径的 body 上限是
+ *    `maxUploadBytes() + 1MB`（生产 FILE_UPLOAD_MAX_BYTES=200MB → 201MB），而 base64 会胖 4/3 ——
+ *    100MB 的整单 ≈ 133MB 传输量 ✅ 落在 201MB 之内，所以学生看到的是**我们的中文原因**，
+ *    不是一个裸 `PAYLOAD_TOO_LARGE`。（测试环境没设 FILE_UPLOAD_MAX_BYTES 时是 25MB+1MB=26MB ——
+ *    p119 的夹具因此把本档压到 8MB，两条断言才都还在。）
  */
-const MAX_UPLOAD_BYTES = 16 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = (() => {
+  const configured = Number(process.env.RUNTIME_UPLOAD_MAX_BYTES || 0);
+  const wanted = Number.isFinite(configured) && configured > 0 ? configured : 64 * 1024 * 1024;
+  // 下限 1MB：只是防"手滑填个 0/负数"；上限 200MB 跟住存储层的单文件上限。
+  // ⚠️ 夹具（p119）要把它压小到 8MB 来验"我们的中文原因先说话"，所以下限不能是 16MB。
+  return Math.max(1 * 1024 * 1024, Math.min(200 * 1024 * 1024, wanted));
+})();
 
 /** 封面的固定文件名（客户端截图上传时用这个名字，服务端靠它认封面）。 */
 const COVER_FILE_NAME = 'cover.png';
