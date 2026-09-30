@@ -11,7 +11,7 @@
 // + 复制链接兜底（有公众号之后再接 `wx.config` + `updateAppMessageShareData` 即可，结构不用改）。
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { avatarGlyph, BrandLogo, createApiClient, Icon } from '@platform/shared';
+import { avatarGlyph, BrandLogo, buildPreviewDocument, createApiClient, Icon, Notice, ReplayPreview } from '@platform/shared';
 
 const api = createApiClient();
 
@@ -57,6 +57,7 @@ export function WorkSharePage() {
   }
 
   const { student, org, lessonTitle, piece, work, homeUrl } = state.data;
+  const missingAssets = Array.isArray(state.data.missingAssets) ? state.data.missingAssets : [];
   const glyph = avatarGlyph(student?.avatarKey);
   const initial = String(student?.name || '同学').slice(0, 1);
 
@@ -76,7 +77,11 @@ export function WorkSharePage() {
       </div>
 
       <div className="share-card__piece">
-        <PieceView piece={piece} />
+        <PieceView piece={piece} document={state.data.document} />
+        {missingAssets.length ? <Notice tone="warning">
+          这件作品里有 {missingAssets.length} 个本地素材（{missingAssets.slice(0, 3).join('、')}{missingAssets.length > 3 ? ' 等' : ''}）
+          没有随作品一起提交上来 —— 让 ta 用最新版客户端**重新提交一次**，这里就能看到图和视频了。
+        </Notice> : null}
       </div>
 
       <h2 className="share-card__label">作品简介</h2>
@@ -99,19 +104,33 @@ export function WorkSharePage() {
 
 /**
  * 那一件产出物怎么显示（按服务端给的 `render` 分派）：
- *   IMAGE/VIDEO/AUDIO → 就地看/听；HTML → **直接玩**（沙箱 iframe，与作品广场同一套口径）；
+ *   IMAGE/VIDEO/AUDIO → 就地看/听；HTML → **就地玩**（沙箱 iframe，与作品广场同一套口径）；
  *   DOC（PPT/Word/Excel）→ 给封面 + 「打开体验」/「下载原件」（转 PDF 预览那条路广场已有，这里先不重复造）。
+ *
+ * ⚠️ 2026-09-30 用户口径（原话）：「手机扫码能否……**直接显示作品**，点击后立马可以在线看游玩，
+ *    **而不是跳转**，跳转又各种无限跳转」。
+ *    所以网页这一件不再只给一个「打开体验」的跳转按钮 —— 服务端把**这一份产物文档**一起给过来
+ *    （`document.files` / `document.entry`，里面的私有素材已换成这一枚码专属的免登录代理），
+ *    这里直接跑起来：扫码看到的就是作品本身，随手就能点着玩（沙箱里 localStorage 有替身、脚本能跑）。
+ *    跳转那条路降级成下面一行小字（"在完整页面里打开"），要回到主页/广场的人才用得上。
  */
-function PieceView({ piece }) {
+function PieceView({ piece, document: doc }) {
   if (!piece) return <p className="muted">这一件已经不在最新版本里了。</p>;
   const { render, mediaUrl, coverUrl, openUrl, name } = piece;
   if (render === 'IMAGE' && mediaUrl) return <img className="share-piece__media" src={mediaUrl} alt={name || '作品'} />;
   if (render === 'VIDEO' && mediaUrl) return <video className="share-piece__media" src={mediaUrl} controls playsInline />;
   if (render === 'AUDIO' && mediaUrl) return <audio className="share-piece__audio" src={mediaUrl} controls />;
   if (render === 'HTML') {
+    const playable = doc?.files && doc?.entry && Object.hasOwn(doc.files, doc.entry);
     return <>
-      {coverUrl ? <img className="share-piece__media" src={coverUrl} alt={name || '网页作品'} /> : null}
-      {openUrl ? <p className="share-piece__play"><Link className="button" to={openUrl}>打开体验 · 直接玩 <b>↗</b></Link></p> : <p className="muted">这一件是网页作品，用电脑/手机打开就能玩。</p>}
+      {playable
+        ? <div className="share-piece__stage"><ReplayPreview html={buildPreviewDocument(doc.files, doc.entry)} title={name || '作品'} fitContent /></div>
+        : (coverUrl ? <img className="share-piece__media" src={coverUrl} alt={name || '网页作品'} /> : null)}
+      {playable ? null : (openUrl
+        ? <p className="share-piece__play"><Link className="button" to={openUrl}>打开体验 · 直接玩 <b>↗</b></Link></p>
+        : <p className="muted">这一件是网页作品，用电脑/手机打开就能玩。</p>)}
+      {/* 就地能玩之后，跳转那条路只留一行小字（桌面端想要大屏/带导航的那份时才点） */}
+      {playable && openUrl ? <p className="share-piece__more"><Link to={openUrl}>在完整页面里打开 ↗</Link></p> : null}
     </>;
   }
   // 文档类（PPT / Word / Excel）

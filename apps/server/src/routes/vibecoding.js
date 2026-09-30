@@ -115,7 +115,15 @@ function normalizeLocalReference(value) {
   const raw = String(value || '').trim();
   if (!raw || raw.startsWith('#') || /^(?:[a-z]+:|\/\/|\/)/i.test(raw)) return '';
   const clean = raw.split(/[?#]/)[0].replace(/^\.\//, '');
-  if (!clean || clean.includes('..') || clean.includes('/') || clean.includes('\\')) return '';
+  if (!clean || clean.includes('..') || clean.includes('\\')) return '';
+  // ⚠️ 2026-09-30（用户报「教师后台看作品里图片/视频显示不出来」）：这里原来连 `/` 一起拒 ——
+  //    只认**平铺名**（`hero.png`）。而学生工作区里的网页几乎都把素材放在子目录里
+  //    （AI 生成的 HTML 写的就是 `src="assets/hero.png"`），于是这类引用
+  //    **既不被收集（哪些文件算作品的一部分）、也不被回写（换成下载地址）**：
+  //    客户端交作品时它们不在文件清单里、平台侧也认不出来 —— 交上来的作品在老师端、
+  //    广场、分享页里就是一片破图/空播放器（字节压根没上来）。
+  //    现在按**相对路径**收进来。仍然拒绝：绝对路径、协议、`//`、`..`、反斜杠、盘符（上面几条）。
+  //    ⚠️ 与上传侧（studentRuntime.js 的 normalizeArtifactName）**同一套路径规矩**，两处要一起改。
   return clean;
 }
 
@@ -791,9 +799,19 @@ export function parseSnapshotArtifacts(submission) {
       // 存的是**真文件**时的引用（学生创作环境交上来的 .pptx/.docx/.xlsx 走这条）：
       // 正文在 file_assets 里，快照只记 id。空串/缺失一律当「这份是规格文本」。
       fileId: item.fileId ? String(item.fileId) : null,
+      // ⭐ 2026-09-30：`coverFileId`（客户端交作品时截的那一屏，见 studentRuntime 的 COVER_FILE_NAME）
+      //    原来在这里被**整条丢掉** —— 快照里明明写着，可这个归一化函数只搬"它认识的那几个字段"，
+      //    于是下游全灭：分享卡的 `piece.coverUrl` 恒 null（扫码看到的卡片没封面）、
+      //    取图准入名单少一个 id、封面回退到按类型画的占位图。
+      //    教训与 §三十三 同款：**归一化函数漏字段 = 全链路静默失效，而且每层看起来都"正常"**。
+      coverFileId: item.coverFileId ? String(item.coverFileId) : null,
       generatedImages: (Array.isArray(item.generatedImages) ? item.generatedImages : []).filter((image) => image?.fileId),
       attachmentImages: (Array.isArray(item.attachmentImages) ? item.attachmentImages : []).filter((image) => image?.fileId && Number(image.index) > 0),
       embeddedImages: (Array.isArray(item.embeddedImages) ? item.embeddedImages : []).filter((image) => image?.fileId),
+      // HTML 里**被引用的本地素材**（图/视频/音频…）：`embeddedImages` 只管图片那半边，
+      // 视频/音频在这里（见 studentRuntime.js 的 embeddedAssets）。准入名单要用到它，
+      // 不然作品里的视频在老师端与分享页里取不到（学生本地看得见、别人全看不到）。
+      embeddedAssets: (Array.isArray(item.embeddedAssets) ? item.embeddedAssets : []).filter((asset) => asset?.fileId),
     }));
 }
 
@@ -900,13 +918,67 @@ export async function renderSnapshotDocument(submission, name) {
   );
 }
 
-/** 快照里出现过的图片 id（公开取图的准入名单，见 public.js 的 /images/:fileId） */
+/**
+ * 快照里**出现过的素材 id**（公开取图/取媒体的准入名单，见 public.js 的 /images/:fileId）。
+ *
+ * ⚠️ 2026-09-30 补两类（用户报「教师后台看作品里图片/视频显示不出来」）：
+ *   · `embeddedAssets`：HTML 引用的本地素材，**含视频/音频**（原来只有图片那半边，视频永远取不到）；
+ *   · `coverFileId`：客户端交上来的封面（原来 `parseSnapshotArtifacts` 把它整个丢了）。
+ * 口径不变：**作品里引用了什么就只放行什么** —— 拿得到一个 fileId 不等于能读别人的文件。
+ */
 export function snapshotImageFileIds(submission) {
   const ids = new Set();
   for (const item of parseSnapshotArtifacts(submission)) {
-    for (const image of [...item.generatedImages, ...item.attachmentImages, ...item.embeddedImages]) ids.add(String(image.fileId));
+    if (item.coverFileId) ids.add(String(item.coverFileId));
+    for (const asset of [...item.generatedImages, ...item.attachmentImages, ...item.embeddedImages, ...item.embeddedAssets]) {
+      ids.add(String(asset.fileId));
+    }
   }
   return ids;
+}
+
+/**
+ * 这件作品里**还指着本地文件、但没随作品交上来**的引用（给老师/学生一句人话的解释）。
+ *
+ * 为什么要它：客户端（旧版本）只把文本产物和一个封面传上来，工作区里 `assets/` 那些
+ * 图与视频一个字节都没上传 —— 老师端看到的就是"图裂了、视频空着"，而**平台侧没有任何字段**
+ * 能说明这件事（界面上看起来像平台坏了）。这里把这类引用扫出来，让界面能说清：
+ * 「这件作品引用了 N 个本地素材，但没有随作品提交上来」。
+ *
+ * 判据：入口 HTML（含被它引用的 css）里，`src/href/url()` 指向的**相对路径**在 `files` 里找不到同名文件
+ * （找得到＝文本文件，会在预览时内联；找不到且不是已改写的 `/api/…` 地址＝素材没上来）。
+ */
+export function missingLocalAssets(files, entryFile) {
+  const map = files && typeof files === 'object' ? files : {};
+  const entry = String(entryFile || '').trim();
+  if (!entry || !Object.hasOwn(map, entry)) return [];
+  const missing = new Set();
+  const visited = new Set();
+  const queue = [entry];
+  while (queue.length) {
+    const name = queue.shift();
+    if (visited.has(name)) continue;
+    visited.add(name);
+    const kind = kindForName(name);
+    if (kind !== 'html' && kind !== 'css' && kind !== 'svg') continue;
+    for (const reference of localArtifactReferences(name, map[name])) {
+      if (Object.hasOwn(map, reference)) { if (kindForName(reference) !== 'html') queue.push(reference); continue; }
+      missing.add(reference);
+    }
+  }
+  return [...missing];
+}
+
+/** 把文本产物里指向私有素材的地址换成给定代理地址（公开页面用；沙箱里没有 cookie，只能走免登录的代理）。 */
+function rewritePrivateAssetRefs(files, fileIds, urlOf) {
+  return Object.fromEntries(Object.entries(files).map(([name, content]) => {
+    let text = String(content ?? '');
+    for (const fileId of fileIds) {
+      const privateUrl = `/api/student/file-assets/${fileId}/download`;
+      text = text.split(privateUrl).join(urlOf(fileId));
+    }
+    return [name, text];
+  }));
 }
 
 /** 公开页面只把当前提交快照准入的私有素材地址改写成作品专属代理。 */
@@ -914,16 +986,22 @@ export function publicSnapshotFiles(submission) {
   const files = parseSnapshotFiles(submission?.files);
   const token = String(submission?.share_token || '').trim();
   if (!token) return files;
-  const allowed = snapshotImageFileIds(submission);
-  return Object.fromEntries(Object.entries(files).map(([name, content]) => {
-    let text = String(content ?? '');
-    for (const fileId of allowed) {
-      const privateUrl = `/api/student/file-assets/${fileId}/download`;
-      const publicUrl = `/api/public/vibecoding-works/${token}/images/${fileId}`;
-      text = text.split(privateUrl).join(publicUrl);
-    }
-    return [name, text];
-  }));
+  return rewritePrivateAssetRefs(files, snapshotImageFileIds(submission),
+    (fileId) => `/api/public/vibecoding-works/${token}/images/${fileId}`);
+}
+
+/**
+ * 分享码那条链路（`/s/<码>`）：把私有素材地址改写成**这一枚码专属**的公开代理。
+ *
+ * 与 `publicSnapshotFiles` 同一个道理（沙箱 iframe 是 opaque origin，带不上 cookie，
+ * 所以作品里引用的图/视频必须换成免登录的代理地址才显示得出来），区别只有"作品怎么定位"：
+ * 那边靠广场的 `share_token`，这边靠学生自己发的分享码（**不看公开状态**，见 §七十四）。
+ */
+export function shareCodeSnapshotFiles(submission, code) {
+  const files = parseSnapshotFiles(submission?.files);
+  if (!files || !Object.keys(files).length) return files;
+  return rewritePrivateAssetRefs(files, snapshotImageFileIds(submission),
+    (fileId) => `/api/public/share-links/${encodeURIComponent(code)}/media/${encodeURIComponent(fileId)}`);
 }
 
 export function normalizeSubmission(value, { includeContent = false } = {}) {

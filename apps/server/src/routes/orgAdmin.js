@@ -1,6 +1,6 @@
 import { audit, clearAuthCookies, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arows, arow, aq, acount, atransaction, amap, likeKeyword, likeEscapeClause } from '../lib.js';
 import { normalizeLesson, canvasMediaFrom } from '../lib.js';
-import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
+import { missingLocalAssets, normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
 // ⭐ 2026-09-30：作品分享码（与学生端**同一份实现** —— 件的定位与幂等口径两处各写一套，迟早只在一半上生效）
 import { assertSharePiece, ensureWorkShareLink, shareLinkUrl } from '../services/workShare.js';
 import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from './fileAssets.js';
@@ -850,7 +850,10 @@ export async function handleOrg(ctx) {
       }]));
     // Keep private references intact; the authenticated viewer resolves them to local blob URLs.
     // ⭐ 2026-09-30：每件产物带 `pieceKey`（机构/老师端也要"点进作品 → 右上角分享 → 选哪一件"）
-    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: (content.artifacts || []).map((item) => ({ ...item, pieceKey: `artifact:${item.name}` })), preview: content.preview, imageUrls, fileUrls };
+    // ⭐ 2026-09-30：`missingAssets` = 这件作品里**还指着本地文件、但没随作品交上来**的引用
+    //    （客户端旧版本只传文本与封面）。老师端要能把这件事说清楚，不然看到的就是"图裂了"、
+    //    以为平台坏了 —— 其实就是那几个素材的字节从没上来过。
+    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: (content.artifacts || []).map((item) => ({ ...item, pieceKey: `artifact:${item.name}` })), preview: content.preview, imageUrls, fileUrls, missingAssets: missingLocalAssets(content.files, content.entryFile) };
   }
 
   if (part === '/sessions' && method === 'GET') {

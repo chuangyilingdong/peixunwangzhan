@@ -25,9 +25,11 @@ import { plazaCategoryLabelOf, plazaCategoryMap, plazaCategoryOf } from '../../s
 import { WEBSITE_CONTENT_KEYS } from '../../services/websiteContentKeys.js';
 import { prepareFileDownload, prepareFilePreview } from '../fileAssets.js';
 import {
+  missingLocalAssets,
   publicArtifactCatalog,
   publicSnapshotFiles,
   renderSnapshotDocument,
+  shareCodeSnapshotFiles,
   snapshotArtifactByName,
   snapshotDocumentFileIds,
   snapshotImageFileIds,
@@ -401,6 +403,14 @@ export async function handlePublicCommunication(ctx) {
     if (!submission) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
     const artifact = parseSnapshotArtifacts(submission).find((item) => `artifact:${item.name}` === link.piece_key) || null;
     const render = artifact ? shareRenderOf(artifact.name) : null;
+    // ⭐ 2026-09-30 用户口径（原话）：「手机扫码能否……**直接显示作品**，点击后立马可以在线看游玩，
+    //    而不是跳转，跳转又各种无限跳转」。
+    //    → 网页作品这一件，分享页要能**就地把它跑起来**（沙箱 iframe，与作品广场同一套口径），
+    //      所以这里直接把这一份产物文档给出去。文档里的私有素材地址已经换成**这一枚码专属、
+    //      免登录**的分享域代理（`/media/<fileId>`）—— 沙箱是 opaque origin，带不上 cookie，
+    //      不换成免登录地址图与视频都显示不出来。
+    const entryFile = String(submission.entry_file || artifact?.name || '').trim();
+    const files = render === 'HTML' ? shareCodeSnapshotFiles(submission, link.code) : null;
     return {
       code: link.code, createdAt: link.created_at, source: 'VIBECODING',
       student: { name: publicCreatorName(owner), avatarUrl: avatarUrlOf(owner.avatar_asset_id) },
@@ -408,6 +418,11 @@ export async function handlePublicCommunication(ctx) {
       lessonTitle: submission.lesson_title || null,
       homeUrl: homeToken ? `/u/${encodeURIComponent(homeToken)}` : null,
       work: { id: submission.id, title: submission.title || null, description: submission.description || null },
+      // 网页这一件就地可玩（`document`）；其余类型（图/视频/音频/文档）照旧在卡里给本色
+      document: render === 'HTML' && files ? { files, entry: entryFile || artifact.name } : null,
+      // 这件作品里**还指着本地文件、但没随作品交上来**的引用（客户端旧版本不带素材）——
+      // 卡面据此说一句人话，而不是让学生对着破图猜（见 vibecoding.js 的 missingLocalAssets）。
+      missingAssets: render === 'HTML' && files ? missingLocalAssets(files, entryFile || artifact.name) : [],
       // 这一件：网页/图片/视频/音频可以在卡里直接给（图片优先封面），文档类给封面 + 「打开体验」走既有作品页
       piece: artifact ? {
         key: link.piece_key, render, name: artifact.name, caption: artifact.name,

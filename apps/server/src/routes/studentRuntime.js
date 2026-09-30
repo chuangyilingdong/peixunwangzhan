@@ -197,11 +197,34 @@ async function requireSelectedClassroom(ctx, studentId, what, mismatch = '') {
 }
 
 
-/** 文件名的尺度与现有产物一致：**平铺**（不带路径分隔符）。叫得出来、能当 URL 段。 */
+/** 相对路径里**每一段**允许的形状（与 packages/shared 的 FILE_NAME_PATTERN 同一套字符表）。 */
+const ARTIFACT_SEGMENT = /^[A-Za-z0-9\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af][A-Za-z0-9._\-\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]*$/;
+
+/**
+ * 作品里的文件/素材名 —— **允许相对子目录**（`assets/hero.png`），但仍然是一条严格白名单。
+ *
+ * ⚠️ 2026-09-30（用户报「教师后台看作品里图片/视频显示不出来」）：这里原来**拒收任何带 `/` 的名字**，
+ *    而客户端工作区里的网页几乎都把素材放在子目录里（AI 生成的 HTML 写的就是
+ *    `<img src="assets/character_mecha.png">`）—— 名字一交上来就被 400，
+ *    于是客户端干脆不带这些文件，交上来的作品在老师端/广场/分享页里就是一片破图与空播放器。
+ *    生产实据：`vibesub_cf3f389300224c448b06`（09-30 14:01 提交）里只有 `index.html` 一个文本文件，
+ *    而它的 HTML 引用了 `assets/character_mecha.png` 与 `assets/transform.mp4` —— 两个字节都没上来。
+ *
+ * 允许 `/` 之后仍然不许：绝对路径、盘符、反斜杠、`..`、隐藏文件（以 `.` 开头）、空段、段过长、层数过深。
+ * ⚠️ 与 `vibecoding.js` 的 `normalizeLocalReference`（扫描/回写那一侧）**同一套规矩**，两处要一起改。
+ */
 function safeArtifactName(value) {
-  const name = String(value || '').trim();
-  if (!name || name.length > 100 || /[\\/\0]/.test(name) || name.includes('..') || name.startsWith('.')) {
-    throw errors.badRequest(`作品里的文件名不合法：${name || '(空)'}`, 'INVALID_ARTIFACT_NAME');
+  const raw = String(value || '(空)');
+  const name = String(value || '').trim().replace(/^\.\//, '');
+  const invalid = (why) => errors.badRequest(`作品里的文件名不合法（${why}）：${raw.slice(0, 80)}`, 'INVALID_ARTIFACT_NAME');
+  if (!name || name.length > 120) throw invalid('空的或太长（上限 120 字）');
+  if (/[\\\0]/.test(name) || /^[A-Za-z]:/.test(name) || name.startsWith('/')) throw invalid('不许绝对路径/盘符/反斜杠');
+  if (name.includes('..') || name.startsWith('.')) throw invalid('不许 .. 或隐藏文件');
+  const segments = name.split('/');
+  if (segments.length > 6) throw invalid('目录太深（最多 5 层）');
+  for (const segment of segments) {
+    if (!segment) throw invalid('路径里有空目录名');
+    if (segment.length > 64 || !ARTIFACT_SEGMENT.test(segment)) throw invalid(`目录/文件名不合法：${segment.slice(0, 40)}`);
   }
   return name;
 }
@@ -484,6 +507,9 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
   const warnings = [...(Array.isArray(collected.warnings) ? collected.warnings : [])];
   const assetUrls = new Map();
   const embeddedImages = [];
+  // HTML 引用过的**所有**本地素材（图/视频/音频…）。`embeddedImages` 是历史字段（PPT 那套按图片读），
+  // 媒体这种非图片素材单独记一份 —— 三端（机构端/广场/分享页）的取件准入名单都要认它。
+  const embeddedAssets = [];
   let entryFileId = null;
   let coverFileId = null;
   for (const file of collected.files || []) {
@@ -499,22 +525,27 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
       const asset = await storeStudentArtifactAsset({
         buffer: Buffer.from(file.content, 'base64'),
         mimeType,
-        fileName: name,
+        // ⚠️ 交给存储层的只有**文件名**：底层 `cleanFileName` 明确拒收带 `/` 的名字（那是文件系统那一层的白名单，
+        //    别为了支持 `assets/hero.png` 去松它）。相对路径只活在我们自己的改写映射里（key = 全路径）。
+        fileName: name.split('/').pop(),
         ownerUserId: auth.user.id,
         ownerOrgId: orgId,
       });
+      // key 用**全路径**：下面回写 HTML 时按它匹配 `src="assets/hero.png"`（与 normalizeLocalReference 同一套规矩）
       assetUrls.set(name, asset.url);
       if (name === entryFile) {
         // 主产物就是这份真文件：字节进 file_assets，快照里只记 fileId
         entryFileId = asset.id;
       } else if (name === collected.coverName) {
-        // 客户端截的封面：不进 embeddedImages（那是"被 HTML 引用的图"），单独标出来
+        // 客户端截的封面：不进 embedded*（那是"被 HTML 引用的素材"），单独标出来
         coverFileId = asset.id;
-      } else if (mimeType.startsWith('image/')) {
-        // 被 HTML 引用的图：进快照的准入名单，发布后广场那条公开代理才认它
-        embeddedImages.push({ fileId: asset.id });
       } else {
-        warnings.push(`素材 ${name} 不是图片，发布到作品广场后可能取不到（广场只代理图片素材）`);
+        // 被 HTML 引用的本地素材：进快照的准入名单，老师端/广场/分享页那条代理才认它。
+        // ⚠️ 图片同时进 `embeddedImages`（老字段，PPT 那套按图读），**所有**素材都进 `embeddedAssets` ——
+        //    非图片（视频/音频）以前只记一句告警就丢，结果 HTML 里的视频在三端全是空播放器
+        //    （用户 2026-09-30 报的「教师后台看作品里视频显示不出来」）。
+        embeddedAssets.push({ fileId: asset.id });
+        if (mimeType.startsWith('image/')) embeddedImages.push({ fileId: asset.id });
       }
     } catch (error) {
       warnings.push(`素材 ${name} 没能随作品存下来：${String(error.message || error).slice(0, 120)}`);
@@ -538,6 +569,7 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
     artifacts.push({
       name: entryFile, kind: entryKind, bytes: Number(entryPayload.bytes || 0), revision: 1,
       updatedAt: now, fileId: entryFileId, generatedImages: [], attachmentImages: [], embeddedImages: [],
+      embeddedAssets: [],
       // ⭐ 客户端截的封面（没有就是 null）：各端算封面时**优先用它**（见 lib.js 的 workCoverFromSnapshot
       //    与 public.js 的 VibeCoding 封面），这样纯代码作品在广场上也有一张真封面。
       coverFileId: coverFileId || null,
@@ -553,8 +585,10 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
       fileId: null,
       generatedImages: [],
       attachmentImages: [],
-      // 只有入口 HTML 上挂图：与老链路 snapshotArtifacts 的规则一致（它只认入口那一份的配图）
+      // 只有入口 HTML 上挂素材：与老链路 snapshotArtifacts 的规则一致（它只认入口那一份的配图）。
+      // `embeddedAssets` = 入口 HTML 引用过的**所有**本地素材（图/视频/音频），`embeddedImages` 只是其中图片那半边。
       embeddedImages: name === entryFile ? embeddedImages : [],
+      embeddedAssets: name === entryFile ? embeddedAssets : [],
       coverFileId: name === entryFile ? (coverFileId || null) : null,
     });
   }

@@ -1243,6 +1243,11 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 .share-piece__media { width: 100%; display: block; border-radius: 14px; background: #f6f4ff; }
 .share-piece__audio { width: 100%; }
 .share-piece__play { display: flex; gap: 10px; flex-wrap: wrap; }
+/* 网页作品**就地跑起来**的那块舞台（用户 2026-09-30 口径：扫码直接显示作品，不再跳转）——
+   手机上要高一点才玩得开；沙箱内部按逻辑视口渲染再整体缩放，见 PreviewFrame。 */
+.share-piece__stage { border-radius: 14px; overflow: hidden; }
+.share-piece__stage .c-replay__stage { min-height: 58vh; }
+.share-piece__more { margin: 10px 0 0; font-size: 13px; text-align: right; }
 .share-card__label { margin: 0 0 8px; font-size: 16px; border-left: 4px solid #7c5cff; padding-left: 10px; }
 .share-card__desc { margin: 0 0 16px; background: #f7f6fd; border-radius: 12px; padding: 14px 16px; line-height: 1.7; color: #3c3557; }
 .share-page__actions { display: flex; gap: 12px; flex-wrap: wrap; }

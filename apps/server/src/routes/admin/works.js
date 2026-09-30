@@ -15,7 +15,7 @@ import { configuredPlazaCategoryMap, DEFAULT_PLAZA_CATEGORY_MAP, PLAZA_CATEGORIE
 import { getAiProviderPolicy } from '../billingConfig.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../../services/modelCapabilities.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
-import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from '../vibecoding.js';
+import { missingLocalAssets, normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from '../vibecoding.js';
 import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from '../fileAssets.js';
 import {
   ENROLLMENT_STATUSES,
@@ -272,7 +272,9 @@ export async function handleWorks(ctx, part, method) {
         download: `${workBase}/files/${encodeURIComponent(item.name)}/download`,
       }]));
     const imageUrls = Object.fromEntries([...snapshotImageFileIds(submission)].map((fileId) => [fileId, `${workBase}/images/${encodeURIComponent(fileId)}`]));
-    return { ...content, fileUrls, imageUrls };
+    // 与机构端同一条口径：这件作品里**还指着本地文件、但没随作品交上来**的引用（旧客户端不带素材），
+    // 平台端预览也要能把它说清楚（见 vibecoding.js 的 missingLocalAssets）。
+    return { ...content, fileUrls, imageUrls, missingAssets: missingLocalAssets(content.files, content.entryFile) };
   }
   let vibeDetailFileMatch = part.match(/^\/vibecoding-works\/([^/]+)\/files\/(.+?)\/(preview|download)$/);
   if (vibeDetailFileMatch && method === 'GET') {

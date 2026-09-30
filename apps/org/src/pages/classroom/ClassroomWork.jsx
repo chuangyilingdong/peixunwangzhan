@@ -86,6 +86,12 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
     {detail.loading ? <Loading label="正在读取私有作品…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : data ? <>
       <p className="muted">{data.studentName || '—'} · {formatDate(data.submittedAt)}</p>
       {imageError ? <Notice tone="warning">{imageError}</Notice> : null}
+      {/* ⭐ 2026-09-30（用户报「教师后台看作品里图片/视频显示不出来」）：这件作品引用的本地素材
+          **没有随作品一起交上来**（旧客户端只传文本与封面）。平台这边拿不到字节，但必须把话说清楚 ——
+          否则老师看到的就是"图裂了、视频空着"，只会以为平台坏了。见 vibecoding.js 的 missingLocalAssets。 */}
+      {Array.isArray(data.missingAssets) && data.missingAssets.length
+        ? <Notice tone="warning">这件作品引用了 {data.missingAssets.length} 个本地素材（{data.missingAssets.slice(0, 3).join('、')}{data.missingAssets.length > 3 ? ' 等' : ''}），但没有随作品一起提交上来 —— 让学生在**最新版客户端**里重新提交一次就能看到它们。</Notice>
+        : null}
       {data.source === 'CANVAS' ? (Array.isArray(data.media) && data.media.length
         // 作品先看**做出来的东西**（图/视频/音频）——用户 2026-09-21：「应该显示的是图片/视频/音频等等，
         // 而不是画布」。画布放到下面的「创作画布」里，想看过程随时切。
