@@ -124,7 +124,9 @@ function PieceView({ piece, document: doc }) {
     const playable = doc?.files && doc?.entry && Object.hasOwn(doc.files, doc.entry);
     return <>
       {playable
-        ? <div className="share-piece__stage"><ReplayPreview html={buildPreviewDocument(doc.files, doc.entry)} title={name || '作品'} fitContent /></div>
+        // ⭐ 与作品页同一个口径（2026-09-30 用户口径「不要固定的小框、要自适应」）：
+        //    无面板 + 按容器宽度自适应 —— 手机上就是学生页自己的窄屏版式，电脑上就是宽屏版式。
+        ? <div className="share-piece__stage"><ReplayPreview html={buildPreviewDocument(doc.files, doc.entry)} title={name || '作品'} chrome={false} responsive /></div>
         : (coverUrl ? <img className="share-piece__media" src={coverUrl} alt={name || '网页作品'} /> : null)}
       {playable ? null : (openUrl
         ? <p className="share-piece__play"><Link className="button" to={openUrl}>打开体验 · 直接玩 <b>↗</b></Link></p>

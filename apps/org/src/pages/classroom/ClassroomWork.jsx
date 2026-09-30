@@ -125,7 +125,9 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
           }} />
             : entry && Object.hasOwn(files, entry) ? <>
               <Notice tone="info">外部网络资源已禁用；依赖 CDN 或在线接口的内容可能无法运行。</Notice>
-              <ReplayPreview html={html} title={data.title || '课堂作品'} />
+              {/* 老师这一档也**不套「作品预览」面板、不缩放**（2026-09-30 用户口径：那么小的界面没法玩）——
+                  宽度＝弹窗宽度、高度跟着内容长；学生页自己的媒体查询因此真正生效。 */}
+              <ReplayPreview html={html} title={data.title || '课堂作品'} chrome={false} responsive />
             </> : <Empty title="暂无可预览产物" />}
           <details className="top-gap"><summary>查看作品源文件</summary><ReplayFiles files={files} entryFile={entry} /></details>
         </div>}

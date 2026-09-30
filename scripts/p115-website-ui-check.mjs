@@ -1139,11 +1139,18 @@ try {
   await page.setViewportSize({ width: 1440, height: 960 });
   await settle();
 
-  // 静态钉子：两处"对外看作品"的详情页都要开着 `fitContent`（预览框跟着内容长，
-  // 内层才不会出现滚动条 —— 用户 2026-09-27 报的那根「点下一页 2/12 出现的滚动条」）。
+  // 静态钉子（**2026-09-30 新口径**）：对外看作品的详情页要开 `responsive`（不缩放、按容器宽度自适应）
+  // 且不再套「作品预览」面板。用户原话：「图1 不管是电脑端还是手机端，有办法自适应吗？像图2 这种界面，
+  // 怎么玩？那么小的界面。为什么非要用作品预览把作品框上呢？不需要这些东西。」
+  // ⚠️ 旧口径（2026-09-27）钉的是"必须开 fitContent"——那是"固定舞台 + 整体缩放"那一版的配套；
+  //    缩放实测把 640 逻辑宽的页面压到 0.52，手机上根本点不着，已被用户否掉。
   for (const file of ['apps/website/src/pages/WorkDetail.jsx']) {
-    if (!/<ReplayPreview[^>]*fitContent/.test(fs.readFileSync(path.join(root, file), 'utf8'))) {
-      problems.push(`${file}：作品预览应当开着 fitContent（否则比逻辑视口高的作品内层会出现滚动条）`);
+    const source = fs.readFileSync(path.join(root, file), 'utf8');
+    if (!/<ReplayPreview[^>]*responsive/.test(source)) {
+      problems.push(`${file}：作品预览应当开着 responsive（用户 2026-09-30 口径：不要塞在缩放的小框里）`);
+    }
+    if (!/<ReplayPreview[^>]*chrome=\{false\}/.test(source)) {
+      problems.push(`${file}：看作品不该再套「作品预览」面板（要 chrome={false}）`);
     }
   }
 
@@ -1177,41 +1184,47 @@ try {
       stageOverflow: stage ? getComputedStyle(stage).overflow : null,
       stageH: stage ? Math.round(stage.getBoundingClientRect().height) : 0,
       stageClass: stage ? String(stage.className) : '(无舞台)',
-      layoutW: Math.round(parseFloat(style.width) || box.width),
-      layoutH: Math.round(parseFloat(style.height) || box.height),
+      // 容器宽度 = iframe 的父元素（responsive 档要求 iframe 宽度＝它，学生页的媒体查询才会生效）
+      containerW: frame.parentElement ? Math.round(frame.parentElement.getBoundingClientRect().width) : 0,
+      // ⚠️ 宽度在 responsive 档里写的是 `100%` —— `parseFloat('100%')` 会得到 **100**（第一版就这么假红过）。
+      //    只有 px 才读 style，百分比一律以实际盒子为准（不缩放时盒子就是布局尺寸）。
+      layoutW: Math.round(String(style.width || '').endsWith('px') ? parseFloat(style.width) : box.width),
+      layoutH: Math.round(String(style.height || '').endsWith('px') ? parseFloat(style.height) : box.height),
       scale: Number((/scale\(([\d.]+)\)/.exec(String(transform)) || [])[1]) || 1,
       transform,
       sandbox: frame.getAttribute('sandbox') || '',
       reportedHeight: Math.max(0, ...(window.__previewHeights || [0])),
     };
   });
-  console.log(`  · 作品预览：舞台=${viewer.hasStage}（高 ${viewer.stageH}px，class「${viewer.stageClass}」）逻辑视口=${viewer.layoutW}×${viewer.layoutH} scale=${viewer.scale} 内层自报内容高=${viewer.reportedHeight}`);
+  console.log(`  · 作品预览：舞台=${viewer.hasStage}（高 ${viewer.stageH}px，class「${viewer.stageClass}」）容器宽=${viewer.containerW} iframe=${viewer.layoutW}×${viewer.layoutH} transform=${viewer.transform} 内层自报内容高=${viewer.reportedHeight}`);
   if (!viewer.found) problems.push('作品详情：找不到作品预览的 iframe');
   else {
-    if (viewer.layoutW < 640) problems.push(`作品预览：内层逻辑视口宽度必须 ≥ 640（实际 ${viewer.layoutW}）`);
-    if (viewer.layoutH < 768) problems.push(`作品预览：内层逻辑视口高度必须 ≥ 768（实际 ${viewer.layoutH}）`);
-    if (!/scale\(/.test(String(viewer.transform))) problems.push(`作品预览：应当整体等比缩放（transform 实际「${viewer.transform}」）`);
+    // ⭐ 2026-09-30 新口径（用户原话见上面静态钉子的注释）：**不缩放 + 宽度跟容器 + 高度跟内容**。
+    //    旧口径那三条（逻辑视口 ≥640×768 / 必须带 scale / 舞台固定 62~78vh 且不许跟内容长）是
+    //    "塞进小框"那一版的配套，已被用户否掉 —— 这里整段换成新不变式。
+    if (/scale\(/.test(String(viewer.transform))) {
+      problems.push(`作品预览：不该再整体缩放了（transform 实际「${viewer.transform}」）—— 用户 2026-09-30 口径要"自适应"`);
+    }
+    if (viewer.containerW && Math.abs(viewer.layoutW - viewer.containerW) > 4) {
+      problems.push(`作品预览：iframe 宽度应当等于容器宽度（容器 ${viewer.containerW}，实际 ${viewer.layoutW}）—— 宽度不跟容器，学生页的媒体查询就不生效`);
+    }
     // ⭐⭐ 用户 2026-09-27 报的那根滚动条，就是这条不变式被破坏：
-    //    内层视口比内容矮 → 内层文档自己滚起来 → 右侧出现滚动条。
+    //    内层视口比内容矮 → 内层文档自己滚起来 → 右侧出现滚动条。（口径变了，这条不变式**保留**）
     if (!viewer.reportedHeight) problems.push('作品预览：内层没有自报高度（PREVIEW_HEIGHT_BRIDGE 没装上？）');
     else if (viewer.layoutH + 1 < viewer.reportedHeight) {
       problems.push(`作品预览：⭐ 内层视口 ${viewer.layoutH} 比内容 ${viewer.reportedHeight} 矮 —— 内层会出现滚动条（用户 2026-09-27 报的那根）`);
     }
-    // ⭐ 2026-09-27（第二轮口径）：「做成图2这样……大大方方的。自适应。」——
-    //    舞台**不许跟着内容长**（那一版把页面撑到 1400px、底下按钮全出首屏：用户「下方的按钮都看不到了」），
-    //    而是固定成"高一档、按屏幕自适应"的高度，作品**整幅缩放进得去**。
-    // ⚠️ 这条只钉**意图**：舞台是按屏幕自适应的一档高度（62~78vh），**不许跟着内容长**
-    //    （跟内容长的那一版实测 1448px，把底下按钮全顶出首屏 —— 用户报的「下方的按钮都看不到了」）。
-    //    不钉精确到某个 vh：页面上可能同时存在别的预览实例，钉死了会因为无关变化假红。
+    // 舞台必须是**流动容器**（class 带 --flow、不裁剪、高度＝作品高度）。
+    // ⚠️ 旧口径要求的正是"舞台不跟内容长"；现在反过来 —— 作品铺开，页面该长就长。
+    if (!/--flow/.test(viewer.stageClass)) problems.push(`作品预览：舞台应当是流动容器（class 实际「${viewer.stageClass}」）—— 固定高度的舞台就是"小框"的来处`);
+    if (viewer.stageOverflow !== 'visible') problems.push(`作品预览：流动舞台不该裁剪（overflow 实际 ${viewer.stageOverflow}）`);
+    if (Math.abs(viewer.stageH - viewer.layoutH) > 8) problems.push(`作品预览：舞台高度（${viewer.stageH}）应当就是作品高度（${viewer.layoutH}）`);
+    // 整页高度：**口径变了**（作品铺开 ⇒ 页面会长，这是用户要的），所以不再钉 1.9 倍那种比值；
+    // 只留一条"防跑飞"的上限 —— 防的是"内容随视口一起长"那类自反馈（实测能把页面撑到几万像素）。
     const viewportH = await page.evaluate(() => window.innerHeight);
-    const stageMax = Math.min(Math.round(viewportH * 0.78), 920) + 8;
-    const stageMin = Math.round(viewportH * 0.6) - 8;
-    if (viewer.stageH > stageMax) problems.push(`作品预览：舞台 ${viewer.stageH}px 比 ${stageMax}px 还高 —— 它跟着内容长了（用户报过：底下按钮会被顶出首屏）`);
-    if (viewer.stageH < stageMin) problems.push(`作品预览：舞台只有 ${viewer.stageH}px，太矮了（用户要的「大大方方」）`);
-    if (viewer.layoutH * viewer.scale > viewer.stageH + 2) problems.push(`作品预览：缩放后的框（${Math.round(viewer.layoutH * viewer.scale)}px）比舞台（${viewer.stageH}px）还高，会被裁掉`);
     const pageHeight = await page.evaluate(() => document.documentElement.scrollHeight);
     console.log(`  · 整页高度 ${pageHeight}px（视口 ${viewportH}px，比值 ${(pageHeight / viewportH).toFixed(2)}）`);
-    if (pageHeight > viewportH * 1.9) problems.push(`作品详情：整页高 ${pageHeight}px（视口的 ${(pageHeight / viewportH).toFixed(2)} 倍）—— 底下的按钮会被顶出首屏（用户 2026-09-27 报的「下方的按钮都看不到了」）`);
+    if (pageHeight > viewportH * 12) problems.push(`作品详情：整页高 ${pageHeight}px（视口的 ${(pageHeight / viewportH).toFixed(2)} 倍）—— 像是"内容随视口一起长"的自反馈，查 PREVIEW_MAX_HEIGHT 那道闸`);
     if (!/allow-scripts/.test(viewer.sandbox) || /allow-same-origin/.test(viewer.sandbox)) problems.push(`作品预览：沙箱属性不对（${viewer.sandbox}）`);
     // 顺手量一下右上角那排按钮：`.c-page__actions` 是 `flex:none` **不换行**，按钮一多就会挤到一起
     // （2026-09-27 在截图里看到「分享」和「← 返回我的主页」叠在一起）。
@@ -1245,8 +1258,6 @@ try {
       const squashed = actionsGeo.items.filter((i) => i.right - i.left < 40);
       if (squashed.length) problems.push(`作品详情：动作区按钮被挤扁了：[${squashed.map((i) => `${i.text}(${i.right - i.left}px)`).join(', ')}]`);
     }
-    if (Number((String(viewer.transform).match(/scale\(([\d.]+)\)/) || [])[1] || 0) > 1) problems.push('作品预览：有空间时缩放不该放大（scale 要封顶 1）');
-    if (viewer.stageOverflow !== 'hidden') problems.push(`作品预览：舞台应当裁剪溢出（overflow 实际 ${viewer.stageOverflow}）`);
     if (/allow-same-origin/.test(viewer.sandbox)) problems.push('作品预览：沙箱不许带 allow-same-origin（口径⑧）');
   }
   await shot('20-work-preview');

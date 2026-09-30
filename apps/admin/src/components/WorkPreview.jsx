@@ -164,7 +164,8 @@ export function WorkPreview({ api, workId, title, kind = 'vibecoding', onClose }
                 const embedded = selected.embeddedImages?.find((item) => item.fileId === slide?.image?.fileId && images[item.fileId]);
                 return (embedded && images[embedded.fileId]) || snapshotImage(reference);
               }} />
-                : html ? <ReplayPreview html={html} title={data.title || '学生作品'} />
+                // 与机构端同一个口径（2026-09-30 用户口径）：平台端看作品也不套面板、不缩放。
+                : html ? <ReplayPreview html={html} title={data.title || '学生作品'} chrome={false} responsive />
                   : <Empty title="这件作品没有可预览的产物" body="没有网页入口、也没有可预览的文档产物。" />}
               {documentFile?.download ? <p className="muted top-gap"><a href={documentFile.download}>下载原文件</a>（预览是服务端转出来的 PDF）</p> : null}
             </>}

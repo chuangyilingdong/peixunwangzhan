@@ -57,9 +57,35 @@ export function ReplayFilePreview({ url, name = '' }) {
   );
 }
 
-/** 作品预览：真的能玩（沙箱 iframe 里跑学生的 HTML） */
-export function ReplayPreview({ html, title = '作品预览', height = '62vh', fitContent = false }) {
+/**
+ * 作品预览：真的能玩（沙箱 iframe 里跑学生的 HTML）。
+ *
+ * @param chrome 可选（默认 true）：要不要「作品预览」那层面板（标题条 + 重新运行）。
+ *   ⚠️ **"看作品"的页面**（作品广场 / 学生主页 / 分享页、老师端与平台端的只读预览）请传
+ *   `chrome={false} responsive` —— 2026-09-30 用户口径（原话）：
+ *   「像图2 这种界面，怎么玩？那么小的界面。**为什么非要用作品预览把作品框上呢？不需要这些东西**」。
+ *   工作台（学生自己边改边看、老师备课预览）保留面板，那里「重新运行」是常用的。
+ * @param responsive 可选：**不缩放、按容器宽度自适应**（电脑端与手机端各自长成它自己的样子，
+ *   见 PreviewFrame 里 PREVIEW_RESPONSIVE_MIN_H 那段注释）。
+ */
+export function ReplayPreview({ html, title = '作品预览', height = '62vh', fitContent = false, chrome = true, responsive = false }) {
   const [reloadKey, setReloadKey] = useState(0);
+  /* ⭐ 老口径（缩放）与 `responsive`（自适应）是两条路：
+     · 老口径：内层按 ≥640×768 的逻辑视口渲染再整体缩放 —— 面板越宽越扁，缩放比越小（实测 0.52），
+       手机上字小到点不着，正是用户 2026-09-30 报的那张图；
+     · `responsive`：不缩放，宽度＝容器真实宽度（学生页自己的媒体查询因此生效），
+       高度＝内层自报的内容高度（下界 600 / 上界 4000）。 */
+  const stage = <PreviewFrame
+    className="c-replay__frame"
+    html={html}
+    reloadKey={reloadKey}
+    title={title}
+    fitToLogical={!responsive}
+    fitContent={fitContent}
+    responsive={responsive}
+    stageClassName={responsive ? 'c-replay__stage c-replay__stage--flow' : (fitContent ? 'c-replay__stage c-replay__stage--tall' : 'c-replay__stage')}
+  />;
+  if (!chrome) return stage;
   return (
     <ReplayPanel
       title="作品预览"
@@ -67,11 +93,7 @@ export function ReplayPreview({ html, title = '作品预览', height = '62vh', f
       className="c-replay__preview"
       actions={<IconButton icon="refresh" size={14} label="重新运行" small onClick={() => setReloadKey((value) => value + 1)} />}
     >
-      {/* ⭐ 查看层要「零滚动条」：内层按逻辑视口渲染再整体缩放（口径㉕，见 PreviewFrame）。
-          `fitContent`：按内层**自报的内容高度**来缩放（整幅装得下、内层不出滚动条），
-          同时把舞台抬到"大方"的高度（.c-replay__stage--tall）—— 用户 2026-09-27 口径
-          「做成图2这样……大大方方的。自适应。」。只在"对外看作品"的页面开。 */}
-      <PreviewFrame className="c-replay__frame" html={html} reloadKey={reloadKey} title={title} fitToLogical fitContent={fitContent} stageClassName={fitContent ? 'c-replay__stage c-replay__stage--tall' : 'c-replay__stage'} />
+      {stage}
     </ReplayPanel>
   );
 }

@@ -135,6 +135,13 @@
    文档预览在工作台里是「固定高度的滚动区」，这里改成跟着页面滚 —— 别再套一层滚动条。 */
 .c-replay__stage { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; }
 .c-replay__stage .c-preview__doc { flex: none; overflow: visible; }
+/* ⭐ 「按容器宽度自适应」那一档（2026-09-30 用户口径：「怎么玩？那么小的界面」）：
+   不缩放、不固定高度 —— 作品按容器宽度铺开、高度跟着内容长（高度写在 iframe 的 style 上）。
+   两个类一起写是为了压过上一条 `height: 62vh`；`display` 保持上一条给的 flex 列
+   （公开作品页那一层外面还包着"产物切换条"，它要跟预览竖着排）。
+   ⚠️ 这条同时管两层：公开作品页的**外层包装**与 PreviewFrame 自己的容器都带 --flow。 */
+.c-replay__stage.c-replay__stage--flow { height: auto; overflow: visible; }
+.c-replay__stage.c-replay__stage--flow > iframe { position: static; width: 100%; }
 .c-replay__file + .c-replay__file { margin-top: var(--sp-3); }
 .c-replay__file-name {
   display: flex;

@@ -28,13 +28,30 @@ export const PREVIEW_LOGICAL_MIN = { w: 640, h: 768 };
 export const PREVIEW_MAX_HEIGHT = 4000;
 
 /**
+ * ⭐ `responsive` 模式的高度下界（2026-09-30 用户口径）。
+ *
+ * 用户原话：「图1 不管是电脑端还是手机端，**有办法自适应吗**？像图2 这种界面，怎么玩？那么小的界面。
+ * 为什么非要用作品预览把作品框上呢？**不需要这些东西**。」
+ *
+ * 图2 就是老口径的产物：学生页按 640×768 的逻辑视口渲染、再整体缩放到面板里 —— 面板越宽越扁，
+ * 缩放比越小（实测 0.52），字小到点不着。现在这一档改成**不缩放**：iframe 宽度＝容器真实宽度
+ * （学生页自己的媒体查询因此真正生效 → 电脑端/手机端各自的样子），高度＝内层自报的内容高度
+ * （`PREVIEW_HEIGHT_BRIDGE`），下界用下面这个值、上界仍是 PREVIEW_MAX_HEIGHT。
+ *
+ * 下界为什么给 600：① 学生游戏类作品大量用 `100vh`，视口太矮就没法玩；② 页面自报的高度对
+ * `100vh` 型页面等于当前框高，有下界才不会塌成一条。
+ */
+export const PREVIEW_RESPONSIVE_MIN_H = 600;
+
+/**
  * 预览 iframe。
  * @param html 完整的 HTML 文档字符串
  * @param onConsole 可选：(line) => void，接收学生页面里的 console 输出
  * @param reloadKey 变化即重新投递（用于「重新运行」）
  * @param fitContent 可选：**按"这份文档有多高"来缩放**（见下）
+ * @param responsive 可选：**不缩放、按容器宽度自适应**（见 PREVIEW_RESPONSIVE_MIN_H 的注释）
  */
-export function PreviewFrame({ html, className = '', stageClassName = '', title = '预览', onConsole, reloadKey = 0, fitToLogical = false, fitContent = false }) {
+export function PreviewFrame({ html, className = '', stageClassName = '', title = '预览', onConsole, reloadKey = 0, fitToLogical = false, fitContent = false, responsive = false }) {
   const frameRef = useRef(null);
   const boxRef = useRef(null);
   const [fit, setFit] = useState(null);
@@ -112,14 +129,18 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
   //    第一版把 iframe 改成 `position:static` + grid 居中，结果框的宽度反过来把舞台撑大 →
   //    ResizeObserver 又量到更大的宽 → 逻辑视口算出 64868900px（正反馈，实测踩到）。
   //    现在框仍是绝对定位（CSS 里那条），居中靠 transform 的 translate 自己算 —— 不参与布局就没有反馈。
-  const frameStyle = !fit ? undefined : (fitContent
-    ? {
-      width: `${fit.w}px`,
-      height: `${fit.h}px`,
-      transform: `translate(${Math.round((fit.boxW - fit.w * fit.scale) / 2)}px, ${Math.round((fit.boxH - fit.h * fit.scale) / 2)}px) scale(${fit.scale})`,
-      transformOrigin: 'top left',
-    }
-    : { width: `${fit.w}px`, height: `${fit.h}px`, transform: `scale(${fit.scale})`, transformOrigin: 'top left' });
+  // responsive 模式：不缩放、跟随容器宽度，高度用内层自报的内容高度（有下界、有上限）。
+  const responsiveHeight = Math.max(PREVIEW_RESPONSIVE_MIN_H, Math.min(PREVIEW_MAX_HEIGHT, contentHeight || 0));
+  const frameStyle = responsive
+    ? { width: '100%', height: `${responsiveHeight}px` }
+    : (!fit ? undefined : (fitContent
+      ? {
+        width: `${fit.w}px`,
+        height: `${fit.h}px`,
+        transform: `translate(${Math.round((fit.boxW - fit.w * fit.scale) / 2)}px, ${Math.round((fit.boxH - fit.h * fit.scale) / 2)}px) scale(${fit.scale})`,
+        transformOrigin: 'top left',
+      }
+      : { width: `${fit.w}px`, height: `${fit.h}px`, transform: `scale(${fit.scale})`, transformOrigin: 'top left' }));
 
   const frame = (
     <iframe
@@ -131,6 +152,8 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
       style={frameStyle}
     />
   );
+  // responsive 走**流动容器**（高度跟着内容长、没有固定舞台高度）—— 见 .c-preview__stage--flow
+  if (responsive) return <div ref={boxRef} className={`c-preview__stage c-preview__stage--flow ${stageClassName}`.trim()}>{frame}</div>;
   // 不开适配时保持**原样结构**（工作台的编辑预览与手机模拟器自己有 stage，别动它们）
   if (!fitToLogical) return frame;
   return <div ref={boxRef} className={`c-preview__stage ${stageClassName}`.trim()}>{frame}</div>;

@@ -142,7 +142,10 @@ export function WorkDetailPage({ api }) {
           <div className="c-replay__grid is-focus">
             {/* 一件作品可能既有网页又有文档（学生后面又让 AI 做了份 PPT），
                 所以可预览的产物不止一份时才摆切换条 —— 否则另一半东西在广场上就摸不到了。 */}
-            <div className="c-replay__stage">
+            {/* ⚠️ 网页作品这一档外面还要 `--flow`：`.c-replay__stage` 默认是**固定 62vh + overflow:hidden**
+                （文档预览那档要它），用在自适应网页上就把作品裁在 595px 高的小框里 ——
+                用户 2026-09-30 报的"那么小的界面"就是它。文档/空态那一档保持原样。 */}
+            <div className={`c-replay__stage${current && !current.document ? ' c-replay__stage--flow' : ''}`}>
               {views.length > 1 ? (
                 <div className="c-file-tabs">
                   {views.map((item) => (
@@ -184,7 +187,10 @@ export function WorkDetailPage({ api }) {
                   />
                 </ReplayPanel>
               ) : (
-                <ReplayPreview html={buildPreviewDocument(files, current.name)} title={work.title} fitContent />
+                // ⭐ 2026-09-30 用户口径：「怎么玩？那么小的界面……为什么非要用作品预览把作品框上呢？不需要这些东西」
+                //    → 看作品这一档**去掉面板、去掉缩放**：宽度＝容器真实宽度（学生页自己的媒体查询生效，
+                //      电脑端与手机端各自长成它自己的样子），高度跟着内容走。见 PreviewFrame 的 responsive。
+                <ReplayPreview html={buildPreviewDocument(files, current.name)} title={work.title} chrome={false} responsive />
               )}
             </div>
           </div>

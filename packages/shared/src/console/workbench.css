@@ -181,6 +181,11 @@ html.is-workbench-resizing * { cursor: col-resize !important; user-select: none 
    ⚠️ 这里**不要**给 iframe 写 height/width：它就是逻辑视口，由 JS 按可用空间算。 */
 .c-preview__stage { position: relative; overflow: hidden; background: #fff; }
 .c-preview__stage > iframe { position: absolute; left: 0; top: 0; display: block; border: 0; background: #fff; }
+/* ⭐ 「按容器宽度自适应」那一档（2026-09-30 用户口径：「怎么玩？那么小的界面」——
+   不要固定舞台、不要缩放，作品就该铺开）。高度由 PreviewFrame 按内层自报的内容高度写在
+   iframe 的 style 上；容器只负责别再套一层高度限制、也别再裁切。 */
+.c-preview__stage--flow { overflow: visible; height: auto; }
+.c-preview__stage--flow > iframe { position: static; width: 100%; }
 .c-preview__frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; display: block; }
 .c-preview-stage {
   flex: 1;
