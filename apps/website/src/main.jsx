@@ -1798,7 +1798,11 @@ export function App(){
   // 这些 `/learn*`、`/my-*` 都是**学生**的页面，所以未登录时统一带去**学生登录**（`?as=student`）。
   // 原来落到 `/login` 会走默认那一支（机构/老师登录），学生点进来第一眼就看到老师的表单。
   // 2026-09-23 起 `/account`（账号安全）也归这一档 —— 它读的是学生自己的接口。
-  if ((loc.pathname.startsWith('/learn') || loc.pathname === '/account') && !session) {
+  // ⚠️ 例外：`/learn/prep/<课时 id>` 是**老师**的画布备课（用户 2026-09-30 口径：「直接进入到画布课堂」）——
+  //    它读的是**机构端**那份会话（会话按应用分桶，见 auth.js），拿学生会话判会把人踢去学生登录页。
+  //    页面自己会用机构端会话去取数据；真没登录时它显示「去机构后台登录」，不在这里拦。
+  const isTeacherPrepPath = loc.pathname.startsWith('/learn/prep');
+  if ((loc.pathname.startsWith('/learn') || loc.pathname === '/account') && !session && !isTeacherPrepPath) {
     return <Navigate to='/login?as=student' replace />;
   }
   const displayName = session?.user?.displayName || session?.user?.login || '用户';
@@ -1896,7 +1900,7 @@ export function App(){
         <Route path='/account' element={session ? <StudentAccountPage api={api} user={session.user} onSignedOut={() => { removeUserSession(); setSession(null); navigate('/login?as=student'); }} /> : <Navigate to='/login?as=student' replace />}/>
         <Route path='/learn/canvas' element={<LearnCanvasPage api={api}/>}/>
         {/* ⭐ 2026-09-30：老师的画布备课 = 学生的画布课堂（同一套全屏界面，不生成、不落库） */}
-        <Route path='/learn/prep/:lessonId' element={<CanvasPrepPage api={api}/>}/>
+        <Route path='/learn/prep/:lessonId' element={<CanvasPrepPage />}/>
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
         {/* ⚠️ 2026-09-27 改名：「我的作品」→「我的主页」（用户口径「现在不需要『我的作品』了，
             就是叫『我的主页』」），路径一起改成 /my-home。下面两条是老地址的重定向 ——

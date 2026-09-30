@@ -14,24 +14,30 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { boxParamsLabel, buildBoxNode, BrandLogo, ErrorState, Loading, materialVisual, Notice } from '@platform/shared';
+import { boxParamsLabel, buildBoxNode, BrandLogo, createApiClient, ErrorState, Loading, materialVisual, Notice, readAppSession } from '@platform/shared';
 
 const EMPTY_SNAPSHOT = { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
 
 /** 备课草稿的存档键：按课时存，互不干扰。 */
 export const prepDraftKey = (lessonId) => `lesson-prep-canvas:${lessonId}`;
 
-export function CanvasPrepPage({ api }) {
+export function CanvasPrepPage() {
   const { lessonId } = useParams();
   const navigate = useNavigate();
   const [state, setState] = useState({ loading: true, error: '', data: null });
+  // ⚠️ 这一页挂在**网站域**（学生的画布课堂那一套），但登录的人是**老师** ——
+  //    会话按应用分桶（见 auth.js），这里必须读**机构端**那份，否则永远 401。
+  const api = useMemo(() => createApiClient({ getToken: () => readAppSession('org')?.token, onUnauthorized: () => {} }), []);
 
   useEffect(() => {
     let cancelled = false;
     setState({ loading: true, error: '', data: null });
     api.get(`org/lessons/${encodeURIComponent(lessonId)}/prep?mode=CANVAS`)
       .then((data) => { if (!cancelled) setState({ loading: false, error: '', data }); })
-      .catch((error) => { if (!cancelled) setState({ loading: false, error: error?.message || '打不开这节课的备课画布', data: null }); });
+      .catch((error) => {
+        const unauthorized = Number(error?.status) === 401 || /登录/.test(String(error?.message || ''));
+        if (!cancelled) setState({ loading: false, data: null, error: unauthorized ? '备课画布要用机构端账号打开：请先在机构后台登录，再点课时详情里的「画布备课」。' : (error?.message || '打不开这节课的备课画布') });
+      });
     return () => { cancelled = true; };
   }, [api, lessonId]);
 

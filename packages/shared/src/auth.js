@@ -14,6 +14,21 @@ export function sessionStorageKey() {
   return `${SESSION_KEY_PREFIX}.student`;
 }
 
+/**
+ * 按**应用**读会话（不按当前路径）。
+ * 为什么要它：老师的「画布备课」挂在网站域（`/learn/prep/<课时 id>`，见 CanvasPrepPage），
+ * 而 `readSession()` 是按**当前路径**分桶的 —— 在 `/learn/...` 下它只会读学生那份会话，
+ * 老师自然是 null。这一条让那个页面能明确去读**机构端**那份会话。
+ * @param {'student'|'org'|'admin'} app
+ */
+export function readAppSession(app) {
+  try {
+    const stored = window.localStorage.getItem(`${SESSION_KEY_PREFIX}.${app}`);
+    const session = stored ? JSON.parse(stored) : null;
+    return session?.token ? session : null;
+  } catch { return null; }
+}
+
 export function readSession() {
   try {
     const stored = window.localStorage.getItem(sessionStorageKey());
