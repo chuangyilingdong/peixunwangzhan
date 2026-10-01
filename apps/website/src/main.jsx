@@ -34,6 +34,7 @@ import SpecularButton from './components/SpecularButton.jsx';
 const publicApi = createApiClient();
 
 function LoginPage() {
+  const t = useT();
   const loc = useLocation();
   // 登录入口分「机构 / 老师」与「学生」两个（用户口径 2026-09-18）。这里**不按入口拦人**：
   // 入口只决定提示文案与交叉链接，鉴权仍由登录接口按角色判定，登录后按角色落到各自工作台。
@@ -44,7 +45,7 @@ function LoginPage() {
       const data = await publicApi.post('auth/login', { login, password });
       session = saveUserSession(data);
     } catch (err) {
-      throw new Error(err.message || '登录失败');
+      throw new Error(err.message || t('login.failed'));
     }
     const role = session.user?.role;
     // 线框主流程：学生登录后直接进入「我的课包」，官网公开首页仍可从品牌入口返回。
@@ -53,7 +54,7 @@ function LoginPage() {
   }
   // 背景按首页来做（用户口径 2026-09-18）：同一份视频资产、同一套「视频 + 压暗层」叠法。
   // 平台端/机构端登录页没有这个视频资源，所以视频只铺在官网这一侧（共享面板只给底色）。
-  return <div className='website-login'><div className='login-bg' aria-hidden='true'><video src='/assets/hero-rabbit.mp4' poster='/assets/hero-rabbit-poster.webp' autoPlay muted loop playsInline preload='metadata' /><div className='login-scrim' /></div><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title={asStudent ? '学生登录' : '机构 / 老师登录'} description={asStudent ? '登录后继续你的创作旅程。' : '登录后进入机构工作台。'} onLogin={handleLogin} /><p className='login-switch'>{asStudent ? <>我是机构 / 老师，<a href={ORG_APP_URL}>去机构后台</a></> : <>我是学生，<Link to='/login?as=student'>去学生登录</Link></>}</p></div>;
+  return <div className='website-login'><div className='login-bg' aria-hidden='true'><video src='/assets/hero-rabbit.mp4' poster='/assets/hero-rabbit-poster.webp' autoPlay muted loop playsInline preload='metadata' /><div className='login-scrim' /></div><Link className='login-back' to='/'>{t('login.back')}</Link><LoginPanel title={asStudent ? t('login.titleStudent') : t('login.titleStaff')} description={asStudent ? t('login.descStudent') : t('login.descStaff')} onLogin={handleLogin} /><p className='login-switch'>{asStudent ? <>{t('login.switchStaffPre')}<a href={ORG_APP_URL}>{t('login.switchStaffLink')}</a></> : <>{t('login.switchStudentPre')}<Link to='/login?as=student'>{t('login.switchStudentLink')}</Link></>}</p></div>;
 }
 
 const ORG_APP_URL = import.meta.env?.VITE_ORG_APP_URL || '/org/';
@@ -106,7 +107,9 @@ function Header({ userBadge, signedIn }){
   // 原因是导航用 `position:absolute; left:50%` 在页面里居中，视口一窄它就和右侧按钮组叠在一起 ——
   // 用户在内页截图报的「联系我们被遮挡」就是这一处（浅底那个实心胶囊被玻璃导航压住）。
   // ⚠️ 只删右上角这一个：首页 hero 的两个 CTA、页脚「合作」列、各页结尾的「联系我们」都保留。
-  return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><LanguageSwitcher/><nav aria-label={t('nav.home')}>{WEBSITE_NAV.map(([to,key])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{t(key)}</NavLink>)}</nav><div className="head-actions">{!signedIn && onDark ? <AuthEntries onDark onNavigate={navigate}/> : userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?t('menu.close'):t('menu.open')} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>{t('menu.close')} ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,key])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{t(key)}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}<LanguageSwitcher variant="footer"/></div></div>}</header>;
+  return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><nav aria-label={t('nav.home')}>{WEBSITE_NAV.map(([to,key])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{t(key)}</NavLink>)}</nav><div className="head-actions">{/* 语言切换（2026-10-01 用户口径：「图1 应该放在图2 旁边的位置，直接写全称」）——
+          它与账号/登录按钮同属右侧按钮组，所以**在 head-actions 里、账号位左边**。 */}
+        <LanguageSwitcher/>{!signedIn && onDark ? <AuthEntries onDark onNavigate={navigate}/> : userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?t('menu.close'):t('menu.open')} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>{t('menu.close')} ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,key])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{t(key)}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}<LanguageSwitcher variant="footer"/></div></div>}</header>;
 }
 // ── 页脚（2026-09-23 按用户给的参考稿 Footer03Luma 重做）─────────────────────────
 // ⚠️ 参考稿是 Tailwind + framer-motion + lucide 三件套，官网**一个都没引**（也不为页脚引进来
@@ -186,6 +189,15 @@ const PL_TYPE_META = {
   music:{label:'音乐',icon:'music'}, podcast:{label:'AI播客',icon:'mic'}, agent:{label:'智能体',icon:'cpu'},
   workflow:{label:'工作流',icon:'flow'}, pictureBook:{label:'绘本',icon:'book'},
 };
+// 类型角标的**文案 key**（2026-10-01 i18n）：`PL_TYPE_META` 里那份中文是兜底，
+// 渲染时若 key 有译文就用译文（英文站上不出现中文角标）；导入件的未知类型仍直接显示原始 type。
+const PL_TYPE_KEY = {
+  canvas: 'works.typeCanvas', VIBECODING: 'works.typeVibecoding', image: 'works.typeImage',
+  video: 'works.typeVideo', webpage: 'works.typeWebpage', miniGame: 'works.typeMiniGame',
+  ppt: 'works.typePpt', brandDesign: 'works.typeBrandDesign', music: 'works.typeMusic',
+  podcast: 'works.typePodcast', agent: 'works.typeAgent', workflow: 'works.typeWorkflow',
+  pictureBook: 'works.typePictureBook',
+};
 const plTypeOf = (w) => (w.imported ? (w.workType || 'image') : (w.type === 'VIBECODING' ? 'VIBECODING' : 'canvas'));
 const plDateOf = (w) => {
   const raw = w.imported ? (w.createdAt || w.submittedAt) : w.submittedAt;
@@ -241,6 +253,7 @@ const PL_FRAME_MIN = { w: 640, h: 768 };
 
 // 作品查看器：图片看大图（多张可翻）、视频直接播。参考站卡片点开没有动作，我们做成能看/能播。
 function WorkViewer({ work, onClose }) {
+  const t = useT();
   const [active, setActive] = useState(0);
   useEffect(() => {
     const onKey = (event) => { if (event.key === 'Escape') onClose(); };
@@ -283,11 +296,11 @@ function WorkViewer({ work, onClose }) {
   const frameStyle = frameFit
     ? { width: `${Math.round(frameFit.w)}px`, height: `${Math.round(frameFit.h)}px`, transform: `scale(${frameFit.scale})` }
     : undefined;
-  return <div className="pl-viewer" role="dialog" aria-modal="true" aria-label={`查看作品：${work.title}`} onClick={onClose}>
+  return <div className="pl-viewer" role="dialog" aria-modal="true" aria-label={t('works.viewerAria', { title: work.title })} onClick={onClose}>
     <div className={'pl-viewer-box' + (hasFrame ? ' has-frame' : '')} onClick={(event) => event.stopPropagation()}>
       <div className="pl-viewer-head">
         <div><span className="pl-badge">{(PL_TYPE_META[plTypeOf(work)] || {}).label || ''}</span><h3>{work.title}</h3></div>
-        <button type="button" className="pl-viewer-close" onClick={onClose} aria-label="关闭">×</button>
+        <button type="button" className="pl-viewer-close" onClick={onClose} aria-label={t('works.close')}>×</button>
       </div>
       <div className="pl-viewer-body">
         {isVideo
@@ -316,17 +329,17 @@ function WorkViewer({ work, onClose }) {
             它的 contentUrls 是空的（见 plOpenKind 注释），而且那块空间被绝对定位的缩放容器占满 ——
             真渲染出来也只会藏在它后面。 */}
         {!isVideo && !hasFrame && images.length > 1 ? <div className="pl-thumbs">
-          {images.map((url, index) => <button type="button" key={url} className={'pl-thumb' + (index === active ? ' on' : '')} onClick={() => setActive(index)} aria-label={`第 ${index + 1} 张`}>
+          {images.map((url, index) => <button type="button" key={url} className={'pl-thumb' + (index === active ? ' on' : '')} onClick={() => setActive(index)} aria-label={`${index + 1} / ${images.length}`}>
             <img src={url} alt="" loading="lazy" />
           </button>)}
         </div> : null}
       </div>
       <div className="pl-viewer-foot">
-        <span>{work.studentName || '小创作者'}{work.orgName ? ` · ${work.orgName}` : ''}</span>
+        <span>{work.studentName || t('works.creator')}{work.orgName ? ` · ${work.orgName}` : ''}</span>
         {/* 出口只给**外链**作品（新窗口打开的是别人的域名，不涉及我们的源）。
             ⭐ 托管的网页作品（entryUrl）刻意没有出口：它的入口页在我们自己源上，
             在新窗口打开就是拿我们的源跑学生代码，等于绕开上面那层沙箱。 */}
-        {work.externalUrl ? <a className="pl-outlink" href={work.externalUrl} target="_blank" rel="noreferrer">打不开？在新窗口打开 ↗</a> : <span>{work.orgName || ''}</span>}
+        {work.externalUrl ? <a className="pl-outlink" href={work.externalUrl} target="_blank" rel="noreferrer">{t('works.openInNew')}</a> : <span>{work.orgName || ''}</span>}
       </div>
     </div>
   </div>;
@@ -345,11 +358,12 @@ function plPageNumbers(current, total) {
   return out;
 }
 function Work({work,index=0,onOpen}){
+  const t = useT();
   const url=work.publicUrl||(work.shareToken?'/works/'+work.shareToken:null);
   const emoji=work.canvasSnapshot?.nodes?.[0]?.data?.emoji||work.emoji||'✦';
-  const title=work.title;const student=work.studentName||'小创作者';const isVibe=work.type==='VIBECODING';
+  const title=work.title;const student=work.studentName||t('works.creator');const isVibe=work.type==='VIBECODING';
   const docKind=isVibe&&work.preview?.document?String(work.preview.kind||'').toLowerCase():'';
-  const vibeHint=docKind==='pptx'?'演示文稿':docKind==='xlsx'?'表格':docKind==='docx'?'文档':isVibe?'可在线玩':'';
+  const vibeHint=docKind==='pptx'?t('works.docPptx'):docKind==='xlsx'?t('works.docXlsx'):docKind==='docx'?t('works.docDocx'):isVibe?t('works.docPlay'):'';
   const typeKey=plTypeOf(work);
   const typeMeta=PL_TYPE_META[typeKey]||{label:typeKey,icon:'✦'};
   const openKind=plOpenKind(work);
@@ -363,7 +377,7 @@ function Work({work,index=0,onOpen}){
   const body=<>
     <div className={'pl-cover w'+(index%6)}>
       {coverNode}
-      <span className="pl-badge">{typeMeta.label}</span>
+      <span className="pl-badge">{PL_TYPE_KEY[typeKey]?t(PL_TYPE_KEY[typeKey]):typeMeta.label}</span>
       {openKind==='video'?<i className="pl-play" aria-hidden="true">▶</i>:null}
       <span className="pl-mark">灵动ai</span>
     </div>
@@ -371,7 +385,7 @@ function Work({work,index=0,onOpen}){
       <h3 className="pl-title" title={title}>{title}</h3>
       {date?<span className="pl-date">{date}</span>:null}
     </div>
-    <div className="pl-author">{work.featured?<i className="work-featured" title="精选作品" aria-label="精选作品">★</i>:null}
+    <div className="pl-author">{work.featured?<i className="work-featured" title={t('works.featured')} aria-label={t('works.featured')}>★</i>:null}
       <span className="pl-student">{student}</span>
       {/* 右下角那一格：机构名（用户给的图2 红框位置）。站内作品没有机构名时退回类型提示。 */}
       <span className="pl-org">{work.orgName || vibeHint || ''}</span>
@@ -380,10 +394,10 @@ function Work({work,index=0,onOpen}){
   // 什么都能点：站内作品进详情页（<Link>，右键新标签照旧可用）；导入件弹出看图/播放层。
   return <article className="pl-card" data-type={typeKey} data-category={plCategoryOf(work)}>
     {openKind==='detail'&&url
-      ? <Link className="pl-hit" to={url} aria-label={`打开作品：${title}`}>{body}</Link>
+      ? <Link className="pl-hit" to={url} aria-label={t('works.openAria', { title })}>{body}</Link>
       : openKind==='external'
-        ? <a className="pl-hit" href={work.externalUrl} target="_blank" rel="noreferrer" aria-label={`在原平台打开：${title}`}>{body}</a>
-        : <button type="button" className="pl-hit" onClick={()=>onOpen(work)} aria-label={`查看作品：${title}`}>{body}</button>}
+        ? <a className="pl-hit" href={work.externalUrl} target="_blank" rel="noreferrer" aria-label={t('works.externalAria', { title })}>{body}</a>
+        : <button type="button" className="pl-hit" onClick={()=>onOpen(work)} aria-label={t('works.viewerAria', { title })}>{body}</button>}
   </article>;
 }
 function Title({eyebrow,title,desc}){return <section className="page-title"><div><Kicker>{eyebrow}</Kicker><h1>{title}</h1><p>{desc}</p></div></section>}
@@ -604,13 +618,14 @@ function useStepsTrack(sectionRef, trackRef, pinRef, count) {
 }
 
 function HomeSteps({ block }) {
+  const t = useT();
   const [ref, shown] = useRevealOnce();
   const trackRef = useRef(null);
   const pinRef = useRef(null);
   const items = Array.isArray(block?.items) ? block.items : [];
   useStepsTrack(ref, trackRef, pinRef, items.length);
   if (!items.length) return null;
-  return <section className={'hp-steps' + (shown ? ' is-in' : '')} ref={ref} aria-label="我们怎么开课">
+  return <section className={'hp-steps' + (shown ? ' is-in' : '')} ref={ref} aria-label={t('section.steps')}>
     <div className="hp-steps__pin" ref={pinRef}>
     {(block?.title || block?.lead) && <div className="hp-steps-head">
       {block?.title ? <h2>{block.title}</h2> : null}
@@ -696,6 +711,7 @@ function titleUnits(text) {
  *      见 §二十七那次的教训：首页配图不缩就是 6MB）。
  */
 function HomeVideos({ block }) {
+  const t = useT();
   const [ref, shown] = useRevealOnce();
   const trackRef = useRef(null);
   const cardRefs = useRef(new Map());
@@ -754,14 +770,14 @@ function HomeVideos({ block }) {
   if (!items.length) return null;
   const openedItem = opened >= 0 ? items[opened] : null;
   const go = (step) => scrollToIndex(Math.max(0, Math.min(items.length - 1, activeIndex + step)));
-  return <section className={'hp-vid' + (shown ? ' is-in' : '')} ref={ref} aria-label="视频展示">
+  return <section className={'hp-vid' + (shown ? ' is-in' : '')} ref={ref} aria-label={t('section.videos')}>
     <div className="hp-vid-inner">
       {(block?.title || block?.lead) && <div className="hp-vid-head">
         {block?.title ? <h2>{String(block.title)}</h2> : null}
         {block?.lead ? <p>{String(block.lead)}</p> : null}
       </div>}
       <div className="hp-vid-stage">
-        <button type="button" className="hp-vid-arrow is-prev" onClick={() => go(-1)} disabled={activeIndex === 0} aria-label="上一个视频">
+        <button type="button" className="hp-vid-arrow is-prev" onClick={() => go(-1)} disabled={activeIndex === 0} aria-label={t('videos.prev')}>
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
         </button>
         <div className="hp-vid-track" ref={trackRef} onScroll={onScroll}>
@@ -783,7 +799,7 @@ function HomeVideos({ block }) {
                   原来这里是一枚右上角的"放大"角标（`hp-vid-open`），现在换成中间这枚 ▶ ——
                   它才是"点开就播"的那一下。 */}
               <button type="button" className="hp-vid-play"
-                aria-label={item.title ? `播放：${item.title}` : '播放视频'}
+                aria-label={item.title ? t('videos.play', { title: item.title }) : t('videos.playPlain')}
                 onClick={(event) => { event.stopPropagation(); setOpened(index); }}>
                 <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M8 5.2v13.6L19 12 8 5.2Z" /></svg>
               </button>
@@ -794,21 +810,21 @@ function HomeVideos({ block }) {
             </div>}
           </article>)}
         </div>
-        <button type="button" className="hp-vid-arrow is-next" onClick={() => go(1)} disabled={activeIndex >= items.length - 1} aria-label="下一个视频">
+        <button type="button" className="hp-vid-arrow is-next" onClick={() => go(1)} disabled={activeIndex >= items.length - 1} aria-label={t('videos.next')}>
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
         </button>
       </div>
       {items.length > 1 ? <div className="hp-vid-dots">
-        {items.map((_, index) => <button type="button" key={index} aria-label={`第 ${index + 1} 个视频`}
+        {items.map((_, index) => <button type="button" key={index} aria-label={t('videos.index', { index: index + 1 })}
           className={index === activeIndex ? 'on' : ''} onClick={() => scrollToIndex(index)} />)}
       </div> : null}
     </div>
     {/* 弹层：点当前那张打开（也可以键盘 ← → 换下一条，Esc 关）。
         ⚠️ 弹层里的 <video> 用 preload="metadata" + controls + **不静音**（卡片上是静音自动播，
         这里既然是人主动点开的，就该有声音、可以拖进度）。打开才创建 DOM，关掉即卸载 = 不预加载。 */}
-    {openedItem ? <div className="hp-vid-modal" role="dialog" aria-modal="true" aria-label={openedItem.title || '视频播放'} onClick={close}>
+      {openedItem ? <div className="hp-vid-modal" role="dialog" aria-modal="true" aria-label={openedItem.title || t('videos.playing')} onClick={close}>
       <div className="hp-vid-modal-box" onClick={(event) => event.stopPropagation()}>
-        <button type="button" className="hp-vid-modal-close" onClick={close} aria-label="关闭">×</button>
+          <button type="button" className="hp-vid-modal-close" onClick={close} aria-label={t('works.close')}>×</button>
         <video className="hp-vid-modal-video" src={openedItem.videoUrl || undefined} poster={openedItem.posterUrl || undefined}
           controls autoPlay playsInline preload="metadata" />
         {(openedItem.title || openedItem.desc) && <div className="hp-vid-modal-meta">
@@ -816,9 +832,9 @@ function HomeVideos({ block }) {
           {openedItem.desc ? <p>{openedItem.desc}</p> : null}
         </div>}
         {items.length > 1 ? <div className="hp-vid-modal-nav">
-          <button type="button" onClick={() => setOpened(Math.max(0, opened - 1))} disabled={opened === 0} aria-label="上一个视频">‹ 上一个</button>
+          <button type="button" onClick={() => setOpened(Math.max(0, opened - 1))} disabled={opened === 0} aria-label={t('videos.prev')}>‹ {t('videos.prevText')}</button>
           <span>{opened + 1} / {items.length}</span>
-          <button type="button" onClick={() => setOpened(Math.min(items.length - 1, opened + 1))} disabled={opened >= items.length - 1} aria-label="下一个视频">下一个 ›</button>
+          <button type="button" onClick={() => setOpened(Math.min(items.length - 1, opened + 1))} disabled={opened >= items.length - 1} aria-label={t('videos.next')}>{t('videos.nextText')} ›</button>
         </div> : null}
       </div>
     </div> : null}
@@ -833,6 +849,7 @@ function coverThumb(url) {
 }
 
 function HomeCompare({ block }) {
+  const t = useT();
   const [ref, shown] = useRevealOnce();
   const title = String(block?.title || '');
   const highlight = String(block?.highlight || '');
@@ -862,7 +879,7 @@ function HomeCompare({ block }) {
   const renderUnits = (from, to) => units
     .filter((unit) => unit.start >= from && unit.end <= to)
     .map((unit) => <span className="hp-cmp-unit" key={unit.start} style={{ opacity: typed >= unit.end ? 1 : 0 }}>{unit.value}</span>);
-  return <section className={'hp-cmp' + (shown ? ' is-in' : '')} ref={ref} aria-label="对比">
+  return <section className={'hp-cmp' + (shown ? ' is-in' : '')} ref={ref} aria-label={t('section.compare')}>
     <div className="hp-cmp-inner">
       {(title || block?.lead) && <div className="hp-cmp-head">
         {title ? <h2 className="hp-cmp-title">
@@ -954,7 +971,7 @@ function HomeLanding() {
         <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.08} blur={8} textColor="#ffffff" lineColor="#ffffff" baseColor="#8a8a92" intensity={0.9} shineSize={15} shineFade={45} thickness={1} speed={0.55} followMouse proximity={250} onClick={() => navigate('/marketplace')}>{t('home.cta.courses')}</SpecularButton>
       </div>
     </section>
-    {ready && stats.length ? <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><HomeStatIcon name={item.icon} /><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
+    {ready && stats.length ? <section className="hp-stats" aria-label={t('section.stats')}>{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><HomeStatIcon name={item.icon} /><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
     </div>
     {/* 第二屏「视频展示」（用户口径 2026-09-26：「做一个官网的第二屏，放在第一屏下方，后台可配置
         视频，我要上传多个视频来展示，文案也要可配置」）—— 所以它排在**第一屏之后、三步一栏之前**。
@@ -978,7 +995,7 @@ function HomeLanding() {
   </main>;
 }
 function Home(_props) { return <HomeLanding />; }
-function CTA(){return <section className="cta"><div><Kicker>准备好把 AI 课开起来了吗？</Kicker><h2>让每个孩子<br/><em>用 AI 做出自己的作品</em></h2><p>获取演示账号与示范课包清单。</p></div><Button>联系我们</Button></section>}
+function CTA(){const t=useT();return <section className="cta"><div><Kicker>{t('cta.kicker')}</Kicker><h2>{t('cta.titleTop')}<br/><em>{t('cta.titleEm')}</em></h2><p>{t('cta.desc')}</p></div><Button>{t('cta.button')}</Button></section>}
 
 function Org(){const faqCms=useWebsiteContent('FAQ');
   // ⚠️ FAQ 的 CMS 内容 2026-09-18 晚改成**按端三档**（student / teacher / org），`title` 字段已废弃。
@@ -988,9 +1005,16 @@ function Org(){const faqCms=useWebsiteContent('FAQ');
   // ⚠️ 2026-09-19：**去掉这里的兜底**。原来「student 为空 → 显示内置的 CMS_FALLBACK.FAQ.student」，
   //    于是运营把学生端问题删光之后，/faq 那边那一档没了、这里反而还在显示旧问答 —— 同一份 CMS
   //    在两个页面表现相反。按口径③（空 = 运营故意清空，不回退显示兜底）：空了就整块不显示。
-  const faqItems=cmsList(faqCms.data?.student);const modules=[['机构账号','管理员、教师、学生分级；学生无需自备 API Key','课堂零配置，避免密钥泄露'],['授权次数','按机构开通、按班分给学生；剩余次数不足友好提示','用量可控，适合班级教学'],['课程中心','11 门 / 87 节标准课包；PPT 与 HTML 互动课件','标准化交付，校区可复制'],['管理后台','账号开通、课包浏览、作品发布、用量记录','运营数据透明'],['作品展厅','机构内作品聚合展示与在线预览','成果可视化，利于续费与招新']];return <><Title eyebrow="机构方案" title={<>教培机构如何开<br/><em>青少年 AI 通识课</em></>} desc="平台提供课程、机构账号与用量计费；机构负责招生和教学。8–16 岁学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的作品。"/><main className="inner"><section className="org-intro"><div><i>“</i><h2>不是再找一个聊天网站，<br/>而是一套<span>可管、可教、可展示</span>的课堂产品。</h2><p>学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的游戏、动画、互动故事和硬件作品。</p></div><div className="steps">{[['01','平台开通机构','配置席位、开通授权次数、发布课包权限。'],['02','老师创建学生账号','学生用机构账号登录，即可开始创作。'],['03','按课包授课','从课程中心进入课时，结合阿飞完成当堂作品。'],['04','作品沉淀与展示','优秀作业进入作品社区，形成校区案例库。']].map(x=><div key={x[0]}><b>{x[0]}</b><p><strong>{x[1]}</strong>{x[2]}</p></div>)}</div></section><section className="modules">{modules.map((m,i)=><article key={m[0]}><small>0{i+1}</small><h3>{m[0]}</h3><p>{m[1]}</p><b>{m[2]}</b></article>)}</section>{faqItems.length?<section className="faq"><div><Kicker>常见问题</Kicker><h2>开课前，你可能想知道</h2></div><div>{faqItems.map((item,i)=><details key={item.question||i} open={i===0}><summary>{item.question||''}</summary><p>{item.answer||''}</p></details>)}</div></section>:null}<End title="让你的校区拥有一门可复制的 AI 课" text="联系我们，获取试用账号与示范课包清单。"/></main></>}
+  const t=useT();
+  const { messages }=useI18n();
+  // 这三组（模块/步骤/对比行）是**数组**，走 `localeBlock` 取译文；语言包里没有就退回下面这份中文。
+  const orgSteps=localeBlock(messages,'lists.orgSteps')||[['01','平台开通机构','配置席位、开通授权次数、发布课包权限。'],['02','老师创建学生账号','学生用机构账号登录，即可开始创作。'],['03','按课包授课','从课程中心进入课时，结合阿飞完成当堂作品。'],['04','作品沉淀与展示','优秀作业进入作品社区，形成校区案例库。']];
+  const modules=localeBlock(messages,'lists.orgModules')||[['机构账号','管理员、教师、学生分级；学生无需自备 API Key','课堂零配置，避免密钥泄露'],['授权次数','按机构开通、按班分给学生；剩余次数不足友好提示','用量可控，适合班级教学'],['课程中心','11 门 / 87 节标准课包；PPT 与 HTML 互动课件','标准化交付，校区可复制'],['管理后台','账号开通、课包浏览、作品发布、用量记录','运营数据透明'],['作品展厅','机构内作品聚合展示与在线预览','成果可视化，利于续费与招新']];
+  const faqItems=cmsList(faqCms.data?.student);
+  return <><Title eyebrow={t('org.eyebrow')} title={<>{t('org.titleA')}<br/><em>{t('org.titleEm')}</em></>} desc={t('org.desc')}/><main className="inner"><section className="org-intro"><div><i>“</i><h2>{t('org.quotePre')}<br/>{t('org.quoteMid')}<span>{t('org.quoteEm')}</span>{t('org.quotePost')}</h2><p>{t('org.quoteDesc')}</p></div><div className="steps">{orgSteps.map(x=><div key={x[0]}><b>{x[0]}</b><p><strong>{x[1]}</strong>{x[2]}</p></div>)}</div></section><section className="modules">{modules.map((m,i)=><article key={m[0]}><small>0{i+1}</small><h3>{m[0]}</h3><p>{m[1]}</p><b>{m[2]}</b></article>)}</section>{faqItems.length?<section className="faq"><div><Kicker>{t('org.faqKicker')}</Kicker><h2>{t('org.faqTitle')}</h2></div><div>{faqItems.map((item,i)=><details key={item.question||i} open={i===0}><summary>{item.question||''}</summary><p>{item.answer||''}</p></details>)}</div></section>:null}<End title={t('org.endTitle')} text={t('org.endText')}/></main></>}
 function Works(){
-  const [items,setItems]=useState(FALLBACK_WORKS.map(w=>({title:w[1],description:w[3],studentName:'小创作者',emoji:w[0]})));
+  const t = useT();
+  const [items,setItems]=useState(FALLBACK_WORKS.map(w=>({title:w[1],description:w[3],studentName:t('works.creator'),emoji:w[0]})));
   const [loaded,setLoaded]=useState(false);
   const [error,setError]=useState(null);
   const [query,setQuery]=useState('');
@@ -1008,7 +1032,7 @@ function Works(){
       const vibeItems = vibe.status === 'fulfilled' && Array.isArray(vibe.value?.items) ? vibe.value.items : [];
       const merged = [...vibeItems, ...canvasItems].sort((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured)));
       if (merged.length) setItems(merged);
-      else if (canvas.status === 'rejected' && vibe.status === 'rejected') setError(canvas.reason?.message || '作品加载失败');
+      else if (canvas.status === 'rejected' && vibe.status === 'rejected') setError(canvas.reason?.message || t('works.loadFail'));
       setLoaded(true);
     });
   },[]);
@@ -1036,33 +1060,33 @@ function Works(){
       {/* 类型筛选：全部 + 数据里真有的类型（点一次选中，再点一次取消回「全部」） */}
       <div className="pl-types">
         <button type="button" data-type="all" aria-pressed={kind===''} className={'pl-type'+(kind===''?' on':'')} onClick={()=>setKind('')}>
-          全部<span className="pl-type-n">{items.length}</span>
+          {t('works.all')}<span className="pl-type-n">{items.length}</span>
         </button>
         {['CANVAS','VIBECODING'].map((key)=><button type="button" key={key} data-type={key} aria-pressed={kind===key} className={'pl-type'+(kind===key?' on':'')} onClick={()=>setKind(kind===key?'':key)}>
-          <Icon name={PL_CATEGORY_ICON[key]} size={15} className="pl-type-ico" />{PL_CATEGORY_LABEL[key]}<span className="pl-type-n">{catCounts[key]||0}</span>
+          <Icon name={PL_CATEGORY_ICON[key]} size={15} className="pl-type-ico" />{t(key==='CANVAS'?'works.categoryCanvas':'works.categoryVibecoding')}<span className="pl-type-n">{catCounts[key]||0}</span>
         </button>)}
       </div>
       {/* 搜索：按作品的「标题 / 学生名字」过滤。作品列表本来就是前端把三类作品合并出来的，
           所以过滤也在前端做 —— 不用改接口。 */}
       <div className="works-search">
-        <label className="sr-only" htmlFor="works-search">搜索作品标题或学生名字</label>
-        <input id="works-search" value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="搜索作品标题或学生名字…" autoComplete="off"/>
-        {query?<button type="button" className="works-search-clear" onClick={()=>setQuery('')}>清空</button>:null}
-        {loaded?<span className="works-search-count">共 <b>{matched.length}</b> 件</span>:null}
+        <label className="sr-only" htmlFor="works-search">{t('works.searchLabel')}</label>
+        <input id="works-search" value={query} onChange={(e)=>setQuery(e.target.value)} placeholder={t('works.searchPlaceholder')} autoComplete="off"/>
+        {query?<button type="button" className="works-search-clear" onClick={()=>setQuery('')}>{t('works.clear')}</button>:null}
+        {loaded?<span className="works-search-count">{t('works.countTotal', { count: matched.length })}</span>:null}
       </div>
     </div>
     <div className="works all">{visible.map((w,i)=><Work key={w.id||w.title} work={w} index={i} onOpen={setViewing}/>)}</div>
     {matched.length>PL_PER_PAGE?<div className="pl-pager">
-      <button type="button" className="pl-page" disabled={currentPage<=1} onClick={()=>{setPage(currentPage-1);window.scrollTo({top:0,behavior:'smooth'});}}>上一页</button>
+      <button type="button" className="pl-page" disabled={currentPage<=1} onClick={()=>{setPage(currentPage-1);window.scrollTo({top:0,behavior:'smooth'});}}>{t('common.prev')}</button>
       {plPageNumbers(currentPage,pageCount).map((n,idx)=>n===null
         ? <span className="pl-page-gap" key={'gap'+idx}>…</span>
         : <button type="button" key={n} className={'pl-page'+(n===currentPage?' on':'')} aria-current={n===currentPage?'page':undefined} onClick={()=>{setPage(n);window.scrollTo({top:0,behavior:'smooth'});}}>{n}</button>)}
-      <button type="button" className="pl-page" disabled={currentPage>=pageCount} onClick={()=>{setPage(currentPage+1);window.scrollTo({top:0,behavior:'smooth'});}}>下一页</button>
-      <span className="pl-page-info">第 {currentPage} / {pageCount} 页</span>
+      <button type="button" className="pl-page" disabled={currentPage>=pageCount} onClick={()=>{setPage(currentPage+1);window.scrollTo({top:0,behavior:'smooth'});}}>{t('common.next')}</button>
+      <span className="pl-page-info">{t('common.pageInfo', { page: currentPage, total: pageCount })}</span>
     </div>:null}
-    {!loaded&&<div className="note">✦ <p>正在加载作品…</p></div>}
-    {loaded&&items.length===0&&<div className="note">✦ <p>{error||'暂无公开作品，学生可在作品页开启公开后展示。'}</p></div>}
-    {loaded&&items.length>0&&visible.length===0&&<div className="note">✦ <p>{keyword?'没有搜到匹配的作品。换个标题或学生名字试试，或者':'这个分类下暂时没有作品。点'} <b>{keyword?'清空搜索词':'取消分类'}</b> 看看全部。</p></div>}
+    {!loaded&&<div className="note">✦ <p>{t('works.loading')}</p></div>}
+    {loaded&&items.length===0&&<div className="note">✦ <p>{error||t('works.empty')}</p></div>}
+    {loaded&&items.length>0&&visible.length===0&&<div className="note">✦ <p>{keyword?t('works.noMatchKeywordBefore'):t('works.noMatchCategoryBefore')} <b>{keyword?t('works.clearSearch'):t('works.cancelFilter')}</b> {t('works.seeAll')}</p></div>}
     {viewing?<WorkViewer work={viewing} onClose={()=>setViewing(null)}/>:null}
   </main>;
 }
@@ -1100,6 +1124,7 @@ const hbReducedMotion = () => typeof window !== 'undefined' && typeof window.mat
  */
 const hbLines = (value) => (Array.isArray(value) ? value : String(value || '').split('\n')).map((line) => String(line).trim()).filter(Boolean);
 function Handbook() {
+  const t = useT();
   const cms = useWebsiteContent('HANDBOOK');
   const stored = cms.data || {};
   const fallback = CMS_FALLBACK.HANDBOOK;
@@ -1303,7 +1328,7 @@ function Handbook() {
       </div>
       <div className="hb-skills__cols">
         {skillSubjects.length ? <div className="hb-skills__panel">
-          <h3 className="hb-skills__label">跨学科<span>知识融合</span></h3>
+          <h3 className="hb-skills__label">{t('handbook.skills1a')}<span>{t('handbook.skills1b')}</span></h3>
           <dl className="hb-skills__table">
             {skillSubjects.map((row, index) => <div className="hb-skills__row" key={`${row.subject || 'subject'}-${index}`}>
               <dt>{row.subject}</dt>
@@ -1312,7 +1337,7 @@ function Handbook() {
           </dl>
         </div> : null}
         {skillAbilities.length ? <div className="hb-skills__panel">
-          <h3 className="hb-skills__label">综合能力<span>实践培养</span></h3>
+          <h3 className="hb-skills__label">{t('handbook.skills2a')}<span>{t('handbook.skills2b')}</span></h3>
           <ol className="hb-skills__list">
             {skillAbilities.map((item, index) => <li key={`${item.title || 'ability'}-${index}`}>
               <strong>{item.title}</strong>
@@ -1367,7 +1392,7 @@ function Handbook() {
       <p>{cta.text}</p>
       {/* 按钮去常见问题页（2026-09-19 用户口径：「改成：点击进入常见问题，跳转到常见问题页面」）。
           文案与去向都从 CMS 读（`cta.buttonLabel` / `cta.buttonTo`），运营想换回「联系我们」不用发版。 */}
-      <Button to={cta.buttonTo || '/faq'}>{cta.buttonLabel || '点击进入常见问题'}</Button>
+        <Button to={cta.buttonTo || '/faq'}>{cta.buttonLabel || t('handbook.ctaFallback')}</Button>
     </section>
   </main>;
 }
@@ -1386,8 +1411,11 @@ function Handbook() {
 // FAQ_AUDIENCES 只作为「后台没配时的默认顺序」。
 const FAQ_AUDIENCES = [['student', '学生端'], ['teacher', '老师端'], ['org', '机构端']];
 const FAQ_LABELS = Object.fromEntries(FAQ_AUDIENCES);
+// 档位名的语言 key（2026-10-01 i18n）：渲染时优先用译文，语言包里没有才退回上面那份中文。
+const FAQ_LABEL_KEYS = { student: 'faq.student', teacher: 'faq.teacher', org: 'faq.org' };
 const FAQ_DEFAULT_ORDER = FAQ_AUDIENCES.map(([key]) => key);
 function Faq() {
+  const t = useT();
   const cms = useWebsiteContent('FAQ');
   const content = cms.data || {};
   const [audience, setAudience] = useState('student');
@@ -1404,7 +1432,7 @@ function Faq() {
   // ⭐ 只显示**有内容**的档位（2026-09-19 用户口径：「如果没有内容就隐藏，有内容才出现」）：
   //    后台把某一档的问题全删了，官网就不该再出现那个空档位 —— 否则点进去是一片空白，
   //    访客还以为页面坏了。空 = 运营故意清空（口径③），所以这里**不回退**任何兜底内容。
-  const visible = orderedKeys.filter((key) => itemsOf(key).length).map((key) => [key, FAQ_LABELS[key]]);
+  const visible = orderedKeys.filter((key) => itemsOf(key).length).map((key) => [key, FAQ_LABEL_KEYS[key] ? t(FAQ_LABEL_KEYS[key]) : FAQ_LABELS[key]]);
   // 选中的那一档可能已经被清空/被隐藏了：这时落到第一个还有内容的档位，而不是死守一个空档位。
   const active = visible.some(([key]) => key === audience) ? audience : (visible[0]?.[0] ?? null);
   const items = active ? itemsOf(active) : [];
@@ -1419,11 +1447,11 @@ function Faq() {
   return <main className="fq">
     <div className="fq-aura" aria-hidden="true" />
     <div className="fq-inner">
-      <header className="fq-head"><h1 className="fq-title">常见问题</h1></header>
+      <header className="fq-head"><h1 className="fq-title">{t('faq.title')}</h1></header>
       {/* 档位切换。用真 tablist：点击、键盘左右、读屏都能用（不用参考稿那种纯 div 点击）。
           ⚠️ 渲染的是 visible 而不是 FAQ_AUDIENCES —— 空档位在这一步就已经被剔掉了。
           一档都不剩时整条 tablist 不渲染（页面上只剩标题）。 */}
-      {visible.length ? <div className="fq-tabs" role="tablist" aria-label="按角色查看常见问题">
+      {visible.length ? <div className="fq-tabs" role="tablist" aria-label={t('faq.tabsAria')}>
         {visible.map(([key, label]) => <button key={key} type="button" role="tab" id={'fq-tab-' + key} aria-selected={active === key} aria-controls={'fq-panel-' + active} className={'fq-tab' + (active === key ? ' on' : '')} onClick={() => pickAudience(key)} onKeyDown={(event) => { if (event.key === 'ArrowRight') { event.preventDefault(); stepAudience(1); } else if (event.key === 'ArrowLeft') { event.preventDefault(); stepAudience(-1); } }}>{label}</button>)}
       </div> : null}
       {/* key={active} 让切档时整列重挂载，CSS 入场动画随之重放（纯 keyframes，不用 IntersectionObserver） */}
@@ -1453,6 +1481,7 @@ function Faq() {
 // 所以每次发布换代都不会把它冲掉；这里读同目录的 manifest.json 拿到当前版本/体积/校验值，
 // 而不是把文件名写死在这份代码里（否则每次出包都得改官网并重发）。
 function Download() {
+  const t = useT();
   const [manifest, setManifest] = useState(null);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -1460,7 +1489,7 @@ function Download() {
     fetch('/downloads/manifest.json', { cache: 'no-store' })
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
       .then((data) => { if (live) setManifest(data); })
-      .catch((reason) => { if (live) setError(reason.message || '读取失败'); });
+      .catch((reason) => { if (live) setError(reason.message || t('faq.readError')); });
     return () => { live = false; };
   }, []);
   const windows = manifest?.files?.['win-x64'] || null;
@@ -1476,23 +1505,28 @@ function Download() {
     <section className="dl">
       <article className="dl-card">
         <Icon name="windows" size={30} />
-        <h3>Windows 版</h3>
+        <h3>{t('download.win')}</h3>
         {windows
-          ? <><p>版本 {windows.version || manifest.version} · {mb(windows.size)}</p><a className="button" href={'/downloads/' + windows.name}>下载安装包</a>
-            <small>下载后双击安装；首次打开若提示「未知发布者」，选择「仍要运行」即可（我们正在办理代码签名证书）。</small></>
-          : <><p>{error ? '安装包暂时取不到（' + error + '）' : '正在读取安装包信息…'}</p><small>稍后再试，或联系我们获取安装包。</small></>}
+          ? <><p>{t('download.version')} {windows.version || manifest.version} · {mb(windows.size)}</p><a className="button" href={'/downloads/' + windows.name}>{t('download.download')}</a>
+            <small>{t('download.winHint')}</small></>
+          : <><p>{error ? t('download.errorPrefix', { error }) : t('download.loading')}</p><small>{t('download.retry')}</small></>}
       </article>
       <article className="dl-card">
         <Icon name="apple" size={30} />
-        <h3>Mac 版（Apple 芯片）</h3>
+        <h3>{t('download.mac')}</h3>
         {/* 版本号优先用**这个平台自己**的（清单里每条都带 version）；没有才回落到顶层 version。
             ⚠️ 这样即使哪天只发了一个平台，这一页也不会把另一个平台的版本号写错。 */}
-        {mac ? <><p>版本 {mac.version || manifest.version} · {mb(mac.size)}</p><a className="button" href={'/downloads/' + mac.name}>下载安装包</a></> : <><p>正在准备中</p><small>需要 macOS 12 以上、Apple 芯片（M 系列）。做好会在这一页放出。</small></>}
+        {mac ? <><p>{t('download.version')} {mac.version || manifest.version} · {mb(mac.size)}</p><a className="button" href={'/downloads/' + mac.name}>{t('download.download')}</a></> : <><p>{t('download.macPreparing')}</p><small>{t('download.macHint')}</small></>}
       </article>
     </section>
   </main>;
 }
-function Compare(){const rows=[['工具形态','多个网站 / App 来回切换','同一个工作台里完成：对话 + 预览 + 项目文件'],['课程交付','机构自建教案，平台不管课','课程中心标准课包，课时与课件一体'],['账号与安全','学生自备账号 / API Key，易泄露','机构账号分级，学生无需自备 Key'],['成本控制','个人账号各买各的，月底才知道超支','机构授权次数按班分配，用量有记录和提醒'],['成果沉淀','作业散落在群聊和个人电脑','作品展厅聚合展示，形成校区案例库'],['硬件实践','外部工具和环境另行配置','Arduino / micro:bit 软硬一体课程']];return <><Title eyebrow="选型对比" title={<>为什么不是<br/><em>再找个对话平台</em>？</>} desc="机构评估 AI 课程时，真正要比较的不是一个聊天框，而是一套能不能长期交付的课堂产品。"/><main className="inner"><section className="compare"><div className="compare-head"><span>对比维度</span><span>分散拼凑</span><b>{BRAND_NAME}</b></div>{rows.map(r=><div key={r[0]}><strong>{r[0]}</strong><span>{r[1]}</span><b>✓ {r[2]}</b></div>)}</section><section className="compare-end"><div><small>一句话总结</small><h2>把「创作、课程、账号、计费、作品」<em>统一起来</em>。</h2></div><Button>联系我们</Button></section></main></>}
+function Compare(){
+  const t=useT();
+  const { messages }=useI18n();
+  const rows=localeBlock(messages,'lists.compareRows')||[['工具形态','多个网站 / App 来回切换','同一个工作台里完成：对话 + 预览 + 项目文件'],['课程交付','机构自建教案，平台不管课','课程中心标准课包，课时与课件一体'],['账号与安全','学生自备账号 / API Key，易泄露','机构账号分级，学生无需自备 Key'],['成本控制','个人账号各买各的，月底才知道超支','机构授权次数按班分配，用量有记录和提醒'],['成果沉淀','作业散落在群聊和个人电脑','作品展厅聚合展示，形成校区案例库'],['硬件实践','外部工具和环境另行配置','Arduino / micro:bit 软硬一体课程']];
+  return <><Title eyebrow={t('compare.eyebrow')} title={<>{t('compare.titleTop')}<br/><em>{t('compare.titleEm')}</em>？</>} desc={t('compare.desc')}/><main className="inner"><section className="compare"><div className="compare-head"><span>{t('compare.headDim')}</span><span>{t('compare.headOther')}</span><b>{BRAND_NAME}</b></div>{rows.map(r=><div key={r[0]}><strong>{r[0]}</strong><span>{r[1]}</span><b>✓ {r[2]}</b></div>)}</section><section className="compare-end"><div><small>{t('compare.summaryLabel')}</small><h2>{t('compare.summaryPre')}<em>{t('compare.summaryEm')}</em>{t('compare.summaryPost')}</h2></div><Button>{t('cta.button')}</Button></section></main></>;
+}
 // 官网公开端的内容兜底：公开接口不可用、或后台还没发布过该区块时，官网仍要有东西可看。
 // 键必须与后台「官网内容」的白名单一致（apps/admin/src/shared.jsx 的 WEBSITE_CONTENT_LABELS）。
 // ⚠️ 这里只放**精简可用**的文案；对外那份丰富内容存在数据库（website_contents）里，由后台维护，
@@ -1530,6 +1564,15 @@ const CMS_FALLBACK = {
  */
 function localeCmsBlock(messages, key) {
   const value = messages?.[`cms.${String(key || '').toLowerCase()}`];
+  return value && typeof value === 'object' ? value : null;
+}
+
+/**
+ * 语言包里任意一块（对象**或数组**）。`localeCmsBlock` 是它在 `cms.` 前缀上的特例；
+ * 数组那一路（`lists.compareRows` 等）走这个 —— `t()` 只返回值是字符串的 key。
+ */
+function localeBlock(messages, key) {
+  const value = messages?.[String(key || '')];
   return value && typeof value === 'object' ? value : null;
 }
 
@@ -1590,18 +1633,19 @@ function contactCardsOf(contact){
   return [normalize(contact)];
 }
 function Demo(){
+  const t = useT();
   const cms = useWebsiteContent('CONTACT');
   const cards = contactCardsOf({ ...CONTACT_DEFAULT, ...(cms.data || {}) });
   return <><main className="inner contact-page">
-    <h1 className="sr-only">联系我们</h1>
+    <h1 className="sr-only">{t('contact.srTitle')}</h1>
     <div className="contact-cards">{cards.map((card, index) => <section className="contact-card" key={`${card.name}|${card.phone}|${index}`}>
-      <h2>商务联系</h2>
-      <p className="contact-line"><span>联系人</span>{card.name ? <strong>{card.name}</strong> : <em className="muted">待配置</em>}</p>
+      <h2>{t('contact.business')}</h2>
+      <p className="contact-line"><span>{t('contact.name')}</span>{card.name ? <strong>{card.name}</strong> : <em className="muted">{t('contact.pending')}</em>}</p>
       {/* 电话是**纯文本**（用户口径「应该就是数字就好了啊」）：别加 tel: 链接、也别做成按钮 */}
-      <p className="contact-line"><span>电话</span>{card.phone ? <strong className="contact-phone">{card.phone}</strong> : <em className="muted">待配置</em>}</p>
+      <p className="contact-line"><span>{t('contact.phone')}</span>{card.phone ? <strong className="contact-phone">{card.phone}</strong> : <em className="muted">{t('contact.pending')}</em>}</p>
       <div className="contact-qr">
-        {card.wechatQrUrl ? <img src={card.wechatQrUrl} alt={`${card.name || '商务'}微信二维码`} loading="lazy"/> : <span className="contact-qr__empty">微信二维码待上传</span>}
-        <small>微信扫码加好友</small>
+        {card.wechatQrUrl ? <img src={card.wechatQrUrl} alt={t('contact.qrAlt', { name: card.name || t('contact.qrBusiness') })} loading="lazy"/> : <span className="contact-qr__empty">{t('contact.qrEmpty')}</span>}
+        <small>{t('contact.scanHint')}</small>
       </div>
       {card.note ? <p className="muted contact-note">{card.note}</p> : null}
     </section>)}</div>
@@ -1621,11 +1665,14 @@ function DifficultyStars({level}){
 // ⚠️ 别退回按 `item.deliveryMode` 单值判断：那是课包自己的字段，与课时会不一致
 //    （线上有 series=CANVAS 而课时是 VIBECODING 的错配，会被显示成「画布课程」）。
 const MKT_DELIVERY_LABEL = { CANVAS: '画布课程', VIBECODING: 'VibeCoding 课程' };
-function deliveryModeText(item){
+/** 课堂形式的显示文案：`t` 传进来就用语言包（`mkt.modeCanvas` / `mkt.modeVibecoding`），没有就退回上面那份中文。 */
+function deliveryModeText(item, t){
   const modes = (item?.deliveryModes?.length ? item.deliveryModes : [item?.deliveryMode]).filter((mode) => MKT_DELIVERY_LABEL[mode]);
-  return modes.length ? modes.map((mode) => MKT_DELIVERY_LABEL[mode]).join('/') : '未设置';
+  const label = (mode) => (t ? t(mode === 'CANVAS' ? 'mkt.modeCanvas' : 'mkt.modeVibecoding') : MKT_DELIVERY_LABEL[mode]);
+  return modes.length ? modes.map(label).join('/') : (t ? t('mkt.notSet') : '未设置');
 }
 function Marketplace(){
+  const t = useT();
   const headCms = useWebsiteContent('MARKETPLACE');
   const content = headCms.data || {};
   const [items,setItems]=useState([]);
@@ -1667,8 +1714,8 @@ function Marketplace(){
         用户说的是「灵动作品」那一页（见 Works 里的 .works-cats）。这一页按之前的删改口径
         仍然**没有任何筛选**（参考稿首屏就是「页头 + 课包行」）。别再往这里加回来。 */}
     {loading?<div className="mp-rows">{Array.from({length:4},(_,i)=><div key={i} className="mp-skeleton"/>)}</div>:
-     error?<div className="mp-note">⚠ <div><b>加载失败</b><p>{error}</p></div></div>:
-     items.length===0?<div className="mp-note">✦ <div><b>暂无课包，敬请期待</b><p>灵动课程会陆续上线优质 AI 课包。</p></div></div>:
+     error?<div className="mp-note">⚠ <div><b>{t('mkt.loadFail')}</b><p>{error}</p></div></div>:
+     items.length===0?<div className="mp-note">✦ <div><b>{t('mkt.empty')}</b><p>{t('mkt.emptyHint')}</p></div></div>:
      <><div className="mp-rows">{items.map(item=>{
        // 缩略图两个来源：后台上传的封面资产（coverAssetId）优先，其次贴的外链地址。
        // ⚠️ 公开接口以前**两个都不下发**，所以这个位置一直是空的（只有首字占位块）。
@@ -1680,28 +1727,29 @@ function Marketplace(){
        // ⚠️ 原来第二格是「适学年龄」，但线上 4 个课包全是「未设置」（课包编辑表单里能填、
        //    只是没人填），于是用户要求换成**版本号** —— 版本号在编辑表单里是有的。
        //    换的时候顺手补了列表接口的 version 字段（它以前没下发，不然这格又会是「未设置」）。
-       const params=[['难度',item.difficultyLevel?item.difficultyLevel+' / 5':'未设置'],['版本',item.version||'未设置'],['课时',(item.lessonCount||0)+' 节'],['课堂形式',deliveryModeText(item)]];
+       const params=[[t('mkt.difficulty'),item.difficultyLevel?item.difficultyLevel+' / 5':t('mkt.notSet')],[t('mkt.version'),item.version||t('mkt.notSet')],[t('mkt.lessons'),t('mkt.lessonUnit',{count:item.lessonCount||0})],[t('mkt.delivery'),deliveryModeText(item,t)]];
        return <article className="mp-row" key={item.id}>
          <div className="mp-main">
-           <div className={'mp-cover'+(cover?' has-image':'')} style={cover?{backgroundImage:'url('+cover+')'}:undefined}>{cover?null:<span>{item.title?.charAt(0)||'课'}</span>}</div>
-           <div className="mp-info"><h2 className="mp-name">{item.title}</h2><p className="mp-desc">{item.description||'课包简介待补充。'}</p></div>
+           <div className={'mp-cover'+(cover?' has-image':'')} style={cover?{backgroundImage:'url('+cover+')'}:undefined}>{cover?null:<span>{item.title?.charAt(0)||t('mkt.course').charAt(0)}</span>}</div>
+           <div className="mp-info"><h2 className="mp-name">{item.title}</h2><p className="mp-desc">{item.description||t('mkt.descPending')}</p></div>
            {/* 价格整块已删（用户口径 2026-09-20：「不要显示价格和按课包开通」）：
                这一行现在只有右边那个按钮。 */}
            <div className="mp-side">
              {/* ⚠️ 按钮里**不要箭头**（用户口径 2026-09-18 晚：「我们还有个箭头也要去掉」） */}
-             <Link className="mp-cta" to={'/marketplace/'+item.id}>查看课程列表</Link>
+             <Link className="mp-cta" to={'/marketplace/'+item.id}>{t('mkt.viewList')}</Link>
            </div>
          </div>
          <div className="mp-features"><div className="mp-feature-grid">{params.map(([label,value])=><div className="mp-feature" key={label}><span>{label}</span><strong>{value}</strong></div>)}</div></div>
        </article>;
      })}</div>
-     {totalPages>1&&<div className="mkt-pages mp-pages"><button type="button" disabled={page<=1} aria-label="上一页" onClick={()=>setPage(p=>p-1)}>上一页</button><span>{page} / {totalPages}</span><button type="button" disabled={page>=totalPages} aria-label="下一页" onClick={()=>setPage(p=>p+1)}>下一页</button></div>}
+     {totalPages>1&&<div className="mkt-pages mp-pages"><button type="button" disabled={page<=1} aria-label={t('common.prev')} onClick={()=>setPage(p=>p-1)}>{t('common.prev')}</button><span>{page} / {totalPages}</span><button type="button" disabled={page>=totalPages} aria-label={t('common.next')} onClick={()=>setPage(p=>p+1)}>{t('common.next')}</button></div>}
      </>}
     </div>
   </main>;
 }
 
 function MarketplaceDetail(){
+  const t = useT();
   const pathParts=window.location.pathname.split('/');
   const id=pathParts[pathParts.length-1];
   const [data,setData]=useState(null);
@@ -1715,32 +1763,32 @@ function MarketplaceDetail(){
       .catch(e=>{if(live){setError(e.message);setLoading(false);}});
     return()=>{live=false};
   },[id]);
-  if(loading) return <><Title eyebrow="课程详情" title={<>加载中…</>} desc=""/><main className="inner"><div className="mkt-grid">{Array.from({length:4},(_,i)=><div key={i} className="mkt-skeleton"/>)}</div></main></>;
-  if(error) return <><Title eyebrow="课程详情" title={<>未找到</>} desc={error}/><main className="inner"><div className="note">⚠ <div><b>无法加载课程</b><p>{error}</p></div><Link to="/marketplace" className="button" style={{marginTop:'20px'}}>返回课程广场</Link></div></main></>;
+  if(loading) return <><Title eyebrow={t('meta.courseDetail')} title={<>{t('mkt.loading')}</>} desc=""/><main className="inner"><div className="mkt-grid">{Array.from({length:4},(_,i)=><div key={i} className="mkt-skeleton"/>)}</div></main></>;
+  if(error) return <><Title eyebrow={t('meta.courseDetail')} title={<>{t('mkt.notFound')}</>} desc={error}/><main className="inner"><div className="note">⚠ <div><b>{t('mkt.cantLoad')}</b><p>{error}</p></div><Link to="/marketplace" className="button" style={{marginTop:'20px'}}>{t('mkt.viewList')}</Link></div></main></>;
   const d=data;
   // ⚠️ 2026-09-18 晚用户口径（图2）：**原来那个页头整块删掉了**（「课程广场」眉题 + 课包标题 + 简介）——
   // 课包名称改到下面那排信息（图3）里当标题，「开始学习」那一条也一起删（图1 红框）。
   return <main className="inner">
-    <Link to="/marketplace" className="back-link">← 返回课程广场</Link>
+    <Link to="/marketplace" className="back-link">{t('mkt.back')}</Link>
     <div className="mkt-detail">
-      {(d.coverAssetId || d.coverImageUrl)&&<div className="mkt-detail-cover" role="img" aria-label={`${d.title || '课程'}封面`} style={{backgroundImage:'url('+(d.coverAssetId ? '/api/public/file-assets/'+d.coverAssetId+'/download' : d.coverImageUrl)+')'}}/>}
+      {(d.coverAssetId || d.coverImageUrl)&&<div className="mkt-detail-cover" role="img" aria-label={t('mkt.coverAlt', { title: d.title || t('mkt.course') })} style={{backgroundImage:'url('+(d.coverAssetId ? '/api/public/file-assets/'+d.coverAssetId+'/download' : d.coverImageUrl)+')'}}/>}
       <div className="mkt-detail-info">
         <h1 className="mkt-detail-title">{d.title}</h1>
         {d.description&&<p className="mkt-detail-desc">{d.description}</p>}
-        <div className="mkt-detail-row"><span className="mkt-label2">难度</span><DifficultyStars level={d.difficultyLevel}/></div>
+        <div className="mkt-detail-row"><span className="mkt-label2">{t('mkt.difficulty')}</span><DifficultyStars level={d.difficultyLevel}/></div>
         {/* 适学年龄整行已删（用户口径 2026-09-20：「适学年龄删除」）——
             线上 4 个课包全是「未设置」，留着只是一行空话。 */}
-        {(d.tags||[]).length>0&&<div className="mkt-detail-row"><span className="mkt-label2">标签</span><div className="mkt-chips">{(d.tags||[]).map(t=><span key={t} className="mkt-tag">{t}</span>)}</div></div>}
-        {d.version&&<div className="mkt-detail-row"><span className="mkt-label2">版本</span><span>{d.version}</span></div>}
-        <div className="mkt-detail-row"><span className="mkt-label2">课时</span><span>{d.lessonCount||0} 节</span></div>
+        {(d.tags||[]).length>0&&<div className="mkt-detail-row"><span className="mkt-label2">{t('mkt.tags')}</span><div className="mkt-chips">{(d.tags||[]).map(tag=><span key={tag} className="mkt-tag">{tag}</span>)}</div></div>}
+        {d.version&&<div className="mkt-detail-row"><span className="mkt-label2">{t('mkt.version')}</span><span>{d.version}</span></div>}
+        <div className="mkt-detail-row"><span className="mkt-label2">{t('mkt.lessons')}</span><span>{t('mkt.lessonUnit',{count:d.lessonCount||0})}</span></div>
         {/* 参考价格整行已删（用户口径 2026-09-20：「参考价格也删除」） */}
       </div>
     </div>
     {/* 课时列表：**不显示那个「01 / 02」编号块**（用户口径：图1 红框那个编号删除） */}
-    {(d.lessons||[]).length>0&&<div className="mkt-lessons"><h2>课程内容</h2>{(d.lessons||[]).map((l)=><div key={l.id} className="mkt-lesson"><div className="mkt-lesson-body"><h3>{l.title}</h3>{l.summary&&<p className="mkt-lesson-summary">{l.summary}</p>}{l.lessonContent&&<p className="mkt-lesson-content">{String(l.lessonContent).slice(0,300)}{l.lessonContent&&l.lessonContent.length>300?'…':''}</p>}</div></div>)}</div>}
+    {(d.lessons||[]).length>0&&<div className="mkt-lessons"><h2>{t('mkt.content')}</h2>{(d.lessons||[]).map((l)=><div key={l.id} className="mkt-lesson"><div className="mkt-lesson-body"><h3>{l.title}</h3>{l.summary&&<p className="mkt-lesson-summary">{l.summary}</p>}{l.lessonContent&&<p className="mkt-lesson-content">{String(l.lessonContent).slice(0,300)}{l.lessonContent&&l.lessonContent.length>300?'…':''}</p>}</div></div>)}</div>}
   </main>;
 }
-function End({title,text}){return <section className="end"><h2>{title}</h2><p>{text}</p><Button>联系我们 · 开通试用</Button></section>}
+function End({title,text}){const t=useT();return <section className="end"><h2>{title}</h2><p>{text}</p><Button>{t('end.button')}</Button></section>}
 // 官网匿名统计（含同意横幅与埋点）已按用户要求**彻底删除**（2026-09-16）：
 // 前端不再有任何上报入口，服务端的接收端点与平台端「官网转化」看板也一并下线，只保留历史表与数据。
 //
@@ -1761,10 +1809,15 @@ function LearnProjectPage({ api }) {
 }
 export function App(){
   const loc = useLocation();
-  const { locale } = useI18n();
+  const { locale, messages } = useI18n();
   const t = useT();
   const LOCALE_META = LOCALES.find((item) => item.code === locale) || LOCALES[0];
-  const localesTitle = locale === DEFAULT_LOCALE ? '' : `${t('cms.home.heroTitle')} ${t('cms.home.heroAccent')}`.trim() + ' · ' + BRAND_NAME;
+  // ⚠️ 2026-10-01 用户报的 bug（图3）：浏览器标签上显示的是 `cms.home.heroTitle` 这个**key**。
+  //   真因：首页那块 CMS 文案在语言包里是**一整个对象**（key 就叫 `cms.home`），
+  //   而这里按 `cms.home.heroTitle` 去取 —— 取不到就回落成 key 本身，于是标签成了那串英文。
+  //   现在先把整块取出来，再用块里的字段拼；取不到就退回中文品牌名（不带前缀的简体那条路不变）。
+  const homeCms = locale === DEFAULT_LOCALE ? null : localeCmsBlock(messages, 'home');
+  const homeCmsTitle = homeCms ? `${homeCms.heroTitle || ''} ${homeCms.heroAccent || ''}`.trim() : '';
   const navigate = useNavigate();
   const [session, setSession] = useState(readUserSession);
   const api = useMemo(() => createApiClient({ getToken: () => session?.token || null, onUnauthorized: () => { removeUserSession(); setSession(null); } }), [session]);
@@ -1773,30 +1826,33 @@ export function App(){
     setSession(null);
   }
   useEffect(() => {
+    // 标题一次一页一个 key（`meta.*` 在三份语言包里都有）：
+    // 简体那份与改动前的字面量逐字一致，所以中文站的标签没有任何变化。
+    const withBrand = (key) => `${t(key)} · ${BRAND_NAME}`;
     const titles = {
-      '/': BRAND_NAME + ' · ' + BRAND_TAGLINE,
-      '/login': '登录 · ' + BRAND_NAME,
-      '/marketplace': '灵动课程 · ' + BRAND_NAME,
-      '/org': '机构方案 · ' + BRAND_NAME,
-      '/works': '灵动作品 · ' + BRAND_NAME,
-      '/handbook': '机构手册 · ' + BRAND_NAME,
-      '/faq': '常见问题 · ' + BRAND_NAME,
-      '/download': '下载创作客户端 · ' + BRAND_NAME,
-      '/compare': '选型对比 · ' + BRAND_NAME,
-      '/demo': '联系我们 · ' + BRAND_NAME,
-      '/terms': '用户协议 · ' + BRAND_NAME,
-      '/privacy': '隐私政策 · ' + BRAND_NAME,
-      '/minors': '儿童 / 未成年人说明 · ' + BRAND_NAME,
-      '/learn': '灵动学习 · ' + BRAND_NAME,
-      '/my-courses': '我的课程 · ' + BRAND_NAME,
-      '/my-home': '我的主页 · ' + BRAND_NAME,
-      '/learn/canvas': '画布上课 · ' + BRAND_NAME,
+      '/': homeCmsTitle ? `${homeCmsTitle} · ${BRAND_NAME}` : BRAND_NAME + ' · ' + BRAND_TAGLINE,
+      '/login': withBrand('meta.login'),
+      '/marketplace': withBrand('meta.marketplace'),
+      '/org': withBrand('meta.org'),
+      '/works': withBrand('meta.works'),
+      '/handbook': withBrand('meta.handbook'),
+      '/faq': withBrand('meta.faq'),
+      '/download': withBrand('meta.download'),
+      '/compare': withBrand('meta.compare'),
+      '/demo': withBrand('meta.demo'),
+      '/terms': withBrand('meta.terms'),
+      '/privacy': withBrand('meta.privacy'),
+      '/minors': withBrand('meta.minors'),
+      '/learn': withBrand('meta.learn'),
+      '/my-courses': withBrand('meta.myCourses'),
+      '/my-home': withBrand('meta.myHome'),
+      '/learn/canvas': withBrand('meta.canvas'),
     };
     // 动态路由（课程/作品详情/学生主页）按前缀回落：否则它们会退到首页标题，浏览器标签上看着不像同一个站。
-    const title = localesTitle || titles[loc.pathname]
-      || (loc.pathname.startsWith('/marketplace/') ? '课程详情 · ' + BRAND_NAME : '')
-      || (loc.pathname.startsWith('/works/') ? '作品详情 · ' + BRAND_NAME : '')
-      || (loc.pathname.startsWith('/u/') ? '学生主页 · ' + BRAND_NAME : '')
+    const title = titles[loc.pathname]
+      || (loc.pathname.startsWith('/marketplace/') ? withBrand('meta.courseDetail') : '')
+      || (loc.pathname.startsWith('/works/') ? withBrand('meta.workDetail') : '')
+      || (loc.pathname.startsWith('/u/') ? withBrand('meta.studentHome') : '')
       || titles['/'];
     document.title = title;
     const robots = document.querySelector('meta[name=robots]');
@@ -1804,14 +1860,15 @@ export function App(){
     const description = document.querySelector('meta[name=description]');
     if (description) description.setAttribute('content', locale === DEFAULT_LOCALE
       ? BRAND_NAME + '：面向教培机构与学校的青少年 AI 创作课堂，用中文对话、VibeCoding 与项目式学习，让孩子从灵感进入作品。'
-      : `${BRAND_NAME} · ${t('cms.home.heroDescription')}`);
+      // ⚠️ 同一类取法错误（取 `cms.home.heroDescription` 只会拿到 key）—— 一起按整块取。
+      : `${BRAND_NAME} · ${homeCms?.heroDescription || BRAND_TAGLINE}`);
     const canonical = document.querySelector('link[rel=canonical]');
     if (canonical) canonical.setAttribute('href', window.location.origin + (loc.pathname === '/' ? '' : loc.pathname));
     const ogTitle = document.querySelector('meta[property="og:title"]');
     if (ogTitle) ogTitle.setAttribute('content', title);
     const ogUrl = document.querySelector('meta[property="og:url"]');
     if (ogUrl) ogUrl.setAttribute('content', window.location.origin + (loc.pathname === '/' ? '' : loc.pathname));
-  }, [loc.pathname]);
+  }, [loc.pathname, locale, t, homeCmsTitle, homeCms]);
   // ⚠️ hook 必须全部写在下面的提前 return 之前：学生会话过期时 App 会在这里提前返回，
   // 若 hook 在其后，同一次渲染里 hook 数从 7 变 6，React 抛 #300 直接白屏（而不是跳登录页）。
   const [showStudentMenu, setShowStudentMenu] = useState(false);
@@ -1841,17 +1898,17 @@ export function App(){
   if ((loc.pathname.startsWith('/learn') || loc.pathname === '/account') && !session && !isTeacherPrepPath) {
     return <Navigate to='/login?as=student' replace />;
   }
-  const displayName = session?.user?.displayName || session?.user?.login || '用户';
+  const displayName = session?.user?.displayName || session?.user?.login || t('account.user');
   const userName = String(displayName);
   // 「我的课程」页（学生登录后的落地页）；原先这里写的是 '/learn'，见下面路由处的口径变更
   // 用户口径 2026-09-20：「学习统计」整个删掉（下拉项、页面、路由、标题一并去掉）
   const studentMenuItems = [
-    { to: '/learn', label: '我的课程' },
+    { to: '/learn', label: t('account.menuCourses') },
     // ⚠️ 2026-09-27 用户口径：「现在不需要『我的作品』了，就是叫『我的主页』」——
     //    名字与**路径**一起改了（`/my-works` → `/my-home`），老地址留着重定向（见路由那两行）。
-    { to: '/my-home', label: '我的主页' },
+    { to: '/my-home', label: t('account.menuHome') },
     // 2026-09-23 用户口径：学生创建账号后要能自己改密码（之前只有接口、没有入口）
-    { to: '/account', label: '账号安全' },
+    { to: '/account', label: t('account.menuSecurity') },
   ];
 
   // 账号徽标（用户口径 2026-09-18 晚，第三次调整）：
@@ -1876,7 +1933,7 @@ export function App(){
             ))}
             <div className='menu-divider'></div>
             <button className='menu-item logout-item' role='menuitem' onClick={() => { setShowStudentMenu(false); logout(); }}>
-              <span className='menu-label'>退出登录</span>
+              <span className='menu-label'>{t('account.logout')}</span>
             </button>
           </div>
         )}
@@ -1884,7 +1941,7 @@ export function App(){
     ) : (
       <span className='header-user'>
         <span className='header-user-name'>{userName}</span>
-        <button className='text-button' onClick={logout}>退出</button>
+        <button className='text-button' onClick={logout}>{t('account.logoutShort')}</button>
       </span>
     )
   ) : <AuthEntries/>;
@@ -1902,7 +1959,7 @@ export function App(){
   const isFullPage = loc.pathname.startsWith('/learn/canvas') || loc.pathname.startsWith('/learn/prep');
   return (
     <div className='site'>
-      {INTERNAL_TEST && <div className='internal-test-banner' role='status'>内部测试环境 · 不代表正式服务</div>}
+      {INTERNAL_TEST && <div className='internal-test-banner' role='status'>{t('account.internalTest')}</div>}
       {!isFullPage && <Header userBadge={userBadge} signedIn={Boolean(session)} />}
       <Routes>
         <Route path='/' element={<Home/>}/>

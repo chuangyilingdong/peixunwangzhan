@@ -22,13 +22,14 @@ export function LanguageSwitcher({ variant = 'topbar' }) {
   }
 
   return <div className={'lang-pick' + (open ? ' is-open' : '')}>
-    {/* ⚠️ 顶栏这颗**只显示短标**（简 / 繁 / EN）：带全称的话右侧按钮组会变宽，
-        1440px 下与绝对居中的导航叠在一起（p115 当场抓到 —— 那个「联系我们」当年就是这么被删掉的）。
-        全称放在 title 与下拉里。 */}
+    {/* ⭐ 2026-10-01 用户口径：「图1 应该放在图2 旁边的位置，**直接写全称例如：繁体中文**」——
+        它现在挨着右上角的账号/登录按钮，按钮上就是当前语言的全称（不再用「简 / 繁 / EN」短标）。
+        ⚠️ 这段顶栏是 `position:absolute` 居中导航 + 右侧按钮组，加宽右侧**必须**跑 p115
+        （当年「联系我们」就是在 1440px 下被这套布局挤掉才删的）。 */}
     <button type="button" className="lang-pick__btn" aria-haspopup="listbox" aria-expanded={open}
-      aria-label={t('lang.switchTo', { name: current.label })} title={current.label}
+      aria-label={t('lang.switchTo', { name: current.label })} title={t('lang.switchTo', { name: current.label })}
       disabled={busy} onClick={() => setOpen((value) => !value)}>
-      <span className="lang-pick__short">{current.short}</span>
+      <span className="lang-pick__short">{current.label}</span>
     </button>
     {open ? <>
       {/* 点外面收起：一层透明的遮罩，比监听 document 更省事，也不会和抽屉菜单打架 */}

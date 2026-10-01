@@ -113,5 +113,421 @@
   "cms.marketplace": {
     "title": "靈動Ai學院課包展示",
     "lead": "靈動Ai堅持自研國內精品Ai課程，持續探索適合青少年Ai培訓體系。"
+  },
+  "meta.login": "登入",
+  "meta.marketplace": "靈動課程",
+  "meta.org": "機構方案",
+  "meta.works": "靈動作品",
+  "meta.handbook": "機構手冊",
+  "meta.faq": "常見問題",
+  "meta.download": "下載創作客戶端",
+  "meta.compare": "選型對比",
+  "meta.demo": "聯絡我們",
+  "meta.terms": "使用者條款",
+  "meta.privacy": "隱私政策",
+  "meta.minors": "兒童 / 未成年人說明",
+  "meta.learn": "靈動學習",
+  "meta.myCourses": "我的課程",
+  "meta.myHome": "我的主頁",
+  "meta.canvas": "畫布上課",
+  "meta.courseDetail": "課程詳情",
+  "meta.workDetail": "作品詳情",
+  "meta.studentHome": "學生主頁",
+  "common.prev": "上一頁",
+  "common.next": "下一頁",
+  "common.pageInfo": "第 {page} / {total} 頁",
+  "works.all": "全部",
+  "works.searchLabel": "搜尋作品標題或學生名字",
+  "works.searchPlaceholder": "搜尋作品標題或學生名字…",
+  "works.clear": "清空",
+  "works.countTotal": "共 {count} 件",
+  "works.loading": "正在載入作品…",
+  "works.empty": "暫無公開作品，學生可在作品頁開啟公開後展示。",
+  "works.noMatchKeywordBefore": "沒有搜到符合的作品。換個標題或學生名字試試，或者",
+  "works.noMatchCategoryBefore": "這個分類暫時沒有作品。點",
+  "works.clearSearch": "清空搜尋詞",
+  "works.cancelFilter": "取消分類",
+  "works.seeAll": "看看全部。",
+  "works.creator": "小創作者",
+  "works.featured": "精選作品",
+  "works.openInNew": "打不開？在新視窗開啟 ↗",
+  "works.close": "關閉",
+  "works.viewerAria": "檢視作品：{title}",
+  "works.openAria": "開啟作品：{title}",
+  "works.externalAria": "在原平台開啟：{title}",
+  "works.categoryCanvas": "畫布作品",
+  "works.categoryVibecoding": "VibeCoding 作品",
+  "works.typeCanvas": "畫布",
+  "works.typeVibecoding": "VibeCoding",
+  "works.typeImage": "圖片",
+  "works.typeVideo": "影片",
+  "works.typeWebpage": "網頁",
+  "works.typeMiniGame": "小遊戲",
+  "works.typePpt": "PPT",
+  "works.typeBrandDesign": "品牌設計",
+  "works.typeMusic": "音樂",
+  "works.typePodcast": "AI 播客",
+  "works.typeAgent": "智能體",
+  "works.typeWorkflow": "工作流",
+  "works.typePictureBook": "繪本",
+  "works.docPptx": "簡報",
+  "works.docXlsx": "試算表",
+  "works.docDocx": "文件",
+  "works.docPlay": "可線上玩",
+  "download.win": "Windows 版",
+  "download.mac": "Mac 版（Apple 晶片）",
+  "download.version": "版本",
+  "download.download": "下載安裝包",
+  "download.winHint": "下載後雙擊安裝；首次開啟若提示「未知發行者」，選擇「仍要執行」即可（我們正在辦理程式碼簽章憑證）。",
+  "download.macPreparing": "正在準備中",
+  "download.macHint": "需要 macOS 12 以上、Apple 晶片（M 系列）。完成後會在本頁放出。",
+  "download.loading": "正在讀取安裝包資訊…",
+  "download.retry": "稍後再試，或聯絡我們取得安裝包。",
+  "download.errorPrefix": "安裝包暫時取不到（{error}）",
+  "faq.title": "常見問題",
+  "faq.tabsAria": "依角色檢視常見問題",
+  "faq.student": "學生端",
+  "faq.teacher": "老師端",
+  "faq.org": "機構端",
+  "faq.readError": "讀取失敗",
+  "faq.askUs": "還有別的問題？",
+  "faq.askUsAction": "聯絡我們",
+  "handbook.skills1a": "跨學科",
+  "handbook.skills1b": "知識融合",
+  "handbook.skills2a": "綜合能力",
+  "handbook.skills2b": "實踐培養",
+  "contact.srTitle": "聯絡我們",
+  "contact.business": "商務聯絡",
+  "contact.name": "聯絡人",
+  "contact.phone": "電話",
+  "contact.pending": "待設定",
+  "contact.qrAlt": "{name} 微信 QR Code",
+  "contact.qrBusiness": "商務",
+  "contact.qrEmpty": "微信 QR Code 待上傳",
+  "contact.scanHint": "微信掃碼加好友",
+  "compare.eyebrow": "選型對比",
+  "compare.titleTop": "為什麼不是",
+  "compare.titleEm": "再找個對話平台",
+  "compare.desc": "機構評估 AI 課程時，真正要比較的不是一個聊天框，而是一套能不能長期交付的課堂產品。",
+  "compare.headDim": "對比維度",
+  "compare.headOther": "分散拼湊",
+  "compare.summaryLabel": "一句話總結",
+  "compare.summaryPre": "把「創作、課程、帳號、計費、作品」",
+  "compare.summaryEm": "統一起來",
+  "compare.summaryPost": "。",
+  "org.eyebrow": "機構方案",
+  "org.titleA": "教培機構如何開",
+  "org.titleEm": "青少年 AI 通識課",
+  "org.desc": "平台提供課程、機構帳號與用量計費；機構負責招生與教學。8–16 歲學生用中文與 AI 夥伴對話，當堂做出可展示的作品。",
+  "org.quotePre": "不是再找一個聊天網站，",
+  "org.quoteMid": "而是一套",
+  "org.quoteEm": "可管、可教、可展示",
+  "org.quotePost": "的課堂產品。",
+  "org.quoteDesc": "學生用中文與 AI 夥伴對話，當堂做出可展示的遊戲、動畫、互動故事和硬體作品。",
+  "org.faqKicker": "常見問題",
+  "org.faqTitle": "開課前，你可能想知道",
+  "org.endTitle": "讓你的校區擁有一門可複製的 AI 課",
+  "org.endText": "聯絡我們，取得試用帳號與示範課包清單。",
+  "cta.kicker": "準備好把 AI 課開起來了嗎？",
+  "cta.titleTop": "讓每個孩子",
+  "cta.titleEm": "用 AI 做出自己的作品",
+  "cta.desc": "取得示範帳號與示範課包清單。",
+  "cta.button": "聯絡我們",
+  "end.button": "聯絡我們 · 開通試用",
+  "mkt.loadFail": "載入失敗",
+  "mkt.empty": "暫無課包，敬請期待",
+  "mkt.emptyHint": "靈動課程會陸續上線優質 AI 課包。",
+  "mkt.difficulty": "難度",
+  "mkt.version": "版本",
+  "mkt.lessons": "課時",
+  "mkt.delivery": "課堂形式",
+  "mkt.tags": "標籤",
+  "mkt.notSet": "未設定",
+  "mkt.lessonUnit": "{count} 節",
+  "mkt.descPending": "課包簡介待補充。",
+  "mkt.viewList": "檢視課程列表",
+  "mkt.back": "← 返回課程廣場",
+  "mkt.loading": "載入中…",
+  "mkt.notFound": "找不到",
+  "mkt.cantLoad": "無法載入課程",
+  "mkt.coverAlt": "{title} 封面",
+  "mkt.course": "課程",
+  "mkt.content": "課程內容",
+  "mkt.modeCanvas": "畫布課程",
+  "mkt.modeVibecoding": "VibeCoding 課程",
+  "section.steps": "我們怎麼開課",
+  "section.videos": "影片展示",
+  "section.compare": "對比",
+  "section.stats": "平台數據",
+  "videos.prev": "上一個影片",
+  "videos.next": "下一個影片",
+  "videos.prevText": "上一個",
+  "videos.nextText": "下一個",
+  "videos.play": "播放：{title}",
+  "videos.playPlain": "播放影片",
+  "videos.playing": "影片播放",
+  "videos.index": "第 {index} 個影片",
+  "login.back": "← 返回官網首頁",
+  "login.titleStudent": "學生登入",
+  "login.titleStaff": "機構 / 老師登入",
+  "login.descStudent": "登入後繼續你的創作旅程。",
+  "login.descStaff": "登入後進入機構工作台。",
+  "login.switchStaffPre": "我是機構 / 老師，",
+  "login.switchStaffLink": "去機構後台",
+  "login.switchStudentPre": "我是學生，",
+  "login.switchStudentLink": "去學生登入",
+  "login.failed": "登入失敗",
+  "account.menuCourses": "我的課程",
+  "account.menuHome": "我的主頁",
+  "account.menuSecurity": "帳號安全",
+  "account.logout": "登出",
+  "account.logoutShort": "登出",
+  "account.user": "使用者",
+  "account.internalTest": "內部測試環境 · 不代表正式服務",
+  "lists.compareRows": [
+    [
+      "工具形態",
+      "多個網站 / App 來回切換",
+      "同一個工作台完成：對話 + 預覽 + 專案檔案"
+    ],
+    [
+      "課程交付",
+      "機構自建教案，平台不管課",
+      "課程中心標準課包，課時與課件一體"
+    ],
+    [
+      "帳號與安全",
+      "學生自備帳號 / API Key，易外洩",
+      "機構帳號分級，學生無需自備 Key"
+    ],
+    [
+      "成本控制",
+      "個人帳號各買各的，月底才知道超支",
+      "機構授權次數按班分配，用量有紀錄和提醒"
+    ],
+    [
+      "成果沉澱",
+      "作業散落在群組和個人電腦",
+      "作品展廳聚合展示，形成校區案例庫"
+    ],
+    [
+      "硬體實踐",
+      "外部工具和環境另行設定",
+      "Arduino / micro:bit 軟硬一體課程"
+    ]
+  ],
+  "lists.orgSteps": [
+    [
+      "01",
+      "平台開通機構",
+      "設定席位、開通授權次數、發佈課包權限。"
+    ],
+    [
+      "02",
+      "老師建立學生帳號",
+      "學生用機構帳號登入，即可開始創作。"
+    ],
+    [
+      "03",
+      "按課包授課",
+      "從課程中心進入課時，完成當堂作品。"
+    ],
+    [
+      "04",
+      "作品沉澱與展示",
+      "優秀作業進入作品社群，形成校區案例庫。"
+    ]
+  ],
+  "lists.orgModules": [
+    [
+      "機構帳號",
+      "管理員、教師、學生分級；學生無需自備 API Key",
+      "課堂零設定，避免金鑰外洩"
+    ],
+    [
+      "授權次數",
+      "按機構開通、按班分給學生；剩餘次數不足友善提示",
+      "用量可控，適合班級教學"
+    ],
+    [
+      "課程中心",
+      "11 門 / 87 節標準課包；PPT 與 HTML 互動課件",
+      "標準化交付，校區可複製"
+    ],
+    [
+      "管理後台",
+      "帳號開通、課包瀏覽、作品發佈、用量紀錄",
+      "營運數據透明"
+    ],
+    [
+      "作品展廳",
+      "機構內作品聚合展示與線上預覽",
+      "成果可視化，利於續約與招生"
+    ]
+  ],
+  "works.loadFail": "作品載入失敗",
+  "handbook.ctaFallback": "點擊進入常見問題",
+  "cms.faq": {
+    "student": [],
+    "teacher": [],
+    "org": [
+      {
+        "question": "學生需要自備 API Key 嗎？",
+        "answer": "不需要。學生帳號由機構建立即可，API Key 與算力我們已經內建好了，直接上課即可。"
+      },
+      {
+        "question": "平台提供哪些課程？",
+        "answer": "靈動課程提供標準課包（含 PPT 與教案課件），機構可按課包直接排課。"
+      },
+      {
+        "question": "你們的 AI 課程具體是什麼體系？適合多大的孩子？",
+        "answer": "目前整套課程專為 8—16 歲青少年設計，共 48 節課。第一階段 AI 魔法啟蒙營（16 課）、第二階段 AI 人文數位探索營（16 課）、第三階段 AI 全端應用實戰營（16 課）。"
+      },
+      {
+        "question": "上課形式是什麼樣的？我們的老師能直接帶嗎？",
+        "answer": "採用「標準化系統 + 老師引導」的授課模式，現有程式老師經過專業培訓就能上崗。系統內建完整的課件、分步操作引導、AI 工具、素材庫、作品管理，老師不需要自己做課件、找工具、寫程式，只需要按照教案引導課堂、解答問題。"
+      },
+      {
+        "question": "系統安全嗎？會不會有不良內容？家長會不會有顧慮？",
+        "answer": "系統是封閉的教學專用環境，所有內容、工具、素材都經過教研團隊嚴格審核，無法存取外部網站，沒有廣告、沒有不良內容，完全符合青少年網路安全標準。"
+      },
+      {
+        "question": "AI 技術更新這麼快，課程會不會很快過時？",
+        "answer": "這正是我們系統模式的優勢。教研團隊持續追蹤 AI 技術前沿，依 AI 產品形式的改變和模型迭代快速更新課程內容，系統內的工具、課件同步更新，合作機構免費享有所有更新。"
+      }
+    ]
+  },
+  "cms.handbook": {
+    "hero": {
+      "line1": "讓 AI 創作課、程式課",
+      "line2": "真正進課堂",
+      "loaderWord": "讓 AI 真正進入課堂",
+      "imageAlt": "暗色科技氛圍中的創作路徑主視覺",
+      "imageUrl": "/assets/handbook/hero.webp"
+    },
+    "about": {
+      "index": "01 / 關於",
+      "headingLines": [
+        "從試點走向普及，",
+        "機構需要的不只是工具"
+      ],
+      "body": "國家和教育部門持續推動中小學人工智慧教育，課程要能開齊開足，生成式 AI 要可用、可管。機構真正需要的是：能進課表、能管住帳號與用量、每節課都有作品的完整方案。",
+      "imageAlt": "AI 創意思維與數據面板",
+      "imageUrl": "/api/public/file-assets/file_2fb8cbc1d7ec4ae0b5ec/download"
+    },
+    "policy": {
+      "eyebrow": "政策",
+      "headingLines": [
+        "國家在推，",
+        "各地都在落"
+      ],
+      "body": "教育部辦公廳印發《關於加強中小學人工智慧教育的通知》之後，北京、上海、廣東、深圳、浙江率先落地，江蘇、山東、天津、福建、重慶、西安等地陸續跟進，都把人工智慧課寫進了中小學課表。以下是各地已公開的文件。"
+    },
+    "poster": {
+      "title": "為什麼現在就是開 AI 課的好時機？",
+      "caption": "政策、家長認知、市場供給與窗口期判斷",
+      "imageAlt": "AI 時代的孩子從這裡起步：政策層面 / 家長認知 / 市場供給 / 窗口期判斷",
+      "eyebrow": "",
+      "imageUrl": "/assets/handbook/poster.webp"
+    },
+    "work": {
+      "introLines": [
+        "開課管課",
+        "沉作品",
+        "一體化交付"
+      ],
+      "cards": [
+        {
+          "title": "中文對話創作",
+          "desc": "學生與 AI 夥伴「小靈」對話，做出可運行的作品",
+          "imageAlt": "學生在 AI 輔助下創作",
+          "imageUrl": "/assets/handbook/card-1.webp"
+        },
+        {
+          "title": "課堂即開即用",
+          "desc": "標準課包與互動課件直接進課堂",
+          "imageAlt": "課件與課堂流程",
+          "imageUrl": "/assets/handbook/card-2.webp"
+        },
+        {
+          "title": "帳號用量可控",
+          "desc": "無需單獨購買、每個課包含算力",
+          "imageAlt": "統一平台下的多端能力",
+          "imageUrl": "/assets/handbook/card-3.webp"
+        },
+        {
+          "title": "作品進展廳",
+          "desc": "校區案例庫與招生素材自動沉澱",
+          "imageAlt": "作品與案例展台",
+          "imageUrl": "/assets/handbook/card-4.webp"
+        },
+        {
+          "title": "體驗課轉正班",
+          "desc": "90 分鐘出作品，家長當場看得見",
+          "imageAlt": "一步一步的成長路徑",
+          "imageUrl": "/assets/handbook/card-5.webp"
+        }
+      ]
+    },
+    "compare": {
+      "eyebrow": "對比",
+      "headingLines": [
+        "別再",
+        "東拼西湊"
+      ],
+      "body": "對話用一家、寫程式換一個編譯器、課件散在雲端硬碟和群組裡——老師每換一門課就要重新教學生用哪個網站。靈動 AI 課堂把對話創作、畫布創作、程式運行、課件管理、作品沉澱整合在同一平台。"
+    },
+    "skills": {
+      "eyebrow": "跨學科 · 綜合能力",
+      "headingLines": [
+        "跨學科知識融合，",
+        "綜合能力培養"
+      ],
+      "intro": "一節課裡同時用到語文、美術、資訊科技、邏輯數學與音樂 —— 知識點不是背下來的，是用出來的。",
+      "subjects": [
+        {
+          "subject": "語文",
+          "points": "故事結構（起承轉合）、人物對話、描寫細節"
+        },
+        {
+          "subject": "美術",
+          "points": "色彩、構圖、光影、風格（寫實 / 卡通 / 水墨）"
+        },
+        {
+          "subject": "資訊科技",
+          "points": "AI 基本原理（訓練資料、生成機制）、參數調節、檔案管理"
+        },
+        {
+          "subject": "邏輯與數學",
+          "points": "序列順序、因果關係、時間軸控制"
+        },
+        {
+          "subject": "音樂 / 節奏",
+          "points": "配樂情緒匹配、音效時機"
+        }
+      ],
+      "abilities": [
+        {
+          "title": "從「被動消費」到「主動創造」",
+          "desc": "孩子不再只是看影片，而是能自己做一支影片表達想法。"
+        },
+        {
+          "title": "分解複雜任務的能力",
+          "desc": "一支 AI 影片 ＝ 寫文案 → 生圖 → 生影片 → 剪輯，學會把大目標拆成小步驟。"
+        },
+        {
+          "title": "與 AI 協作的習慣",
+          "desc": "不是「讓 AI 幫我做作業」，而是「我指揮 AI，我來把關」。"
+        },
+        {
+          "title": "成長型思維",
+          "desc": "生成結果不完美 → 修改提示詞 → 變好一點 → 再試。失敗是迭代的一部分。"
+        }
+      ]
+    },
+    "cta": {
+      "headline": "把 AI 課開起來",
+      "text": "聯絡我們，我們為你量身打造招生方案！"
+    }
   }
 }

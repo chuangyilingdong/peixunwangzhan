@@ -108,6 +108,9 @@ try {
     hero: (document.querySelector('.hp-title')?.innerText || '').replace(/\n+/g, ' ').trim(),
     alternates: Array.from(document.querySelectorAll('link[data-i18n-alt]')).map((l) => l.getAttribute('hreflang')),
     switcher: document.querySelectorAll('.lang-pick').length,
+    // 第六组（第二波）：作品广场的筛选胶囊 / 搜索框 / 顶栏那颗切换器
+    worksAll: (document.querySelector('.pl-types .pl-type')?.textContent || '').replace(/\d+$/, '').trim(),
+    worksSearch: document.querySelector('#works-search')?.getAttribute('placeholder') || '',
   }));
 
   await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
@@ -143,6 +146,47 @@ try {
     new URL(after).pathname === '/en/works' && new URL(before).pathname === '/works', `${before} → ${after}`);
   const enWorks = await snapshot();
   check('⑤ 切过去之后导航仍是英文（前缀被路由器接住了）', enWorks.nav[0] === 'Home', JSON.stringify(enWorks.nav.slice(0, 2)));
+  check('⑥ /en/works 的类型胶囊与搜索框是英文',
+    enWorks.worksAll === 'All' && /Search/.test(enWorks.worksSearch),
+    JSON.stringify([enWorks.worksAll, enWorks.worksSearch]));
+
+  /* ───────── 第六组（2026-10-01 第二波）：浏览器标签、其余页面、切换器位置 ─────────
+     ⚠️ 这一组是把用户报的 bug 直接转成断言（图3：标签上显示的是 `cms.home.heroTitle` 这个 **key**）。 */
+  const pageSnapshot = async (path) => {
+    await page.goto(base + path, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1800);
+    return page.evaluate(() => ({
+      title: document.title,
+      // ⚠️ 手册的 hero 是**逐字动画**：它把词间空格换成了 `&nbsp;`（U+00A0，防换行）——
+      //    断言前统一归一化，否则"看得见的那句话"在 DOM 里其实匹配不上。
+      text: document.body.innerText.replace(/\u00a0/g, ' ').replace(/\n+/g, ' | ').slice(0, 1500),
+      pickBtn: (document.querySelector('.head-actions .lang-pick__btn')?.textContent || '').trim(),
+    }));
+  };
+  const enFaq = await pageSnapshot('/en/faq');
+  check('⑥ /en/faq 的标签是英文标题（既不是 key 也不是中文）',
+    enFaq.title.startsWith('FAQ') && !enFaq.title.includes('cms.'), enFaq.title);
+  check('⑥ /en/faq 的档位与问答是英文',
+    /Organizations/.test(enFaq.text) && /API key/.test(enFaq.text), enFaq.text.slice(0, 160));
+  check('⑥ 顶栏切换器写着**当前语言的全称**、且落在右上角按钮组里',
+    enFaq.pickBtn === 'English', JSON.stringify(enFaq.pickBtn));
+
+  const twHandbook = await pageSnapshot('/zh-TW/handbook');
+  // ⚠️ 只做**正向**断言：手册的「政策」那一栏是各地政府文件的原题（本来就是中文，不该翻），
+  //    所以"整页不含简体字"这种负向断言在这页上永远不成立。
+  check('⑥ /zh-TW/handbook 的正文是繁體',
+    /讓 AI 創作課/.test(twHandbook.text) && /從試點走向普及/.test(twHandbook.text), twHandbook.text.slice(0, 160));
+  check('⑥ /zh-TW 的标签是繁體标题（不是 key）',
+    twHandbook.title.includes('機構手冊') && !twHandbook.title.includes('cms.'), twHandbook.title);
+
+  const enDownload = await pageSnapshot('/en/download');
+  check('⑥ /en/download 两张安装卡片是英文',
+    /Windows/.test(enDownload.text) && /Mac \(Apple silicon\)/.test(enDownload.text), enDownload.text.slice(0, 160));
+
+  const enHome = await pageSnapshot('/en/');
+  // 品牌名（灵动ai学院）是专有名词，**不翻**——所以这里只要求"是英文主标题 + 不含 key"。
+  check('⑥ /en 首页的标签是英文主标题（图3 那个 bug 的口径）',
+    !enHome.title.includes('cms.') && /Cultivate AI thinking/.test(enHome.title), enHome.title);
 
   await browser.close();
 } finally {

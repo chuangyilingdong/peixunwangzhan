@@ -2,12 +2,12 @@
   "nav.home": "Home",
   "nav.learn": "Learn",
   "nav.marketplace": "Courses",
-  "nav.works": "Student Gallery",
+  "nav.works": "Gallery",
   "nav.handbook": "Handbook",
   "nav.faq": "FAQ",
-  "nav.download": "Download Client",
-  "auth.org": "School / Teacher Login",
-  "auth.student": "Student Login",
+  "nav.download": "Download",
+  "auth.org": "Teacher login",
+  "auth.student": "Student login",
   "menu.open": "Open menu",
   "menu.close": "Close menu",
   "menu.login": "Sign in",
@@ -113,5 +113,421 @@
   "cms.marketplace": {
     "title": "Course packs from Lingdong AI Academy",
     "lead": "Lingdong AI builds its own AI courses for young learners and keeps refining a curriculum that fits how kids learn."
+  },
+  "meta.login": "Sign in",
+  "meta.marketplace": "Courses",
+  "meta.org": "For Organizations",
+  "meta.works": "Student Gallery",
+  "meta.handbook": "Handbook",
+  "meta.faq": "FAQ",
+  "meta.download": "Download Client",
+  "meta.compare": "Comparison",
+  "meta.demo": "Contact us",
+  "meta.terms": "Terms of Service",
+  "meta.privacy": "Privacy Policy",
+  "meta.minors": "Children & Minors",
+  "meta.learn": "Learn",
+  "meta.myCourses": "My courses",
+  "meta.myHome": "My page",
+  "meta.canvas": "Canvas class",
+  "meta.courseDetail": "Course details",
+  "meta.workDetail": "Work details",
+  "meta.studentHome": "Student page",
+  "common.prev": "Previous",
+  "common.next": "Next",
+  "common.pageInfo": "Page {page} / {total}",
+  "works.all": "All",
+  "works.searchLabel": "Search by work title or student name",
+  "works.searchPlaceholder": "Search by work title or student name…",
+  "works.clear": "Clear",
+  "works.countTotal": "{count} works",
+  "works.loading": "Loading works…",
+  "works.empty": "No public works yet. Students can publish theirs from their work page.",
+  "works.noMatchKeywordBefore": "Nothing matched. Try another title or student name, or",
+  "works.noMatchCategoryBefore": "No works in this category yet. Tap",
+  "works.clearSearch": "clear the search",
+  "works.cancelFilter": "clear the filter",
+  "works.seeAll": "to see everything.",
+  "works.creator": "Young creator",
+  "works.featured": "Featured",
+  "works.openInNew": "Won't open? Try a new window ↗",
+  "works.close": "Close",
+  "works.viewerAria": "View work: {title}",
+  "works.openAria": "Open work: {title}",
+  "works.externalAria": "Open on the original platform: {title}",
+  "works.categoryCanvas": "Canvas works",
+  "works.categoryVibecoding": "VibeCoding works",
+  "works.typeCanvas": "Canvas",
+  "works.typeVibecoding": "VibeCoding",
+  "works.typeImage": "Image",
+  "works.typeVideo": "Video",
+  "works.typeWebpage": "Web page",
+  "works.typeMiniGame": "Mini game",
+  "works.typePpt": "PPT",
+  "works.typeBrandDesign": "Brand design",
+  "works.typeMusic": "Music",
+  "works.typePodcast": "AI podcast",
+  "works.typeAgent": "Agent",
+  "works.typeWorkflow": "Workflow",
+  "works.typePictureBook": "Picture book",
+  "works.docPptx": "Presentation",
+  "works.docXlsx": "Spreadsheet",
+  "works.docDocx": "Document",
+  "works.docPlay": "Playable online",
+  "download.win": "Windows",
+  "download.mac": "Mac (Apple silicon)",
+  "download.version": "Version",
+  "download.download": "Download",
+  "download.winHint": "Double-click the file to install. If Windows warns about an unknown publisher on first launch, choose \"Run anyway\" — we are applying for a code-signing certificate.",
+  "download.macPreparing": "In preparation",
+  "download.macHint": "Requires macOS 12 or later on Apple silicon (M series). It will appear on this page once ready.",
+  "download.loading": "Reading installer information…",
+  "download.retry": "Please try again later, or contact us for the installer.",
+  "download.errorPrefix": "The installer is unavailable for now ({error})",
+  "faq.title": "FAQ",
+  "faq.tabsAria": "Browse FAQ by role",
+  "faq.student": "Students",
+  "faq.teacher": "Teachers",
+  "faq.org": "Organizations",
+  "faq.readError": "Failed to load",
+  "faq.askUs": "Still have questions?",
+  "faq.askUsAction": "Contact us",
+  "handbook.skills1a": "Interdisciplinary",
+  "handbook.skills1b": "knowledge",
+  "handbook.skills2a": "Integrated",
+  "handbook.skills2b": "practice",
+  "contact.srTitle": "Contact us",
+  "contact.business": "Business contact",
+  "contact.name": "Contact",
+  "contact.phone": "Phone",
+  "contact.pending": "Not set",
+  "contact.qrAlt": "WeChat QR code of {name}",
+  "contact.qrBusiness": "Business",
+  "contact.qrEmpty": "QR code coming soon",
+  "contact.scanHint": "Scan to add us on WeChat",
+  "compare.eyebrow": "Comparison",
+  "compare.titleTop": "Why not",
+  "compare.titleEm": "yet another chat platform",
+  "compare.desc": "When evaluating an AI curriculum, what matters is not a chat box but a classroom product you can deliver term after term.",
+  "compare.headDim": "Dimension",
+  "compare.headOther": "Pieced together",
+  "compare.summaryLabel": "In short",
+  "compare.summaryPre": "Creation, courses, accounts, billing and works —",
+  "compare.summaryEm": "in one place",
+  "compare.summaryPost": ".",
+  "org.eyebrow": "For Organizations",
+  "org.titleA": "How training organizations",
+  "org.titleEm": "teach youth AI courses",
+  "org.desc": "The platform provides courses, organization accounts and usage billing; your organization handles enrolment and teaching. Students aged 8–16 create presentable works in class.",
+  "org.quotePre": "Not another chat site —",
+  "org.quoteMid": "but a classroom product that is",
+  "org.quoteEm": "manageable, teachable and presentable",
+  "org.quotePost": ".",
+  "org.quoteDesc": "Students talk with an AI partner and finish a presentable game, animation, interactive story or hardware project in class.",
+  "org.faqKicker": "FAQ",
+  "org.faqTitle": "What you may want to know before class",
+  "org.endTitle": "Give your campus a repeatable AI course",
+  "org.endText": "Contact us for a trial account and the sample course-pack list.",
+  "cta.kicker": "Ready to launch your AI class?",
+  "cta.titleTop": "Let every child",
+  "cta.titleEm": "create with AI",
+  "cta.desc": "Get a demo account and the sample course-pack list.",
+  "cta.button": "Contact us",
+  "end.button": "Contact us · start a trial",
+  "mkt.loadFail": "Failed to load",
+  "mkt.empty": "No course packs yet",
+  "mkt.emptyHint": "New AI course packs are on the way.",
+  "mkt.difficulty": "Level",
+  "mkt.version": "Version",
+  "mkt.lessons": "Lessons",
+  "mkt.delivery": "Mode",
+  "mkt.tags": "Tags",
+  "mkt.notSet": "Not set",
+  "mkt.lessonUnit": "{count} lessons",
+  "mkt.descPending": "Description coming soon.",
+  "mkt.viewList": "View lessons",
+  "mkt.back": "← Back to courses",
+  "mkt.loading": "Loading…",
+  "mkt.notFound": "Not found",
+  "mkt.cantLoad": "Could not load the course",
+  "mkt.coverAlt": "Cover of {title}",
+  "mkt.course": "Course",
+  "mkt.content": "Lessons",
+  "mkt.modeCanvas": "Canvas course",
+  "mkt.modeVibecoding": "VibeCoding course",
+  "section.steps": "How we run classes",
+  "section.videos": "Videos",
+  "section.compare": "Comparison",
+  "section.stats": "Platform numbers",
+  "videos.prev": "Previous video",
+  "videos.next": "Next video",
+  "videos.prevText": "Previous",
+  "videos.nextText": "Next",
+  "videos.play": "Play: {title}",
+  "videos.playPlain": "Play video",
+  "videos.playing": "Video",
+  "videos.index": "Video {index}",
+  "login.back": "← Back to the homepage",
+  "login.titleStudent": "Student sign-in",
+  "login.titleStaff": "Organization / teacher sign-in",
+  "login.descStudent": "Sign in to continue creating.",
+  "login.descStaff": "Sign in to the organization console.",
+  "login.switchStaffPre": "I'm an organization / teacher — ",
+  "login.switchStaffLink": "go to the org console",
+  "login.switchStudentPre": "I'm a student — ",
+  "login.switchStudentLink": "go to student sign-in",
+  "login.failed": "Sign-in failed",
+  "account.menuCourses": "My courses",
+  "account.menuHome": "My page",
+  "account.menuSecurity": "Account security",
+  "account.logout": "Sign out",
+  "account.logoutShort": "Sign out",
+  "account.user": "User",
+  "account.internalTest": "Internal test environment · not a production service",
+  "lists.compareRows": [
+    [
+      "Tooling",
+      "Jump between multiple sites and apps",
+      "One workspace: chat, preview and project files"
+    ],
+    [
+      "Course delivery",
+      "Organizations build their own lesson plans",
+      "Standard course packs: lessons and slides together"
+    ],
+    [
+      "Accounts & safety",
+      "Students bring their own accounts / API keys",
+      "Tiered org accounts; students need no API key"
+    ],
+    [
+      "Cost control",
+      "Everyone buys their own account; overruns show up at month-end",
+      "Org credits split per class, with usage records and alerts"
+    ],
+    [
+      "Showcase",
+      "Homework scattered across chat groups and laptops",
+      "A gallery that aggregates works into a campus portfolio"
+    ],
+    [
+      "Hardware",
+      "External tools and environments configured separately",
+      "Arduino / micro:bit with software and hardware together"
+    ]
+  ],
+  "lists.orgSteps": [
+    [
+      "01",
+      "Platform onboarding",
+      "Set up seats, issue credits and grant course-pack permissions."
+    ],
+    [
+      "02",
+      "Teachers create student accounts",
+      "Students sign in with the org account and start creating."
+    ],
+    [
+      "03",
+      "Teach with course packs",
+      "Open a lesson from the course center and finish a work in class."
+    ],
+    [
+      "04",
+      "Collect and showcase",
+      "Outstanding works enter the gallery and build a campus portfolio."
+    ]
+  ],
+  "lists.orgModules": [
+    [
+      "Org accounts",
+      "Admin, teacher and student tiers; students need no API key",
+      "Zero setup in class, no key leakage"
+    ],
+    [
+      "Credits",
+      "Issued to the organization, split per class; friendly prompts when running low",
+      "Predictable usage for classroom teaching"
+    ],
+    [
+      "Course center",
+      "Standard course packs with slides and interactive HTML courseware",
+      "Standardized delivery, easy to replicate"
+    ],
+    [
+      "Admin console",
+      "Accounts, course packs, publishing and usage records",
+      "Transparent operations data"
+    ],
+    [
+      "Gallery",
+      "Aggregated student works with online preview",
+      "Visible results that help retention and enrolment"
+    ]
+  ],
+  "works.loadFail": "Failed to load works",
+  "handbook.ctaFallback": "Go to FAQ",
+  "cms.faq": {
+    "student": [],
+    "teacher": [],
+    "org": [
+      {
+        "question": "Do students need their own API key?",
+        "answer": "No. The organization creates student accounts, and API access plus compute are already built in — students just start class."
+      },
+      {
+        "question": "What courses does the platform provide?",
+        "answer": "Lingdong Courses offers standard course packs (with slides and lesson plans); organizations can schedule them directly."
+      },
+      {
+        "question": "What is the curriculum, and what ages is it for?",
+        "answer": "The curriculum is designed for ages 8–16, with 48 lessons in total: Stage 1 — AI Magic Starter Camp (16 lessons), Stage 2 — AI Humanities & Digital Exploration Camp (16 lessons), Stage 3 — AI Full-stack Application Camp (16 lessons)."
+      },
+      {
+        "question": "How are classes run? Can our own teachers teach them?",
+        "answer": "We use a “standardized system + teacher guidance” model: existing coding teachers can teach after training. The system includes complete courseware, step-by-step guidance, AI tools, an asset library and work management, so teachers do not need to build slides, find tools or write code — they follow the lesson plan and answer questions."
+      },
+      {
+        "question": "Is the system safe? Could children see inappropriate content?",
+        "answer": "It is a closed, teaching-only environment. All content, tools and assets are reviewed by our curriculum team; there is no access to external websites, no ads and no inappropriate content, fully meeting youth online-safety standards."
+      },
+      {
+        "question": "AI changes so fast — will the courses go out of date?",
+        "answer": "That is exactly the strength of this model. Our curriculum team tracks the frontier and updates lessons, tools and courseware as AI products and models evolve — partner organizations get every update for free."
+      }
+    ]
+  },
+  "cms.handbook": {
+    "hero": {
+      "line1": "AI creation and coding",
+      "line2": "that reaches the classroom",
+      "loaderWord": "Let AI truly enter the classroom",
+      "imageAlt": "A creation path in a dark tech atmosphere",
+      "imageUrl": "/assets/handbook/hero.webp"
+    },
+    "about": {
+      "index": "01 / About",
+      "headingLines": [
+        "From pilots to scale —",
+        "organizations need more than tools"
+      ],
+      "body": "National and local education authorities keep pushing AI education in K-12: courses must be offered in full, and generative AI must be usable and governable. What organizations really need is a complete solution — one that fits the timetable, keeps accounts and usage under control, and produces a work in every lesson.",
+      "imageAlt": "AI creative thinking and a data dashboard",
+      "imageUrl": "/api/public/file-assets/file_2fb8cbc1d7ec4ae0b5ec/download"
+    },
+    "policy": {
+      "eyebrow": "Policy",
+      "headingLines": [
+        "Nationally driven,",
+        "locally implemented"
+      ],
+      "body": "After the Ministry of Education issued its notice on strengthening AI education in K-12, Beijing, Shanghai, Guangdong, Shenzhen and Zhejiang moved first, with Jiangsu, Shandong, Tianjin, Fujian, Chongqing and Xi’an following — AI classes are now on the timetable. The documents published so far are listed below."
+    },
+    "poster": {
+      "title": "Why now is the right time to launch an AI course",
+      "caption": "Policy, parent awareness, market supply and the window of opportunity",
+      "imageAlt": "Children in the AI era start here: policy / parent awareness / market supply / window of opportunity",
+      "eyebrow": "",
+      "imageUrl": "/assets/handbook/poster.webp"
+    },
+    "work": {
+      "introLines": [
+        "Run the classes",
+        "Collect the works",
+        "Delivered as one"
+      ],
+      "cards": [
+        {
+          "title": "Chat-based creation",
+          "desc": "Students talk with the AI partner and build something that runs",
+          "imageAlt": "A student creating with AI assistance",
+          "imageUrl": "/assets/handbook/card-1.webp"
+        },
+        {
+          "title": "Ready-to-teach classes",
+          "desc": "Standard course packs and interactive courseware, straight into class",
+          "imageAlt": "Courseware and classroom flow",
+          "imageUrl": "/assets/handbook/card-2.webp"
+        },
+        {
+          "title": "Accounts and usage under control",
+          "desc": "No separate purchase — compute is included in every course pack",
+          "imageAlt": "Multi-device capability on one platform",
+          "imageUrl": "/assets/handbook/card-3.webp"
+        },
+        {
+          "title": "Works in the gallery",
+          "desc": "Campus case library and enrolment material, collected automatically",
+          "imageAlt": "Works and case showcase",
+          "imageUrl": "/assets/handbook/card-4.webp"
+        },
+        {
+          "title": "From trial lesson to term course",
+          "desc": "A finished work in 90 minutes — parents see it on the spot",
+          "imageAlt": "A step-by-step growth path",
+          "imageUrl": "/assets/handbook/card-5.webp"
+        }
+      ]
+    },
+    "compare": {
+      "eyebrow": "Comparison",
+      "headingLines": [
+        "Stop piecing",
+        "it together"
+      ],
+      "body": "One vendor for chat, another compiler for code, courseware scattered across drives and chat groups — every new course means teaching students a new website. Lingdong AI Classroom puts conversation, canvas creation, code running, courseware and works on one platform."
+    },
+    "skills": {
+      "eyebrow": "Interdisciplinary · integrated skills",
+      "headingLines": [
+        "Interdisciplinary knowledge,",
+        "integrated skills"
+      ],
+      "intro": "One lesson uses language arts, art, IT, logic and maths, and music at the same time — knowledge is used, not memorised.",
+      "subjects": [
+        {
+          "subject": "Language arts",
+          "points": "Story structure, character dialogue, descriptive detail"
+        },
+        {
+          "subject": "Art",
+          "points": "Colour, composition, light and shadow, style (realistic / cartoon / ink)"
+        },
+        {
+          "subject": "IT",
+          "points": "How AI works (training data, generation), parameter tuning, file management"
+        },
+        {
+          "subject": "Logic & maths",
+          "points": "Sequencing, cause and effect, timeline control"
+        },
+        {
+          "subject": "Music & rhythm",
+          "points": "Matching music to mood, timing sound effects"
+        }
+      ],
+      "abilities": [
+        {
+          "title": "From consuming to creating",
+          "desc": "Instead of only watching videos, children make one to express their own idea."
+        },
+        {
+          "title": "Breaking down complex tasks",
+          "desc": "An AI video = script → images → video → editing. Big goals become small steps."
+        },
+        {
+          "title": "A habit of working with AI",
+          "desc": "Not “let AI do my homework”, but “I direct the AI and I check the result”."
+        },
+        {
+          "title": "A growth mindset",
+          "desc": "Imperfect result → adjust the prompt → a bit better → try again. Failure is part of iterating."
+        }
+      ]
+    },
+    "cta": {
+      "headline": "Launch your AI class",
+      "text": "Contact us and we will tailor an enrolment plan for you."
+    }
   }
 }
