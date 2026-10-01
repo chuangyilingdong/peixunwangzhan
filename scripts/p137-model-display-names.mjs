@@ -144,7 +144,11 @@ try {
   const courseEditor = read('apps/admin/src/components/CourseManagement.jsx');
   check('⑤ 画布两处都改成显示 modelLabel（配置标签 + 参数胶囊）',
     (canvas.match(/params\.push\(data\.modelLabel \|\| data\.model\)/g) || []).length === 2, `匹配到 ${(canvas.match(/params\.push\(data\.modelLabel \|\| data\.model\)/g) || []).length} 处`);
-  check('⑤ 画布节点数据里带上了 modelLabel（服务端下发 → 画布渲染，中间不能断）', /modelLabel: box\.modelLabel \|\| ''/.test(workspace));
+  // ⚠️ 2026-10-01：这段构建搬进了 `canvasBoxNode.js`（学生画布与老师备课共用一个实现，见 §七十九），
+  //    所以断言认**两个文件里任意一个** —— 要点仍是"服务端下发的 modelLabel 没在客户端被丢掉"。
+  const boxNode = read('packages/shared/src/canvasBoxNode.js');
+  check('⑤ 画布节点数据里带上了 modelLabel（服务端下发 → 画布渲染，中间不能断）',
+    /modelLabel: box\.modelLabel \|\| ''/.test(workspace) || /modelLabel: box\.modelLabel \|\| ''/.test(boxNode));
   check('⑤ 后台有单独一页（页签 + 路由都在）',
     /ModelNamePanel/.test(compute) && /to="\/compute\/names"/.test(compute) && /path="\/compute\/names"/.test(adminMain) && /export function ModelNamePanel/.test(panel));
   check('⑤ 这一页只改显示名、并写清"不改调用参数"（它读写的是同一份渠道策略）',

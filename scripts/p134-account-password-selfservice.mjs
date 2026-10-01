@@ -152,8 +152,12 @@ try {
   const studentPage = readFile('apps/website/src/pages/AccountSecurity.jsx');
   check('学生端：新增 /account 页，端点 student/account/password',
     /PasswordChangeForm/.test(studentPage) && /student\/account\/password/.test(studentPage));
+  // ⚠️ 2026-10-01 多语言：下拉项的文案改成 key（`t('account.menuSecurity')`），
+  //    所以这里认 key + 简体语言包里那句话（换语言不再误报）。
+  const zhAccount = JSON.parse(readFile('apps/website/src/locales/zh-CN.json'));
   check('学生端：右上角下拉里有「账号安全」入口，且 /account 未登录会被带去学生登录',
-    /to: '\/account', label: '账号安全'/.test(site) && /pathname === '\/account'/.test(site) && /path='\/account'/.test(site));
+    /to: '\/account', label: t\('account\.menuSecurity'\)/.test(site) && zhAccount['account.menuSecurity'] === '账号安全'
+    && /pathname === '\/account'/.test(site) && /path='\/account'/.test(site));
 
 } finally {
   server.kill();

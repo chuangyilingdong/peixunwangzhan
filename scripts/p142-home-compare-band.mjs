@@ -119,8 +119,10 @@ check('④ 入场动画挂在 `.hp-cmp.is-in` 上（观察器触发一次）',
   /\.hp-cmp\.is-in \.hp-cmp-card\{animation:hp-cmp-in/.test(css) && /\.hp-cmp\.is-in \.hp-cmp-item\{animation:hp-cmp-in/.test(css));
 check('④ reduced-motion 下不播任何动画',
   /@media\(prefers-reduced-motion:reduce\)\{\.hp-cmp\.is-in \.hp-cmp-card,\.hp-cmp\.is-in \.hp-cmp-item\{animation:none\}/.test(css.replace(/\s*\n\s*/g, '')));
+// ⚠️ 2026-10-01：HomeCompare 里多了一行 `const t = useT();`（多语言），所以这里**不锚在第一行**，
+//    只要求"这个组件里确实用了 useRevealOnce"（这才是"复用三步一栏那套"的意思）。
 check('④ 观察器不可用时内容照常显示（直接算已进入 —— 复用三步一栏那个 useRevealOnce）',
-  /function HomeCompare\(\{ block \}\) \{\s*\n\s*const \[ref, shown\] = useRevealOnce\(\)/.test(site));
+  /function HomeCompare\(\{ block \}\) \{[\s\S]{0,200}?const \[ref, shown\] = useRevealOnce\(\)/.test(site));
 check('④ ★ 打字只是"到了才开始打"：观察器不可用 / reduced-motion 时**直接给完整标题**（不许停在 0 字）',
   /if \(!active \|\| reduced\) \{ setCount\(active \? full : 0\); return undefined; \}/.test(site));
 check('④ 逐字显示不重排：每个单元是 opacity 过渡（不是"一个字一个字往 DOM 里塞"）',

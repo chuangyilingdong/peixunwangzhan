@@ -63,10 +63,14 @@ const ENTRIES = ['apps/admin/src/main.jsx', 'apps/org/src/main.jsx', 'apps/websi
 for (const entry of ENTRIES) {
   const source = stripComments(read(entry));
   const render = source.match(/createRoot\([\s\S]*?\)\.render\(([\s\S]*)\);\s*$/);
+  // ⚠️ 2026-10-01：多语言给 render 里加了一层 `<I18nProvider>`（`<AppErrorBoundary>` 仍是最外层），
+  //    多行参数还会带一个**尾逗号** —— 断言跟着放宽这两点；"最外层是 AppErrorBoundary + 里面有 <App />"
+  //    这条口径不变（这才是它真正要拦的东西）。
+  const rendered = (render?.[1] || '').trim().replace(/,\s*$/, '').trim();
   const wired = Boolean(render)
-    && /^<AppErrorBoundary>/.test(render[1].trim())
-    && /<App\s*\/>/.test(render[1])
-    && /<\/AppErrorBoundary>\s*$/.test(render[1].trim());
+    && /^<AppErrorBoundary>/.test(rendered)
+    && /<App\s*\/>/.test(rendered)
+    && /<\/AppErrorBoundary>\s*$/.test(rendered);
   check(`① ${entry} 的 render 把 <App /> 包在 <AppErrorBoundary> 里`, wired);
   check(`① ${entry} 从 '@platform/shared' 导入 AppErrorBoundary`,
     /import \{[^}]*\bAppErrorBoundary\b[^}]*\} from '@platform\/shared'/.test(source));

@@ -79,12 +79,18 @@ console.log('② 页面上只剩卡片（页头大标题与「你将获得」清
     /<h1 className="sr-only">/.test(block));
   check('⭐ 电话是**纯文本、不可点**（二轮口径「应该就是数字就好了啊」）',
     !/href=\{`tel:/.test(block) && /className="contact-phone"/.test(block));
-  check('二维码是 <img>（可长按/扫码保存），空时给「待上传」占位', /<img src=\{card\.wechatQrUrl\}/.test(block) && /微信二维码待上传/.test(block));
+  // ⚠️ 2026-10-01 多语言：这两句话搬到语言包了（`contact.qrEmpty` / `contact.pending`），
+  //    所以断言改成"**用 key**" + "**简体语言包里就是那句话**"（换语言不再误报）。
+  const zhContact = JSON.parse(fs.readFileSync(path.join(root, 'apps/website/src/locales/zh-CN.json'), 'utf8'));
+  check('二维码是 <img>（可长按/扫码保存），空时给「待上传」占位',
+    /<img src=\{card\.wechatQrUrl\}/.test(block) && /contact\.qrEmpty/.test(block)
+    && zhContact['contact.qrEmpty'] === '微信二维码待上传');
   check('⭐ 卡片可以有多张：认 `contacts` 数组（按数组渲染）', /contactCardsOf/.test(block) && /Array\.isArray\(contact\?\.contacts\)/.test(block));
   check('⭐ 老形状（四个扁平字段）仍认 —— 线上已发布的就是它，不认这一页会空白',
     /if \(cards\.length\) return cards;/.test(block) && /return \[normalize\(contact\)\]/.test(block));
   check('一张都没配时也返回**一张空卡**（卡里各项显示「待配置」）—— 别改成"啥都没有"，那看着像页面坏了',
-    /return \[normalize\(contact\)\]/.test(block) && /待配置/.test(block) && !/contact-empty/.test(block));
+    /return \[normalize\(contact\)\]/.test(block) && /contact\.pending/.test(block)
+    && zhContact['contact.pending'] === '待配置' && !/contact-empty/.test(block));
   check('页面上**没有表单**（用户口径：直接显示，不是让访客填表）', !/<form/.test(block) && !/onSubmit/.test(block));
   check('官方数字不再写死「11 门 / 87 节」（那条对外数字自相矛盾的待办里点过名）', !/11 门|87 节/.test(block));
   const css = read('apps/website/src/styles.css');

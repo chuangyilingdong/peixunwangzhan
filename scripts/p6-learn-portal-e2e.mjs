@@ -132,8 +132,18 @@ try {
   // 2026-09-19 晚又加一项：首页 hero 那行下载小字删掉，下载入口进导航（「VibeCoding客户端下载」）。
   // 2026-09-19 更晚又**去掉一项**：用户口径「灵动介绍页面和灵动介绍的导航全部删除，不需要这个了」。
   // ⚠️ 2026-09-25：「灵动作品」按用户口径改成「课堂作品」（导航与页脚同一处文案）。
-  for (const label of ['首页', '灵动学习', '灵动课程', '课堂作品', '机构手册', '常见问题', 'VibeCoding客户端下载']) {
-    check(`Header nav has ${label}`, () => assert.ok(websiteSrc.includes(`'${label}'`), `官网导航应含「${label}」`));
+  // ⚠️ 2026-10-01 多语言：导航文案搬进了语言包（`WEBSITE_NAV` 里现在存的是 key），
+  //    所以"源码里含某句中文"不再成立 —— 断言改成两半：**key 在导航里** + **简体语言包里那句话在**。
+  //    这样它仍然拦得住"改导航时漏改一份"，而且换语言/改译文时不会误报。
+  const zhNavPack = JSON.parse(fs.readFileSync(path.join(root, 'apps/website/src/locales/zh-CN.json'), 'utf8'));
+  for (const [key, label] of [
+    ['nav.home', '首页'], ['nav.learn', '灵动学习'], ['nav.marketplace', '灵动课程'], ['nav.works', '课堂作品'],
+    ['nav.handbook', '机构手册'], ['nav.faq', '常见问题'], ['nav.download', 'VibeCoding客户端下载'],
+  ]) {
+    check(`Header nav has ${label}`, () => {
+      assert.ok(websiteSrc.includes(`'${key}'`), `官网导航应含 key「${key}」`);
+      assert.equal(zhNavPack[key], label, `简体语言包里 ${key} 应当是「${label}」`);
+    });
   }
 
   // 6. Shared package exports classroom components

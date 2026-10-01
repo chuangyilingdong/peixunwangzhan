@@ -78,8 +78,11 @@ check('① 外链 / data: / 站内相对地址原样放行',
   /\^data:\/i\.test\(raw\)/.test(workMedia) && /\^https:\\\/\\\/\/i\.test\(raw\)/.test(workMedia) && /\^\\\/\(\?!\\\/\)\//.test(workMedia));
 
 console.log('② 两个机构端界面都改用它（不再为预览做 fetchDataUrl → data:）');
+// ⚠️ 2026-10-01：这一行在 §八十三 之后变成 `resolveWorkMediaUrl(value, { ...imageUrls, ...ossUrls })`
+//    （老师端预览改走 OSS 签名直链）—— 断言改成认"用了 resolveWorkMediaUrl + 传的是服务端的 imageUrls"，
+//    不再锚死后面的第二个参数长什么样（那是会随优化变的形状）。
 check('② 课堂「只读作品」弹窗：快照解析与作品内容画廊都走 resolveWorkMediaUrl',
-  /const snapshotImage = \(value\) => resolveWorkMediaUrl\(value, data\?\.imageUrls\);/.test(classroom)
+  /const snapshotImage = \(value\) => resolveWorkMediaUrl\(value, [^;]*data\?\.imageUrls/.test(classroom)
   && /resolveSrc=\{\(item\) => snapshotImage\(item\?\.url\) \|\| ''\}/.test(classroom));
 check('② 「学生学习结果与作品」弹窗：同上，且 workImageData 那套 data: 转换已移除',
   /const snapshotImage = \(value\) => resolveWorkMediaUrl\(value, selectedWork\?\.imageUrls\);/.test(orgMain)
