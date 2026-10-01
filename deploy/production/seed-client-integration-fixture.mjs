@@ -102,95 +102,27 @@ if (student?.status === 'DISABLED') {
   log('学生原本是停用状态，已启用');
 }
 
-// ── ② 课包 + 三节课时（幂等：按标题；**封面/发布/授权缺哪补哪**）────────────────
-/**
- * 封面：发布课包的硬前置（`COURSE_COVER_REQUIRED`，见 admin/helpers.js）。
- * 自己上传一张 1×1 PNG（内联字节、不依赖任何外部资源），拿 `file_` 资源 id 当封面。
- * ⚠️ 为什么不直接写 `https://…` 的封面地址：那会依赖外部图床；上传是平台自己的资源，最稳。
- */
-async function ensureCover(seriesId) {
-  const current = await api(`/api/admin/course-series/${seriesId}`, { token: root.token });
-  if (current.data?.coverAssetId || current.data?.coverImageUrl) return null;
-  const form = new FormData();
-  form.append('file', new Blob([Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6360000002000154a24f5f0000000049454e44ae426082', 'hex')], { type: 'image/png' }), 'fixture-cover.png');
-  form.append('category', 'PROMO_COVER');
-  form.append('visibility', 'PUBLIC_PLATFORM');
-  const uploaded = await fetch(`${BASE}/api/admin/file-assets/upload`, { method: 'POST', headers: { authorization: `Bearer ${root.token}` }, body: form });
-  const asset = (await uploaded.json().catch(() => ({})))?.data;
-  if (!asset?.id) return `上传封面失败：HTTP ${uploaded.status}`;
-  const patched = await api(`/api/admin/course-series/${seriesId}`, {
-    method: 'PUT', token: root.token,
-    body: { coverAssetId: asset.id, coverImageUrl: `/api/public/file-assets/${asset.id}/download` },
-  });
-  if (patched.status !== 200) return `设封面失败：${JSON.stringify(patched.data || patched.error).slice(0, 200)}`;
-  return null;
-}
-
+// ── ② 课包：**只复用，永不新建**（2026-10-01 用户口径：「联调的 0 元不留」）────────
+// ⚠️⚠️ 这一节原来是「按标题找不到就建一个 + 发布 + 授权」。那条路**整个删掉了**，别再写回来：
+//    授权必然会在 `license_purchase_batches` 里落一条购买记录（成交额/订单号/合同号齐全、状态 PAID），
+//    哪怕是 0 元的 FIXTURE 单也会进真实的账目表 —— 用户明确不要这种记录留在线上。
+//    所以本脚本现在只认**运营正常开出来并已授权**的课包：标题对不上就直接停，让人去后台开。
 const existing = await api('/api/admin/course-series?limit=200', { token: root.token });
-const found = (existing.data?.items || []).find((item) => item.title === SERIES_TITLE);
-let series = found || null;
-let isNewSeries = false;
-if (series) {
-  log(`课包「${SERIES_TITLE}」已存在（${series.id}），复用`);
-} else {
-  isNewSeries = true;
-  const created = await api('/api/admin/course-series', {
-    method: 'POST', token: root.token,
-    body: {
-      title: SERIES_TITLE,
-      description: '给 ZCode 客户端做真实联调用：三种课时形式 + 一节带发送上限与预设。',
-      visibility: 'ALL_ORGS',
-      stockTotal: 20000,
-      perStudentBudgetFen: 5000,
-      lessons: LESSONS.map((lesson, index) => ({
-        title: lesson.title, summary: lesson.summary, status: 'PUBLISHED', sort: index + 1, durationMinutes: 45,
-        deliveryModes: lesson.deliveryModes, capabilities: ['text', 'image'], lessonContent: lesson.summary,
-        ...(lesson.classroomConfig ? { classroomConfig: lesson.classroomConfig } : {}),
-      })),
-    },
-  });
-  if (created.status !== 200) throw new Error(`建课包失败：${JSON.stringify(created.data || created.error).slice(0, 300)}`);
-  series = created.data;
-  log(`课包已建：${series.id}`);
+const series = (existing.data?.items || []).find((item) => item.title === SERIES_TITLE) || null;
+if (!series) {
+  check(`线上已有一个叫「${SERIES_TITLE}」的课包（本脚本不新建、也不写任何许可购买记录）`, false,
+    `没找到。请先在后台正常开一个课包并授权给该机构，再用 FIXTURE_SERIES_TITLE=… 指过来（口径见文件头）。`);
+  throw new Error('联调环境：找不到可复用的课包 —— 本脚本不会自己建课包（用户口径「联调的 0 元不留」）。');
 }
+log(`课包「${SERIES_TITLE}」已存在（${series.id}），复用`);
 {
   const detail0 = await api(`/api/admin/course-series/${series.id}/detail`, { token: root.token });
   // ⚠️ 形状是 `{ series, assignedOrgs, usage, … }`（不是把 series 摊平）—— 第一版按摊平写，
   //    于是状态读成 undefined → 又去发布一次 → 报 "PUBLISHED 不允许 publish"。
   const assignedNow = (detail0.data?.assignedOrgs || []).some((item) => item.orgId === org.organization.id && !item.expired);
-  if (isNewSeries) {
-    // 自己新建的课包：封面 / 发布 / 授权三样按当前状态补（半成品重跑也能救回来）。
-    // ⚠️ 授权会**写一条许可购买记录**（`license_purchase_batches`：成交额/币种/收款状态/订单号/合同号/幂等键，
-    //    且必须 PAID）—— 联调环境用「成交额 0 + `FIXTURE-` 订单号/合同号 + 固定幂等键」，重跑不重复。
-    // ⚠️⚠️ **复用线上已有课包时（本轮的用法）：这一整块一个字都不写** —— 用户口径是
-    //    「0 元测试单不留、其他别动」，所以复用模式下我们**只读**、不建课包、不发布、不授权。
-    const coverError = await ensureCover(series.id);
-    check('课包封面就绪（发布的前置）', !coverError, coverError || '');
-    if (detail0.data?.series?.status !== 'PUBLISHED') {
-      const published = await api(`/api/admin/course-series/${series.id}/status`, { method: 'POST', token: root.token, body: { action: 'publish' } });
-      check('课包已发布', published.status === 200, JSON.stringify(published.data || published.error).slice(0, 200));
-    } else {
-      log('课包已是发布状态，跳过发布');
-    }
-    if (assignedNow) {
-      log('课包已授权给本机构，跳过（不会写任何许可购买记录）');
-    } else {
-      const assigned = await api(`/api/admin/course-series/${series.id}/assignments`, {
-        method: 'POST', token: root.token,
-        body: {
-          orgIds: [org.organization.id], quotaTotal: 20,
-          amountMinor: 0, currency: 'CNY', paymentStatus: 'PAID',
-          orderNo: `FIXTURE-ZCODE-IT-${series.id}`, contractNo: 'FIXTURE-ZCODE-IT',
-          idempotencyKey: `fixture-zcode-it-${series.id}`,
-        },
-      });
-      check('课包已授权给本机构（留一条 0 元 FIXTURE 测试购买记录）', assigned.status === 200, JSON.stringify(assigned.data || assigned.error).slice(0, 200));
-    }
-  } else {
-    log(`复用模式：**只看不改**（不建课包、不发布、不授权、不写任何购买记录）`);
-    check('该课包本来就已发布', detail0.data?.series?.status === 'PUBLISHED', String(detail0.data?.series?.status));
-    check('该课包本来就已授权给本机构（否则本脚本拒绝继续，绝不自己建授权）', assignedNow, JSON.stringify(detail0.data?.assignedOrgs || []).slice(0, 200));
-  }
+  log('复用模式（唯一模式）：**只看不改** —— 不建课包、不发布、不授权、不写任何购买记录');
+  check('该课包本来就已发布', detail0.data?.series?.status === 'PUBLISHED', String(detail0.data?.series?.status));
+  check('该课包本来就已授权给本机构（否则本脚本拒绝继续，绝不自己建授权）', assignedNow, JSON.stringify(detail0.data?.assignedOrgs || []).slice(0, 200));
 }
 const detail = await api(`/api/admin/course-series/${series.id}/detail`, { token: root.token });
 const lessons = detail.data?.series?.lessons || series.lessons || [];

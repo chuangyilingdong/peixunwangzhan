@@ -25,6 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { ensureClassroom } from './lib/classroomFixture.mjs';
+import { stripComments } from './lib/sourceText.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p152-audit-'));
@@ -218,3 +219,23 @@ if (failures) {
   process.exit(1);
 }
 console.log(JSON.stringify({ name: 'p152-audit-cleanups', pass: true }));
+
+console.log('⑨ 运维脚本不许往账目表里写测试单（用户口径 2026-10-01：「联调的 0 元不留」）');
+{
+  // 背景：`seed-client-integration-fixture.mjs` 原来"找不到课包就自建 + 0 元授权"，
+  // 而授权必然在 `license_purchase_batches` 里落一条 PAID 记录（哪怕成交额是 0）——
+  // 那是真账目表，用户明确不要这种记录留在线上。现在那条路整段删掉了，这里钉住别写回来。
+  // ⚠️ 必须**先剥注释**再判：这个脚本自己的注释里就写着「license_purchase_batches」
+  //    （解释为什么不能写），不剥注释的话它会被自己的说明文字判红。
+  const opsDir = 'deploy/production';
+  const offenders = fs.readdirSync(path.join(root, opsDir))
+    .filter((name) => name.endsWith('.mjs'))
+    .filter((name) => {
+      const code = stripComments(read(`${opsDir}/${name}`));
+      return /amountMinor\s*:\s*0\b/.test(code) || /license_purchase_batches/.test(code) || /paymentStatus\s*:\s*'PAID'/.test(code);
+    });
+  check('⑨ deploy/production 下没有脚本写许可购买记录（联调单 0 元也不留）', offenders.length === 0, offenders.join('、'));
+  const fixture = read(`${opsDir}/seed-client-integration-fixture.mjs`);
+  check('⑨ 联调播种脚本只复用课包、不新建（新建必然带一条授权记录）',
+    !/api\('\/api\/admin\/course-series',/.test(fixture) && !/\/assignments`/.test(fixture));
+}
