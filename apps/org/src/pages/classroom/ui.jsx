@@ -11,7 +11,7 @@ import { Notice } from '@platform/shared';
  * 课堂页统一的对话弹窗（原生 <dialog>，自动获得焦点陷阱与 Esc 关闭）。
  * 线框图的确认弹窗都长这样：标题 + 父级行 + 信息带 + 若干带色块 → 底部两个按钮。
  */
-export function Modal({ title, parent, description, children, onClose, footer, busy, error, wide = false }) {
+export function Modal({ title, parent, description, children, onClose, footer, busy, error, wide = false, headerAction = null }) {
   const ref = useRef(null);
   const titleId = useId();
   useEffect(() => {
@@ -21,7 +21,9 @@ export function Modal({ title, parent, description, children, onClose, footer, b
   }, []);
   return <dialog ref={ref} className={`classroom-dialog${wide ? ' classroom-dialog-wide' : ''}`} aria-labelledby={titleId} aria-busy={busy}
     onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}>
-    <h3 id={titleId}>{title}</h3>
+    {/* `headerAction`：页眉右上角那格（2026-10-01 用户口径 —— 作品分享按钮要跟其它入口一致，
+        放**右上角**而不是底部按钮行；见 ClassroomWork 里的用法）。 */}
+    <div className="classroom-dialog-head"><h3 id={titleId}>{title}</h3>{headerAction}</div>
     {parent?.length ? <ParentLine items={parent} /> : null}
     {description ? <p className="muted">{description}</p> : null}
     {error ? <div role="alert"><Notice tone="danger">{error}</Notice></div> : null}

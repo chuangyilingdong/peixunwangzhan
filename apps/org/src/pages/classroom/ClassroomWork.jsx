@@ -89,11 +89,13 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
     ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; ${mediaSources}img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
     : '';
   return <Modal title={`只读作品 · ${work.title || '未命名作品'}`} wide onClose={onClose}
+    // ⭐ 2026-10-01：分享入口**从底部按钮行挪到页眉右上角**（用户口径：与作品库那处「详情右上角」
+    //    以及网站端预览弹窗的 `pl-viewer-head__actions` 对齐 —— 三处同款位置）。
+    headerAction={canShare && shareCreate && data
+      ? <button type="button" className="secondary-button" data-testid="work-share" onClick={() => setShareOpen(true)}>分享</button>
+      : null}
     footer={<>
       {documentFile?.download ? <a className="secondary-button" href={documentFile.download}>下载原文件</a> : null}
-      {/* ⭐ 2026-09-30 用户口径：机构/老师端也要能分享。这个弹窗是**共用组件**（页眉没有插槽），
-          所以分享入口放在底部按钮行 —— 画布作品那条在预览面板的右上角。 */}
-      {canShare && shareCreate && data ? <button type="button" className="secondary-button" data-testid="work-share" onClick={() => setShareOpen(true)}>分享</button> : null}
       <button className="secondary-button" onClick={onClose}>关闭预览</button>
     </>}>
     {detail.loading ? <Loading label="正在读取私有作品…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : data ? <>

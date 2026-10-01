@@ -15,6 +15,18 @@
   width: min(1180px, 94vw);
 }
 
+/* 弹窗页眉：标题在左、可选的动作按钮在右（分享按钮就落在这里，与作品库那处"详情右上角"同款）。 */
+.classroom-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.classroom-dialog-head > h3 {
+  margin: 0;
+}
+
 .classroom-work-preview {
   min-width: 0;
 }
