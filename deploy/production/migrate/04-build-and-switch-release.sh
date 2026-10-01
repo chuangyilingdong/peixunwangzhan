@@ -86,9 +86,13 @@ bash "$(dirname "${BASH_SOURCE[0]}")/03-verify-new-host.sh" --local
 #    `daily-backup.sh` 只在**每晚 03:00** 按 mtime 清 7 天前的，白天发的版它一份都不清，
 #    于是磁盘一路涨到监控阈值（2026-10-01 实测 22G/40G=58%，清完 18G/40G=48%）。
 #    ⚠️ 它**不是**发布的前置：失败只 warn，绝不拦住这次发布。
-log "6. 清旧备份（保留最新 6 份 + 7 天内的每日份）"
+log "6. 清旧备份与旧 release（各自保留策略见脚本头）"
 bash "$(dirname "${BASH_SOURCE[0]}")/../prune-backups.sh" --apply \
   || warn "清理旧备份失败（不影响本次发布；可手工跑 deploy/production/prune-backups.sh）"
+# 同理：`prune-releases.sh` 一直是**手工**跑的（09-29 清到 10 份，之后没人再跑 → 2026-10-01 已涨回 35 份）。
+# 每份 release ~27MB，涨得慢但一样是只增不减；这里一并收口。它有"current 必须在保留集里"的硬断言。
+bash "$(dirname "${BASH_SOURCE[0]}")/../prune-releases.sh" --apply \
+  || warn "清理旧 release 失败（不影响本次发布；可手工跑 deploy/production/prune-releases.sh）"
 
 cat <<NEXT
 
