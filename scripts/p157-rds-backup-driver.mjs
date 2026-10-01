@@ -123,6 +123,47 @@ console.log('③ 建表侧：函数索引的表达式不能返回裸 TEXT/BLOB �
     /DROP INDEX[\s\S]{0,200}ADD UNIQUE INDEX/.test(fix));
 }
 
+console.log('④ 备份目录必须有清理机制（2026-10-01：磁盘涨到 58% 那一轮）');
+{
+  // 背景：单份备份 ~200MB（里面拷了一整棵 release 树），发布密集的日子（09-30 实测 **19 份**）
+  // 一周就能堆到 6GB+。`daily-backup.sh` 只在**每晚 03:00** 按 mtime 清 7 天前的，
+  // 白天发的版它一份都不清 —— 于是 2026-10-01 实测 22G/40G（58%）= 离监控阈值只差 22 个点。
+  const source = read('deploy/production/prune-backups.sh');
+  check('prune-backups.sh 存在、默认**干跑**（--apply 才真删）',
+    /APPLY="\$\{1:-\}"/.test(source) && /\$APPLY" != "--apply"/.test(source));
+  check('保留口径写死两条：最新 N 份 + 每日份 N 天',
+    /KEEP_NEWEST="\$\{KEEP_NEWEST:-6\}"/.test(source) && /KEEP_DAYS=/.test(source) && /T19/.test(source));
+  check('⭐ 只删「名字像时间戳」的目录（`platform.db.before-*` 这类迁移快照一律不碰）',
+    /grep -E '\^\[0-9\]\{8\}T\[0-9\]\{6\}Z\$'/.test(source) && /case "\$name" in/.test(source));
+  check('删之前有安全闸：current 的 release 与最新那份备份都必须在',
+    /current 指向的 release 不在/.test(source) && /最新那份备份不在/.test(source));
+  check('删完留档（logs/backups-archive-*.tsv），并且健康检查用的是**现行域名**',
+    /backups-archive-/.test(source) && /https:\/\/aicyld\.com\/api\/health/.test(source));
+
+  const release = read('deploy/production/migrate/04-build-and-switch-release.sh');
+  check('⭐ 每次发布后自动清一次（best-effort，失败只 warn、不拦发布）',
+    /prune-backups\.sh" --apply/.test(release) && /清理旧备份失败/.test(release));
+  check('清完再报一次自检（顺序上不抢在 03 自检之前）',
+    release.indexOf('prune-backups.sh') > release.indexOf('03-verify-new-host.sh'));
+}
+
+console.log('⑤ 运维脚本里不许再用已下线的旧域名');
+{
+  // 2026-10-01：prune-releases.sh / build-production.sh / add-media-location.sh /
+  // apply-nginx-sensitive-path-hardening.sh 里还写着 **iicili.cyou**（早就不提供服务了）——
+  // 轻则打印一串 000 骗人，重则在生产上**指错 nginx 配置路径**、或让构建回落到一个死域名。
+  const files = fs.readdirSync(path.join(root, 'deploy/production'))
+    .filter((name) => /\.(sh|mjs)$/.test(name))
+    .map((name) => `deploy/production/${name}`)
+    .concat(['deploy/production/migrate/04-build-and-switch-release.sh']);
+  const offenders = files.filter((file) => {
+    const code = read(file).replace(/^\s*#.*$/gm, '');
+    return /iicili\.cyou/.test(code);
+  });
+  check('deploy/production 下的脚本不再引用 iicili.cyou（现行域名 = aicyld.com）',
+    offenders.length === 0, offenders.join('、'));
+}
+
 if (failures) {
   console.error(JSON.stringify({ name: 'p157-rds-backup-driver', pass: false, failed: failures }, null, 1));
   process.exit(1);

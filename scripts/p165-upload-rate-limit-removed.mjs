@@ -71,9 +71,16 @@ let concurrencyCode = null;
 try { await reserveUpload({ userId: 'user_p165b', orgId: 'org_p165b', bytes: 1024 }); } catch (error) { concurrencyCode = error?.code; }
 check('② 同时在传超过上限仍会被拦（UPLOAD_CONCURRENCY_LIMIT）', concurrencyCode === 'UPLOAD_CONCURRENCY_LIMIT', String(concurrencyCode));
 for (const release of held) release();
+// ⚠️ 2026-10-01：这里原来写死"传 1GB 必被拦" —— 配额上调到 2GB 之后这条**自己**红了。
+//    改成**从配置里读**当前上限再加 1 字节（同 §六十七 那条 p13 的教训：别把断言建在某个写死的默认值上）。
+const cfg = uploadLimitConfig();
 let quotaCode = null;
-try { await reserveUpload({ userId: 'user_p165c', orgId: 'org_p165c', bytes: 1024 * 1024 * 1024 }); } catch (error) { quotaCode = error?.code; }
+try { await reserveUpload({ userId: 'user_p165c', orgId: 'org_p165c', bytes: cfg.userBytes + 1 }); } catch (error) { quotaCode = error?.code; }
 check('② 超过容量配额仍会被拦（UPLOAD_USER_QUOTA_EXCEEDED）', quotaCode === 'UPLOAD_USER_QUOTA_EXCEEDED', String(quotaCode));
+// 顺带钉住现行档位（个人 2GB / 机构 20GB，2026-10-01 依据生产实测上调：最重的用户已用到 410/500MB）
+check('② 容量档位仍是 2GB / 20GB（个人 / 机构）',
+  cfg.userBytes === 2 * 1024 * 1024 * 1024 && cfg.orgBytes === 20 * 1024 * 1024 * 1024,
+  JSON.stringify({ userBytes: cfg.userBytes, orgBytes: cfg.orgBytes }));
 
 /* ── ③ 源码里不再有频率闸的残留 ─────────────────────────────────────── */
 console.log('③ 源码里没有频率闸的残留');

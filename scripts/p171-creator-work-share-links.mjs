@@ -305,6 +305,28 @@ try {
   server.kill('SIGTERM');
 }
 
+// ⑩ 静态：三处「分享」入口的**位置**必须同款（用户 2026-09-30 点名要"右上角"）。
+//    ⚠️ 2026-10-01：机构端**课堂**里那份原来落在弹窗底部按钮行（当时那个弹窗没有页眉插槽）——
+//    已经给弹窗加了 `headerAction` 并挪到右上角；这条钉住别再掉回去。
+console.log('⑩ 三处「分享」入口都在右上角（面板/弹窗页眉），没有掉到底部按钮行');
+{
+  const readFile = (file) => fs.readFileSync(path.join(process.cwd(), file), 'utf8');
+  const classroom = readFile('apps/org/src/pages/classroom/ClassroomWork.jsx');
+  check('⑩ 机构端课堂弹窗：分享按钮在 `headerAction`（页眉右上角）',
+    /headerAction=\{[^}]*data-testid="work-share"|headerAction=[\s\S]{0,200}data-testid="work-share"/.test(classroom));
+  const footerChunk = classroom.slice(classroom.indexOf('footer={<'), classroom.indexOf('footer={<') + 400);
+  check('⑩ 机构端课堂弹窗：底部按钮行里**不再**有分享入口', !/work-share/.test(footerChunk), footerChunk.slice(0, 120));
+  const modal = readFile('apps/org/src/pages/classroom/ui.jsx');
+  check('⑩ 弹窗组件真的支持 headerAction（页眉右侧那格）',
+    /headerAction/.test(modal) && /classroom-dialog-head/.test(modal));
+  const orgList = readFile('apps/org/src/main.jsx');
+  check('⑩ 机构端作品库：分享入口在面板 `actions`（详情右上角）',
+    /actions=\{<div className="row-actions">[\s\S]{0,400}data-testid="work-share"/.test(orgList));
+  const websiteModal = readFile('apps/website/src/components/WorkPreviewModal.jsx');
+  check('⑩ 网站端预览弹窗：分享入口在 `pl-viewer-head__actions`（弹窗右上角）',
+    /pl-viewer-head__actions[\s\S]{0,300}data-testid="work-share"/.test(websiteModal));
+}
+
 console.log('');
 if (failures) { console.log(`✗ p171 有 ${failures} 处不符合预期`); process.exit(1); }
 assert.equal(failures, 0);

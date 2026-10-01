@@ -119,6 +119,19 @@ try {
   const created = await api('/api/student/projects', { method: 'POST', token: studentToken, body: { courseLessonId: lessonId, title: workTitle } });
   assert.equal(created.status, 200, `学生项目创建失败: ${JSON.stringify(created.data)}`);
   const projectId = created.data.id;
+  // ⚠️⚠️ 2026-10-01 定性并修掉这条"一红一绿"（记录见 §六十七 与 §〇 的 p13 条目）：
+  //    `POST /api/student/projects` 是**幂等**语义（同一场课堂 + 同一个课时只该有一个项目：
+  //    已有项目就**复用**、**忽略传入的 title**，那是 2026-09-21 的产品口径，别去改它）。
+  //    本脚本前面插的 `历史用量项目`（第 65 行）只要落在这个课时上，复用回来的就是**它** ——
+  //    于是"按我传的标题去报表里搜"必然搜不到 → 红。根因是**断言建在"我传的标题会赢"上**，
+  //    不是产品那条幂等语义，也不是"飘"。
+  //    修法：从库里**读回真实的标题**，后面按它检索、并按它断言报表字段。
+  const projectRow = await arow('SELECT title FROM student_projects WHERE id=?', [projectId]);
+  const actualTitle = String(projectRow?.title || '');
+  assert.ok(actualTitle, '项目行应当有标题');
+  if (actualTitle !== workTitle) {
+    console.log(`  ℹ 项目被幂等复用（标题是「${actualTitle}」，不是传进去的「${workTitle}」）—— 按库里的真实标题继续验`);
+  }
 
   // ⚠️ 2026-09-25：提交这一步多了「画布上要有**没提交过的产出**」这道闸（2026-09-24 §十二.A 的增量提交），
   //    空画布提交会被 409 NO_NEW_OUTPUT 拒 —— 这条守卫因此长期一红一绿（跑得早时它还绿，闸加上去之后必红）。
@@ -148,12 +161,13 @@ try {
   assert.equal(adminLogin.status, 200, `管理员登录失败: ${JSON.stringify(adminLogin.data)}`);
   const adminToken = adminLogin.data.token;
 
-  const report = await api('/api/admin/billing/usage-records?search=' + encodeURIComponent(workTitle), { token: adminToken });
+  // 按**库里那个真实标题**检索（见上面那段：标题可能是幂等复用留下来的旧标题）
+  const report = await api('/api/admin/billing/usage-records?search=' + encodeURIComponent(actualTitle), { token: adminToken });
   assert.equal(report.status, 200, `平台端用量报表读取失败: ${JSON.stringify(report.data)}`);
   const hit = (report.data.items || []).find((item) => item.id === liveUsageId);
-  assert.ok(hit, '平台端用量报表应能按作品标题检索到该记录');
+  assert.ok(hit, `平台端用量报表应能按作品标题（「${actualTitle}」）检索到该记录`);
   assert.equal(hit.workId, workId, '报表应返回作品 id');
-  assert.equal(hit.workTitle, workTitle, '报表应返回作品标题');
+  assert.equal(hit.workTitle, actualTitle, '报表应返回作品标题');
   // 2026-09-13（C3 前置）**推翻了这条旧断言**：当时上游从不返回 token 用量，字段恒为 0，
   // 显示出来只会误导，所以报表干脆不返回它。现在 provider 会把上游的 usage 采集进账本，
   // 字段不再恒为 0（多模态接口仍可能不返回 → 那种就是 0），所以报表改回透出，并语义明确：

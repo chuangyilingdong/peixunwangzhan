@@ -147,55 +147,101 @@ for (let i = 0; i < files.length; i += 1) {
     try { await resetMysqlDatabase({ silent: true, database: dbName, dropToo: i > 0 ? [`${dbPrefix}_${i}`] : [] }); }
     catch (error) { console.log(`  [mysql] 重置失败，跳过 ${rel}：${error.message}`); results.push({ script: rel, ok: false, status: -1, timedOut: false, ms: 0, tail: `mysql 重置失败：${error.message}` }); continue; }
   }
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'acceptance-'));
-  const logPath = path.join(tmp, 'log.txt');
-  const fd = fs.openSync(logPath, 'w');
-  const t0 = Date.now();
-  // 输出写**文件**而不是管道：脚本里常起服务器，孙进程会握着管道不放，spawnSync 会一直等
-  // mysql 驱动下用包装层跑：脚本结束后由包装层显式关连接池，
-  // 否则 mysql2 的池会握着事件循环 → 脚本跑完不退出 → 全被判成"超时"（假失败）。
-  const argv = useMysql ? [path.join(ROOT, 'scripts/acceptance-script-wrapper.mjs'), rel] : [rel];
-  const res = spawnSync(nodeBin, argv, {
-    cwd: ROOT,
-    timeout,
-    stdio: ['ignore', fd, fd],
-    env: {
-      ...process.env,
-      // ⚠️ 只有真给了库名才覆盖（否则会写进字符串 "null"，应用连到一个不存在的库）
-      ...(useMysql ? { ...mysqlEnvFromProcess(), ...(dbName ? { MYSQL_DATABASE: dbName } : {}) } : {}),
-      PLATFORM_DATA_DIR: tmp,
-      PLATFORM_DB_PATH: path.join(tmp, 'platform.db'),
-      DEPLOYMENT_MODE: process.env.DEPLOYMENT_MODE || 'internal-test',
-    },
-  });
-  fs.closeSync(fd);
-  let out = '';
-  try { out = fs.readFileSync(logPath, 'utf8'); } catch { /* 没输出就算了 */ }
-  // 想看"红在哪一条"就带上 SUITE_KEEP_LOGS=1：这时保留临时目录（里面有每个脚本的完整输出），
-  // 并在结果行里带上路径。默认仍然清理（不然跑一晚全量会攒下几百个目录）。
-  if (process.env.SUITE_KEEP_LOGS) {
-    try { fs.writeFileSync(path.join(tmp, `${path.basename(rel, '.mjs')}.status`), String(res.status)); } catch { /* 无所谓 */ }
-  } else {
-    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 交给系统清理 */ }
+  // ⭐ 2026-10-01：**已知会偶发**的脚本，红了**原地重跑一次**再定性。
+  //    这些是记录在交接文档里的既有"跑一次红一次绿"，与当轮改动无关（p146 超限上传遇 ECONNRESET、
+  //    p10 偶发崩溃且 tail 只剩一行、p54/p117 子进程空 tail、p156 夹具型）。
+  //    ⚠️ 只对白名单生效，而且**照实标注**：结果行打印 `FLAKY`、结果 JSON 里 `flaky: true`，
+  //    所以"重跑才过"这件事永远看得见，不会被悄悄当成绿。
+  //    `SUITE_RETRYABLE_EXTRA=a.mjs,b.mjs` 可以临时往名单里再加几个（新发现的偶发不用改这个文件）。
+  const RETRYABLE = new Set([
+    'scripts/p146-client-installer-upload.mjs',
+    'scripts/p10-file-upload-security.mjs',
+    'scripts/p54-draft-isolation.mjs',
+    'scripts/p117-deployment-mode-copy.mjs',
+    'scripts/p156-contact-us-page.mjs',
+    ...String(process.env.SUITE_RETRYABLE_EXTRA || '').split(',').map((x) => x.trim()).filter(Boolean),
+  ]);
+
+  const runOnce = (suffix = '') => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `acceptance${suffix}-`));
+    const logPath = path.join(tmp, 'log.txt');
+    const fd = fs.openSync(logPath, 'w');
+    const t0 = Date.now();
+    // 输出写**文件**而不是管道：脚本里常起服务器，孙进程会握着管道不放，spawnSync 会一直等
+    // mysql 驱动下用包装层跑：脚本结束后由包装层显式关连接池，
+    // 否则 mysql2 的池会握着事件循环 → 脚本跑完不退出 → 全被判成"超时"（假失败）。
+    const argv = useMysql ? [path.join(ROOT, 'scripts/acceptance-script-wrapper.mjs'), rel] : [rel];
+    const res = spawnSync(nodeBin, argv, {
+      cwd: ROOT,
+      timeout,
+      stdio: ['ignore', fd, fd],
+      env: {
+        ...process.env,
+        // ⚠️ 只有真给了库名才覆盖（否则会写进字符串 "null"，应用连到一个不存在的库）
+        ...(useMysql ? { ...mysqlEnvFromProcess(), ...(dbName ? { MYSQL_DATABASE: dbName } : {}) } : {}),
+        PLATFORM_DATA_DIR: tmp,
+        PLATFORM_DB_PATH: path.join(tmp, 'platform.db'),
+        DEPLOYMENT_MODE: process.env.DEPLOYMENT_MODE || 'internal-test',
+      },
+    });
+    fs.closeSync(fd);
+    let out = '';
+    try { out = fs.readFileSync(logPath, 'utf8'); } catch { /* 没输出就算了 */ }
+    // 想看"红在哪一条"就带上 SUITE_KEEP_LOGS=1：这时保留临时目录（里面有每个脚本的完整输出），
+    // 并在结果行里带上路径。默认仍然清理（不然跑一晚全量会攒下几百个目录）。
+    if (process.env.SUITE_KEEP_LOGS) {
+      try { fs.writeFileSync(path.join(tmp, `${path.basename(rel, '.mjs')}${suffix}.status`), String(res.status)); } catch { /* 无所谓 */ }
+    } else {
+      try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 交给系统清理 */ }
+    }
+    const ms = Date.now() - t0;
+    return {
+      ok: res.status === 0,
+      status: res.status,
+      timedOut: res.error?.code === 'ETIMEDOUT' || Boolean(res.signal),
+      ms,
+      tail: (out.trim().split('\n').filter(Boolean).slice(-1)[0] || '').slice(0, 300),
+      logPath,
+    };
+  };
+
+  let attempt = runOnce();
+  let retried = false;
+  if (!attempt.ok && RETRYABLE.has(rel)) {
+    console.log(`  ↻ ${rel} 红了 —— 它是**已知偶发**名单里的，原地重跑一次再定性`);
+    const second = runOnce('-retry');
+    retried = true;
+    if (second.ok) attempt = { ...second, flaky: true, firstTail: attempt.tail };
+    else attempt = { ...attempt, retriedFailedTwice: true, tail: second.tail };
   }
 
-  const ms = Date.now() - t0;
-  const tail = out.trim().split('\n').filter(Boolean).slice(-1)[0] || '';
   const rec = {
     script: rel,
-    ok: res.status === 0,
-    status: res.status,
-    timedOut: res.error?.code === 'ETIMEDOUT' || Boolean(res.signal),
-    ms,
-    tail: tail.slice(0, 300),
+    ok: attempt.ok,
+    status: attempt.status,
+    timedOut: attempt.timedOut,
+    ms: attempt.ms,
+    tail: attempt.tail,
+    ...(attempt.flaky ? { flaky: true, firstTail: attempt.firstTail } : {}),
+    ...(attempt.retriedFailedTwice ? { retriedFailedTwice: true } : {}),
   };
   results.push(rec);
-  console.log(`[${String(i + 1).padStart(3)}/${files.length}] ${rec.ok ? 'PASS' : 'FAIL'}${rec.timedOut ? '(超时)' : ''} ${String(Math.round(ms / 1000)).padStart(3)}s ${rel}${rec.ok ? '' : `  ← ${tail.slice(0, 110)}`}${!rec.ok && process.env.SUITE_KEEP_LOGS ? `  [完整输出: ${logPath}]` : ''}`);
+  const label = rec.ok ? (rec.flaky ? 'PASS*' : 'PASS') : 'FAIL';
+  const extra = rec.flaky
+    ? '  ⚠️ 第一次红、重跑才过（已知偶发；红时的尾巴：' + String(rec.firstTail || '').slice(0, 90) + '）'
+    : (retried && !rec.ok ? '  ⚠️ 重跑一次仍然红（这次不是偶发）' : '');
+  console.log(`[${String(i + 1).padStart(3)}/${files.length}] ${label}${rec.timedOut ? '(超时)' : ''} ${String(Math.round(rec.ms / 1000)).padStart(3)}s ${rel}${rec.ok ? extra : `  ← ${rec.tail.slice(0, 110)}${extra}`}${!rec.ok && process.env.SUITE_KEEP_LOGS ? `  [完整输出: ${attempt.logPath}]` : ''}`);
 }
 
 const secs = Math.round((Date.now() - started) / 1000);
 const pass = results.filter((r) => r.ok).length;
+const flaky = results.filter((r) => r.flaky);
 console.log(`\n合计 ${results.length}：通过 ${pass} / 失败 ${results.length - pass}（${secs}s）`);
+// 「重跑才过」的脚本单独列一条 —— 它们仍然算通过（已知偶发），但**必须看得见**，
+// 别让"重跑一次"变成把真回归洗白的橡皮擦。
+if (flaky.length) {
+  console.log(`⚠️ 其中 ${flaky.length} 个是**第一次红、重跑才过**（已知偶发名单）：${flaky.map((r) => `${r.script}  ← ${String(r.firstTail || '').slice(0, 80)}`).join('\n    ')}`);
+}
 
 fs.mkdirSync(path.join(ROOT, '.tmp'), { recursive: true });
 const outPath = path.join(ROOT, `.tmp/acceptance-${tag}.json`);
