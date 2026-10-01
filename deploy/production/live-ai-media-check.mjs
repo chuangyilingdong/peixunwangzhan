@@ -62,7 +62,7 @@ for (const line of readFileSync('/etc/ai-kids-platform/production.env', 'utf8').
 for (const [name, value] of Object.entries(env)) {
   if (/^AI_PROVIDER_/.test(name) || /^FILE_UPLOAD_/.test(name) || name === 'PUBLIC_SITE_URL') process.env[name] = value;
 }
-const SELF = String(env.PUBLIC_SITE_URL || 'https://iicili.cyou').replace(/\/+$/, '');
+const SELF = String(env.PUBLIC_SITE_URL || 'https://aicyld.com').replace(/\/+$/, '');
 
 const { DatabaseSync } = await import('node:sqlite');
 const db = new DatabaseSync(`${PROD_DATA}/platform.db`, { readOnly: true });

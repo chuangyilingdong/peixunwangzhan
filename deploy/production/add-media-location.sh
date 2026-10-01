@@ -14,14 +14,14 @@
 # 任一步失败都不 reload（配置没动过就谈不上回滚）。
 set -euo pipefail
 
-CONF=/etc/nginx/sites-enabled/iicili.cyou
+CONF=/etc/nginx/sites-enabled/aicyld.com
 BACKUP_DIR=/etc/nginx/backups
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 MEDIA_DIR=/srv/ai-kids-platform/public-media
 
 mkdir -p "$BACKUP_DIR"
-cp "$CONF" "$BACKUP_DIR/iicili.cyou.before-media.$STAMP"
-echo "已备份 nginx 配置 → $BACKUP_DIR/iicili.cyou.before-media.$STAMP"
+cp "$CONF" "$BACKUP_DIR/aicyld.com.before-media.$STAMP"
+echo "已备份 nginx 配置 → $BACKUP_DIR/aicyld.com.before-media.$STAMP"
 
 if grep -q "location ^~ /media/" "$CONF"; then
   echo "已存在 /media/ 这条 location，跳过插入"
@@ -98,7 +98,7 @@ SAMPLE=$(find "$MEDIA_DIR/ltai-works" -type f \( -name 'cover.jpg' -o -name 'cov
 if [ -n "$SAMPLE" ]; then
   REL=${SAMPLE#"$MEDIA_DIR"/}
   echo "样本：$REL"
-  curl -sI -m 20 "https://iicili.cyou/media/$REL" | grep -iE "^HTTP|content-type|content-length|cache-control|access-control-allow-origin"
+  curl -sI -m 20 "https://aicyld.com/media/$REL" | grep -iE "^HTTP|content-type|content-length|cache-control|access-control-allow-origin"
 else
   echo "!! 媒体目录里没找到封面样本"
 fi

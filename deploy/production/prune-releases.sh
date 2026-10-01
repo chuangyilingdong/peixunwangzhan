@@ -54,4 +54,4 @@ echo
 echo "剩余 $(ls -1 "$PROD/releases" | wc -l) 份；current = $(readlink -f "$PROD/current")"
 printf 'service: '; systemctl is-active learning-platform-production
 df -h / | tail -1
-for u in / /admin/ /org/ /student/ /api/health; do printf '%s ' "$u"; curl -s -o /dev/null -m 12 -w '%{http_code}\n' "https://iicili.cyou$u"; done
+for u in / /admin/ /org/ /student/ /api/health; do printf '%s ' "$u"; curl -s -o /dev/null -m 12 -w '%{http_code}\n' "https://aicyld.com$u"; done

@@ -81,6 +81,15 @@ curl -fsS --max-time 8 http://127.0.0.1:8789/health && echo
 log "5. 验收"
 bash "$(dirname "${BASH_SOURCE[0]}")/03-verify-new-host.sh" --local
 
+# ⭐ 2026-10-01：**每次发布后顺手清一次旧备份**（保留最新 6 份 + 7 天内的每日份，见该脚本头）。
+#    背景：单份备份 ~200MB（里面拷了一整棵 release 树），发布密集的日子一天能留 19 份 ——
+#    `daily-backup.sh` 只在**每晚 03:00** 按 mtime 清 7 天前的，白天发的版它一份都不清，
+#    于是磁盘一路涨到监控阈值（2026-10-01 实测 22G/40G=58%，清完 18G/40G=48%）。
+#    ⚠️ 它**不是**发布的前置：失败只 warn，绝不拦住这次发布。
+log "6. 清旧备份（保留最新 6 份 + 7 天内的每日份）"
+bash "$(dirname "${BASH_SOURCE[0]}")/../prune-backups.sh" --apply \
+  || warn "清理旧备份失败（不影响本次发布；可手工跑 deploy/production/prune-backups.sh）"
+
 cat <<NEXT
 
   回滚（一条命令，把软链切回上一版再重启）：

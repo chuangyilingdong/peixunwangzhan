@@ -27,7 +27,7 @@ const log = (msg) => console.log(`  · ${msg}`);
 async function api(pathname, { method = 'GET', token, body } = {}) {
   const r = await fetch(BASE + pathname, {
     method,
-    headers: { 'content-type': 'application/json', host: 'iicili.cyou', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    headers: { 'content-type': 'application/json', host: 'aicyld.com', ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const j = await r.json().catch(() => ({}));

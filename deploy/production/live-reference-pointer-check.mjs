@@ -49,7 +49,7 @@ for (const line of readFileSync('/etc/ai-kids-platform/production.env', 'utf8').
   const matched = line.match(/^([A-Z0-9_]+)=(.*)$/);
   if (matched) env[matched[1]] = matched[2].replace(/^["']|["']$/g, '');
 }
-const SELF = String(env.PUBLIC_SITE_URL || 'https://iicili.cyou').replace(/\/+$/, '');
+const SELF = String(env.PUBLIC_SITE_URL || 'https://aicyld.com').replace(/\/+$/, '');
 const pepper = createHash('sha256').update(String(env.AUTH_PEPPER || 'p0-local-pepper')).digest();
 const store = JSON.parse(readFileSync('/srv/ai-kids-platform/production/data/provider-secrets/provider-secrets.json', 'utf8'));
 const decipher = createDecipheriv('aes-256-gcm', pepper, Buffer.from(store.secrets['channel-mtpzt0c8'].iv, 'hex'));

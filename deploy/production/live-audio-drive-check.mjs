@@ -65,7 +65,7 @@ for (const [name, value] of Object.entries(env)) {
 process.env.PLATFORM_DATA_DIR = WORK;
 process.env.PLATFORM_DB_PATH = COPY_DB;
 process.env.DEPLOYMENT_MODE = 'public';
-const SELF = String(env.PUBLIC_SITE_URL || 'https://iicili.cyou').replace(/\/+$/, '');
+const SELF = String(env.PUBLIC_SITE_URL || 'https://aicyld.com').replace(/\/+$/, '');
 const pepper = createHash('sha256').update(String(env.AUTH_PEPPER || 'p0-local-pepper')).digest();
 const store = JSON.parse(readFileSync(`${PROD_DATA}/provider-secrets/provider-secrets.json`, 'utf8'));
 function apiKeyFor(channelId) {
@@ -95,7 +95,7 @@ if (!audio) { console.log('这条任务里没有音频参考'); process.exit(1);
 const prompt = String(job.prompt || '让画面跟着音频动起来').replace(/图片[ ]?(\d)/g, 'Image $1').replace(/音频[ ]?(\d)/g, 'Audio $1');
 console.log(`任务 ${job.id}（${job.created_at}）\n提示词 ${prompt}\n音频 ${audio.url}\n图片 ${images.length} 张\n`);
 
-/* ── 素材镜像：我们自己域名上的一定要先传到上游（对方读不到 iicili.cyou）── */
+/* ── 素材镜像：我们自己域名上的一定要先传到上游（对方读不到 aicyld.com）── */
 const { mirrorSelfHostedMedia } = await import(`${RELEASE}/apps/server/src/services/upstreamMediaMirror.js`);
 const { defaultMediaUploadPath } = await import(`${RELEASE}/apps/server/src/services/openaiCompatibleProvider.js`);
 const uploadPath = defaultMediaUploadPath(channel.endpoint);

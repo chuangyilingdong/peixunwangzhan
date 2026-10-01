@@ -3,10 +3,10 @@ set -Eeuo pipefail
 
 # Apply only the repository's reviewed sensitive-path deny block to the live
 # production vhost. This script never touches the application release or DB.
-CONFIG_PATH="${NGINX_PRODUCTION_CONFIG:-/etc/nginx/sites-enabled/iicili.cyou}"
+CONFIG_PATH="${NGINX_PRODUCTION_CONFIG:-/etc/nginx/sites-enabled/aicyld.com}"
 BACKUP_DIR="${NGINX_BACKUP_DIR:-/etc/nginx/backups}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-BACKUP_PATH="${BACKUP_DIR}/iicili.cyou.before-sensitive-path-hardening.${STAMP}"
+BACKUP_PATH="${BACKUP_DIR}/aicyld.com.before-sensitive-path-hardening.${STAMP}"
 MARKER_BEGIN="# BEGIN AI-KIDS-SENSITIVE-PATH-HARDENING"
 MARKER_END="# END AI-KIDS-SENSITIVE-PATH-HARDENING"
 
@@ -81,7 +81,7 @@ fi
 systemctl reload nginx
 
 for path in /server.js /package.json /pnpm-lock.yaml /pnpm-workspace.yaml /apps/ /packages/ /node_modules/ /scripts/ /deploy/; do
-  code="$(curl -k -sS -o /dev/null -w '%{http_code}' --max-time 10 "https://iicili.cyou${path}")" || {
+  code="$(curl -k -sS -o /dev/null -w '%{http_code}' --max-time 10 "https://aicyld.com${path}")" || {
     rollback
     echo "ERROR: smoke request failed for ${path}; restored $CONFIG_PATH from $BACKUP_PATH" >&2
     exit 1
