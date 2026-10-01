@@ -6,14 +6,11 @@
   "nav.handbook": "机构手册",
   "nav.faq": "常见问题",
   "nav.download": "VibeCoding客户端下载",
-
   "auth.org": "机构 / 老师登录",
   "auth.student": "学生登录",
-
   "menu.open": "打开菜单",
   "menu.close": "关闭菜单",
   "menu.login": "登录入口",
-
   "footer.product": "产品",
   "footer.usage": "使用",
   "footer.link.marketplace": "灵动课程",
@@ -22,10 +19,8 @@
   "footer.link.download": "下载客户端",
   "footer.link.faq": "常见问题",
   "footer.link.orgConsole": "机构后台",
-
   "lang.label": "语言",
   "lang.switchTo": "切换到{name}",
-
   "cms.home": {
     "heroKicker": "",
     "heroTitle": "培养青少年Ai思维",
@@ -34,18 +29,46 @@
     "trustTitle": "",
     "trustDescription": "",
     "stats": [
-      { "value": 3, "suffix": " 门", "label": "标准课包" },
-      { "value": 48, "suffix": " 节", "label": "课时总量" },
-      { "value": 2, "suffix": " 类", "label": "课堂形式" },
-      { "value": 1, "suffix": " 套", "label": "机构工作台" }
+      {
+        "value": 3,
+        "suffix": " 门",
+        "label": "标准课包"
+      },
+      {
+        "value": 48,
+        "suffix": " 节",
+        "label": "课时总量"
+      },
+      {
+        "value": 2,
+        "suffix": " 类",
+        "label": "课堂形式"
+      },
+      {
+        "value": 1,
+        "suffix": " 套",
+        "label": "机构工作台"
+      }
     ],
     "steps": {
       "title": "三步，把 AI 创作课开进课堂",
       "lead": "从开通机构到学生交出作品，中间不需要技术团队，学生也不用自备账号或 API Key。",
       "items": [
-        { "number": "01", "title": "开通机构与账号", "desc": "配置席位与授权次数，创建老师与学生账号。学生用机构账号登录，无需自备 API Key。" },
-        { "number": "02", "title": "按课包直接排课", "desc": "课程中心提供标准课包与课件，老师选课即用；课堂零配置，机房电脑打开就能上。" },
-        { "number": "03", "title": "当堂出作品、沉淀展厅", "desc": "学生每节课都用 AI 做出可展示的作品，提交后进入作品展厅，形成校区的案例库与招生素材。" }
+        {
+          "number": "01",
+          "title": "开通机构与账号",
+          "desc": "配置席位与授权次数，创建老师与学生账号。学生用机构账号登录，无需自备 API Key。"
+        },
+        {
+          "number": "02",
+          "title": "按课包直接排课",
+          "desc": "课程中心提供标准课包与课件，老师选课即用；课堂零配置，机房电脑打开就能上。"
+        },
+        {
+          "number": "03",
+          "title": "当堂出作品、沉淀展厅",
+          "desc": "学生每节课都用 AI 做出可展示的作品，提交后进入作品展厅，形成校区的案例库与招生素材。"
+        }
       ]
     },
     "videos": {
@@ -84,5 +107,11 @@
         }
       ]
     }
+  },
+  "home.cta.contact": "联系我们",
+  "home.cta.courses": "查看课程",
+  "cms.marketplace": {
+    "title": "灵动Ai学院课包展示",
+    "lead": "灵动Ai坚持自研国内精品Ai课程，持续探索适合青少年Ai培训体系。"
   }
 }

@@ -6,14 +6,11 @@
   "nav.handbook": "Handbook",
   "nav.faq": "FAQ",
   "nav.download": "Download Client",
-
   "auth.org": "School / Teacher Login",
   "auth.student": "Student Login",
-
   "menu.open": "Open menu",
   "menu.close": "Close menu",
   "menu.login": "Sign in",
-
   "footer.product": "Product",
   "footer.usage": "Getting started",
   "footer.link.marketplace": "Courses",
@@ -22,10 +19,8 @@
   "footer.link.download": "Download Client",
   "footer.link.faq": "FAQ",
   "footer.link.orgConsole": "School Console",
-
   "lang.label": "Language",
   "lang.switchTo": "Switch to {name}",
-
   "cms.home": {
     "heroKicker": "",
     "heroTitle": "Cultivate AI thinking,",
@@ -34,18 +29,46 @@
     "trustTitle": "",
     "trustDescription": "",
     "stats": [
-      { "value": 3, "suffix": " packs", "label": "Standard course packs" },
-      { "value": 48, "suffix": " lessons", "label": "Lessons in total" },
-      { "value": 2, "suffix": " formats", "label": "Class formats" },
-      { "value": 1, "suffix": " console", "label": "School console" }
+      {
+        "value": 3,
+        "suffix": " packs",
+        "label": "Standard course packs"
+      },
+      {
+        "value": 48,
+        "suffix": " lessons",
+        "label": "Lessons in total"
+      },
+      {
+        "value": 2,
+        "suffix": " formats",
+        "label": "Class formats"
+      },
+      {
+        "value": 1,
+        "suffix": " console",
+        "label": "School console"
+      }
     ],
     "steps": {
       "title": "Three steps to bring AI creation into your classroom",
       "lead": "From setting up your school to students submitting real work — no tech team needed, and no accounts or API keys for students to bring.",
       "items": [
-        { "number": "01", "title": "Set up your school and accounts", "desc": "Allocate seats and authorizations, then create teacher and student accounts. Students sign in with the school account — no API key required." },
-        { "number": "02", "title": "Schedule straight from the course packs", "desc": "Ready-made course packs and teaching slides: pick a lesson and teach. Classes need zero setup — any lab computer will do." },
-        { "number": "03", "title": "Real work in every class, kept in your gallery", "desc": "Students make something worth showing with AI in every lesson. Submitted work goes to the gallery and becomes your school's case library and marketing material." }
+        {
+          "number": "01",
+          "title": "Set up your school and accounts",
+          "desc": "Allocate seats and authorizations, then create teacher and student accounts. Students sign in with the school account — no API key required."
+        },
+        {
+          "number": "02",
+          "title": "Schedule straight from the course packs",
+          "desc": "Ready-made course packs and teaching slides: pick a lesson and teach. Classes need zero setup — any lab computer will do."
+        },
+        {
+          "number": "03",
+          "title": "Real work in every class, kept in your gallery",
+          "desc": "Students make something worth showing with AI in every lesson. Submitted work goes to the gallery and becomes your school's case library and marketing material."
+        }
       ]
     },
     "videos": {
@@ -84,5 +107,11 @@
         }
       ]
     }
+  },
+  "home.cta.contact": "Contact us",
+  "home.cta.courses": "Browse courses",
+  "cms.marketplace": {
+    "title": "Course packs from Lingdong AI Academy",
+    "lead": "Lingdong AI builds its own AI courses for young learners and keeps refining a curriculum that fits how kids learn."
   }
 }

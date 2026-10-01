@@ -903,6 +903,7 @@ function HomeCompare({ block }) {
   </section>;
 }
 function HomeLanding() {
+  const t = useT();
   const cms = useWebsiteContent('HOME');
   const navigate = useNavigate();
   const content = cms.data || {};
@@ -949,8 +950,8 @@ function HomeLanding() {
           ⚠️ 它渲染的是 <button>，所以导航走 onClick + navigate，不再是 <a>；
           代价是右键「新标签打开」不再可用（首页 CTA 影响很小，接受）。 */}
       <div className="hp-actions">
-        <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.08} blur={8} textColor="#ffffff" lineColor="#ffffff" baseColor="#8a8a92" intensity={1.15} shineSize={17} shineFade={40} thickness={1} speed={0.7} followMouse proximity={250} autoAnimate onClick={() => navigate('/demo')}>联系我们</SpecularButton>
-        <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.08} blur={8} textColor="#ffffff" lineColor="#ffffff" baseColor="#8a8a92" intensity={0.9} shineSize={15} shineFade={45} thickness={1} speed={0.55} followMouse proximity={250} onClick={() => navigate('/marketplace')}>查看课程</SpecularButton>
+        <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.08} blur={8} textColor="#ffffff" lineColor="#ffffff" baseColor="#8a8a92" intensity={1.15} shineSize={17} shineFade={40} thickness={1} speed={0.7} followMouse proximity={250} autoAnimate onClick={() => navigate('/demo')}>{t('home.cta.contact')}</SpecularButton>
+        <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.08} blur={8} textColor="#ffffff" lineColor="#ffffff" baseColor="#8a8a92" intensity={0.9} shineSize={15} shineFade={45} thickness={1} speed={0.55} followMouse proximity={250} onClick={() => navigate('/marketplace')}>{t('home.cta.courses')}</SpecularButton>
       </div>
     </section>
     {ready && stats.length ? <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><HomeStatIcon name={item.icon} /><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
