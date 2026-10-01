@@ -19,6 +19,7 @@
  *    （注释里常原样引用被删的代码，直接 includes 会永远命中 —— 这一轮 p130/p132 各踩过一次）。
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import { stripComments } from './lib/sourceText.mjs';
 
 const read = (p) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
@@ -48,8 +49,17 @@ check('① 「首页除外」这件事回不来：isFullPage 只由 /learn/canva
    2026-09-25 用户口径：「条款与隐私下方那几项全部删除，其他的选型对比、机构方案、机构手册好多
    都是重复的，只需要留关键的 5-6 个入口」。所以从"四列同构"改成"两列、每组三条"，
    并把删掉的那几项钉死（免得过两天又被复制回来）。 */
-const titles = ['产品', '使用'].filter((name) => site.includes(`<strong>${name}</strong>`));
-check('② 两列链接（产品 / 使用），共 6 个入口', titles.length === 2, JSON.stringify(titles));
+// ⚠️ 2026-10-01 多语言：列头文案进了语言包（`footer.product` / `footer.usage`），源码里是 `t(key)` ——
+//    所以这条从"找中文字面量"改成"找 key + 语言包里真有这两条"（文案不该再写死在页脚里）。
+const titleKeys = ['footer.product', 'footer.usage'].filter((key) => site.includes(`t('${key}')`));
+const localeHasTitles = ['zh-CN', 'zh-TW', 'en'].every((code) => {
+  try {
+    const table = JSON.parse(fs.readFileSync(path.join('apps', 'website', 'src', 'locales', `${code}.json`), 'utf8'));
+    return Boolean(table['footer.product']) && Boolean(table['footer.usage']);
+  } catch { return false; }
+});
+check('② 两列链接（footer.product / footer.usage），共 6 个入口', titleKeys.length === 2 && localeHasTitles,
+  JSON.stringify({ titleKeys, localeHasTitles }));
 // ⚠️ 先剥注释再判：页脚里刚加的那段注释**原样写着**被删掉的那几个路径（说明"页面还在、只是不列"），
 //    不剥的话下面每一条"不再列 X"都会命中注释 —— 这个守卫的文件头就警告过这一脚。
 const footerOnly = stripComments(site.slice(site.indexOf('function Footer('), site.indexOf('function Button(')));

@@ -1,0 +1,88 @@
+{
+  "nav.home": "首页",
+  "nav.learn": "灵动学习",
+  "nav.marketplace": "灵动课程",
+  "nav.works": "课堂作品",
+  "nav.handbook": "机构手册",
+  "nav.faq": "常见问题",
+  "nav.download": "VibeCoding客户端下载",
+
+  "auth.org": "机构 / 老师登录",
+  "auth.student": "学生登录",
+
+  "menu.open": "打开菜单",
+  "menu.close": "关闭菜单",
+  "menu.login": "登录入口",
+
+  "footer.product": "产品",
+  "footer.usage": "使用",
+  "footer.link.marketplace": "灵动课程",
+  "footer.link.org": "机构方案",
+  "footer.link.works": "课堂作品",
+  "footer.link.download": "下载客户端",
+  "footer.link.faq": "常见问题",
+  "footer.link.orgConsole": "机构后台",
+
+  "lang.label": "语言",
+  "lang.switchTo": "切换到{name}",
+
+  "cms.home": {
+    "heroKicker": "",
+    "heroTitle": "培养青少年Ai思维",
+    "heroAccent": "掌握Ai时代的创造方式",
+    "heroDescription": "AI 画布创作 + Vibe Coding 对话编程，从兴趣到独立创作",
+    "trustTitle": "",
+    "trustDescription": "",
+    "stats": [
+      { "value": 3, "suffix": " 门", "label": "标准课包" },
+      { "value": 48, "suffix": " 节", "label": "课时总量" },
+      { "value": 2, "suffix": " 类", "label": "课堂形式" },
+      { "value": 1, "suffix": " 套", "label": "机构工作台" }
+    ],
+    "steps": {
+      "title": "三步，把 AI 创作课开进课堂",
+      "lead": "从开通机构到学生交出作品，中间不需要技术团队，学生也不用自备账号或 API Key。",
+      "items": [
+        { "number": "01", "title": "开通机构与账号", "desc": "配置席位与授权次数，创建老师与学生账号。学生用机构账号登录，无需自备 API Key。" },
+        { "number": "02", "title": "按课包直接排课", "desc": "课程中心提供标准课包与课件，老师选课即用；课堂零配置，机房电脑打开就能上。" },
+        { "number": "03", "title": "当堂出作品、沉淀展厅", "desc": "学生每节课都用 AI 做出可展示的作品，提交后进入作品展厅，形成校区的案例库与招生素材。" }
+      ]
+    },
+    "videos": {
+      "title": "课堂里真实做出来的东西",
+      "lead": "一节课一件作品：点开就是学生自己动手做出来的样子。",
+      "items": []
+    },
+    "compare": {
+      "title": "同样的 AI 课，两种上法。",
+      "highlight": "两种上法",
+      "lead": "工具、环境、账号、作品都交给平台，老师只负责教。",
+      "cards": [
+        {
+          "tone": "without",
+          "title": "分散拼凑",
+          "items": [
+            "多个网站 / App 来回切换，课堂节奏被打断",
+            "学生各自注册账号、自备 API Key，难管也易泄露",
+            "课件与素材靠老师手工准备，每节课都要重来",
+            "作品散落在群聊和个人电脑里，留不下来",
+            "出问题现场排查，老师被迫当技术员",
+            "校区之间无法复用，新老师从零开始"
+          ]
+        },
+        {
+          "tone": "with",
+          "title": "用灵动ai",
+          "items": [
+            "同一个工作台里完成：对话 + 预览 + 项目文件",
+            "机构统一开通账号与授权次数，学生无需自备 Key",
+            "标准课包与课件选课即用，课堂零配置",
+            "作品当堂提交、进作品展厅，形成校区案例库",
+            "用量与算力有记录、有提醒，成本看得见",
+            "一套流程可复制到每个校区、每位新老师"
+          ]
+        }
+      ]
+    }
+  }
+}

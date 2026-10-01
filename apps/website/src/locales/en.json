@@ -1,0 +1,88 @@
+{
+  "nav.home": "Home",
+  "nav.learn": "Learn",
+  "nav.marketplace": "Courses",
+  "nav.works": "Student Gallery",
+  "nav.handbook": "Handbook",
+  "nav.faq": "FAQ",
+  "nav.download": "Download Client",
+
+  "auth.org": "School / Teacher Login",
+  "auth.student": "Student Login",
+
+  "menu.open": "Open menu",
+  "menu.close": "Close menu",
+  "menu.login": "Sign in",
+
+  "footer.product": "Product",
+  "footer.usage": "Getting started",
+  "footer.link.marketplace": "Courses",
+  "footer.link.org": "For Schools",
+  "footer.link.works": "Student Gallery",
+  "footer.link.download": "Download Client",
+  "footer.link.faq": "FAQ",
+  "footer.link.orgConsole": "School Console",
+
+  "lang.label": "Language",
+  "lang.switchTo": "Switch to {name}",
+
+  "cms.home": {
+    "heroKicker": "",
+    "heroTitle": "Cultivate AI thinking,",
+    "heroAccent": "create in the age of AI",
+    "heroDescription": "AI canvas creation plus Vibe Coding conversation — from first spark to finished work.",
+    "trustTitle": "",
+    "trustDescription": "",
+    "stats": [
+      { "value": 3, "suffix": " packs", "label": "Standard course packs" },
+      { "value": 48, "suffix": " lessons", "label": "Lessons in total" },
+      { "value": 2, "suffix": " formats", "label": "Class formats" },
+      { "value": 1, "suffix": " console", "label": "School console" }
+    ],
+    "steps": {
+      "title": "Three steps to bring AI creation into your classroom",
+      "lead": "From setting up your school to students submitting real work — no tech team needed, and no accounts or API keys for students to bring.",
+      "items": [
+        { "number": "01", "title": "Set up your school and accounts", "desc": "Allocate seats and authorizations, then create teacher and student accounts. Students sign in with the school account — no API key required." },
+        { "number": "02", "title": "Schedule straight from the course packs", "desc": "Ready-made course packs and teaching slides: pick a lesson and teach. Classes need zero setup — any lab computer will do." },
+        { "number": "03", "title": "Real work in every class, kept in your gallery", "desc": "Students make something worth showing with AI in every lesson. Submitted work goes to the gallery and becomes your school's case library and marketing material." }
+      ]
+    },
+    "videos": {
+      "title": "Real work made in real classrooms",
+      "lead": "One piece per lesson — click to see what students actually built.",
+      "items": []
+    },
+    "compare": {
+      "title": "The same AI class, two very different ways.",
+      "highlight": "two very different ways",
+      "lead": "Tools, environment, accounts and work are all handled by the platform. Teachers just teach.",
+      "cards": [
+        {
+          "tone": "without",
+          "title": "Pieced together",
+          "items": [
+            "Switching between many sites and apps breaks the rhythm of the lesson",
+            "Students register their own accounts and bring API keys — hard to manage, easy to leak",
+            "Teachers prepare slides and assets by hand, starting over every lesson",
+            "Work scatters across chat groups and personal laptops — nothing is kept",
+            "Problems get debugged live, turning teachers into IT support",
+            "Nothing can be reused across campuses; every new teacher starts from zero"
+          ]
+        },
+        {
+          "tone": "with",
+          "title": "With Lingdong AI",
+          "items": [
+            "One workbench for conversation, preview and project files",
+            "The school issues accounts and authorizations — students bring no keys",
+            "Standard course packs and slides are ready to teach, with zero setup",
+            "Work is submitted in class and goes straight to the gallery",
+            "Usage and compute are logged and visible, so costs stay clear",
+            "One process any campus or new teacher can repeat"
+          ]
+        }
+      ]
+    }
+  }
+}

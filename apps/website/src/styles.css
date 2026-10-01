@@ -1297,3 +1297,25 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 /* 分享卡里**就地显示**的真文件文档（服务端转好的 PDF）：与作品广场同一个渲染方式。
    ⚠️ 高度写死一档（62vh）：PDF 在 iframe 里自己滚，卡片不该被它撑到几千像素。 */
 .share-piece__doc { width: 100%; height: 62vh; border: 0; background: #fff; display: block; }
+
+/* ── 语言切换器（2026-10-01，用户口径：简体中文 / 繁體中文 / English，默认简体）─────────
+   顶栏那颗小胶囊 + 页脚那行文字链；首页是深色底，配色另走 .site-topbar.on-dark。 */
+.lang-pick { position: relative; flex: none; margin-left: 12px; }
+.lang-pick__btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 40px; padding: 6px 10px; border: 1px solid rgba(20,16,40,.16); border-radius: 999px; background: rgba(255,255,255,.72); color: #1d1b33; font: inherit; font-size: 13px; cursor: pointer; }
+.lang-pick__btn:hover { background: #fff; }
+.lang-pick__short { font-weight: 800; letter-spacing: .04em; }
+.lang-pick__label { color: #5b5670; }
+.lang-pick__scrim { position: fixed; inset: 0; border: 0; padding: 0; background: transparent; cursor: default; z-index: 40; }
+.lang-pick__list { position: absolute; right: 0; top: calc(100% + 8px); z-index: 41; margin: 0; padding: 6px; list-style: none; min-width: 150px; border-radius: 14px; border: 1px solid rgba(20,16,40,.12); background: #fff; box-shadow: 0 14px 40px rgba(20,12,50,.18); }
+.lang-pick__list button { display: block; width: 100%; padding: 8px 12px; border: 0; border-radius: 10px; background: transparent; color: #1d1b33; font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.lang-pick__list button:hover { background: #f3f0ff; }
+.lang-pick__list button[aria-selected="true"] { background: #efe9ff; font-weight: 700; }
+/* 首页深色底 */
+.site-topbar.on-dark .lang-pick__btn { border-color: rgba(255,255,255,.22); background: rgba(255,255,255,.08); color: #fff; }
+.site-topbar.on-dark .lang-pick__btn:hover { background: rgba(255,255,255,.16); }
+.site-topbar.on-dark .lang-pick__label { color: rgba(255,255,255,.72); }
+/* 页脚那行 */
+.ft-lang { display: inline-flex; align-items: center; gap: 10px; margin-left: 14px; font-size: 12.5px; }
+.ft-lang strong { color: rgba(255,255,255,.72); font-weight: 600; }
+.ft-lang button { border: 0; padding: 0; background: transparent; color: rgba(255,255,255,.5); font: inherit; cursor: pointer; }
+.ft-lang button:hover { color: #fff; text-decoration: underline; }

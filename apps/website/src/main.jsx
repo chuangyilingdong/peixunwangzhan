@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { AppErrorBoundary, LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, CONTACT_DEFAULT, HANDBOOK_POLICY_DEFAULT, HANDBOOK_SKILLS_DEFAULT, Icon, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { AppErrorBoundary, DEFAULT_LOCALE, I18nProvider, LOCALES, applyLocaleAlternates, applyLocaleDocument, getHref, localeFromPath, readStoredLocale, useI18n, useT, LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, CONTACT_DEFAULT, HANDBOOK_POLICY_DEFAULT, HANDBOOK_SKILLS_DEFAULT, Icon, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { StudentAccountPage } from './pages/AccountSecurity.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
 // 学生个人主页（对外公开，路由 /u/:token）—— 用户口径 2026-09-27：「学生创建了账号应该就有个主页的专属链接」
@@ -12,6 +12,11 @@ import { CreatorHomePage } from './pages/CreatorHome.jsx';
 // 作品分享页（/s/<分享码>）—— 学生主页侧发的码，与作品广场两条链路（2026-09-30）
 import { WorkSharePage } from './pages/WorkShare.jsx';
 import { CanvasPrepPage } from './pages/CanvasPrep.jsx';
+import { LanguageSwitcher } from './components/LanguageSwitcher.jsx';
+// 语言包（2026-10-01）：界面词 + 首页那份 CMS 文案的三种语言版本。加一种语言就是加一份 JSON。
+import zhCNMessages from './locales/zh-CN.json';
+import zhTWMessages from './locales/zh-TW.json';
+import enMessages from './locales/en.json';
 import { MyHomeRedirect } from './components/MyHomeRedirect.jsx';
 
 /**
@@ -64,7 +69,8 @@ const BRAND_NAME = '灵动ai学院';
 const BRAND_TAGLINE = '青少年 AI 创作开课平台';
 // 官网主导航：桌面端与移动端抽屉共用这一份。
 // 此前 main.jsx 里有两份内容相同的硬编码导航（Header 的 nav 与 WEBSITE_NAV），改文案要改两处。
-const WEBSITE_NAV = [['/', '首页'], ['/learn', '灵动学习'], ['/marketplace', '灵动课程'], ['/works', '课堂作品'], ['/handbook', '机构手册'], ['/faq', '常见问题'], ['/download', 'VibeCoding客户端下载']];
+// ⚠️ 2026-10-01：这里的第二项改成**语言 key**（文案在 `src/locales/*.json`），渲染处用 `t(key)`。
+const WEBSITE_NAV = [['/', 'nav.home'], ['/learn', 'nav.learn'], ['/marketplace', 'nav.marketplace'], ['/works', 'nav.works'], ['/handbook', 'nav.handbook'], ['/faq', 'nav.faq'], ['/download', 'nav.download']];
 // 未登录时的两个登录入口（用户口径 2026-09-18）。机构/老师与学生是**同一套账号体系、同一个登录接口**，
 // 两个入口只决定落点，不参与鉴权判定——所以不往 auth/login 里传 clientType，
 // 避免「老师从学生入口进来就被拒」这类按入口拦人的行为。
@@ -73,17 +79,19 @@ const WEBSITE_NAV = [['/', '首页'], ['/learn', '灵动学习'], ['/marketplace
 //    首页那支视频，点进去看着还像首页（用户就是这么报的：「为什么还在首页」）。
 //    学生入口留在官网上 —— 学生登录后进自己的课包中心。
 //    第三条 `true` = **跨应用跳转**（机构后台是另一个 SPA），必须整页跳、不能走前端路由。
-const LOGIN_ENTRIES = [['机构 / 老师登录', ORG_APP_URL, true], ['学生登录', '/login?as=student', false]];
+const LOGIN_ENTRIES = [['auth.org', ORG_APP_URL, true], ['auth.student', '/login?as=student', false]];
 // 品牌区用真正的 logo（灵动ai 横标，三端共用同一张图）；不再用「✦ + 文字」的占位标记。
 function Logo(){return <Link className="logo" to="/"><BrandLogo height={26} /></Link>}
 function AuthEntries({ onDark, onNavigate }){
   // 未登录时导航右侧的两个入口。登录后这里换成账号徽标（由 App 传 userBadge 进来）。
   // 黑底首页上用 SpecularButton；浅底内页仍用原来的描边胶囊 —— 光效是「白线在暗面上扫」。
+  const t = useT();
   const go = (to, external) => { if (external) window.location.assign(to); else onNavigate(to); };
-  if (onDark) return <>{LOGIN_ENTRIES.map(([label, to, external]) => <SpecularButton key={label} className="site-specular-btn" size="sm" radius={999} tint="#ffffff" tintOpacity={0.06} blur={6} textColor="#ffffff" lineColor="#ffffff" baseColor="#7c7c85" intensity={0.8} shineSize={15} shineFade={45} thickness={1} speed={0.45} followMouse proximity={160} onClick={() => go(to, external)}>{label}</SpecularButton>)}</>;
-  return <>{LOGIN_ENTRIES.map(([label, to, external]) => external ? <a key={label} className='site-login' href={to}>{label}</a> : <Link key={label} className='site-login' to={to}>{label}</Link>)}</>;
+  if (onDark) return <>{LOGIN_ENTRIES.map(([labelKey, to, external]) => <SpecularButton key={labelKey} className="site-specular-btn" size="sm" radius={999} tint="#ffffff" tintOpacity={0.06} blur={6} textColor="#ffffff" lineColor="#ffffff" baseColor="#7c7c85" intensity={0.8} shineSize={15} shineFade={45} thickness={1} speed={0.45} followMouse proximity={160} onClick={() => go(to, external)}>{t(labelKey)}</SpecularButton>)}</>;
+  return <>{LOGIN_ENTRIES.map(([labelKey, to, external]) => external ? <a key={labelKey} className='site-login' href={to}>{t(labelKey)}</a> : <Link key={labelKey} className='site-login' to={to}>{t(labelKey)}</Link>)}</>;
 }
 function Header({ userBadge, signedIn }){
+  const t = useT();
   const loc=useLocation();
   const navigate=useNavigate();
   const [menuOpen,setMenuOpen]=useState(false);
@@ -98,7 +106,7 @@ function Header({ userBadge, signedIn }){
   // 原因是导航用 `position:absolute; left:50%` 在页面里居中，视口一窄它就和右侧按钮组叠在一起 ——
   // 用户在内页截图报的「联系我们被遮挡」就是这一处（浅底那个实心胶囊被玻璃导航压住）。
   // ⚠️ 只删右上角这一个：首页 hero 的两个 CTA、页脚「合作」列、各页结尾的「联系我们」都保留。
-  return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><nav aria-label="主导航">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{n}</NavLink>)}</nav><div className="head-actions">{!signedIn && onDark ? <AuthEntries onDark onNavigate={navigate}/> : userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?'关闭菜单':'打开菜单'} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>关闭 ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{n}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}</div></div>}</header>;
+  return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><LanguageSwitcher/><nav aria-label={t('nav.home')}>{WEBSITE_NAV.map(([to,key])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{t(key)}</NavLink>)}</nav><div className="head-actions">{!signedIn && onDark ? <AuthEntries onDark onNavigate={navigate}/> : userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?t('menu.close'):t('menu.open')} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>{t('menu.close')} ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,key])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{t(key)}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}<LanguageSwitcher variant="footer"/></div></div>}</header>;
 }
 // ── 页脚（2026-09-23 按用户给的参考稿 Footer03Luma 重做）─────────────────────────
 // ⚠️ 参考稿是 Tailwind + framer-motion + lucide 三件套，官网**一个都没引**（也不为页脚引进来
@@ -110,7 +118,9 @@ function Header({ userBadge, signedIn }){
 function FooterLink({ to, href, children }) {
   return to ? <Link to={to}>{children}</Link> : <a href={href}>{children}</a>;
 }
-function Footer(){return <footer className="site-footer">
+function Footer(){
+  const t = useT();
+  return <footer className="site-footer">
   <div className="ft-glow ft-glow--a" aria-hidden="true" /><div className="ft-glow ft-glow--b" aria-hidden="true" /><div className="ft-glow ft-glow--c" aria-hidden="true" />
   <div className="ft-inner">
     {/* 页脚只留 6 个**各有分工**的入口（2026-09-25 用户口径：原来四列里「选型对比 / 机构方案 /
@@ -118,8 +128,8 @@ function Footer(){return <footer className="site-footer">
         ⚠️ 删掉的那些页面**仍然存在**、直达 URL 照样能开（/compare /handbook /terms /privacy /minors），
         只是不再从页脚列出来 —— 想加回来就按这两组的形状补一条。 */}
     <div className="foot">
-      <div><strong>产品</strong><FooterLink to="/marketplace">灵动课程</FooterLink><FooterLink to="/org">机构方案</FooterLink><FooterLink to="/works">课堂作品</FooterLink></div>
-      <div><strong>使用</strong><FooterLink to="/download">下载客户端</FooterLink><FooterLink to="/faq">常见问题</FooterLink><FooterLink href={ORG_APP_URL}>机构后台</FooterLink></div>
+      <div><strong>{t('footer.product')}</strong><FooterLink to="/marketplace">{t('footer.link.marketplace')}</FooterLink><FooterLink to="/org">{t('footer.link.org')}</FooterLink><FooterLink to="/works">{t('footer.link.works')}</FooterLink></div>
+      <div><strong>{t('footer.usage')}</strong><FooterLink to="/download">{t('footer.link.download')}</FooterLink><FooterLink to="/faq">{t('footer.link.faq')}</FooterLink><FooterLink href={ORG_APP_URL}>{t('footer.link.orgConsole')}</FooterLink></div>
     </div>
     <div className="ft-brand">
       <Logo />
@@ -134,6 +144,8 @@ function Footer(){return <footer className="site-footer">
     <div className="ft-filings">
       <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">鄂ICP备2025162545号-2</a>
       <a href="https://beian.mps.gov.cn/#/query/webSearch?code=42011102006378" target="_blank" rel="noreferrer"><img className="ft-filings__icon" src="/assets/beian-gongan.png" alt="" />鄂公网安备42011102006378号</a>
+      {/* 语言切换（2026-10-01）：页脚这一行是**全站都在的**入口（顶栏那颗在内页窄屏会被折叠）*/}
+      <LanguageSwitcher variant="footer" />
     </div>
   </div>
 </footer>}
@@ -1511,11 +1523,28 @@ const CMS_FALLBACK = {
   // 「联系我们」（/demo）页：公开接口挂掉时用这份（与后台预填、`websiteContentDefaults` 三处同源）。
   CONTACT: CONTACT_DEFAULT,
 };
+/**
+ * 语言包里那一块 CMS 内容（键是**扁平的带点 key**：`"cms.home"`，与其它界面词同一套写法）；
+ * 没翻就返回 null → 调用方用自己的兜底（中文那份）。
+ */
+function localeCmsBlock(messages, key) {
+  const value = messages?.[`cms.${String(key || '').toLowerCase()}`];
+  return value && typeof value === 'object' ? value : null;
+}
+
 function useWebsiteContent(key) {
+  const { locale, messages } = useI18n();
+  const nonDefault = locale !== DEFAULT_LOCALE;
   const [state, setState] = useState({ loading: true, data: null, error: null });
   // 接口返回的是 { key, content, version, status } 包装体，这里统一解包成 content，
   // 调用方直接用字段（此前的写法把包装体当内容用，导致 CMS 内容一直没生效）。
-  useEffect(() => { let live = true; publicApi.get('public/website-content/' + encodeURIComponent(key)).then((payload) => { if (live) setState({ loading: false, data: payload?.content ?? payload ?? null, error: null }); }).catch((error) => { if (live) setState({ loading: false, data: CMS_FALLBACK[key] || null, error }); }); return () => { live = false; }; }, [key]);
+  useEffect(() => {
+    // ⭐ 2026-10-01：**非中文语种先读语言包里那一块**（`src/locales/*.json` 的 `cms.home`）。
+    //    CMS 那套是单语言（中文）的 —— "逐语言编辑"是下一步（见交接 §八十四），
+    //    在那之前英文/繁中站的营销文案来自语言包，改文案改 JSON（要审）。
+    if (nonDefault) { setState({ loading: false, data: localeCmsBlock(messages, key), error: null }); return undefined; }
+    let live = true; publicApi.get('public/website-content/' + encodeURIComponent(key)).then((payload) => { if (live) setState({ loading: false, data: payload?.content ?? payload ?? null, error: null }); }).catch((error) => { if (live) setState({ loading: false, data: CMS_FALLBACK[key] || null, error }); }); return () => { live = false; }; }, [key, nonDefault, messages]);
+  if (nonDefault) return { loading: false, data: localeCmsBlock(messages, key), error: null };
   return { ...state, data: state.data || CMS_FALLBACK[key] || null };
 }
 
@@ -1731,6 +1760,10 @@ function LearnProjectPage({ api }) {
 }
 export function App(){
   const loc = useLocation();
+  const { locale } = useI18n();
+  const t = useT();
+  const LOCALE_META = LOCALES.find((item) => item.code === locale) || LOCALES[0];
+  const localesTitle = locale === DEFAULT_LOCALE ? '' : `${t('cms.home.heroTitle')} ${t('cms.home.heroAccent')}`.trim() + ' · ' + BRAND_NAME;
   const navigate = useNavigate();
   const [session, setSession] = useState(readUserSession);
   const api = useMemo(() => createApiClient({ getToken: () => session?.token || null, onUnauthorized: () => { removeUserSession(); setSession(null); } }), [session]);
@@ -1759,7 +1792,7 @@ export function App(){
       '/learn/canvas': '画布上课 · ' + BRAND_NAME,
     };
     // 动态路由（课程/作品详情/学生主页）按前缀回落：否则它们会退到首页标题，浏览器标签上看着不像同一个站。
-    const title = titles[loc.pathname]
+    const title = localesTitle || titles[loc.pathname]
       || (loc.pathname.startsWith('/marketplace/') ? '课程详情 · ' + BRAND_NAME : '')
       || (loc.pathname.startsWith('/works/') ? '作品详情 · ' + BRAND_NAME : '')
       || (loc.pathname.startsWith('/u/') ? '学生主页 · ' + BRAND_NAME : '')
@@ -1768,7 +1801,9 @@ export function App(){
     const robots = document.querySelector('meta[name=robots]');
     if (robots) robots.setAttribute('content', INTERNAL_TEST ? 'noindex, nofollow, noarchive' : 'index,follow');
     const description = document.querySelector('meta[name=description]');
-    if (description) description.setAttribute('content', BRAND_NAME + '：面向教培机构与学校的青少年 AI 创作课堂，用中文对话、VibeCoding 与项目式学习，让孩子从灵感进入作品。');
+    if (description) description.setAttribute('content', locale === DEFAULT_LOCALE
+      ? BRAND_NAME + '：面向教培机构与学校的青少年 AI 创作课堂，用中文对话、VibeCoding 与项目式学习，让孩子从灵感进入作品。'
+      : `${BRAND_NAME} · ${t('cms.home.heroDescription')}`);
     const canonical = document.querySelector('link[rel=canonical]');
     if (canonical) canonical.setAttribute('href', window.location.origin + (loc.pathname === '/' ? '' : loc.pathname));
     const ogTitle = document.querySelector('meta[property="og:title"]');
@@ -1852,6 +1887,10 @@ export function App(){
       </span>
     )
   ) : <AuthEntries/>;
+  // ⭐ 2026-10-01 多语言：`<html lang>` 与 hreflang 互链跟着语言走（SEO 基本盘）。
+  //    用运行时里的两个 helper（`applyLocaleDocument` / `applyLocaleAlternates`），别在这里再写一份。
+  applyLocaleDocument(locale);
+  applyLocaleAlternates(loc.pathname, typeof window === 'undefined' ? '' : window.location.origin);
   if (loc.pathname === '/login') return <LoginPage/>;
   // 2026-09-18 晚用户口径：「点击『灵动课程』上方都有导航栏，点击『灵动学习』应该也要有导航栏才对」。
   // 所以 /learn（我的课程）是**普通页面**——顶栏 + 页脚都在。
@@ -1932,4 +1971,29 @@ export function App(){
 
 // 兜底放在**最外层**（BrowserRouter 之外）：路由渲染期抛错也归它管 —— 官网是未登录访客也会到的页面，
 // 白屏在这里最不该出现。
-createRoot(document.getElementById('root')).render(<AppErrorBoundary><BrowserRouter><App /></BrowserRouter></AppErrorBoundary>);
+// ── 多语言（2026-10-01）──────────────────────────────────────────────────────
+// 语言取自 **URL 前缀**（`/en`、`/zh-TW`；不带前缀 = 简体中文 = 默认，现有链接一个都不变）。
+// `basename` 交给 react-router：所有 `<Link>` / `useNavigate` 自动带前缀，
+// 而 `useLocation().pathname` 里**不含**前缀 —— 所以页面里那些按路径判断的代码一行都不用改。
+const LOCALE_MESSAGES = { 'zh-CN': zhCNMessages, 'zh-TW': zhTWMessages, en: enMessages };
+const ACTIVE_LOCALE = (() => {
+  const fromUrl = localeFromPath(window.location.pathname);
+  if (fromUrl !== DEFAULT_LOCALE) return fromUrl;
+  // 「记住上次的选择」：只对**首页**做一次纠正 —— 深链接（分享码 / 作品页 / 学生主页）不碰，
+  // 收到链接的人看到的应当是这个链接自己的语言。
+  const stored = readStoredLocale();
+  if (stored && stored !== DEFAULT_LOCALE && window.location.pathname === '/') {
+    window.location.replace(getHref('/', stored));
+    return stored;
+  }
+  return DEFAULT_LOCALE;
+})();
+createRoot(document.getElementById('root')).render(
+  <AppErrorBoundary>
+    <I18nProvider locale={ACTIVE_LOCALE} messages={LOCALE_MESSAGES[ACTIVE_LOCALE]} fallback={LOCALE_MESSAGES[DEFAULT_LOCALE]}>
+      <BrowserRouter key={ACTIVE_LOCALE} basename={ACTIVE_LOCALE === DEFAULT_LOCALE ? undefined : `/${ACTIVE_LOCALE}`}>
+        <App />
+      </BrowserRouter>
+    </I18nProvider>
+  </AppErrorBoundary>,
+);

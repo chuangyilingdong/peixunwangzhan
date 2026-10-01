@@ -1,0 +1,88 @@
+{
+  "nav.home": "首頁",
+  "nav.learn": "靈動學習",
+  "nav.marketplace": "靈動課程",
+  "nav.works": "課堂作品",
+  "nav.handbook": "機構手冊",
+  "nav.faq": "常見問題",
+  "nav.download": "VibeCoding 用戶端下載",
+
+  "auth.org": "機構 / 老師登入",
+  "auth.student": "學生登入",
+
+  "menu.open": "開啟選單",
+  "menu.close": "關閉選單",
+  "menu.login": "登入入口",
+
+  "footer.product": "產品",
+  "footer.usage": "使用",
+  "footer.link.marketplace": "靈動課程",
+  "footer.link.org": "機構方案",
+  "footer.link.works": "課堂作品",
+  "footer.link.download": "下載用戶端",
+  "footer.link.faq": "常見問題",
+  "footer.link.orgConsole": "機構後台",
+
+  "lang.label": "語言",
+  "lang.switchTo": "切換到{name}",
+
+  "cms.home": {
+    "heroKicker": "",
+    "heroTitle": "培養青少年 AI 思維",
+    "heroAccent": "掌握 AI 時代的創造方式",
+    "heroDescription": "AI 畫布創作 + Vibe Coding 對話程式設計，從興趣到獨立創作",
+    "trustTitle": "",
+    "trustDescription": "",
+    "stats": [
+      { "value": 3, "suffix": " 門", "label": "標準課包" },
+      { "value": 48, "suffix": " 節", "label": "課時總量" },
+      { "value": 2, "suffix": " 類", "label": "課堂形式" },
+      { "value": 1, "suffix": " 套", "label": "機構工作台" }
+    ],
+    "steps": {
+      "title": "三步，把 AI 創作課開進課堂",
+      "lead": "從開通機構到學生交出作品，中間不需要技術團隊，學生也不用自備帳號或 API Key。",
+      "items": [
+        { "number": "01", "title": "開通機構與帳號", "desc": "配置席次與授權次數，建立老師與學生帳號。學生用機構帳號登入，無需自備 API Key。" },
+        { "number": "02", "title": "按課包直接排課", "desc": "課程中心提供標準課包與課件，老師選課即用；課堂零設定，機房電腦打開就能上。" },
+        { "number": "03", "title": "當堂出作品、沉澱展廳", "desc": "學生每節課都用 AI 做出可展示的作品，提交後進入作品展廳，形成校區的案例庫與招生素材。" }
+      ]
+    },
+    "videos": {
+      "title": "課堂裡真實做出來的東西",
+      "lead": "一節課一件作品：點開就是學生自己動手做出來的樣子。",
+      "items": []
+    },
+    "compare": {
+      "title": "同樣的 AI 課，兩種上法。",
+      "highlight": "兩種上法",
+      "lead": "工具、環境、帳號、作品都交給平台，老師只負責教。",
+      "cards": [
+        {
+          "tone": "without",
+          "title": "分散拼湊",
+          "items": [
+            "多個網站 / App 來回切換，課堂節奏被打斷",
+            "學生各自註冊帳號、自備 API Key，難管也易外洩",
+            "課件與素材靠老師手工準備，每節課都要重來",
+            "作品散落在群組對話和個人電腦裡，留不下來",
+            "出問題現場排查，老師被迫當技術人員",
+            "校區之間無法複用，新老師從零開始"
+          ]
+        },
+        {
+          "tone": "with",
+          "title": "用靈動ai",
+          "items": [
+            "同一個工作台裡完成：對話 + 預覽 + 專案檔案",
+            "機構統一開通帳號與授權次數，學生無需自備 Key",
+            "標準課包與課件選課即用，課堂零設定",
+            "作品當堂提交、進作品展廳，形成校區案例庫",
+            "用量與算力有記錄、有提醒，成本看得見",
+            "一套流程可複製到每個校區、每位新老師"
+          ]
+        }
+      ]
+    }
+  }
+}
