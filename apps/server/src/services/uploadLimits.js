@@ -14,11 +14,15 @@ function positive(name, fallback, max = Number.MAX_SAFE_INTEGER) { const n = Num
  * ⚠️ 下面**两类仍然保留**，它们不是频次闸、用户也没让取消：
  *    · `maxConcurrent` —— **同时在传**的数量（不是总量）。界面是一次传一个，正常使用撞不到；
  *      它的作用是别让一个客户端同时占一堆上传连接。
- *    · `userBytes` / `orgBytes` —— **容量**配额（个人 500MB / 机构 5GB，都是累计占用）。
- *      ⚠️ 这两个值偏小（一份课件就几十 MB），要是哪天报「个人文件容量配额已用尽」，
- *      调 `FILE_UPLOAD_USER_QUOTA_BYTES` / `FILE_UPLOAD_ORG_QUOTA_BYTES` 或找用户确认新口径。
+ *    · `userBytes` / `orgBytes` —— **容量**配额（都是累计占用）。
+ *      ⚠️ 2026-10-01 上调过一档：个人 **500MB → 2GB**、机构 **5GB → 20GB**。
+ *      依据是生产实测（不是猜）：当时**最重的那个用户已经用到 410MB / 500MB** —— 再传两节课件
+ *      就会撞上「个人文件容量配额已用尽」，而学生单次提交的上限本来就是 100MB
+ *      （见 §八十一，用户要求放宽的那次）。全库当时合计 1.81GB，OSS 侧按 GB 计费，2GB/20GB 很宽裕。
+ *      ⚠️ 这是**累计占用**不是频次：真要再放宽就调 `FILE_UPLOAD_USER_QUOTA_BYTES` / `..._ORG_...`，
+ *      别再把它当成"限流"来理解（频次那两道已在 §六十四 整体删掉）。
  */
-function limits() { return { maxConcurrent: positive('FILE_UPLOAD_MAX_CONCURRENT', 3, 100), userBytes: positive('FILE_UPLOAD_USER_QUOTA_BYTES', 500 * 1024 * 1024, 100 * 1024 * 1024 * 1024), orgBytes: positive('FILE_UPLOAD_ORG_QUOTA_BYTES', 5 * 1024 * 1024 * 1024, 1024 * 1024 * 1024 * 1024) }; }
+function limits() { return { maxConcurrent: positive('FILE_UPLOAD_MAX_CONCURRENT', 3, 100), userBytes: positive('FILE_UPLOAD_USER_QUOTA_BYTES', 2 * 1024 * 1024 * 1024, 100 * 1024 * 1024 * 1024), orgBytes: positive('FILE_UPLOAD_ORG_QUOTA_BYTES', 20 * 1024 * 1024 * 1024, 1024 * 1024 * 1024 * 1024) }; }
 function key(scope, value) { return `${scope}:${value || 'anonymous'}`; }
 async function currentBytes(scope, value) { const clause = scope === 'org' ? 'owner_org_id=?' : 'owner_user_id=?'; return Number((await arows(`SELECT COALESCE(SUM(file_size),0) AS bytes FROM file_assets WHERE ${clause} AND storage_kind='INTERNAL_PROXY' AND status != 'REMOVED'`, [value])).at(0)?.bytes || 0); }
 export async function reserveUpload({ userId, orgId, bytes }) {
