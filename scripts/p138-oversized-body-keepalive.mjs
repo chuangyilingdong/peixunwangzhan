@@ -35,6 +35,10 @@ const baseEnv = {
   DEPLOYMENT_MODE: 'development',
   AI_PROVIDER: 'local-mock',
   AI_PROVIDER_API_KEY: '',
+  // ⭐ 2026-10-02：body 上限改成从业务档推导后，这条夹具把业务档压到 8MB（→ body 上限 15MB），
+  //    30MB 的测试包依旧远超传输层 —— 这一条钉的是传输层行为（超限拒绝 + connection: close），
+  //    业务档多大是 p119 的事，两层各测各的。
+  RUNTIME_UPLOAD_MAX_BYTES: String(8 * 1024 * 1024),
   PORT: String(PORT),
 };
 const base = `http://127.0.0.1:${PORT}`;
