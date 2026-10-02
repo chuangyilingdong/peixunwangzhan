@@ -234,10 +234,12 @@ try {
     const result = await bad({ name: 'p0.html', files: many });
     assert.equal(result.error?.code, 'RUNTIME_UPLOAD_TOO_MANY_FILES');
   });
-  // 16MB 是我们自己的上限、26MB 是传输层（body）的上限，base64 之后 17MB 的文件约 22.7MB ——
-  // 落在两者之间，所以这一条验的是**我们的中文原因**先说话（不是框架那个裸 413）。
-  await check('总量超上限（我们的 16MB）→ 400 RUNTIME_UPLOAD_TOO_LARGE（中文原因先说话）', async () => {
-    const huge = 'A'.repeat(17 * 1024 * 1024);
+  // 业务上限 8MB、传输层 body 上限 = 8MB×4/3+4MB ≈ 15MB（index.js 按本档推导）——
+  // base64 之后 9.5MB 的文件约 12.7MB，落在两者之间，所以这一条验的是**我们的中文原因**先说话
+  //（不是框架那个裸 413）。⚠️ 2026-10-02：原来这条用 17MB —— body 上限从写死 24MB 改成推导值
+  // （8MB 档 → 15MB）之后，17MB（base64 22.7MB）会先撞传输层，断言必须挪进"业务 < 传输"的窗口里。
+  await check('总量超上限（我们的 8MB）→ 400 RUNTIME_UPLOAD_TOO_LARGE（中文原因先说话）', async () => {
+    const huge = 'A'.repeat(Math.floor(9.5 * 1024 * 1024));
     const result = await bad({ files: [{ name: 'index.html', content: huge }] });
     assert.equal(result.error?.code, 'RUNTIME_UPLOAD_TOO_LARGE', JSON.stringify(result).slice(0, 200));
   });
@@ -257,6 +259,52 @@ try {
     const result = await bad({ files: [{ name: 'index.html', content: beyond }] });
     assert.equal(result.error?.code, 'PAYLOAD_TOO_LARGE', JSON.stringify(result).slice(0, 200));
   });
+  /* ── ⭐ 2026-10-02：body 上限**默认从业务档推导**（客户端实测抓到的 P1）────────────────
+     "整单放宽到 100MB"（§八十一）当时只改了业务层；`/submit-upload` 的 JSON body 上限还是
+     写死的 24MB —— base64 后约 26MB 的 19.6MB 视频在传输层就被 413，**100MB 从未真正生效**。
+     现在默认 = `RUNTIME_UPLOAD_MAX_BYTES × 4/3 + 4MB`。这条用**第二台服务**（30MB 档、不设
+     RUNTIME_UPLOAD_BODY_LIMIT）做真请求：26MB 的文件 base64 后约 34.7MB —— 高于旧默认 24MB、
+     低于推导值 44MB，必须**收得下**。这正是客户端撞的那个场景。 */
+  {
+    const bigPort = PORT + 1;
+    const bigEnv = { ...baseEnv, RUNTIME_UPLOAD_MAX_BYTES: String(30 * 1024 * 1024), PORT: String(bigPort) };
+    delete bigEnv.RUNTIME_UPLOAD_BODY_LIMIT;
+    const bigServer = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env: bigEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    let bigLog = ''; bigServer.stdout.on('data', (x) => { bigLog += x; }); bigServer.stderr.on('data', (x) => { bigLog += x; });
+    try {
+      const bigDeadline = Date.now() + 30_000;
+      for (;;) {
+        try { if ((await fetch(`http://127.0.0.1:${bigPort}/health`)).ok) break; } catch { /* 等 */ }
+        if (Date.now() > bigDeadline) throw new Error(`第二台服务没起来：${bigLog.slice(-500)}`);
+        await sleep(150);
+      }
+      await check('⭐ body 上限跟业务档推导：30MB 档交 26MB（base64 34.7MB > 旧默认 24MB）→ 收下', async () => {
+        // 零字节扫得快（clamscan 对全零块的耗时远低于随机数据）；内容本身不影响这条断言
+        const big = 'A'.repeat(26 * 1024 * 1024);
+        const response = await fetch(`http://127.0.0.1:${bigPort}/api/student/runtime/submit-upload`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+          body: JSON.stringify({ name: 'index.html', copyrightConfirmed: true, files: [{ name: 'index.html', content: big }] }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        const code = payload?.error?.code || payload?.data?.error?.code;
+        assert.equal(response.status, 200, `26MB 应当收得下（HTTP ${response.status}，code=${code}）—— 传输层不该拦它`);
+      });
+      await check('⭐ 推导值可被 RUNTIME_UPLOAD_BODY_LIMIT 显式覆盖（env 优先）', () => {
+        const source = fs.readFileSync(path.join(root, 'apps/server/src/index.js'), 'utf8');
+        const lines = source.split(/\r?\n/);
+        const at = lines.findIndex((l) => l.includes('RUNTIME_UPLOAD_BODY_LIMIT ='));
+        assert.ok(at >= 0, 'index.js 里应有 RUNTIME_UPLOAD_BODY_LIMIT 的定义');
+        // 定义跨两行（`.trim()` 后换行接推导式）—— 取两行窗口
+        const chunk = lines.slice(at, at + 2).join(' ');
+        assert.match(chunk, /RUNTIME_UPLOAD_BODY_LIMIT \|\| ''/, '默认值必须允许 env 覆盖（空串触发推导）');
+        // ⚠️ 只钉 submit-upload 这一处：网关那条（RUNTIME_GATEWAY_BODY_LIMIT）写死 24mb 是另一码事
+        assert.match(chunk, /runtimeUploadMaxBytes \* 4\) \/ 3/, '默认值必须从业务档推导（×4/3 + 余量）');
+      });
+    } finally {
+      bigServer.kill('SIGTERM');
+    }
+  }
   /* ── 客户端运行时**只看"这节课声明了 VibeCoding"**（2026-09-21，客户端项目报的）──────
      平台建课时会勾上课类型（可多选：只画布 / 只 VibeCoding / 两种同时），老师建课堂时那个单值
      只是"跟着课时带的第一个"（9-16 口径「老师不再选课堂模式」，只作历史兼容）。

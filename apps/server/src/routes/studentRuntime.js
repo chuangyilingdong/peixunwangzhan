@@ -444,8 +444,11 @@ export async function handleStudentRuntime(ctx) {
   // 形状与「取回来的产物」一致（`{ name, files: [{ name, content, binary }] }`），
   // 下半段（存资产 → 改引用 → 定格清单 → 落库）与 `/submit` **共用同一份实现** ——
   // 两条入口各写一份的话，广场那边的规则迟早只在一半上生效。
-  // ⚠️ 二进制用 base64 装在 JSON 里：body 上限是 `maxUploadBytes() + 1MB`（见 index.js），
-  //    默认 25MB 文件 → 约 33MB 传输量，够学生交 PPT；超了会在这里明确报错而不是静默截断。
+  // ⚠️ 二进制用 base64 装在 JSON 里：body 上限在 index.js 按**本档推导**（`runtimeUploadMaxBytes`
+  //    × 4/3 + 4MB 余量；生产 100MB → 138MB），保证"作品太大"的中文原因由我们这条业务闸先说出口，
+  //    而不是让学生吃一个裸 `PAYLOAD_TOO_LARGE`。⚠️ 2026-10-02 前这里写的是
+  //    "maxUploadBytes() + 1MB"——那是 **multipart** 路径（index.js:149）的闸，这条 JSON 路径
+  //    当时实际还是默认 24MB，100MB 的业务上限因此**从未真正生效**（客户端实测 19.6MB 视频被 413）。
   if (part === '/submit-upload' && method === 'POST') {
     const classroom = await requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品', '当前是画布课堂，不能提交 VibeCoding 作品');
     if (ctx.body?.copyrightConfirmed !== true) {
@@ -468,11 +471,14 @@ const MAX_UPLOAD_FILES = 60;
  *    现在读 `RUNTIME_UPLOAD_MAX_BYTES`：默认 **64MB**，夹在 16MB（老下限）~ 200MB（存储层的
  *    单文件上限 `FILE_UPLOAD_MAX_BYTES`）之间。**生产设 100MB**（见 §八十一）。
  *
- * ⚠️ 这个数必须**小于传输层的上限**才会先于它报错：`index.js` 给这条路径的 body 上限是
- *    `maxUploadBytes() + 1MB`（生产 FILE_UPLOAD_MAX_BYTES=200MB → 201MB），而 base64 会胖 4/3 ——
- *    100MB 的整单 ≈ 133MB 传输量 ✅ 落在 201MB 之内，所以学生看到的是**我们的中文原因**，
- *    不是一个裸 `PAYLOAD_TOO_LARGE`。（测试环境没设 FILE_UPLOAD_MAX_BYTES 时是 25MB+1MB=26MB ——
- *    p119 的夹具因此把本档压到 8MB，两条断言才都还在。）
+ * ⚠️ 传输层的 body 上限**由本档推导**（index.js：`runtimeUploadMaxBytes() × 4/3 + 4MB`）——
+ *    base64 会胖 4/3：100MB 的整单 ≈ 133MB 传输量，body 上限 138MB 接得住，且仍小于 nginx 的
+ *    300m；所以学生超了我们这档时看到的是**我们的中文原因**，不是一个裸 `PAYLOAD_TOO_LARGE`。
+ *    ⚠️⚠️ 2026-10-02 修正一条**写错的注释/表格**（§82.2）：这里原来写"body 上限是
+ *    maxUploadBytes() + 1MB = 201MB"——那是 **multipart** 路径（index.js:149）的闸，不是这条
+ *    JSON 路径的；这条路径当时实际是默认 **24MB**，100MB 的业务上限因此从未真正生效
+ *    （客户端实测 19.6MB 视频交不上，被 413）。现在默认值跟着本档走，env
+ *    `RUNTIME_UPLOAD_BODY_LIMIT` 仍可显式覆盖。
  */
 const MAX_UPLOAD_BYTES = (() => {
   const configured = Number(process.env.RUNTIME_UPLOAD_MAX_BYTES || 0);
@@ -481,6 +487,13 @@ const MAX_UPLOAD_BYTES = (() => {
   // ⚠️ 夹具（p119）要把它压小到 8MB 来验"我们的中文原因先说话"，所以下限不能是 16MB。
   return Math.max(1 * 1024 * 1024, Math.min(200 * 1024 * 1024, wanted));
 })();
+
+/**
+ * 本档的整单字节上限，**导出给 index.js 推导传输层 body 上限**（2026-10-02）：
+ * base64 胖 4/3，body 上限 = 本值 × 4/3 + 4MB 余量（封面 + JSON 转义）。
+ * 顶到 200MB 时 body ≈ 271MB，仍小于 nginx 的 300m —— 三层阶梯保持"业务闸先说话"。
+ */
+export const runtimeUploadMaxBytes = MAX_UPLOAD_BYTES;
 
 /** 封面的固定文件名（客户端截图上传时用这个名字，服务端靠它认封面）。 */
 const COVER_FILE_NAME = 'cover.png';

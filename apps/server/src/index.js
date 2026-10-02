@@ -7,7 +7,7 @@ import { handleOrg } from './routes/orgAdmin.js';
 import { handleStudent } from './routes/student.js';
 import { handleRuntimeGateway } from './routes/runtimeGateway.js';
 import { handleRuntimeSearchGateway } from './routes/runtimeSearchGateway.js';
-import { handleStudentRuntime } from './routes/studentRuntime.js';
+import { handleStudentRuntime, runtimeUploadMaxBytes } from './routes/studentRuntime.js';
 import { handleAi } from './routes/ai.js';
 import { handleAiGeneration, initializeAsyncGenerationQueue, interruptOwnJobsOnShutdown } from './routes/aiGeneration.js';
 // 2026-09-18：供应商账单两条线整体下线（用户口径）——服务、路由与「官方账单 API 日级定时拉取」
@@ -46,9 +46,15 @@ const JSON_BODY_LIMIT = '2mb';
 const RUNTIME_GATEWAY_BODY_LIMIT = String(process.env.RUNTIME_GATEWAY_BODY_LIMIT || '24mb').trim();
 // 桌面客户端交作品（`/api/student/runtime/submit-upload`，2026-09-19）：字节以 base64 装在 JSON 里，
 // 2MB 的通用上限连一个 PPT 都装不下。**按路径开额度**，不动全局 —— 放宽全局放宽的是攻击面，
-// 不只是善良的上传。24MB 对应解回来约 17MB 的文件，而 `studentRuntime.js` 的 MAX_UPLOAD_BYTES
-// 取得比它小一点：为的是"作品太大"这句中文原因由**我们**先说出口，而不是让学生吃一个裸 413。
-const RUNTIME_UPLOAD_BODY_LIMIT = String(process.env.RUNTIME_UPLOAD_BODY_LIMIT || '24mb').trim();
+// 不只是善良的上传。
+// ⭐ 2026-10-02（客户端实测抓到）：这个上限**默认从业务档推导**（`RUNTIME_UPLOAD_MAX_BYTES`
+//    × 4/3 + 4MB 余量），不再写死 24MB —— 写死的那天起，"整单放宽到 100MB"（§八十一）就
+//    **从未真正生效**：业务层放行了，传输层却在 24MB 把 base64 后约 26MB 的 19.6MB 视频挡成
+//    `PAYLOAD_TOO_LARGE`。推导值：生产 100MB → 138MB（< nginx 300m）；本档顶到 200MB → 271MB，
+//    三层阶梯（业务闸 → 本层 → nginx）依然是"业务闸先说中文原因"。
+//    `RUNTIME_UPLOAD_BODY_LIMIT` 仍可显式覆盖（emergency valve，别长期依赖它）。
+const RUNTIME_UPLOAD_BODY_LIMIT = String(process.env.RUNTIME_UPLOAD_BODY_LIMIT || '').trim()
+  || `${Math.ceil((runtimeUploadMaxBytes * 4) / 3 / (1024 * 1024)) + 4}mb`;
 const jsonBodyLimitFor = (pathname) => {
   const path = String(pathname || '');
   if (path.startsWith('/api/gateway/')) return RUNTIME_GATEWAY_BODY_LIMIT;
