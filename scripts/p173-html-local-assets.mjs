@@ -304,6 +304,41 @@ try {
   const missing = Array.isArray(legacyDetail.data?.missingAssets) ? legacyDetail.data.missingAssets : [];
   check('⑩ 旧作品（只有 index.html）→ missingAssets 如实列出两个本地素材',
     missing.includes('assets/character_mecha.png') && missing.includes('assets/transform.mp4'), JSON.stringify(missing));
+  /* ─── ⑪ 扫描器不许把"代码/数据"当成缺素材（2026-10-02 老师端那条假警报）────────────
+     现场：一份「文件管理」作品让老师端弹出「这件作品引用了 7 个本地素材（`name`、
+     `new Blob([b], { type: mimeOf(name, path)` 等）」—— 全是 JS 代码片段。
+     两个真因：① `url(` 在 `URL.createObjectURL(` 里也被匹配；② JS/HTML 里**所有引号串**都被
+     当成引用，于是内置演示清单 `{name:'萌宠角色.png'}`、zip 内部条目 `zip.text('word/document.xml')`、
+     接口路由 `fetch('./api/upload?name='…)` 全都成了"缺素材"（那份作品实际报了 13 条，一条真的没有）。
+     判据收紧成：**只认真正取文件的上下文 + 必须带已知资源扩展名**。 */
+  const { missingLocalAssets } = await import('../apps/server/src/routes/vibecoding.js');
+  const NO_FALSE_POSITIVE = [
+    ["<script>const u = URL.createObjectURL(new Blob([b], { type: mimeOf(name, path) }))</script>", 'createObjectURL 里的 url('],
+    ["<script>const BUILTIN=[{name:'萌宠角色.png', size:2990481}];</script>", '内置演示清单'],
+    ["<script>await zip.text('word/document.xml')</script>", 'zip 内部条目'],
+    ["<script>const r = await fetch('./api/upload?name=' + n)</script>", '接口路由'],
+    ['<script>const t="image/png"; const s="text/css";</script>', 'MIME 类型'],
+    ['<style>body{font-family:"Segoe UI","PingFang SC",sans-serif}</style>', '字体栈'],
+    ["<script>const k='SESSION[i].url', g='d.name';</script>", 'JS 标识符'],
+    ["<script>const m = { image: 'assets/x.png' };</script>", '数据里的路径串（不是 URL 上下文）'],
+  ];
+  for (const [html, label] of NO_FALSE_POSITIVE) {
+    const found = missingLocalAssets({ 'index.html': html }, 'index.html');
+    check(`⑪ 不误报：${label}`, found.length === 0, JSON.stringify(found));
+  }
+  // 反向：真引用一条都不能漏（否则素材既不被收进作品清单、也不被回写）
+  const STILL_FOUND = [
+    ['<img src="assets/hero.png">', 'assets/hero.png'],
+    ['<img src="hero.png">', 'hero.png'],
+    ['<link rel="stylesheet" href="styles/main.css">', 'styles/main.css'],
+    ['<style>.a{background:url("bg.jpg")}</style>', 'bg.jpg'],
+    ["<script>new Audio('assets/sfx.wav').play()</script>", 'assets/sfx.wav'],
+    ["<script>img.src = 'assets/pic.png'</script>", 'assets/pic.png'],
+  ];
+  for (const [html, expected] of STILL_FOUND) {
+    const found = missingLocalAssets({ 'index.html': html }, 'index.html');
+    check(`⑪ 真引用仍认：${expected}`, found.includes(expected), JSON.stringify(found));
+  }
 } finally {
   server.kill();
 }

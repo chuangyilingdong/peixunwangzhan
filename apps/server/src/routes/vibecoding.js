@@ -111,11 +111,49 @@ function parseAttachments(value) {
   } catch { return []; }
 }
 
+/**
+ * 平铺名要带**已知资源扩展名**才算引用（目录式路径不受此限）。
+ * ⭐ 2026-10-02（老师端那条假警报）：`"name"` / `"f"` / `"d.name"` / `"bg"` 这类
+ * JS 标识符、CSS 值、字体栈以前会被当成"引用"，于是 `missingLocalAssets` 给老师报
+ * 「这件作品引用了 7 个本地素材（`name`、`new Blob([b]…）」，完全是无中生有。
+ */
+const ASSET_EXTENSION = /\.(?:png|jpe?g|gif|webp|avif|bmp|ico|svg|mp4|webm|mov|m4v|mp3|wav|ogg|m4a|aac|flac|pptx?|docx?|xlsx?|pdf|woff2?|ttf|otf|eot|json|txt|md|csv|tsv|js|mjs|jsx|css|html?|xml|glb|gltf|obj|wasm|map|zip)$/i;
+
+/** `type="image/png"` / `href="text/css"` 这类是 **MIME 类型**不是文件路径 ——
+ *  它们恰好也含 `/`，不单独排掉就会被当成"缺素材"报给老师。 */
+const MIME_LIKE = /^(?:image|text|audio|video|application|font|multipart|message|model|chemical)\/[a-z0-9.+-]+$/i;
+
+/**
+ * 长得像"文件引用"吗。**必须带已知资源扩展名**（`assets/hero`、`api/upload`、`files/` 这类
+ * 一律不算 —— 实测那份"文件管理"作品里，`api/upload`、`api/list`、`files/` 都会被误当素材）。
+ * 另外挡掉空白/括号/引号/分号/`$`（JS 片段与 CSS 值）与 MIME 类型（`image/png`）。
+ */
+function looksLikeAssetPath(clean) {
+  if (/[\s(){}[\]<>"'`$;,|]/.test(clean)) return false;
+  if (MIME_LIKE.test(clean)) return false;
+  return ASSET_EXTENSION.test(clean);
+}
+
+/**
+ * JS 里**真正会去取一个文件**的上下文（2026-10-02）。只认这些写法，不再扫"所有引号串" ——
+ * 因为引号串里躺着的东西实在太杂：内置演示清单的 `{name:'萌宠角色.png', size:…}`、
+ * zip 内部条目 `zip.text('word/document.xml')`、接口路由 `fetch('./api/upload?name=…')`
+ * 全都会被当成"缺素材"报给老师（实测那份"文件管理"作品报了 13 条，一条真的都没有）。
+ * 回写侧不受影响：`rewriteLocalReferences` 只替换**真交上来的**素材名，写法多松都安全。
+ */
+const JS_URL_CONTEXT_PATTERNS = [
+  /\bnew\s+(?:Audio|Image|Worker|SharedWorker)\s*\(\s*["'`]([^"'`\n]{1,160})["'`]/gi,
+  /\.\s*(?:src|href|poster)\s*=\s*["'`]([^"'`\n]{1,160})["'`]/gi,
+  /\b(?:fetch|importScripts)\s*\(\s*["'`]([^"'`\n]{1,160})["'`]/gi,
+  /\bimport\s*\(\s*["'`]([^"'`\n]{1,160})["'`]/gi,
+];
+
 function normalizeLocalReference(value) {
   const raw = String(value || '').trim();
   if (!raw || raw.startsWith('#') || /^(?:[a-z]+:|\/\/|\/)/i.test(raw)) return '';
   const clean = raw.split(/[?#]/)[0].replace(/^\.\//, '');
   if (!clean || clean.includes('..') || clean.includes('\\')) return '';
+  if (!looksLikeAssetPath(clean)) return '';
   // ⚠️ 2026-09-30（用户报「教师后台看作品里图片/视频显示不出来」）：这里原来连 `/` 一起拒 ——
   //    只认**平铺名**（`hero.png`）。而学生工作区里的网页几乎都把素材放在子目录里
   //    （AI 生成的 HTML 写的就是 `src="assets/hero.png"`），于是这类引用
@@ -135,7 +173,9 @@ function localArtifactReferences(name, content) {
     for (const match of text.matchAll(/\b(?:src|href)\s*=\s*["']([^"']+)["']/gi)) values.push(match[1]);
   }
   if (kind === 'html' || kind === 'css' || kind === 'svg') {
-    for (const match of text.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) values.push(match[1]);
+    // ⚠️ 2026-10-02：`url(` 前面必须是**非标识符边界** —— 否则 `URL.createObjectURL(new Blob(…))`
+    //    里的 `url(` 也会命中，抓出一串 JS 代码当"素材"（老师端那条假警报就是这么来的）。
+    for (const match of text.matchAll(/(?<![\w$])url\(\s*["']?([^"')]+)["']?\s*\)/gi)) values.push(match[1]);
   }
   // ⭐ 2026-10-01：**JS 里引用的素材**也要收 —— 学生做的小游戏十有八九是这样写的：
   //    `new Audio("assets/sfx.wav")` / `fetch("assets/level.json")` / `img.src = "assets/x.png"`。
@@ -144,7 +184,24 @@ function localArtifactReferences(name, content) {
   //    ⚠️ 只认**带引号的整段相对路径**（单/双引号、反引号），不做裸词匹配 ——
   //       正文里随便一句提到 hero.png 不该被当成引用（与上面 html 那条同一套谨慎）。
   if (kind === 'js' || kind === 'json') {
-    for (const match of text.matchAll(/["'`]([^"'`\n]{1,120})["'`]/g)) values.push(match[1]);
+    // ⚠️ 2026-10-01 那版扫的是"所有引号串"（为了 `new Audio("assets/sfx.wav")` 这类写法）；
+    //    2026-10-02 收紧成**只认真正取文件的上下文**（见 JS_URL_CONTEXT_PATTERNS 的注释）——
+    //    json 例外（它是纯数据，`{"image":"assets/x.png"}` 这种就该认）。
+    if (kind === 'json') {
+      for (const match of text.matchAll(/["'`]([^"'`\n]{1,120})["'`]/g)) values.push(match[1]);
+    } else {
+      for (const pattern of JS_URL_CONTEXT_PATTERNS) {
+        for (const match of text.matchAll(pattern)) values.push(match[1]);
+      }
+    }
+  }
+  // ⭐ 2026-10-02：**HTML 的内联 `<script>`** 与 .js 同一套（`new Audio("assets/sfx.wav")`）——
+  //    改写侧（rewriteLocalReferences）早就认这种写法，收集侧却只认 src/href/url()，
+  //    于是"只在内联脚本里引用"的素材既不被收进作品清单、也不进回写表（不对称）。
+  if (kind === 'html') {
+    for (const pattern of JS_URL_CONTEXT_PATTERNS) {
+      for (const match of text.matchAll(pattern)) values.push(match[1]);
+    }
   }
   return values.map(normalizeLocalReference).filter(Boolean);
 }
