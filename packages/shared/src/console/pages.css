@@ -142,6 +142,16 @@
    ⚠️ 这条同时管两层：公开作品页的**外层包装**与 PreviewFrame 自己的容器都带 --flow。 */
 .c-replay__stage.c-replay__stage--flow { height: auto; overflow: visible; }
 .c-replay__stage.c-replay__stage--flow > iframe { position: static; width: 100%; }
+/* ⭐⭐ 2026-10-03 用户口径：「我不希望网页作品可滚动，体验非常差……必须是自适应的，不要有滚动」——
+   `--screen`：**占满一屏**（视口高减去这一页的页头/操作区，用 --wd-chrome 给，默认 232px），
+   里面是 `fill` 形态（铺满、原生比例、不缩放）；**作品自己的滚动条在 iframe 内部**，
+   页面本身不再滚 —— 视觉上就是"作品自己长成这一屏"。压过上面几条固定高度。 */
+.c-replay__stage.c-replay__stage--screen {
+  height: calc(100dvh - var(--wd-chrome, 232px));
+  min-height: 420px;
+  overflow: hidden;
+}
+.c-replay__stage.c-replay__stage--screen > .c-preview__stage--fill { flex: 1 1 auto; min-height: 0; }
 .c-replay__file + .c-replay__file { margin-top: var(--sp-3); }
 .c-replay__file-name {
   display: flex;

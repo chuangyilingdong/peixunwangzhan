@@ -145,7 +145,11 @@ export function WorkDetailPage({ api }) {
             {/* ⚠️ 网页作品这一档外面还要 `--flow`：`.c-replay__stage` 默认是**固定 62vh + overflow:hidden**
                 （文档预览那档要它），用在自适应网页上就把作品裁在 595px 高的小框里 ——
                 用户 2026-09-30 报的"那么小的界面"就是它。文档/空态那一档保持原样。 */}
-            <div className={`c-replay__stage${current && !current.document ? ' c-replay__stage--flow' : ''}`}>
+            {/* ⭐ 2026-10-03 用户口径：「我不希望网页作品可滚动，体验非常差……必须是自适应的，
+                不要有滚动」—— 网页作品这一档改 `--screen`：**占满一屏**（视口高 − 这一页的头尾），
+                里面 `fill` 铺满、原生比例、无缩放；作品自身按容器自适应、滚动条只在作品**内部**
+                （页面本身不再滚）。文档/空态那一档保持原来的 62vh 固定舞台。 */}
+            <div className={`c-replay__stage${current && !current.document ? ' c-replay__stage--screen' : ''}`}>
               {views.length > 1 ? (
                 <div className="c-file-tabs">
                   {views.map((item) => (
@@ -190,7 +194,7 @@ export function WorkDetailPage({ api }) {
                 // ⭐ 2026-09-30 用户口径：「怎么玩？那么小的界面……为什么非要用作品预览把作品框上呢？不需要这些东西」
                 //    → 看作品这一档**去掉面板、去掉缩放**：宽度＝容器真实宽度（学生页自己的媒体查询生效，
                 //      电脑端与手机端各自长成它自己的样子），高度跟着内容走。见 PreviewFrame 的 responsive。
-                <ReplayPreview html={buildPreviewDocument(files, current.name)} title={work.title} chrome={false} responsive />
+                <ReplayPreview html={buildPreviewDocument(files, current.name)} title={work.title} chrome={false} fill />
               )}
             </div>
           </div>

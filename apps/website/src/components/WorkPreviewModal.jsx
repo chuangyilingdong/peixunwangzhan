@@ -60,6 +60,9 @@ export function WorkPreviewModal({ api, studentApi = null, isOwner = false, crea
   const pieces = shareablePiecesOf(detail, source);
 
   return <div className="pl-viewer" role="dialog" aria-modal="true" aria-label={`查看作品：${work.title || ''}`} data-testid="work-modal" onClick={onClose}>
+    {/* 一整屏、**不滚动**（`has-frame` 写死高度 + 容器 overflow:hidden）—— 2026-10-03 用户口径：
+        「我不希望网页作品可滚动，体验非常差……必须是自适应的，不要有滚动」。
+        网页作品在里面用 `fill`（铺满这一屏、原生比例、作品自身按容器自适应）。 */}
     <div className='pl-viewer-box has-frame' onClick={(event) => event.stopPropagation()}>
       <div className="pl-viewer-head">
         <div><span className="pl-badge">{type.label}</span><h3>{work.title}</h3></div>
@@ -74,7 +77,17 @@ export function WorkPreviewModal({ api, studentApi = null, isOwner = false, crea
         {state.loading ? <div className="c-page__center">正在打开作品…</div> : null}
         {state.error ? <div className="c-page__center">⚠ {state.error}</div> : null}
         {detail ? (isVibe
-          ? <div className="creator-modal__web"><ReplayPreview html={buildPreviewDocument(detail.files, entry)} title={detail.title || '作品预览'} fitContent /></div>
+          // ⭐ 2026-10-03（用户报「从学生主页点进去好卡好卡」）：这里原来走**老口径**
+          //    （`fitContent` = 把整页缩放到框里 + 默认的「作品预览」黑条面板）。缩放渲染要按比例
+          //    重新栅格化整页（这页有 8 张大尺寸 SVG data URI + 动画），而且黑条那层面板
+          //    用户在 §七十七 就说过「不需要这些东西」。改成与**其它三处看作品同款**：
+          //    `chrome={false} responsive`（不缩放、宽度＝容器宽、高度跟内容走、无面板）。
+          // ⭐ 2026-10-03（用户报「从学生主页点进去好卡好卡」+「不要滚动、必须自适应」）：
+          //    这里原来走老口径（`fitContent` 缩放到 62vh 的小框 + 默认黑条面板）—— 缩放要按比例
+          //    重新栅格化整页（这页有 8 张大尺寸 SVG data URI 与动画），既卡又小、还带内层滚动条。
+          //    现在与老师端（§九十）同款：**`fill` = 铺满这一屏、原生比例、无缩放**，
+          //    外层弹窗固定一屏不滚动，作品自身按容器宽度自适应（学生页的媒体查询因此真正生效）。
+          ? <div className="creator-modal__web"><ReplayPreview html={buildPreviewDocument(detail.files, entry)} title={detail.title || '作品预览'} chrome={false} fill /></div>
           : <div className="work-detail__canvas"><CanvasEditor key={detail.id} initialSnapshot={detail.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={canvasResolve(detail)} /></div>) : null}
       </div>
       <div className="pl-viewer-foot">
