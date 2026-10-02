@@ -325,6 +325,18 @@ console.log('⑩ 三处「分享」入口都在右上角（面板/弹窗页眉�
   const websiteModal = readFile('apps/website/src/components/WorkPreviewModal.jsx');
   check('⑩ 网站端预览弹窗：分享入口在 `pl-viewer-head__actions`（弹窗右上角）',
     /pl-viewer-head__actions[\s\S]{0,300}data-testid="work-share"/.test(websiteModal));
+  // ⚠️ 2026-10-02（用户报「为什么没有分享按钮呢」）：**每个** <ClassroomWork 调用点都要传
+  //    `canShare` + `shareCreate` —— 组件默认 canShare=false，漏一个就是那条路上没有分享入口
+  //    （机构端课堂那处就漏了：作品库有、我的课堂没有）。这条静态断言把这一类钉死。
+  const callSites = [];
+  for (const file of ['apps/org/src/main.jsx', 'apps/org/src/pages/classroom/ClassroomDetail.jsx']) {
+    const source = readFile(file);
+    for (const match of source.matchAll(/<ClassroomWork[\s\S]{0,500}?\/>/g)) callSites.push([file, match[0]]);
+  }
+  const missingProps = callSites.filter(([, jsx]) => !/canShare/.test(jsx) || !/shareCreate=/.test(jsx));
+  check('⑩ 每个 <ClassroomWork 调用点都传了 canShare + shareCreate（漏一个就没分享）',
+    callSites.length >= 2 && missingProps.length === 0,
+    `共 ${callSites.length} 处，缺 props：${missingProps.map(([file]) => file).join('、')}`);
 }
 
 console.log('');

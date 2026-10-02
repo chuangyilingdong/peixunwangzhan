@@ -229,7 +229,13 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
           </Panel>
         </> : null}
 
-    {modal?.kind === 'work' ? <ClassroomWork api={api} workBase={`org/sessions/${encodeURIComponent(openId)}/works`} work={modal.work} onClose={closeModal} /> : null}
+    {/* ⭐ 2026-10-02（用户报「为什么没有分享按钮呢」）：**这里漏传了 canShare / shareCreate** ——
+        分享按钮的开关就是这两个 prop，而 ClassroomWork 的默认值是 canShare=false，
+        于是"我的课堂 → 查看作品"打开的作品只有「关闭预览」，作品库那条路却有分享。
+        发码走机构作用域（与作品库同一条 `/api/org/share-links`，p171 ⑧ 验过课堂老师可以发）。 */}
+    {modal?.kind === 'work' ? <ClassroomWork api={api} workBase={`org/sessions/${encodeURIComponent(openId)}/works`} work={modal.work} onClose={closeModal}
+      canShare
+      shareCreate={(pieceKey) => api.post('org/share-links', { source: modal.work.source || 'CANVAS', workId: modal.work.id, pieceKey })} /> : null}
 
     {/* 005-03A 编辑课堂名称 */}
     {modal?.kind === 'title' ? <Modal title="编辑课堂名称" parent={['课堂详情']} busy={busy} error={error} onClose={closeModal}
