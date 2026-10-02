@@ -7,13 +7,15 @@
 //    也是学生与他的机构）；"是谁分享的"留在审计里（`WORK_SHARE_LINK_CREATE` 的 actor）。
 import { randomUUID } from 'node:crypto';
 import { aq, arow, canvasMediaFrom, errors, nowIso, parseJson } from '../lib.js';
-import { parseSnapshotArtifacts, snapshotArtifactNames } from '../routes/vibecoding.js';
+import { shareableArtifactNames } from '../routes/vibecoding.js';
 
 /**
  * 一件作品里**每一件产出物**的稳定标识（分享码就按它定位）：
  *   · 画布作品：快照里的每个图/视频/音频 → `media:<fileId|url>`（优先 fileId：资产 id 跨版本稳定）
- *   · VibeCoding：产物清单的每一项 → `artifact:<文件名>`（与**主页产物清单**共用 `snapshotArtifactNames`：
- *     各枚举一套的话，"主页上看得见的那一件"可能发不了码 —— 写守卫时实测踩到）
+ *   · VibeCoding：**可独立分享的**那些产物的 `artifact:<文件名>`（与分享面板同一份清单
+ *     `shareableArtifactNames`：各枚举一套的话，"面板上看得见的那一件"可能发不了码 ——
+ *     写守卫时实测踩到）。⚠️ 2026-10-02 起**网页作品的引用零件（css/js/图）不算独立一件**
+ *     （用户口径：「客户端传过来的是 1 个主文件，然后是一些引用文件……这里肯定就是一个整体啊」）。
  */
 export function sharePieceKeysOf(source, row) {
   if (source === 'CANVAS') {
@@ -21,7 +23,7 @@ export function sharePieceKeysOf(source, row) {
       .map((item) => `media:${item.fileId || item.url}`)
       .filter((key) => !key.endsWith(':'));
   }
-  return snapshotArtifactNames(row).map((name) => `artifact:${name}`);
+  return shareableArtifactNames(row).map((name) => `artifact:${name}`);
 }
 
 /** 这件产出物在不在**最新那一版**里（不在就拒 —— 免得发出一枚打不开的码）。 */

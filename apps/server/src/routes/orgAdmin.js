@@ -1,6 +1,6 @@
 import { audit, clearAuthCookies, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arows, arow, aq, acount, atransaction, amap, likeKeyword, likeEscapeClause } from '../lib.js';
 import { normalizeLesson, canvasMediaFrom } from '../lib.js';
-import { missingLocalAssets, normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
+import { missingLocalAssets, normalizeSubmission, parseSnapshotArtifacts, shareableArtifactNames, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
 // ⭐ 2026-09-30：作品分享码（与学生端**同一份实现** —— 件的定位与幂等口径两处各写一套，迟早只在一半上生效）
 import { assertSharePiece, ensureWorkShareLink, shareLinkUrl } from '../services/workShare.js';
 import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from './fileAssets.js';
@@ -908,7 +908,10 @@ export async function handleOrg(ctx) {
     // ⭐ 2026-09-30：`missingAssets` = 这件作品里**还指着本地文件、但没随作品交上来**的引用
     //    （客户端旧版本只传文本与封面）。老师端要能把这件事说清楚，不然看到的就是"图裂了"、
     //    以为平台坏了 —— 其实就是那几个素材的字节从没上来过。
-    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: (content.artifacts || []).map((item) => ({ ...item, pieceKey: `artifact:${item.name}` })), preview: content.preview, imageUrls, ossUrls, fileUrls, missingAssets: missingLocalAssets(content.files, content.entryFile) };
+    // ⭐ 2026-10-02：可分享件与发码准入同一份（`shareableArtifactNames`）—— 网页作品是个**整体**，
+    //    它引用的 css/js/图是零件，不该出现在"选哪一件"里（用户口径见该函数注释）。
+    const shareablePieces = new Set(shareableArtifactNames(work));
+    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: (content.artifacts || []).map((item) => ({ ...item, pieceKey: `artifact:${item.name}`, shareable: shareablePieces.has(item.name) })), preview: content.preview, imageUrls, ossUrls, fileUrls, missingAssets: missingLocalAssets(content.files, content.entryFile) };
   }
 
   if (part === '/sessions' && method === 'GET') {
@@ -1281,7 +1284,8 @@ export async function handleOrg(ctx) {
     const row = source === 'CANVAS'
       ? await arow(`SELECT work.id, work.student_id, work.org_id, work.canvas_snapshot FROM works work
           WHERE work.org_id=? AND work.id=?${sessionOwnedByTeacherExists('work.class_session_id', auth, params, { orgColumn: 'work.org_id' })}`, params)
-      : await arow(`SELECT submission.id, submission.student_id, submission.org_id, submission.files, submission.artifacts
+      : await arow(`SELECT submission.id, submission.student_id, submission.org_id, submission.files, submission.artifacts,
+            submission.entry_file
           FROM vibecoding_submissions submission
           WHERE submission.org_id=? AND submission.id=?${sessionOwnedByTeacherExists('(SELECT class_session_id FROM vibecoding_conversations conv WHERE conv.id=submission.conversation_id)', auth, params, { orgColumn: 'submission.org_id' })}`, params);
     if (!row) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');

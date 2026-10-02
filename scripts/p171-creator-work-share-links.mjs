@@ -297,6 +297,61 @@ try {
     JSON.stringify(orgArtifactKeys).slice(0, 200));
   const orgFromDetail = await api('/api/org/share-links', { method: 'POST', token: adminOrgToken, body: { source: 'VIBECODING', workId, pieceKey: 'artifact:deck.pptx' } });
   check('⑨ 机构端详情给的键，机构端发码接口**照单接受**', orgFromDetail.status === 200, JSON.stringify(orgFromDetail.raw).slice(0, 160));
+/* ── ⑫ 网页作品是**一个整体**：入口 + 它引用的 css/js 只算**一件**（2026-10-02 用户口径）────
+   客户端原话：「客户端那边传过来的是 1 个主文件，然后是一些引用文件……这里肯定就是一个整体啊」
+   —— 此前把 `styles.css` / `app.js` 也当成"可选的另一件"，用户在分享面板里看到一个
+   「选哪一件」下拉、而且唯一那件还显示成「index.html · index.html」。 */
+console.log('⑫ 网页作品（入口 + 引用文件）只算一件，零件不参与分享');
+{
+  // ⚠️ 引用文件照**真实客户端**的形态交：css/js 都是**文本**（客户端截图里说的
+  //    「自动包含 2 个引用文件：styles.css 32.1 KB / app.js 95.3 KB」），binary:false。
+  //    二进制的图/视频走的是 embeddedAssets 那条路，本来就不在这份"产物清单"里。
+  const webWork = await api('/api/student/runtime/submit-upload', {
+    method: 'POST', token: studentToken,
+    body: {
+      name: 'index.html', title: 'P171 网页作品（整体一件）', copyrightConfirmed: true,
+      files: [
+        { name: 'index.html', content: '<!doctype html><html><head><link rel="stylesheet" href="styles.css"></head><body><script src="app.js"></script></body></html>', binary: false },
+        { name: 'styles.css', content: 'body{margin:0}', binary: false },
+        { name: 'app.js', content: 'console.log("p171")', binary: false },
+      ],
+    },
+  });
+  const webId = webWork.data?.id;
+  check('⑫ 夹具：网页作品提交成功（入口 index.html + 两个引用文件）', webWork.status === 200 && Boolean(webId), JSON.stringify(webWork.raw).slice(0, 200));
+
+  const { shareableArtifactNames } = await import('../apps/server/src/routes/vibecoding.js');
+  const webRow = await arow('SELECT * FROM vibecoding_submissions WHERE id=?', [webId]);
+  const names = shareableArtifactNames(webRow);
+  check('⑫ 可分享件只有入口那一件（styles.css / app.js 是零件）',
+    names.length === 1 && names[0] === 'index.html', JSON.stringify(names));
+
+  // 机构端作品详情：零件带 pieceKey 但 `shareable:false`（前端据此不出现在"选哪一件"）
+  const webDetail = await api(`/api/org/works/VIBECODING/${encodeURIComponent(webId)}`, { token: adminOrgToken });
+  const arts = webDetail.data?.artifacts || [];
+  const byName = Object.fromEntries(arts.map((item) => [item.name, item]));
+  check('⑫ 机构端详情把零件标成 shareable:false（入口仍是 true）',
+    byName['index.html']?.shareable === true && byName['styles.css']?.shareable === false && byName['app.js']?.shareable === false,
+    JSON.stringify(arts.map((item) => [item.name, item.shareable])));
+
+  // 发码准入：零件拒、入口收
+  const partShare = await api('/api/org/share-links', { method: 'POST', token: adminOrgToken, body: { source: 'VIBECODING', workId: webId, pieceKey: 'artifact:styles.css' } });
+  check('⑫ 给零件发码被拒（400 SHARE_PIECE_NOT_FOUND）',
+    partShare.status === 400 && partShare.data?.error?.code === 'SHARE_PIECE_NOT_FOUND', JSON.stringify(partShare.data).slice(0, 160));
+  const wholeShare = await api('/api/org/share-links', { method: 'POST', token: adminOrgToken, body: { source: 'VIBECODING', workId: webId, pieceKey: 'artifact:index.html' } });
+  check('⑫ 给"整件"发码照常（200 且有码）', wholeShare.status === 200 && Boolean(wholeShare.data?.code), JSON.stringify(wholeShare.data).slice(0, 160));
+
+  // 学生主页那份清单（publicArtifactCatalog）也一样：只有入口 shareable
+  const { publicArtifactCatalog } = await import('../apps/server/src/routes/vibecoding.js');
+  await aq('UPDATE vibecoding_submissions SET is_public=1, share_token=? WHERE id=?', [`tok_${webId.slice(-8)}`, webId]);
+  const fresh = await arow('SELECT * FROM vibecoding_submissions WHERE id=?', [webId]);
+  const catalog = publicArtifactCatalog(fresh);
+  check('⑫ 学生主页产物清单里也只有入口 shareable（别人的清单条目照样在）',
+    catalog.filter((item) => item.shareable).map((item) => item.name).join(',') === 'index.html' && catalog.length >= 3,
+    JSON.stringify(catalog.map((item) => [item.name, item.shareable])));
+  await aq('UPDATE vibecoding_submissions SET is_public=0, share_token=NULL WHERE id=?', [webId]);
+}
+
 } catch (error) {
   failures += 1;
   console.error('P171 抛错：', error?.message || error);

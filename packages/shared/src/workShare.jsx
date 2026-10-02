@@ -61,8 +61,11 @@ export function WorkSharePanel({ title, pieces = [], createShare, onClose }) {
         <strong>分享作品</strong>
         <button type="button" className="text-button" onClick={onClose}>关闭</button>
       </div>
-      <p className="share-modal__title">{title}{current?.label ? ` · ${current.label}` : ''}</p>
-      {/* 这件作品有好几件产出物时，让用户**选哪一件**（一节课的 1 张图 + 1 段视频就是两个选项） */}
+      {/* ⚠️ 只有**一件**时不再后缀那一件名（此前网页作品会显示成「index.html · index.html」——
+          作品名本来就是入口文件名，重复一遍既丑、又像"还有别的可挑"）。 */}
+      <p className="share-modal__title">{title}{pieces.length > 1 && current?.label ? ` · ${current.label}` : ''}</p>
+      {/* 这件作品有好几件产出物时，让用户**选哪一件**（一节课的 1 张图 + 1 段视频就是两个选项）。
+          ⚠️ 网页作品（入口 + 它引用的 css/js/图）是**一个整体**，不会再出现这个下拉（2026-10-02 用户口径）。 */}
       {pieces.length > 1 ? <label className="share-modal__pick">选哪一件
         <select value={state.pieceKey} onChange={(event) => pick(event.target.value)} data-testid="share-piece-select">
           {pieces.map((piece) => <option key={piece.pieceKey} value={piece.pieceKey}>{piece.label}</option>)}
@@ -91,7 +94,12 @@ export function WorkSharePanel({ title, pieces = [], createShare, onClose }) {
  */
 export function shareablePiecesOf(detail, source) {
   if ((source || 'CANVAS') === 'VIBECODING') {
-    return (detail?.artifacts || []).filter((item) => item?.pieceKey).map((item) => ({ pieceKey: item.pieceKey, label: item.name || '这一件' }));
+    // ⚠️ 2026-10-02：`shareable === false` 的是**网页作品引用的零件**（css/js/图片/音视频）——
+    //    它们是入口那件作品的组成部分，不是独立的"一件"（用户口径：「客户端传过来的是 1 个主文件，
+    //    然后是一些引用文件……这里肯定就是一个整体啊」）。服务端在产物清单上标了这一位。
+    return (detail?.artifacts || [])
+      .filter((item) => item?.pieceKey && item.shareable !== false)
+      .map((item) => ({ pieceKey: item.pieceKey, label: item.name || '这一件' }));
   }
   const labels = { IMAGE: '图片', VIDEO: '视频', AUDIO: '音频' };
   return (detail?.media || []).filter((item) => item?.pieceKey).map((item) => ({ pieceKey: item.pieceKey, label: item.caption || labels[item.modality] || '这一件' }));

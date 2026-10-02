@@ -921,15 +921,43 @@ export function snapshotArtifactNames(submission) {
   return [...new Set([...Object.keys(files), ...artifacts.map((item) => item.name)])].sort();
 }
 
+/**
+ * 这件作品里**可独立分享的产出物**（2026-10-02 用户口径：
+ * 「客户端那边传过来的是 1 个主文件，然后是一些引用文件……这里肯定就是一个整体啊」）。
+ *
+ *   · **网页作品**（入口是 html）：可分享的 = **入口那一个整体** —— 它 `src/href` 引用的
+ *     css / js / 图片 / 音视频都是**它的零件**，不是独立作品（分享「styles.css」毫无意义）；
+ *     外加**没被入口引用**的产物（学生另外交的 pptx、单独录的视频）才算另一件。
+ *   · 其它（入口是 pptx/docx/… 的文档件）：全部产物照旧各自成件。
+ *
+ * 用途：① 分享面板的「选哪一件」——只剩一件时那个下拉根本不该出现；
+ *      ② 发码的准入（`sharePieceKeysOf`）——两边同一套，免得"看得见却分享不了"。
+ * ⚠️ 分享**卡**的取件是按名字直接查 `parseSnapshotArtifacts` 的，不依赖这份清单 ——
+ *    所以收窄它不会让**已发出的**老码失效（老码指向某个零件时照旧渲染）。
+ */
+export function shareableArtifactNames(submission) {
+  const files = parseSnapshotFiles(submission?.files);
+  const names = snapshotArtifactNames(submission);
+  const entry = String(submission?.entry_file || '').trim();
+  if (!entry || !Object.hasOwn(files, entry) || kindForName(entry) !== 'html') return names;
+  const parts = new Set(submissionArtifactNames(files, entry));
+  parts.delete(entry);
+  return names.filter((name) => name === entry || !parts.has(name));
+}
+
 export function publicArtifactCatalog(submission) {  const artifacts = parseSnapshotArtifacts(submission);
   const byName = new Map(artifacts.map((item) => [item.name, item]));
   const base = `/api/public/vibecoding-works/${submission.share_token}`;
+  // 可独立分享的那几件（2026-10-02：网页作品的 css/js 是零件，不是独立的"一件"）——
+  // 清单里**照样列出**每个文件（预览/下载要用），只是**零件不带 pieceKey 语义**：
+  // `shareable:false` 让前端的"选哪一件"不列它，发码准入也不认它。
+  const shareable = new Set(shareableArtifactNames(submission));
   return snapshotArtifactNames(submission).map((name) => {
     const meta = byName.get(name) || {};
     const kind = meta.kind || kindForName(name);
     // ⭐ 2026-09-30：每件产物带 `pieceKey` —— 学生主页要**逐件**发分享码，键由服务端算
     //    （与 `sharePieceKeysOf()` 同一套规则；前端别自己拼，两边口径迟早飘）。
-    const item = { name, kind, document: isDocumentKind(kind), updatedAt: meta.updatedAt || null, pieceKey: `artifact:${name}` };
+    const item = { name, kind, document: isDocumentKind(kind), updatedAt: meta.updatedAt || null, pieceKey: `artifact:${name}`, shareable: shareable.has(name) };
     if (!item.document) return item;
     if (meta.fileId) {
       // 这份是**真文件**：预览用服务端转出来的 PDF（Office 转 PDF，见 materialPreview），

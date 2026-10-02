@@ -1373,7 +1373,7 @@ export async function handleStudent(ctx) {
     // 只能是**自己的**作品（越权一律 404，不泄露"存在但不是你的"）
     const row = source === 'CANVAS'
       ? await arow('SELECT id, canvas_snapshot FROM works WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId])
-      : await arow('SELECT id, files, artifacts FROM vibecoding_submissions WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId]);
+      : await arow('SELECT id, files, artifacts, entry_file FROM vibecoding_submissions WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId]);
     if (!row) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
     // 件的定位与"发码"都在 `services/workShare.js` 一份（机构/老师端共用同一套，别各写一套）
     assertSharePiece(source, row, pieceKey);
