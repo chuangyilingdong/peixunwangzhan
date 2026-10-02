@@ -135,7 +135,10 @@ export function WorkPreview({ api, workId, title, kind = 'vibecoding', onClose }
   const documentFile = isDocument ? (data?.fileUrls?.[selected.name] || null) : null;
   // 学生代码跑在不带 allow-same-origin 的沙箱里（口径⑧），网络一律禁掉
   const html = !isDocument && entry && Object.hasOwn(files, entry)
-    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; ${mediaSources}img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
+    // ⚠️⚠️ `mediaSources` 只能出现在 img-src/media-src/font-src 的**值**里（2026-10-02 修：
+    //    `style-src …;` 后多写的那个占位符会让整条 img-src 变成"名字非法的指令"被丢弃，
+    //    作品只要有任一 OSS 素材就**全图被拦**。详见 ClassroomWork 同处的长注释。）
+    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
     : '';
 
   return <PreviewDialog title={title || data?.title} onClose={onClose}>

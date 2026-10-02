@@ -31,6 +31,13 @@
         try { parent.postMessage(payload, '*'); } catch (error) { /* 忽略 */ }
         return;
       }
+      // PDF 桥（2026-10-02，见 vibecodingProject.js 的 PDF_BRIDGE）：学生文档截下 blob PDF 后把
+      // 字节发到这里，壳**只做转发** —— 真正的渲染在平台应用里做（它自带 pdf.js、且不在沙箱里）。
+      // 回程由应用发给壳、壳转进 stage（学生那种写法因此不用改一行代码就能显示）。
+      if (payload.source === 'vibecoding-pdf-render') {
+        try { parent.postMessage(payload, '*'); } catch (error) { /* 忽略 */ }
+        return;
+      }
       if (payload.source === 'vibecoding-preview' && typeof payload.html === 'string') {
         stage.srcdoc = payload.html;
       }

@@ -364,6 +364,27 @@ console.log('⑫ 预览沙箱 CSP：放行 blob/data 子框架（两层都要放
   const nginx = readSource('deploy/production/nginx-site.conf');
   check('⑫ 预览壳（nginx /vibe-preview.html）的 frame-src 也放行了 blob:/data:',
     /media-src data: https: blob:; connect-src https: wss:; frame-src 'self' blob: data:/.test(nginx));
+  // ⚠️ 2026-10-02 生产实测抓到的真 bug（P1）：`${mediaSources}` 被多写在 `style-src …;` 之后，
+  //    于是作品**只要有任一 OSS 素材**（哪怕只是封面），CSP 就变成
+  //    `style-src 'unsafe-inline'; https://…oss… img-src data: blob: …` —— 浏览器把
+  //    「https://… img-src data: blob: …」当成一条**名字非法的指令**整条丢掉 ⇒ 真 img-src 不存在
+  //    ⇒ 回落 `default-src 'none'` ⇒ 老师端预览里**所有图片被拦**（连 data:/blob: 一起）。
+  //    没有 OSS 素材的作品那串是空的、CSP 恰好合法 —— 所以本地怎么都复现不出来。
+  //    这条断言：**把占位符替换成一个假 OSS 源**再逐条检查指令名 —— 任何"值出现在指令名位置"
+  //    的写法都会被它抓住（比"看某个字面量在不在"强得多）。
+  const KNOWN_DIRECTIVES = new Set(['default-src', 'script-src', 'style-src', 'img-src', 'media-src', 'font-src',
+    'connect-src', 'frame-src', 'form-action', 'base-uri', 'object-src', 'worker-src', 'manifest-src', 'child-src']);
+  for (const file of ['apps/org/src/pages/classroom/ClassroomWork.jsx', 'apps/admin/src/components/WorkPreview.jsx']) {
+    const source = readSource(file);
+    const template = (source.match(/content="(default-src[^"]+)"/) || [])[1] || '';
+    const filled = template.replaceAll('${mediaSources}', 'https://bucket.example.com ');
+    const directives = filled.split(';').map((part) => part.trim()).filter(Boolean);
+    const badNames = directives.map((part) => part.split(/\s+/)[0]).filter((name) => !KNOWN_DIRECTIVES.has(name));
+    check(`⑫ ${file}：CSP 拼上 OSS 源之后每条指令名都合法（占位符没跑到指令名位置）`,
+      Boolean(template) && badNames.length === 0, `非法指令名：${JSON.stringify(badNames)}`);
+    const img = directives.find((part) => part.startsWith('img-src ')) || '';
+    check(`⑫ ${file}：img-src 里 data:/blob:/OSS 源三样都在`, /data:/.test(img) && /blob:/.test(img) && /bucket\.example\.com/.test(img), img);
+  }
   const shell = readSource('apps/website/public/vibe-preview.html');
   // ⚠️ 只看**那个 iframe 标签**：文件顶上的注释里正解释着"内层不带 allow-same-origin"，
   //    整文件扫会把说明文字当成违规（写这条时当场踩到）。

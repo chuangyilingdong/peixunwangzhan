@@ -91,7 +91,13 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
   const documentFile = document ? (data?.fileUrls?.[selected.name] || null) : null;
   // Run private student code in the existing opaque-origin sandbox, with network access blocked.
   const html = data?.source === 'VIBECODING' && entry && !document
-    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; ${mediaSources}img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
+    // ⚠️⚠️ `mediaSources` **只能出现在 img-src/media-src/font-src 的值里**。2026-10-01（§八十三）我在
+    //    `style-src ...;` 后面多写了一个 `${mediaSources}`，于是作品**只要有任一 OSS 素材**（哪怕只是封面），
+    //    CSP 就变成 `style-src 'unsafe-inline'; https://…oss… img-src data: blob: …` —— 浏览器把
+    //    「https://… img-src data: blob: …」当成**一条名字非法的指令**整条丢弃 ⇒ **真 `img-src` 不存在**、
+    //    回落到 `default-src 'none'` ⇒ 老师端预览里**所有图片被拦**（连 data:/blob: 一起）。
+    //    没有 OSS 素材的作品那串为空、CSP 恰好合法 —— 所以本地怎么都复现不出来（生产一测就现形）。
+    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
     : '';
   return <Modal title={`只读作品 · ${work.title || '未命名作品'}`} wide onClose={onClose}
     // ⭐ 2026-10-01：分享入口**从底部按钮行挪到页眉右上角**（用户口径：与作品库那处「详情右上角」
