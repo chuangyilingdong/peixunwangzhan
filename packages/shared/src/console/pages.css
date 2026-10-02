@@ -152,6 +152,10 @@
   overflow: hidden;
 }
 .c-replay__stage.c-replay__stage--screen > .c-preview__stage--fill { flex: 1 1 auto; min-height: 0; }
+/* ⚠️ 生产实测（2026-10-03）：光给 `--fill` 写 `height:100%` 不管用 —— 它和本文件上面那条
+   `.c-replay__stage{height:62vh}` 是**同权重**、靠源码顺序打架，62vh 赢了 ⇒ 弹窗 852px 里
+   作品只占 558px（用户要的"铺满"没达成）。这里用**双类名**提高权重压过它。 */
+.c-replay__stage.c-replay__stage--fill { height: 100%; }
 .c-replay__file + .c-replay__file { margin-top: var(--sp-3); }
 .c-replay__file-name {
   display: flex;
