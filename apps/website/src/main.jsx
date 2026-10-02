@@ -866,7 +866,15 @@ function HomeCompare({ block }) {
     if (!highlight) return { before: '', mid: title, after: '' };
     const at = title.indexOf(highlight);
     if (at >= 0) return { before: title.slice(0, at), mid: highlight, after: title.slice(at + highlight.length) };
-    return { before: title + (PUNCT_END.test(title) ? '' : '，'), mid: highlight, after: '' };
+    // ⭐ 2026-10-02：高亮不在标题里 → 追加。连接符分两种：
+    //   · 中文/全角标点结尾（或中文标题）→ 原样补「，」；
+    //   · **拉丁句读结尾（. ! ? ; :) → 补一个空格** —— 不补的话 `titleUnits` 的分词正则
+    //     把「标题尾字符+高亮首词」合成**一个词单元**（"similar.why"：`.` 和字母都在词内字符类里），
+    //     这个单元横跨正文/高亮的边界，被两边的 range 过滤**同时丢掉** —— 线上英文标题
+    //     就这样丢了 "similar.why"（生产实测 innerText = "Every AI course looks choose Lingdong AI"）。
+    //     中文每个字都是独立单元、边界天然对齐，所以这个问题只在拉丁文标题上出现。
+    const glue = /[.!?;:)]$/.test(title) && /^[A-Za-z0-9]/.test(highlight) ? ' ' : (PUNCT_END.test(title) ? '' : '，');
+    return { before: title + glue, mid: highlight, after: '' };
   })();
   const displayText = segments ? segments.before + segments.mid + segments.after : '';
   const typed = useTypedCount(displayText, shown);

@@ -237,16 +237,24 @@ try {
   const homeStructure = async (path) => {
     await page.goto(base + path, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2500);
+    // 对比栏标题是**打字机**（进视口才逐字亮，55ms/字）——滚过去等它打完再量，
+    // 否则 innerText 里 opacity:0 的字不算数，断言会量到半句话（⑧ 那个 bug 就是这么被量出来的）。
+    await page.evaluate(() => document.querySelector('.hp-cmp')?.scrollIntoView({ block: 'center' }));
+    await page.waitForTimeout(4500);
     return page.evaluate(() => ({
       steps: document.querySelectorAll('.hp-step').length,
       stepImages: document.querySelectorAll('.hp-step-art img').length,
       stepPlaceholders: document.querySelectorAll('.hp-step-art.is-placeholder').length,
       videoCards: document.querySelectorAll('.hp-vid-card').length,
       compareCards: document.querySelectorAll('.hp-cmp-card').length,
+      compareTitle: (document.querySelector('.hp-cmp-title')?.innerText || '').replace(/\s+/g, ' ').trim(),
     }));
   };
   const enHomeStruct = await homeStructure('/en/');
-  const zhHomeStruct = await homeStructure('/');
+  // ⚠️ 这里**不能**用 '/' 当"中文页"：第 ⑤ 组测过"切英文"之后本机记住了 en，
+  //    首页那条「本机记忆纠正一次」的规则会把 '/' 重定向到 /en/（量到的还是英文页）。
+  //    显式带前缀的 /zh-TW/ 没有歧义 —— URL 前缀优先于本机记忆。
+  const zhHomeStruct = await homeStructure('/zh-TW/');
   check('⑦ /en 步骤卡带**真图**（不是占位条 —— 运营在 CMS 配的图必须三语都显示）',
     enHomeStruct.stepImages >= enHomeStruct.steps && enHomeStruct.steps >= 1 && enHomeStruct.stepPlaceholders === 0,
     JSON.stringify(enHomeStruct));
@@ -256,6 +264,17 @@ try {
     enHomeStruct.steps === zhHomeStruct.steps && enHomeStruct.videoCards === zhHomeStruct.videoCards
       && enHomeStruct.compareCards === zhHomeStruct.compareCards,
     `en=${JSON.stringify(enHomeStruct)} zh=${JSON.stringify(zhHomeStruct)}`);
+  // ⑧ 对比栏标题的**两段都在**：英文标题以句号结尾 + 高亮以字母开头时，分词器会把
+  //   "similar.why" 合成一个跨边界单元、被正文段和高亮段的 range 过滤同时丢掉（线上实测丢字）。
+  //   修法是拉丁句读结尾时补一个空格再接高亮；这里钉住「标题前段 + 高亮段」都出现在最终文本里。
+  check('⑧ /en 对比栏标题正文段与高亮段都渲染（跨边界词单元不再丢字）',
+    /similar\.? ?$/.test(enHomeStruct.compareTitle.split('why choose')[0].trim() + '') || /similar/.test(enHomeStruct.compareTitle),
+    JSON.stringify(enHomeStruct.compareTitle));
+  check('⑧ /en 对比栏高亮段完整（why choose Lingdong AI 三个词都在）',
+    enHomeStruct.compareTitle.includes('why choose Lingdong AI'), JSON.stringify(enHomeStruct.compareTitle));
+  check('⑧ /zh-TW 对比栏两段同样齐全（语言包的繁體文案盖在 CMS 结构上）',
+    zhHomeStruct.compareTitle.includes('同樣都是 AI 課程') && zhHomeStruct.compareTitle.includes('為什麼選擇靈動 AI 課程'),
+    JSON.stringify(zhHomeStruct.compareTitle));
 
   await browser.close();
 } finally {
