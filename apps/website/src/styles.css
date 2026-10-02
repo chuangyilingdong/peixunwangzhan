@@ -1235,7 +1235,10 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
    里面的网页作品用 `fill` 铺满它（原生比例、作品自身按容器自适应、无缩放、无内层滚动条）。
    ⚠️ `min-height:0` 不能省：没有它，flex 子项的默认 min-height:auto 会让内容把格子顶大，
    于是又变回"外层滚动"——正是用户不想要的那种体验。 */
-.creator-modal__web{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:#141418;border-radius:12px;padding:10px}
+/* ⚠️ 这里必须给**确定高度**（`height:100%`）：它的父级 `.pl-viewer-body` 在 `has-frame` 下是
+   定高的（`flex:1` + 容器写死一屏），但**不是 flex 容器** —— 只写 `flex:1` 不会生效，
+   高度会塌成"内容高"（= 舞台那条 62vh），用户要的"铺满"就只铺了 62%。 */
+.creator-modal__web{height:100%;display:flex;flex-direction:column;background:#141418;border-radius:12px;padding:10px}
 .creator-modal__web>.c-preview__stage--fill{flex:1 1 auto;min-height:0}
 
 /* ── 作品分享页（/s/<分享码>，2026-09-30 用户口径）──────────────────────────────
