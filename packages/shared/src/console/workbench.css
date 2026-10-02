@@ -186,6 +186,11 @@ html.is-workbench-resizing * { cursor: col-resize !important; user-select: none 
    iframe 的 style 上；容器只负责别再套一层高度限制、也别再裁切。 */
 .c-preview__stage--flow { overflow: visible; height: auto; }
 .c-preview__stage--flow > iframe { position: static; width: 100%; }
+/* ⭐ fill（2026-10-02，老师端作品预览弹窗）：舞台高度由布局给（调用方的 flex:1），
+   iframe 绝对定位**铺满舞台**、原生比例、滚动条在 iframe 内部 —— 外层弹窗不滚，
+   页眉（分享按钮）与页脚常驻可见。舞台自己必须有确定高度（见 Classrooms.css 的弹窗布局）。 */
+.c-preview__stage--fill { height: 100%; }
+.c-preview__stage--fill > iframe { left: 0; top: 0; width: 100%; height: 100%; }
 .c-preview__frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; display: block; }
 .c-preview-stage {
   flex: 1;

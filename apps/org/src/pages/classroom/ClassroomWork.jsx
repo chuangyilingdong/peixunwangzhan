@@ -141,9 +141,11 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
           }} />
             : entry && Object.hasOwn(files, entry) ? <>
               <Notice tone="info">外部网络资源已禁用；依赖 CDN 或在线接口的内容可能无法运行。</Notice>
-              {/* 老师这一档也**不套「作品预览」面板、不缩放**（2026-09-30 用户口径：那么小的界面没法玩）——
-                  宽度＝弹窗宽度、高度跟着内容长；学生页自己的媒体查询因此真正生效。 */}
-              <ReplayPreview html={html} title={data.title || '课堂作品'} chrome={false} responsive />
+              {/* 老师这一档**不套「作品预览」面板、不缩放**（2026-09-30 用户口径：那么小的界面没法玩）；
+                  ⭐ 2026-10-02 再进一步（用户口径「作品预览为什么不能自适应，交互一下还需要滚轮条么」）：
+                  `fill` = 铺满弹窗给的那格（flex:1）、原生比例、**滚动条在 iframe 内部** ——
+                  弹窗整体不再滚，页眉的「分享」与页脚的「关闭预览」常驻可见。 */}
+              <ReplayPreview html={html} title={data.title || '课堂作品'} chrome={false} fill />
             </> : <Empty title="暂无可预览产物" />}
           <details className="top-gap"><summary>查看作品源文件</summary><ReplayFiles files={files} entryFile={entry} /></details>
         </div>}

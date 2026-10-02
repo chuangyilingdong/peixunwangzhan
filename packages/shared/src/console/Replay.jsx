@@ -68,22 +68,25 @@ export function ReplayFilePreview({ url, name = '' }) {
  * @param responsive 可选：**不缩放、按容器宽度自适应**（电脑端与手机端各自长成它自己的样子，
  *   见 PreviewFrame 里 PREVIEW_RESPONSIVE_MIN_H 那段注释）。
  */
-export function ReplayPreview({ html, title = '作品预览', height = '62vh', fitContent = false, chrome = true, responsive = false }) {
+export function ReplayPreview({ html, title = '作品预览', height = '62vh', fitContent = false, chrome = true, responsive = false, fill = false }) {
   const [reloadKey, setReloadKey] = useState(0);
-  /* ⭐ 老口径（缩放）与 `responsive`（自适应）是两条路：
+  /* ⭐ 老口径（缩放）与 `responsive`（自适应）与 `fill`（铺满容器）是三条路：
      · 老口径：内层按 ≥640×768 的逻辑视口渲染再整体缩放 —— 面板越宽越扁，缩放比越小（实测 0.52），
        手机上字小到点不着，正是用户 2026-09-30 报的那张图；
      · `responsive`：不缩放，宽度＝容器真实宽度（学生页自己的媒体查询因此生效），
-       高度＝内层自报的内容高度（下界 600 / 上界 4000）。 */
+       高度＝内层自报的内容高度（下界 600 / 上界 4000）—— 公开页/分享页用这个；
+     · `fill`（2026-10-02，老师端弹窗）：铺满给定容器、原生比例、**滚动条在 iframe 内部** ——
+       弹窗不再整体滚动，页眉（分享按钮）与页脚常驻。容器必须有确定高度（调用方给）。 */
   const stage = <PreviewFrame
     className="c-replay__frame"
     html={html}
     reloadKey={reloadKey}
     title={title}
-    fitToLogical={!responsive}
+    fitToLogical={!responsive && !fill}
     fitContent={fitContent}
     responsive={responsive}
-    stageClassName={responsive ? 'c-replay__stage c-replay__stage--flow' : (fitContent ? 'c-replay__stage c-replay__stage--tall' : 'c-replay__stage')}
+    fill={fill}
+    stageClassName={fill ? 'c-replay__stage c-replay__stage--fill' : (responsive ? 'c-replay__stage c-replay__stage--flow' : (fitContent ? 'c-replay__stage c-replay__stage--tall' : 'c-replay__stage'))}
   />;
   if (!chrome) return stage;
   return (

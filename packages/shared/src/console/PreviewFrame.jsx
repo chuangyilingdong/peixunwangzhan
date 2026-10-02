@@ -51,7 +51,7 @@ export const PREVIEW_RESPONSIVE_MIN_H = 600;
  * @param fitContent 可选：**按"这份文档有多高"来缩放**（见下）
  * @param responsive 可选：**不缩放、按容器宽度自适应**（见 PREVIEW_RESPONSIVE_MIN_H 的注释）
  */
-export function PreviewFrame({ html, className = '', stageClassName = '', title = '预览', onConsole, reloadKey = 0, fitToLogical = false, fitContent = false, responsive = false }) {
+export function PreviewFrame({ html, className = '', stageClassName = '', title = '预览', onConsole, reloadKey = 0, fitToLogical = false, fitContent = false, responsive = false, fill = false }) {
   const frameRef = useRef(null);
   const boxRef = useRef(null);
   const [fit, setFit] = useState(null);
@@ -131,16 +131,22 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
   //    现在框仍是绝对定位（CSS 里那条），居中靠 transform 的 translate 自己算 —— 不参与布局就没有反馈。
   // responsive 模式：不缩放、跟随容器宽度，高度用内层自报的内容高度（有下界、有上限）。
   const responsiveHeight = Math.max(PREVIEW_RESPONSIVE_MIN_H, Math.min(PREVIEW_MAX_HEIGHT, contentHeight || 0));
-  const frameStyle = responsive
-    ? { width: '100%', height: `${responsiveHeight}px` }
-    : (!fit ? undefined : (fitContent
-      ? {
-        width: `${fit.w}px`,
-        height: `${fit.h}px`,
-        transform: `translate(${Math.round((fit.boxW - fit.w * fit.scale) / 2)}px, ${Math.round((fit.boxH - fit.h * fit.scale) / 2)}px) scale(${fit.scale})`,
-        transformOrigin: 'top left',
-      }
-      : { width: `${fit.w}px`, height: `${fit.h}px`, transform: `scale(${fit.scale})`, transformOrigin: 'top left' }));
+  // fill 模式（2026-10-02 用户口径「作品预览为什么不能自适应，交互一下还需要滚轮条么」）：
+  // **铺满给定容器**（容器自己要有确定高度，弹窗里是 flex:1 那一格）、原生比例不缩放、
+  // 滚动条在 iframe 内部 —— 像一扇小浏览器窗口。弹窗预览用它：外层弹窗不再滚，
+  // 页眉（含分享按钮）与页脚常驻可见。
+  const frameStyle = fill
+    ? { width: '100%', height: '100%' }
+    : (responsive
+      ? { width: '100%', height: `${responsiveHeight}px` }
+      : (!fit ? undefined : (fitContent
+        ? {
+          width: `${fit.w}px`,
+          height: `${fit.h}px`,
+          transform: `translate(${Math.round((fit.boxW - fit.w * fit.scale) / 2)}px, ${Math.round((fit.boxH - fit.h * fit.scale) / 2)}px) scale(${fit.scale})`,
+          transformOrigin: 'top left',
+        }
+        : { width: `${fit.w}px`, height: `${fit.h}px`, transform: `scale(${fit.scale})`, transformOrigin: 'top left' })));
 
   const frame = (
     <iframe
@@ -152,6 +158,8 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
       style={frameStyle}
     />
   );
+  // fill 走**铺满容器**：舞台高度由布局给（flex:1），iframe 绝对定位铺满、内部滚动。
+  if (fill) return <div ref={boxRef} className={`c-preview__stage c-preview__stage--fill ${stageClassName}`.trim()}>{frame}</div>;
   // responsive 走**流动容器**（高度跟着内容长、没有固定舞台高度）—— 见 .c-preview__stage--flow
   if (responsive) return <div ref={boxRef} className={`c-preview__stage c-preview__stage--flow ${stageClassName}`.trim()}>{frame}</div>;
   // 不开适配时保持**原样结构**（工作台的编辑预览与手机模拟器自己有 stage，别动它们）
