@@ -343,5 +343,35 @@ try {
   server.kill();
 }
 
+/* ─── ⑫ 预览沙箱的 CSP 口径（2026-10-02 客户端报「PDF/Word 内嵌预览被拦」）──────────────
+   客户端原话：作品里 `iframe.src = URL.createObjectURL(pdfBlob)` 被 `frame-src 'none'` 拦成
+   「已阻止此内容」，建议放行 `blob: data:`。平台侧确实该放（沙箱仍然 opaque-origin + 不联网），
+   而且**两层都要放**：① 注入到学生文档的 meta；② 预览壳 `/vibe-preview.html` 的 nginx CSP
+   （srcdoc 会继承壳的 CSP，只改一层等于没改）。
+   ⚠️ 已知边界（受控实验，见 §九十三）：沙箱里 **blob HTML 子框架能显示**，
+   而 Chrome 的**内置 PDF 查看器在沙箱框架里不工作**（同一份 PDF 不套沙箱能渲染、套上就只剩占位图标）
+   —— PDF 要显示得走 pdf.js 之类渲染到 canvas 的路线，那时 `connect-src blob:` 正好够用。 */
+console.log('⑫ 预览沙箱 CSP：放行 blob/data 子框架（两层都要放）');
+{
+  const readSource = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+  for (const file of ['apps/org/src/pages/classroom/ClassroomWork.jsx', 'apps/admin/src/components/WorkPreview.jsx']) {
+    const source = readSource(file);
+    check(`⑫ ${file}：注入的 meta CSP 放行 frame-src blob: data:`, /frame-src blob: data:;/.test(source));
+    check(`⑫ ${file}：放行 connect-src blob:（pdf.js 之类要 fetch(blob:)）`, /connect-src blob:;/.test(source));
+    check(`⑫ ${file}：仍然不联网、不许表单、不许 base（收紧的部分一条都没松）`,
+      /connect-src blob:;[^"]*form-action 'none'/.test(source) && !/connect-src [^;]*https?:/.test(source));
+  }
+  const nginx = readSource('deploy/production/nginx-site.conf');
+  check('⑫ 预览壳（nginx /vibe-preview.html）的 frame-src 也放行了 blob:/data:',
+    /media-src data: https: blob:; connect-src https: wss:; frame-src 'self' blob: data:/.test(nginx));
+  const shell = readSource('apps/website/public/vibe-preview.html');
+  // ⚠️ 只看**那个 iframe 标签**：文件顶上的注释里正解释着"内层不带 allow-same-origin"，
+  //    整文件扫会把说明文字当成违规（写这条时当场踩到）。
+  const stageTag = (shell.match(/<iframe id="stage"[^>]*>/) || [''])[0];
+  check('⑫ 预览壳的内层 iframe 仍然**不带 allow-same-origin**（学生代码碰不到主站）',
+    /sandbox="allow-scripts allow-modals allow-forms allow-popups"/.test(stageTag) && !/allow-same-origin/.test(stageTag),
+    stageTag.slice(0, 120));
+}
+
 assert.equal(failures, 0, `P173 有 ${failures} 条断言没过`);
 console.log('PASS: 网页作品的本地素材（子目录/图/视频/封面）全链路可提交、可预览、可分享，路径白名单未放松');

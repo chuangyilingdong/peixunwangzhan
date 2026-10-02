@@ -9,7 +9,12 @@ export function previewHref(value) {
   return /^https?:\/\//i.test(value) || /^\/(?!\/)/.test(value) ? value : null;
 }
 
-// 作品图片直接从鉴权接口转 data:；不再 fetch blob:（生产 CSP 不允许 connect-src blob:）。
+// 作品图片直接从鉴权接口转 data:（老师端那几条媒体现在优先走 OSS 签名直链，见 §八十三）。
+// ⚠️ 2026-10-02：预览文档的 CSP 放行了 `connect-src blob:` 与 `frame-src blob: data:` ——
+//    学生的"文件管理"类作品会 `iframe.src = URL.createObjectURL(pdfBlob)`，此前被拦成
+//    「已阻止此内容」。⚠️ 但**沙箱内 Chrome 的 PDF 查看器仍然不工作**（受控实验：同一份 PDF
+//    不套沙箱能渲染，套上平台这套 sandbox 就只剩占位图标）——PDF 要显示得用 pdf.js 之类
+//    渲染到 canvas 的路线（那时 `connect-src blob:` 正好够用）。见 §九十三。
 
 /**
  * 只读作品预览弹窗（画布 / VibeCoding 产物都走它）。
@@ -86,7 +91,7 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
   const documentFile = document ? (data?.fileUrls?.[selected.name] || null) : null;
   // Run private student code in the existing opaque-origin sandbox, with network access blocked.
   const html = data?.source === 'VIBECODING' && entry && !document
-    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; ${mediaSources}img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
+    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; ${mediaSources}img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
     : '';
   return <Modal title={`只读作品 · ${work.title || '未命名作品'}`} wide onClose={onClose}
     // ⭐ 2026-10-01：分享入口**从底部按钮行挪到页眉右上角**（用户口径：与作品库那处「详情右上角」

@@ -63,7 +63,7 @@ const STUDENT_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>�
 // 预览文档：调用方（学生作品页 / 广场 / 机构端）就是这么拼的，还各自带一段收紧 CSP 的 meta
 const previewDoc = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; '
   + 'script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; img-src data: blob:; media-src data: blob:; '
-  + 'font-src data:; connect-src \'none\'; frame-src \'none\'; form-action \'none\'; base-uri \'none\'">'
+  + 'font-src data:; connect-src blob:; frame-src blob: data:; form-action \'none\'; base-uri \'none\'">'
   + buildPreviewDocument({ '打地鼠.html': STUDENT_HTML }, '打地鼠.html');
 
 const shellPath = path.join(root, 'apps/website/public/vibe-preview.html');
