@@ -1576,6 +1576,32 @@ function localeBlock(messages, key) {
   return value && typeof value === 'object' ? value : null;
 }
 
+/**
+ * ⭐ 2026-10-02（用户报「其他语言这些页面跟中文显示不一样」）：**CMS 当底，语言包只盖文字**。
+ * 起因：运营改了 CMS 首页（步骤 3→4 条、每条带真图与中文编号、对比栏/视频区文案换新），
+ * 而非中文语种原来**整块读语言包** —— 图没了（渲染成占位条）、视频区空了、对比栏还是旧稿。
+ * 合并规则：
+ *   · **结构以 CMS 为准**：数组条数、imageUrl/videoUrl 等地址、字段顺序全跟 CMS 走；
+ *   · **字符串被语言包的非空值覆盖**（缺了就回落 CMS 原文，绝不渲染成空）；
+ *   · 数组按下标对齐，语言包比 CMS 多的部分丢弃（运营删了一条，译文多出来的那条自然失效）。
+ * 以后运营在 CMS 改图/增删条目，非中文页面立即跟着变；改文字则等语言包更新。
+ */
+function overlayCmsText(base, overlay) {
+  if (base === undefined || base === null) return overlay ?? base;
+  if (Array.isArray(base)) {
+    if (!Array.isArray(overlay)) return base;
+    return base.map((item, index) => overlayCmsText(item, overlay[index]));
+  }
+  if (base && typeof base === 'object') {
+    if (!overlay || typeof overlay !== 'object' || Array.isArray(overlay)) return base;
+    const merged = {};
+    for (const key of Object.keys(base)) merged[key] = overlayCmsText(base[key], overlay[key]);
+    return merged;
+  }
+  if (typeof base === 'string') return typeof overlay === 'string' && overlay.trim() ? overlay : base;
+  return base;
+}
+
 function useWebsiteContent(key) {
   const { locale, messages } = useI18n();
   const nonDefault = locale !== DEFAULT_LOCALE;
@@ -1583,12 +1609,26 @@ function useWebsiteContent(key) {
   // 接口返回的是 { key, content, version, status } 包装体，这里统一解包成 content，
   // 调用方直接用字段（此前的写法把包装体当内容用，导致 CMS 内容一直没生效）。
   useEffect(() => {
-    // ⭐ 2026-10-01：**非中文语种先读语言包里那一块**（`src/locales/*.json` 的 `cms.home`）。
-    //    CMS 那套是单语言（中文）的 —— "逐语言编辑"是下一步（见交接 §八十四），
-    //    在那之前英文/繁中站的营销文案来自语言包，改文案改 JSON（要审）。
-    if (nonDefault) { setState({ loading: false, data: localeCmsBlock(messages, key), error: null }); return undefined; }
+    // ⭐ 2026-10-02（用户报「其他语言这些页面跟中文不一样」）：非中文语种**也走 CMS**，但把
+    //    语言包的文字覆盖上去（`overlayCmsText`）—— 结构/图/视频/条数永远跟 CMS，
+    //    语言包只管字。此前"整块读语言包"的做法在运营改了 CMS 之后立刻露馅：
+    //    步骤图全变占位条、视频区空了、对比栏还是旧稿（§88.1）。
+    //    ⚠️ 接口挂掉时退回语言包整块（再不行退中文兜底），页面不能白。
+    if (nonDefault) {
+      const localized = localeCmsBlock(messages, key);
+      let live = true;
+      setState({ loading: true, data: null, error: null });
+      publicApi.get('public/website-content/' + encodeURIComponent(key))
+        .then((payload) => {
+          if (!live) return;
+          const cmsContent = payload?.content ?? payload ?? null;
+          setState({ loading: false, data: cmsContent ? (localized ? overlayCmsText(cmsContent, localized) : cmsContent) : (localized || null), error: null });
+        })
+        .catch((error) => { if (live) setState({ loading: false, data: localized || CMS_FALLBACK[key] || null, error }); });
+      return () => { live = false; };
+    }
     let live = true; publicApi.get('public/website-content/' + encodeURIComponent(key)).then((payload) => { if (live) setState({ loading: false, data: payload?.content ?? payload ?? null, error: null }); }).catch((error) => { if (live) setState({ loading: false, data: CMS_FALLBACK[key] || null, error }); }); return () => { live = false; }; }, [key, nonDefault, messages]);
-  if (nonDefault) return { loading: false, data: localeCmsBlock(messages, key), error: null };
+  if (nonDefault) return state;
   return { ...state, data: state.data || CMS_FALLBACK[key] || null };
 }
 

@@ -86,6 +86,48 @@ let web = null; let webLog = '';
 try {
   await run(['packages/database/src/db.js', '--init']);
   await run(['packages/database/src/seed.js']);
+  // ⭐ 2026-10-02：把夹具库的 HOME 改成**生产形状**（运营在 CMS 配好的那份：4 步带真图、
+  //    视频区 2 条、对比栏新文案）。默认种子里是旧形状（3 步无图、视频无条目），那样
+  //    第七组的"步骤真图/视频卡片/三语结构一致"根本无从断言 —— 这组要验的是
+  //    「非中文跟着 CMS 结构走」（overlayCmsText），夹具就必须像运营真的配过的样子。
+  //    图片地址用仓库自带的静态素材（打包产物里有），不需要真服务端文件。
+  {
+    const { aq } = await import('../packages/database/src/store.js');
+    const fixtureHome = {
+      heroKicker: '夹具 · 眉题', heroTitle: '培养青少年Ai思维', heroAccent: '掌握Ai时代的创造方式',
+      heroDescription: 'AI 画布创作 + VibeCoding 对话编程，从兴趣到独立创作',
+      trustTitle: '', trustDescription: '',
+      stats: [
+        { icon: '◆', value: '3', suffix: ' 门', label: '标准课包' },
+        { icon: '◇', value: '48', suffix: ' 节', label: '课时总量' },
+        { icon: '✧', value: 2, suffix: ' 类', label: '课堂形式' },
+        { icon: '⌘', value: 1, suffix: ' 套', label: '机构工作台' },
+      ],
+      steps: {
+        title: '三步，把 AI 创作课开进课堂', lead: '从开通机构到学生交出作品',
+        items: [1, 2, 3, 4].map((n) => ({
+          number: `0${n}.自研`, title: `步骤${n}标题`, desc: `第 ${n} 步的描述文字。`,
+          imageUrl: `/assets/handbook/card-${n}.webp`, imageAlt: '',
+        })),
+      },
+      compare: {
+        title: '同样都是Ai课程', highlight: '为什么选择灵动ai课程', lead: '工具、环境、账号、作品都交给平台，老师只负责教。',
+        cards: [
+          { tone: 'without', title: '其他ai平台', items: ['条目一', '条目二', '条目三'] },
+          { tone: 'with', title: '灵动ai平台', items: ['条目甲', '条目乙', '条目丙'] },
+        ],
+      },
+      videos: {
+        title: '视频区标题（夹具）', lead: '',
+        items: [
+          { tag: '', title: '宣传视频', desc: '自研系统演示', videoUrl: '/assets/hero-rabbit.mp4', posterUrl: '/assets/hero-rabbit-poster.webp' },
+          { tag: '', title: '功能演示', desc: '三端完整流程', videoUrl: '/assets/hero-rabbit.mp4', posterUrl: '/assets/hero-rabbit-poster.webp' },
+        ],
+      },
+    };
+    const patch = JSON.stringify(fixtureHome);
+    await aq("UPDATE website_contents SET draft_content=?, published_content=?, updated_at=? WHERE content_key='HOME'", [patch, patch, new Date().toISOString()]);
+  }
   let apiUp = false;
   for (let i = 0; i < 120; i += 1) { try { if ((await fetch(`http://127.0.0.1:${PORT}/health`)).ok) { apiUp = true; break; } } catch { /* 等 */ } await sleep(150); }
   assert.ok(apiUp, `后端没起来：${serverLog.slice(-600)}`);
@@ -187,6 +229,33 @@ try {
   // 品牌名（灵动ai学院）是专有名词，**不翻**——所以这里只要求"是英文主标题 + 不含 key"。
   check('⑥ /en 首页的标签是英文主标题（图3 那个 bug 的口径）',
     !enHome.title.includes('cms.') && /Cultivate AI thinking/.test(enHome.title), enHome.title);
+
+  /* ── 第七组（2026-10-02）：非中文首页必须**跟着 CMS 的结构走**（用户报「其他语言这些页面
+     跟中文显示不一样」）——根因是"整块读语言包"把 CMS 的结构字段丢了（步骤图/视频条目）。
+     修法是"CMS 当底 + 语言包盖文字"（overlayCmsText）；这里钉住三件肉眼看得见的事：
+     步骤卡要有**真图**（不是占位条）、视频区要有**卡片**、步骤条数与中文一致。 */
+  const homeStructure = async (path) => {
+    await page.goto(base + path, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2500);
+    return page.evaluate(() => ({
+      steps: document.querySelectorAll('.hp-step').length,
+      stepImages: document.querySelectorAll('.hp-step-art img').length,
+      stepPlaceholders: document.querySelectorAll('.hp-step-art.is-placeholder').length,
+      videoCards: document.querySelectorAll('.hp-vid-card').length,
+      compareCards: document.querySelectorAll('.hp-cmp-card').length,
+    }));
+  };
+  const enHomeStruct = await homeStructure('/en/');
+  const zhHomeStruct = await homeStructure('/');
+  check('⑦ /en 步骤卡带**真图**（不是占位条 —— 运营在 CMS 配的图必须三语都显示）',
+    enHomeStruct.stepImages >= enHomeStruct.steps && enHomeStruct.steps >= 1 && enHomeStruct.stepPlaceholders === 0,
+    JSON.stringify(enHomeStruct));
+  check('⑦ /en 视频区有卡片（此前语言包丢了 videos.items，整段是空的）',
+    enHomeStruct.videoCards >= 1, JSON.stringify(enHomeStruct));
+  check('⑦ 非中文与中文的首页结构一致（步骤/视频/对比条数）',
+    enHomeStruct.steps === zhHomeStruct.steps && enHomeStruct.videoCards === zhHomeStruct.videoCards
+      && enHomeStruct.compareCards === zhHomeStruct.compareCards,
+    `en=${JSON.stringify(enHomeStruct)} zh=${JSON.stringify(zhHomeStruct)}`);
 
   await browser.close();
 } finally {

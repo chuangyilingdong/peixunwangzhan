@@ -28,85 +28,101 @@
     "heroDescription": "AI canvas creation plus Vibe Coding conversation — from first spark to finished work.",
     "trustTitle": "",
     "trustDescription": "",
-    "stats": [
-      {
-        "value": 3,
-        "suffix": " packs",
-        "label": "Standard course packs"
-      },
-      {
-        "value": 48,
-        "suffix": " lessons",
-        "label": "Lessons in total"
-      },
-      {
-        "value": 2,
-        "suffix": " formats",
-        "label": "Class formats"
-      },
-      {
-        "value": 1,
-        "suffix": " console",
-        "label": "School console"
-      }
-    ],
     "steps": {
-      "title": "Three steps to bring AI creation into your classroom",
-      "lead": "From setting up your school to students submitting real work — no tech team needed, and no accounts or API keys for students to bring.",
+      "title": "A complete AI curriculum that actually lands",
+      "lead": "Purpose-built canvas classes, VibeCoding classes, teacher courseware and a SaaS management console",
       "items": [
         {
-          "number": "01",
-          "title": "Set up your school and accounts",
-          "desc": "Allocate seats and authorizations, then create teacher and student accounts. Students sign in with the school account — no API key required."
+          "number": "01 · In-house canvas",
+          "title": "A world-class canvas creation method",
+          "desc": "Canvas classes come with materials built in, so teachers can teach worry-free. Students create high-quality work simply by connecting nodes — powered by top international models.",
+          "imageAlt": ""
         },
         {
-          "number": "02",
-          "title": "Schedule straight from the course packs",
-          "desc": "Ready-made course packs and teaching slides: pick a lesson and teach. Classes need zero setup — any lab computer will do."
+          "number": "02 · Vibe coding",
+          "title": "An agent foundation at software-engineering grade",
+          "desc": "VibeCoding runs on top-tier coding models with deep reasoning and visual understanding, parallel agents and skills collaboration, and large-scale code projects — students build genuinely high-quality software.",
+          "imageAlt": ""
         },
         {
-          "number": "03",
-          "title": "Real work in every class, kept in your gallery",
-          "desc": "Students make something worth showing with AI in every lesson. Submitted work goes to the gallery and becomes your school's case library and marketing material."
+          "number": "03 · Flagship curriculum",
+          "title": "Built by engineers and courseware designers together",
+          "desc": "48 lessons across three stages, field-tested with 1,000+ students and on-site teacher training — covering images, video, music, agents, mini games and web development to awaken AI thinking.",
+          "imageAlt": ""
+        },
+        {
+          "number": "04 · Management console",
+          "title": "One console for organizations, teachers and students",
+          "desc": "Organizations see student and teacher status, course-pack inventory, activations and classes at a glance; teachers start classes fast and open slides and lesson plans in one click.",
+          "imageAlt": ""
         }
       ]
     },
-    "videos": {
-      "title": "Real work made in real classrooms",
-      "lead": "One piece per lesson — click to see what students actually built.",
-      "items": []
-    },
     "compare": {
-      "title": "The same AI class, two very different ways.",
-      "highlight": "two very different ways",
-      "lead": "Tools, environment, accounts and work are all handled by the platform. Teachers just teach.",
+      "title": "Every AI course looks similar.",
+      "highlight": "why choose Lingdong AI",
+      "lead": "Tools, environment, accounts and works are all handled by the platform — teachers just teach.",
       "cards": [
         {
           "tone": "without",
-          "title": "Pieced together",
+          "title": "Other AI platforms",
           "items": [
-            "Switching between many sites and apps breaks the rhythm of the lesson",
+            "Jumping between many sites and apps breaks the rhythm of the lesson",
             "Students register their own accounts and bring API keys — hard to manage, easy to leak",
-            "Teachers prepare slides and assets by hand, starting over every lesson",
-            "Work scatters across chat groups and personal laptops — nothing is kept",
+            "Slides and materials are prepared by hand and rebuilt every lesson",
+            "Work scatters across chat groups and laptops — nothing is kept",
             "Problems get debugged live, turning teachers into IT support",
             "Nothing can be reused across campuses; every new teacher starts from zero"
           ]
         },
         {
           "tone": "with",
-          "title": "With Lingdong AI",
+          "title": "The Lingdong AI platform",
           "items": [
-            "One workbench for conversation, preview and project files",
-            "The school issues accounts and authorizations — students bring no keys",
-            "Standard course packs and slides are ready to teach, with zero setup",
-            "Work is submitted in class and goes straight to the gallery",
-            "Usage and compute are logged and visible, so costs stay clear",
+            "One in-house SaaS covering VibeCoding and canvas classes",
+            "Accounts and credits issued by the organization — compute is not your problem",
+            "Flagship course packs with teaching slides built in",
+            "Work is submitted in class and flows into the gallery — a campus case library",
+            "All class materials are built in, clear to teachers and students alike",
             "One process any campus or new teacher can repeat"
           ]
         }
       ]
-    }
+    },
+    "videos": {
+      "title": "Lingdong AI — every young person a creator",
+      "lead": "",
+      "items": [
+        {
+          "tag": "",
+          "title": "Lingdong AI course promo",
+          "desc": "In-house SaaS, canvas classroom and VibeCoding system"
+        },
+        {
+          "tag": "",
+          "title": "Lingdong AI feature tour",
+          "desc": "A full walkthrough of the organization, teacher and student apps"
+        }
+      ]
+    },
+    "stats": [
+      {
+        "suffix": " packs",
+        "label": "Standard course packs"
+      },
+      {
+        "suffix": " lessons",
+        "label": "Total lessons"
+      },
+      {
+        "suffix": " formats",
+        "label": "Class formats"
+      },
+      {
+        "suffix": " console",
+        "label": "Organization console"
+      }
+    ]
   },
   "home.cta.contact": "Contact us",
   "home.cta.courses": "Browse courses",
@@ -368,8 +384,34 @@
   "works.loadFail": "Failed to load works",
   "handbook.ctaFallback": "Go to FAQ",
   "cms.faq": {
-    "student": [],
-    "teacher": [],
+    "student": [
+      {
+        "question": "Do students need their own API key or chat account?",
+        "answer": "No. Signing in with the organization account gives access to the platform's unified model capability."
+      },
+      {
+        "question": "Do the computer lab and classroom PCs work?",
+        "answer": "Yes — the public client supports macOS (Apple silicon) and 64-bit Windows."
+      },
+      {
+        "question": "Can we run Arduino and micro:bit lessons?",
+        "answer": "Yes — classroom practice with Arduino Uno and micro:bit is supported."
+      },
+      {
+        "question": "What happens when an organization runs out of credits?",
+        "answer": "The organization console prompts teachers to top up; once topped up, students can continue. The platform never blocks students over compute usage."
+      }
+    ],
+    "teacher": [
+      {
+        "question": "What should teachers prepare before class?",
+        "answer": "Students sign in with the organization account and open the class in a browser — lab PCs need nothing installed."
+      },
+      {
+        "question": "Where can teachers see student work and usage?",
+        "answer": "The organization console shows usage records and works, and can publish outstanding works to the gallery."
+      }
+    ],
     "org": [
       {
         "question": "Do students need their own API key?",
