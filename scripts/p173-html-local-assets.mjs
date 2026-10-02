@@ -385,7 +385,20 @@ console.log('⑫ 预览沙箱 CSP：放行 blob/data 子框架（两层都要放
     const img = directives.find((part) => part.startsWith('img-src ')) || '';
     check(`⑫ ${file}：img-src 里 data:/blob:/OSS 源三样都在`, /data:/.test(img) && /blob:/.test(img) && /bucket\.example\.com/.test(img), img);
   }
+  // PDF 桥的两条腿都要在（2026-10-03：第一版只写了"请求转上去"，结果学生在"正在渲染…"停住 ——
+  // 请求上去了、结果回不来。回程那条同样是"必须的"，钉住它。）
   const shell = readSource('apps/website/public/vibe-preview.html');
+  check('⑫ 预览壳把 PDF 渲染请求转给应用（上行）', /payload\.source === 'vibecoding-pdf-render'[\s\S]{0,120}parent\.postMessage/.test(shell));
+  check('⑫ 预览壳把渲染结果转进 stage（下行 —— 少这条学生侧会永远停在"正在渲染…"）',
+    /payload\.source === 'vibecoding-pdf-rendered'[\s\S]{0,140}stage\.contentWindow\.postMessage/.test(shell));
+  const project = readSource('packages/shared/src/vibecodingProject.js');
+  check('⑫ 学生侧注入了 PDF 桥（接管 iframe.src = createObjectURL(pdfBlob)）',
+    /PDF_BRIDGE/.test(project) && /vibecoding-pdf-render/.test(project) && /HTMLIFrameElement\.prototype,\s*'src'/.test(project));
+  check('⑫ PDF 桥装在学生脚本之前（preamble 里排在最后）',
+    /\$\{PREVIEW_HEIGHT_BRIDGE\}\$\{PDF_BRIDGE\}/.test(project));
+  const frame = readSource('packages/shared/src/console/PreviewFrame.jsx');
+  check('⑫ 应用侧真的用 pdf.js 渲染（legacy 构建，老浏览器才有 Iterator）',
+    /pdfjs-dist\/legacy\/build\/pdf\.mjs/.test(frame) && /renderPdfImages/.test(frame));
   // ⚠️ 只看**那个 iframe 标签**：文件顶上的注释里正解释着"内层不带 allow-same-origin"，
   //    整文件扫会把说明文字当成违规（写这条时当场踩到）。
   const stageTag = (shell.match(/<iframe id="stage"[^>]*>/) || [''])[0];

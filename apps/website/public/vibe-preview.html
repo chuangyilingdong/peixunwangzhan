@@ -38,6 +38,12 @@
         try { parent.postMessage(payload, '*'); } catch (error) { /* 忽略 */ }
         return;
       }
+      // ⚠️ 回程也要接上（第一版漏了这条：请求上去了、结果回不来，学生侧永远停在"正在渲染…"）：
+      // 应用把渲染好的图片发给壳，壳转进 stage，学生文档里的桥把 `<img>` 贴进那个 iframe。
+      if (payload.source === 'vibecoding-pdf-rendered') {
+        try { stage.contentWindow.postMessage(payload, '*'); } catch (error) { /* 忽略 */ }
+        return;
+      }
       if (payload.source === 'vibecoding-preview' && typeof payload.html === 'string') {
         stage.srcdoc = payload.html;
       }

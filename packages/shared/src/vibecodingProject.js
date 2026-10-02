@@ -131,6 +131,77 @@ export const PREVIEW_HEIGHT_BRIDGE = `<script>(function(){
   setTimeout(report,0);setTimeout(report,300);setTimeout(report,1200);
 })();</script>`;
 
+/**
+ * PDF 桥（2026-10-02，客户端提的「沙箱内 PDF bridge」）。
+ *
+ * 为什么必须有它：学生页常写 `iframe.src = URL.createObjectURL(pdfBlob)`。
+ *   ① 平台把 `frame-src` 放开了 blob:/data:（§九十三），但 **Chrome 在沙箱框架里根本不启用
+ *      内置 PDF 查看器** —— 受控实验：同一份 PDF 不套沙箱能渲染，套上我们这套 sandbox 就只剩占位图标；
+ *   ② 所以桥的分工是：**学生文档**截下这个 PDF（先显示"正在渲染"），把字节交给父级（预览壳），
+ *      壳转发给**平台应用**（自带 pdf.js、且不在沙箱里）渲染成图片，再原路送回来贴进那个 iframe。
+ * 全程：沙箱不放松、opaque origin 不带 cookie、不联网、不依赖外部 CDN（pdf.js 是我们自己打包的）。
+ *
+ * 兼容范围：**学生现在这种写法不用改代码**（客户端明确说"无法通过多传一个文件修复已有的
+ * `<iframe src=blob:pdf>`"）。取不到渲染结果时给一句人话 + 指路"查看作品源文件"，不留白屏。
+ */
+export const PDF_BRIDGE = `<script>(function(){
+  var pdfBlobs=new Map();      // blob: 地址 → PDF Blob（返回的仍是**真地址**，只是顺手记一笔）
+  var pending=new Map();       // 请求 id → {frame, timer}
+  var seq=0;
+  var realCreate=URL.createObjectURL?URL.createObjectURL.bind(URL):null;
+  if(realCreate){URL.createObjectURL=function(value){
+    var url=realCreate(value);
+    try{if(value&&typeof value==='object'&&/application\\/pdf/i.test(String(value.type||'')))pdfBlobs.set(url,value);}catch(error){}
+    return url;
+  };}
+  function toBase64(buffer){
+    var bytes=new Uint8Array(buffer);var chunk=0x8000;var out='';
+    for(var i=0;i<bytes.length;i+=chunk){out+=String.fromCharCode.apply(null,bytes.subarray(i,i+chunk));}
+    try{return btoa(out);}catch(error){return '';}
+  }
+  function fallbackText(state){return state==='timeout'
+    ?'PDF 预览：平台渲染超时。可以点开「查看作品源文件」下载原件。'
+    :'PDF 预览：这份 PDF 没能渲染出来（'+(state||'未知原因')+'）。可以点开「查看作品源文件」下载原件。';}
+  function paint(frame,images){
+    var html='<body style="margin:0;background:#f3f4f6">';
+    for(var i=0;i<images.length;i++){html+='<img src="'+images[i]+'" style="display:block;width:100%;margin:0 0 8px">';}
+    html+='</body>';
+    try{frame.srcdoc=html;}catch(error){}
+  }
+  function request(frame,blob){
+    var id='pdf'+(++seq);
+    var timer=setTimeout(function(){var entry=pending.get(id);pending.delete(id);if(entry&&entry.frame)try{entry.frame.srcdoc=fallbackText('timeout');}catch(error){}},20000);
+    pending.set(id,{frame:frame,timer:timer});
+    blob.arrayBuffer().then(function(buffer){
+      var base64=toBase64(buffer);
+      if(!base64){var entry=pending.get(id);if(entry)clearTimeout(entry.timer);pending.delete(id);try{frame.srcdoc=fallbackText('转码失败');}catch(error){}return;}
+      try{parent.postMessage({source:'vibecoding-pdf-render',id:id,base64:base64,pages:12},'*');}catch(error){}
+    }).catch(function(){var entry=pending.get(id);if(entry)clearTimeout(entry.timer);pending.delete(id);try{frame.srcdoc=fallbackText('读取失败');}catch(error){}});
+  }
+  window.addEventListener('message',function(event){
+    var data=event.data;if(!data||typeof data!=='object')return;
+    if(data.source!=='vibecoding-pdf-rendered')return;
+    var key=String(data.id||'');var entry=pending.get(key);if(!entry)return;
+    clearTimeout(entry.timer);pending.delete(key);
+    if(data.images&&data.images.length)paint(entry.frame,data.images);
+    else try{entry.frame.srcdoc=fallbackText(data.error);}catch(error){}
+  });
+  var descriptor=Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype,'src');
+  if(descriptor&&descriptor.set){
+    Object.defineProperty(HTMLIFrameElement.prototype,'src',{
+      configurable:true,enumerable:descriptor.enumerable,
+      get:descriptor.get,
+      set:function(value){
+        var blob=(typeof value==='string'&&pdfBlobs.has(value))?pdfBlobs.get(value):null;
+        if(!blob){descriptor.set.call(this,value);return;}
+        // 不设置真地址：沙箱里 Chrome 不启用 PDF 查看器，设了只会得到一块"已阻止/未知内容"的灰块。
+        try{this.srcdoc='<body style="margin:0;display:grid;place-items:center;height:100%;font:13px sans-serif;color:#6b7280">PDF 预览：正在由平台渲染…</body>';}catch(error){}
+        request(this,blob);
+      },
+    });
+  }
+})();</script>`;
+
 function svgDataUrl(content) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(String(content || ''))}`;
 }
@@ -175,7 +246,8 @@ export function buildPreviewDocument(files, entryFile) {
   const embedded = embedLocalAssets(html, files);
   // 存储替身与桥都必须装在学生脚本**之前**：前者要抢在那行顶层 localStorage 之前，
   // 后者要抢在 head 里的早期 console/error 调用之前。顺序：存储替身 → 控制台桥 → 高度上报 → 学生脚本。
-  const preamble = `${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}${PREVIEW_HEIGHT_BRIDGE}`;
+  // PDF_BRIDGE 排最后：它要抢在学生脚本之前接管 `iframe.src = createObjectURL(pdfBlob)`。
+  const preamble = `${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}${PREVIEW_HEIGHT_BRIDGE}${PDF_BRIDGE}`;
   if (/<head[^>]*>/i.test(embedded)) return embedded.replace(/<head[^>]*>/i, (match) => `${match}${preamble}`);
   if (/<body[^>]*>/i.test(embedded)) return embedded.replace(/<body[^>]*>/i, (match) => `${match}${preamble}`);
   return preamble + embedded;

@@ -4,7 +4,7 @@
 // 父页 CSP，学生代码里的内联脚本会被直接拦掉。所以把学生页面 postMessage 给
 // /vibe-preview.html（nginx 单独给它的宽松 CSP），由它写进内层 sandbox iframe。
 // 这条路径依赖服务器上的 `location = /vibe-preview.html`，改路径要同步改 nginx。
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 export const PREVIEW_SHELL_URL = '/vibe-preview.html';
 
@@ -51,6 +51,47 @@ export const PREVIEW_RESPONSIVE_MIN_H = 600;
  * @param fitContent 可选：**按"这份文档有多高"来缩放**（见下）
  * @param responsive 可选：**不缩放、按容器宽度自适应**（见 PREVIEW_RESPONSIVE_MIN_H 的注释）
  */
+let pdfjsPromise = null;
+/** 懒惰加载 pdf.js（**legacy 构建** —— 老浏览器缺 `Iterator` 的那个坑见 TeachingAssetViewer 的注释）。 */
+function loadPdfjs() {
+  if (!pdfjsPromise) {
+    pdfjsPromise = Promise.all([
+      import('pdfjs-dist/legacy/build/pdf.mjs'),
+      import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'),
+    ]).then(([lib, worker]) => {
+      lib.GlobalWorkerOptions.workerSrc = worker.default;
+      return lib;
+    });
+  }
+  return pdfjsPromise;
+}
+
+/**
+ * 把学生页里的 blob PDF 渲染成图片（PDF 桥的服务端……其实是我们这一层）。
+ * 规格：最多 `pages` 页、按宽度 1000px 渲染、逐页 dataURL —— 学生文档那边直接 `<img>` 铺开。
+ */
+async function renderPdfImages(base64, pageLimit) {
+  const pdfjs = await loadPdfjs();
+  const bytes = Uint8Array.from(atob(String(base64 || '')), (character) => character.charCodeAt(0));
+  const document_ = await pdfjs.getDocument({ data: bytes, isEvalSupported: false }).promise;
+  const total = Math.min(Number(pageLimit) || 12, document_.numPages);
+  const images = [];
+  for (let number = 1; number <= total; number += 1) {
+    const page = await document_.getPage(number);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(2, Math.max(0.6, 1000 / base.width));
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const context = canvas.getContext('2d');
+    await page.render({ canvasContext: context, viewport }).promise;
+    images.push(canvas.toDataURL('image/png'));
+    page.cleanup();
+  }
+  return images;
+}
+
 export function PreviewFrame({ html, className = '', stageClassName = '', title = '预览', onConsole, reloadKey = 0, fitToLogical = false, fitContent = false, responsive = false, fill = false }) {
   const frameRef = useRef(null);
   const boxRef = useRef(null);
@@ -59,6 +100,21 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
   const [contentHeight, setContentHeight] = useState(0);
   const consoleRef = useRef(onConsole);
   consoleRef.current = onConsole;
+
+  // PDF 桥的应答路径：渲染好 → 发回**外壳**（它会转进学生文档的 stage 里）
+  const renderPdfBridge = useCallback(async (payload) => {
+    const frame = frameRef.current;
+    const id = String(payload?.id || '');
+    if (!frame?.contentWindow || !id) return;
+    const reply = (body) => { try { frame.contentWindow.postMessage({ source: 'vibecoding-pdf-rendered', id, ...body }, '*'); } catch { /* 外壳没了就算了 */ } };
+    try {
+      const images = await renderPdfImages(payload.base64, payload.pages);
+      if (!images.length) { reply({ error: '这份 PDF 没有可显示的页面' }); return; }
+      reply({ images });
+    } catch (error) {
+      reply({ error: String(error?.message || error).slice(0, 120) });
+    }
+  }, []);
 
   useEffect(() => {
     function onMessage(event) {
@@ -80,6 +136,10 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
           source: '浏览器',
         });
       }
+      // ⭐ PDF 桥（2026-10-02，见 vibecodingProject.js 的 PDF_BRIDGE）：学生页里
+      //    `iframe.src = createObjectURL(pdfBlob)` 在沙箱里 Chrome 不启用 PDF 查看器，
+      //    由**我们这一层**（不在沙箱里、自带 pdf.js）渲染成图片再送回去。
+      if (payload.source === 'vibecoding-pdf-render') void renderPdfBridge(payload);
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
