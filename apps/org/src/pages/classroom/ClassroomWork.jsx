@@ -151,7 +151,6 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
             return (embedded && media[embedded.fileId]) || snapshotImage(reference);
           }} />
             : entry && Object.hasOwn(files, entry) ? <>
-              <Notice tone="info">外部网络资源已禁用；依赖 CDN 或在线接口的内容可能无法运行。</Notice>
               {/* 老师这一档**不套「作品预览」面板、不缩放**（2026-09-30 用户口径：那么小的界面没法玩）；
                   ⭐ 2026-10-02 再进一步（用户口径「作品预览为什么不能自适应，交互一下还需要滚轮条么」）：
                   `fill` = 铺满弹窗给的那格（flex:1）、原生比例、**滚动条在 iframe 内部** ——

@@ -93,7 +93,9 @@ export function CreatorHomePage({ api, studentApi = null }) {
   async function share() {
     const url = absoluteUrl(`/u/${token}`);
     const copied = await copyToClipboard(url);
-    setNotice(copied ? `链接已复制：${url}` : `请手动复制这个地址：${url}`);
+    // ⚠️ 2026-10-03 用户口径：复制后**只提示"链接已复制"**，不要把那一长串地址倒出来
+    //    （「不用显示具体的链接地址」；那串地址在微信里也没法照着手抄）。
+    setNotice(copied ? '链接已复制' : '复制失败，请长按二维码保存后发送');
   }
 
   if (state.loading) return <main className="inner"><div className="student-page-state">正在打开主页…</div></main>;

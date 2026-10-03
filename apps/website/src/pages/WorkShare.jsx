@@ -15,16 +15,18 @@ import { avatarGlyph, BrandLogo, buildPreviewDocument, createApiClient, Icon, No
 
 const api = createApiClient();
 
-/** 「分享作品」：优先用系统分享面板（手机浏览器支持），否则复制链接并给出微信里的手动路径。 */
-async function sharePiece(url, title) {
-  try {
-    if (navigator.share) { await navigator.share({ title, url }); return '已唤起系统分享'; }
-  } catch { /* 用户取消或浏览器不支持 → 走复制 */ }
+/**
+ * 「分享作品」：**不再调系统分享**（2026-10-03 用户实测：微信里那条链路走不通 ——
+ * 点分享作品 → 跳到系统分享 → 选微信 → 转发给朋友 → 又回到"已唤起系统分享"，绕一圈没发出去）。
+ * 改成：**复制链接 + 教一句点右上角 ···**（用户原话：「不如提示点击右上角的···，3个点」）——
+ * 微信/手机浏览器里唯一真正有效的路径就是它自己的右上角菜单。
+ */
+async function sharePiece(url) {
   try {
     await navigator.clipboard.writeText(url);
-    return '链接已复制';
+    return '链接已复制。微信里请点右上角 ··· 转发给朋友或分享到朋友圈。';
   } catch {
-    return `请手动复制这个地址：${url}`;
+    return '微信里请点右上角 ···，选「发送给朋友」或「分享到朋友圈」。';
   }
 }
 
@@ -89,7 +91,7 @@ export function WorkSharePage() {
 
       <div className="share-page__actions">
         <button type="button" className="share-page__btn is-primary"
-          onClick={async () => setNotice(await sharePiece(shareUrl, `${student?.name || '同学'}的作品`))}>
+          onClick={async () => setNotice(await sharePiece(shareUrl))}>
           <Icon name="share" /> 分享作品
         </button>
         <a className="share-page__btn is-site" href="/">查看官网</a>

@@ -74,12 +74,14 @@ export function WorkSharePanel({ title, pieces = [], createShare, onClose }) {
       {state.busy ? <p className="share-modal__hint">正在生成二维码…</p> : null}
       {state.svg ? <div className="share-modal__qr" dangerouslySetInnerHTML={{ __html: state.svg }} /> : null}
       {state.notice ? <p className="share-modal__hint">{state.notice}</p> : null}
+      {/* ⭐ 2026-10-03 用户口径：「"先看看分享页"删除，复制链接点击后**显示复制成功提示即可，
+          不用显示具体的链接地址**」——链接那么长，贴在提示里既读不了也用不上（微信里还得手抄）。
+          ⚠️ 失败时也别再把地址倒出来（用户原话：「实际这个操作根本不可能用」）——给一句能照做的。 */}
       {state.url ? <div className="share-modal__actions">
         <button type="button" className="button" onClick={async () => {
-          try { await navigator.clipboard.writeText(state.url); setState((old) => ({ ...old, notice: `链接已复制：${state.url}` })); }
-          catch { setState((old) => ({ ...old, notice: `请手动复制：${state.url}` })); }
+          try { await navigator.clipboard.writeText(state.url); setState((old) => ({ ...old, notice: '链接已复制' })); }
+          catch { setState((old) => ({ ...old, notice: '复制失败，请长按二维码保存后发送' })); }
         }}>复制链接</button>
-        <a className="button soft" href={state.url} target="_blank" rel="noreferrer">先看看分享页</a>
       </div> : null}
       {/* ⚠️ 2026-09-30 用户口径「分享按钮这些多余的文案全部删除」：这里原来还有两行
           （微信"点右上角 ···"的引导 + 「看 TA 的主页 · 更多作品」）。面板只干一件事：给码、给链接。 */}
