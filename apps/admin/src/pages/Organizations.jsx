@@ -90,7 +90,10 @@ function CreateOrganizationDialog({ form, setForm, saving, error, onClose, onSub
 
   const errorText = (key) => (fieldErrors[key] ? <small className="org-field-error">{fieldErrors[key]}</small> : null);
 
-  return <dialog ref={dialogRef} className="admin-confirm" style={{ width: 'min(760px, calc(100vw - 32px))' }} aria-labelledby="create-organization-title" onCancel={(event) => { event.preventDefault(); if (!saving) onClose(); }}>
+  // ⚠️ 2026-10-03：必填段展开之后这个弹窗变高了（生产实测 760×850，还差 162px 要滚）。
+  //    `max-height` 从 `.admin-confirm` 的 85dvh 放宽到 **92dvh**（别写死像素：小屏还得靠它兜底），
+  //    让「机构管理员姓名」那行也露在一屏里；真放不下时弹窗自己滚，不会把按钮顶出去。
+  return <dialog ref={dialogRef} className="admin-confirm" style={{ width: 'min(760px, calc(100vw - 32px))', maxHeight: 'min(92dvh, 1080px)' }} aria-labelledby="create-organization-title" onCancel={(event) => { event.preventDefault(); if (!saving) onClose(); }}>
     <form onSubmit={submit} noValidate>
       <h2 id="create-organization-title">添加机构</h2>
       <p className="muted">创建后到机构详情页配置课包与授权次数。</p>
