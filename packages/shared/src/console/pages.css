@@ -165,7 +165,12 @@
      · 宽 + 占满一屏：宽 min(1280px,96vw)、高 min(920px,90dvh)；
      · **整窗不滚**：页眉（标题/分享）、页脚（关闭）常驻，中间内容格自己滚（flex:1 + min-height:0）；
      · 预览舞台吃满内容格剩下的高度（fill 形态；`--fill` 不写 height:100%，见上面那条血泪）。 */
-.c-work-preview-dialog {
+/* ⚠️ 选择器**故意写两遍类名**：两端的页面各自还有一条同优先级的"基础弹窗"规则
+   （机构端 `.classroom-dialog{width:min(620px,92vw)}`、平台端 `.admin-console .admin-confirm{…}`），
+   它们跟单类选择器同分或更高、而且**后加载** —— 只写一遍类名会被它们压回去
+   （2026-10-03 生产实测：机构端弹窗还是 620×880）。写两遍是最省事的做法：
+   优先级抬到 (0,2,0)，任何单类基础规则都压不过它，也不必去改两端的旧文件。 */
+.c-work-preview-dialog.c-work-preview-dialog {
   width: min(1280px, 96vw);
   height: min(920px, 90dvh);
   max-height: 90dvh;

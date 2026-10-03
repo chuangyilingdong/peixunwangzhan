@@ -443,8 +443,8 @@ console.log('⑫ 预览沙箱 CSP：放行 blob/data 子框架（两层都要放
   //    此前两端各写一套，平台端那份被 `.admin-console .admin-confirm` 的 480px 压着 ——
   //    用户原话「图3 的整个作品预览页太小了吧太窄了吧，大气一点呀」。
   const pages = readSource('packages/shared/src/console/pages.css');
-  check('⑫ 弹窗口径在 shared 定义（宽 + 一屏 + 整窗不滚 + 舞台吃满）',
-    /\.c-work-preview-dialog \{[\s\S]{0,320}width: min\(1280px, 96vw\)/.test(pages)
+  check('⑫ 弹窗口径在 shared 定义（宽 + 一屏 + 整窗不滚 + 舞台吃满；选择器写两遍压过两端的基础弹窗规则）',
+    /\.c-work-preview-dialog\.c-work-preview-dialog \{[\s\S]{0,360}width: min\(1280px, 96vw\)/.test(pages)
     && /\.c-work-preview-dialog__body \{[\s\S]{0,200}min-height: 0;/.test(pages)
     && /\.c-work-preview-dialog__body > \.c-preview__stage--fill/.test(pages));
   check('⑫ 平台端弹窗挂的是这份共用口径（+ 不许再退回 480px 小框）',
