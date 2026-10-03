@@ -156,6 +156,47 @@
    的 flex 容器或普通块，百分比高度会解析成 **0**（生产上弹窗 852px 里预览变成 0 高）。
    正确做法是**让父级有确定高度**、由父级那条 `> .c-preview__stage--fill{flex:1 1 auto;min-height:0}`
    把它撑满 —— 两处调用方（学生主页弹窗的 .creator-modal__web、作品页的 --screen）都这么写。 */
+
+/* ⭐⭐ 2026-10-03（§一百）：**作品预览弹窗的口径，两端共用这一份**。
+   为什么要有它：机构端（.classroom-dialog-wide）与平台端（.admin-work-preview）各自写过一套，
+   于是漂成了两个样子 —— 平台端那份一直挂着 `.admin-confirm` 的 480px 小框（用户 2026-10-03 原话：
+   「图3 的整个作品预览页太小了吧太窄了吧，大气一点呀」）。现在尺寸/一屏/整窗不滚只在这里定义，
+   两端都挂 `.c-work-preview-dialog`（内容格挂 `__body`）：
+     · 宽 + 占满一屏：宽 min(1280px,96vw)、高 min(920px,90dvh)；
+     · **整窗不滚**：页眉（标题/分享）、页脚（关闭）常驻，中间内容格自己滚（flex:1 + min-height:0）；
+     · 预览舞台吃满内容格剩下的高度（fill 形态；`--fill` 不写 height:100%，见上面那条血泪）。 */
+.c-work-preview-dialog {
+  width: min(1280px, 96vw);
+  height: min(920px, 90dvh);
+  max-height: 90dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.c-work-preview-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+/* 页眉/页脚（标题、按钮行…）一律不参与伸缩、不许被压扁 —— 只有内容格会长。 */
+.c-work-preview-dialog > *:not(.c-work-preview-dialog__body) { flex: none; }
+/* 舞台吃满：两种挂法都认 ——
+   ① 舞台直接挂在内容格下（平台端 `__body > 舞台`）；
+   ② 中间还夹一层包装（机构端 `.classroom-work-preview`，挂 `__fill`）。
+   `min-height` 兜住"内容格被挤扁"的极端情况（预览至少还能看）。 */
+.c-work-preview-dialog__fill {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.c-work-preview-dialog__body > .c-preview__stage--fill,
+.c-work-preview-dialog__fill > .c-preview__stage--fill {
+  flex: 1 1 auto;
+  min-height: 260px;
+}
 .c-replay__file + .c-replay__file { margin-top: var(--sp-3); }
 .c-replay__file-name {
   display: flex;

@@ -68,11 +68,12 @@ function loadPdfjs() {
 
 const OSS_HOST = /(^|\.)oss-[a-z0-9-]+\.aliyuncs\.com$/i;
 /**
- * PDF 桥的**地址白名单**：只允许 ① data:application/pdf（字节本来就在学生页里）；
+ * **取字节的地址白名单**（PDF 桥与素材 fetch 桥共用）：只允许
+ * ① data:application/pdf（字节本来就在学生页里，只有 PDF 那条用得上）；
  * ② 本站根路径 `/…`（作品素材的公开代理口）；③ 本站同源地址；④ 我们的 OSS 桶（签名直链）。
  * 其余一律拒绝 —— 学生代码不能借平台的 fetch 去打内网或第三方。
  */
-function safePdfUrl(raw) {
+function safeAssetUrl(raw) {
   const value = String(raw || '').trim();
   if (!value) return '';
   if (/^data:application\/pdf/i.test(value)) return value;
@@ -83,6 +84,15 @@ function safePdfUrl(raw) {
     if (OSS_HOST.test(parsed.hostname)) return parsed.href;
   } catch { /* 解析不了就是不合法 */ }
   return '';
+}
+
+/** 素材 fetch 桥的单次上限（解出字节后算）：8MB 的 pptx 完全够用，别让一次预览吃掉几百 MB 内存。 */
+const ASSET_MAX_BYTES = 32 * 1024 * 1024;
+/** ArrayBuffer → base64（分块拼，几十 MB 也不会把调用栈撑爆）。 */
+function bytesToBase64(bytes) {
+  let text = '';
+  for (let index = 0; index < bytes.length; index += 0x8000) text += String.fromCharCode.apply(null, bytes.subarray(index, index + 0x8000));
+  return btoa(text);
 }
 
 /**
@@ -133,18 +143,43 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
       //    学生代码递上来的 url 绝不能变成"让平台去请求任意地址"的口子。
       let base64 = String(payload.base64 || '');
       if (!base64 && payload.url) {
-        const target = safePdfUrl(String(payload.url));
+        const target = safeAssetUrl(String(payload.url));
         if (!target) { reply({ error: '这个 PDF 地址不在允许的范围内' }); return; }
         const response = await fetch(target, { credentials: 'include' });
         if (!response.ok) { reply({ error: `取 PDF 失败（HTTP ${response.status}）` }); return; }
         const bytes = new Uint8Array(await response.arrayBuffer());
-        let text = '';
-        for (let index = 0; index < bytes.length; index += 0x8000) text += String.fromCharCode.apply(null, bytes.subarray(index, index + 0x8000));
-        base64 = btoa(text);
+        base64 = bytesToBase64(bytes);
       }
       const rendered = await renderPdfImages(base64, payload.pages);
       if (!rendered.images.length) { reply({ error: '这份 PDF 没有可显示的页面' }); return; }
       reply({ images: rendered.images, total: rendered.totalPages });
+    } catch (error) {
+      reply({ error: String(error?.message || error).slice(0, 120) });
+    }
+  }, []);
+
+  /**
+   * ⭐ 素材 fetch 桥的应答路径（2026-10-03，见 vibecodingProject.js 的 ASSET_FETCH_BRIDGE）。
+   * 学生页里 `fetch(src)` 取 docx/pptx 这类**文档字节**时，沙箱里两道墙：既禁网（connect-src blob:），
+   * 又过不了 CORS（opaque origin ⇒ `Origin: null`，我们的 OSS 不给它 ACAO —— 生产实测原话见那处注释）。
+   * 所以由我们这一层代取（同源、带 cookie、OSS 对我们放行），把字节回贴成 base64；
+   * 学生页那边用 `new Response(bytes)` 还原成一个正常的 fetch 响应 —— 页面代码一行都不用改。
+   * 白名单与 PDF 桥同一份（safeAssetUrl），学生页不能拿它当跳板。
+   */
+  const fetchAssetBridge = useCallback(async (payload) => {
+    const frame = frameRef.current;
+    const id = String(payload?.id || '');
+    if (!frame?.contentWindow || !id) return;
+    const reply = (body) => { try { frame.contentWindow.postMessage({ source: 'vibecoding-asset-fetched', id, ...body }, '*'); } catch { /* 外壳没了就算了 */ } };
+    try {
+      const target = safeAssetUrl(String(payload.url));
+      if (!target) { reply({ error: '这个地址不在允许的范围内' }); return; }
+      const response = await fetch(target, { credentials: 'include' });
+      if (!response.ok) { reply({ error: `HTTP ${response.status}` }); return; }
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (!bytes.length) { reply({ error: '文件是空的' }); return; }
+      if (bytes.length > ASSET_MAX_BYTES) { reply({ error: `文件太大（${Math.round(bytes.length / 1048576)}MB）` }); return; }
+      reply({ base64: bytesToBase64(bytes), contentType: response.headers.get('content-type') || '' });
     } catch (error) {
       reply({ error: String(error?.message || error).slice(0, 120) });
     }
@@ -174,6 +209,9 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
       //    `iframe.src = createObjectURL(pdfBlob)` 在沙箱里 Chrome 不启用 PDF 查看器，
       //    由**我们这一层**（不在沙箱里、自带 pdf.js）渲染成图片再送回去。
       if (payload.source === 'vibecoding-pdf-render') void renderPdfBridge(payload);
+      // ⭐ 素材 fetch 桥（2026-10-03）：学生页 fetch 文档字节（docx/pptx 那种页面自己解析的）——
+      //    沙箱里禁网 + CORS（Origin: null）两道墙，只能由我们代取，见 fetchAssetBridge 的注释。
+      if (payload.source === 'vibecoding-asset-fetch') void fetchAssetBridge(payload);
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);

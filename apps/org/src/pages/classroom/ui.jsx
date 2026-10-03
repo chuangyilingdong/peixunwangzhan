@@ -19,7 +19,10 @@ export function Modal({ title, parent, description, children, onClose, footer, b
     ref.current?.showModal();
     return () => { ref.current?.close(); previous?.focus?.(); };
   }, []);
-  return <dialog ref={ref} className={`classroom-dialog${wide ? ' classroom-dialog-wide' : ''}`} aria-labelledby={titleId} aria-busy={busy}
+  // ⭐ 2026-10-03（§一百）：wide 变体的**尺寸/一屏/整窗不滚**口径挪进了 shared 的
+  //    `.c-work-preview-dialog`（平台端那份预览弹窗此前漂成了 480px 的小框，就是各写一份的下场）。
+  //    内容格用 shared 的 `__body`：flex:1 + 自己滚，页眉页脚常驻；预览舞台吃满剩下高度。
+  return <dialog ref={ref} className={`classroom-dialog${wide ? ' classroom-dialog-wide c-work-preview-dialog' : ''}`} aria-labelledby={titleId} aria-busy={busy}
     onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}>
     {/* `headerAction`：页眉右上角那格（2026-10-01 用户口径 —— 作品分享按钮要跟其它入口一致，
         放**右上角**而不是底部按钮行；见 ClassroomWork 里的用法）。 */}
@@ -27,7 +30,7 @@ export function Modal({ title, parent, description, children, onClose, footer, b
     {parent?.length ? <ParentLine items={parent} /> : null}
     {description ? <p className="muted">{description}</p> : null}
     {error ? <div role="alert"><Notice tone="danger">{error}</Notice></div> : null}
-    <fieldset disabled={busy} className="classroom-dialog-fields">{children}</fieldset>
+    <fieldset disabled={busy} className={`classroom-dialog-fields${wide ? ' c-work-preview-dialog__body' : ''}`}>{children}</fieldset>
     <fieldset disabled={busy} className="classroom-dialog-fields row-actions top-gap">{footer}</fieldset>
   </dialog>;
 }

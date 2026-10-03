@@ -22,7 +22,10 @@ import {
   ReplayDocument, ReplayPreview, WorkMediaGallery, useData,
 } from '@platform/shared';
 
-/** 弹窗外壳（原生 dialog + 遮罩，与 AdminConfirm 同一套样式）。 */
+/** 弹窗外壳（原生 dialog + 遮罩，与 AdminConfirm 同一套样式）。
+ *  ⭐ 2026-10-03（§一百）：尺寸/一屏/整窗不滚改挂 shared 的 `.c-work-preview-dialog`（+ `__body`）——
+ *  与机构端**同一份口径**。此前它只带 `.admin-confirm`，被那条 `width:min(480px,…)` 压着，
+ *  用户看到的就是"图3 那么小的一个框"（原话：「整个作品预览页太小了吧太窄了吧，大气一点呀」）。 */
 function PreviewDialog({ title, onClose, children }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -30,11 +33,11 @@ function PreviewDialog({ title, onClose, children }) {
     node?.showModal();
     return () => node?.close();
   }, []);
-  return <dialog ref={ref} className="admin-confirm admin-work-preview"
+  return <dialog ref={ref} className="admin-confirm admin-work-preview c-work-preview-dialog"
     onCancel={(event) => { event.preventDefault(); onClose(); }}
     onClick={(event) => { if (event.target === ref.current) onClose(); }}>
     <h2>作品预览 · {title || '未命名作品'}</h2>
-    <div className="admin-work-preview__body">{children}</div>
+    <div className="admin-work-preview__body c-work-preview-dialog__body">{children}</div>
     <div className="row-actions"><button type="button" className="secondary-button" onClick={onClose}>关闭</button></div>
   </dialog>;
 }
@@ -173,8 +176,9 @@ export function WorkPreview({ api, workId, title, kind = 'vibecoding', onClose }
                 const embedded = selected.embeddedImages?.find((item) => item.fileId === slide?.image?.fileId && images[item.fileId]);
                 return (embedded && images[embedded.fileId]) || snapshotImage(reference);
               }} />
-                // 与机构端同一个口径（2026-09-30 用户口径）：平台端看作品也不套面板、不缩放。
-                : html ? <ReplayPreview html={html} title={data.title || '学生作品'} chrome={false} responsive />
+                // 与机构端同一个口径（2026-09-30 / 2026-10-03）：平台端看作品也不套面板、不缩放，
+                // 而且是 **fill 铺满弹窗那一格**（responsive 是"高度跟内容长"、页面自己变长要滚 —— §九十五 已否）。
+                : html ? <ReplayPreview html={html} title={data.title || '学生作品'} chrome={false} fill />
                   : <Empty title="这件作品没有可预览的产物" body="没有网页入口、也没有可预览的文档产物。" />}
               {documentFile?.download ? <p className="muted top-gap"><a href={documentFile.download}>下载原文件</a>（预览是服务端转出来的 PDF）</p> : null}
             </>}

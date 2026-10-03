@@ -298,6 +298,73 @@ export const PDF_BRIDGE = `<script>(function(){
   }catch(error){}
 })();</script>`;
 
+/**
+ * 「素材 fetch 桥」（2026-10-03，§一百）：学生页里 `fetch(src)` 取 **docx/pptx 这类文档字节**时，
+ * 沙箱里这条路走不通 —— 两道墙，缺一不可：
+ *   ① `connect-src blob:`（我们注入的 meta）本来就禁网；
+ *   ② ⭐ **就算放开 CSP 也过不去**：沙箱文档是 opaque origin，请求带 `Origin: null`，
+ *      我们的 OSS 桶不给它 `Access-Control-Allow-Origin`。生产实测原话：
+ *      `Access to fetch at 'https://…oss…' from origin 'null' has been blocked by CORS policy:
+ *       No 'Access-Control-Allow-Origin' header is present on the requested resource.`
+ * ⇒ 字节只能由**平台应用**代取（它同源、带 cookie、OSS 对它是放行的），再回贴给页面 —— 与 PDF 桥同一条通道
+ *   （上行走 request，下行走 fetched，壳只转发；白名单在**应用侧** `safeAssetUrl`，学生页不能拿它当跳板）。
+ *
+ * 只接管**普通 GET、且没有自定义头/body** 的那种 fetch（客户端就是 `fetch(src)`）；
+ * POST / 带 header / `blob:` / `data:` 一律原样放行（前者照旧被 CSP 挡，后两者沙箱里本来就能取）。
+ */
+export const ASSET_FETCH_BRIDGE = `<script>(function(){
+  var pending=new Map();   // 请求 id → {resolve, reject, timer}
+  var seq=0;
+  var TIMEOUT=60000;       // 8MB 的 pptx 实测 1~3 秒；给足余量，别把"其实正在取"判成失败
+  // 学生侧只做"粗筛"（明显不该走的别发消息）；真正说了算的是应用侧的 safeAssetUrl
+  function allowed(value){
+    var raw=String(value||'').trim();
+    if(!raw)return false;
+    if(/^data:|^blob:/i.test(raw))return false;                  // 这两类沙箱里本来就能取
+    if(raw.charAt(0)==='/'&&raw.charAt(1)!=='/')return true;     // 本站绝对路径
+    try{
+      var parsed=new URL(raw,location.href);
+      if(parsed.origin===location.origin)return true;
+      return /(^|\\.)oss-[a-z0-9-]+\\.aliyuncs\\.com$/i.test(parsed.hostname);
+    }catch(error){return false;}
+  }
+  function toBytes(text){
+    var binary=atob(String(text||''));
+    var bytes=new Uint8Array(binary.length);
+    for(var i=0;i<binary.length;i+=1)bytes[i]=binary.charCodeAt(i);
+    return bytes;
+  }
+  window.addEventListener('message',function(event){
+    var data=event.data;if(!data||typeof data!=='object')return;
+    if(data.source!=='vibecoding-asset-fetched')return;
+    var key=String(data.id||'');var entry=pending.get(key);if(!entry)return;
+    clearTimeout(entry.timer);pending.delete(key);
+    if(data.error){entry.reject(new TypeError('取文件失败：'+data.error));return;}
+    try{
+      var headers=data.contentType?{'content-type':String(data.contentType)}:{};
+      entry.resolve(new Response(toBytes(data.base64),{status:200,statusText:'OK',headers:headers}));
+    }catch(error){entry.reject(new TypeError('取文件失败：平台返回的字节读不出来'));}
+  });
+  function requestBytes(url){
+    return new Promise(function(resolve,reject){
+      var id='asset'+(++seq);
+      var timer=setTimeout(function(){pending.delete(id);reject(new TypeError('取文件超时（平台没有按时返回）'));},TIMEOUT);
+      pending.set(id,{resolve:resolve,reject:reject,timer:timer});
+      try{parent.postMessage({source:'vibecoding-asset-fetch',id:id,url:String(url).slice(0,2000)},'*');}
+      catch(error){clearTimeout(timer);pending.delete(id);reject(new TypeError('取文件失败：拿不到外层窗口'));}
+    });
+  }
+  var realFetch=typeof window.fetch==='function'?window.fetch.bind(window):null;
+  window.fetch=function(input,init){
+    var url='';
+    try{url=typeof input==='string'?input:String((input&&input.url)||'');}catch(error){url='';}
+    var method=String((init&&init.method)||(input&&input.method)||'GET').toUpperCase();
+    var plain=!init||(!init.body&&!init.headers);
+    if(realFetch&&method==='GET'&&plain&&allowed(url))return requestBytes(url);
+    return realFetch?realFetch(input,init):Promise.reject(new TypeError('fetch 不可用'));
+  };
+})();</script>`;
+
 function svgDataUrl(content) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(String(content || ''))}`;
 }
@@ -341,9 +408,9 @@ export function buildPreviewDocument(files, entryFile) {
     });
   const embedded = embedLocalAssets(html, files);
   // 存储替身与桥都必须装在学生脚本**之前**：前者要抢在那行顶层 localStorage 之前，
-  // 后者要抢在 head 里的早期 console/error 调用之前。顺序：存储替身 → 控制台桥 → 高度上报 → 学生脚本。
-  // PDF_BRIDGE 排最后：它要抢在学生脚本之前接管 `iframe.src = createObjectURL(pdfBlob)`。
-  const preamble = `${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}${PREVIEW_HEIGHT_BRIDGE}${PDF_BRIDGE}`;
+  // 后者要抢在 head 里的早期 console/error 调用之前（fetch 桥也一样：学生页可能一上来就 fetch 素材）。
+  // 顺序：存储替身 → 控制台桥 → 高度上报 → 素材 fetch 桥 → PDF 桥（PDF 桥仍排最后，见它自己的注释）。
+  const preamble = `${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}${PREVIEW_HEIGHT_BRIDGE}${ASSET_FETCH_BRIDGE}${PDF_BRIDGE}`;
   if (/<head[^>]*>/i.test(embedded)) return embedded.replace(/<head[^>]*>/i, (match) => `${match}${preamble}`);
   if (/<body[^>]*>/i.test(embedded)) return embedded.replace(/<body[^>]*>/i, (match) => `${match}${preamble}`);
   return preamble + embedded;

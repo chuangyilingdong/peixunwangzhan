@@ -11,51 +11,19 @@
   background: rgb(20 28 38 / 38%);
 }
 
-.classroom-dialog-wide {
-  width: min(1180px, 94vw);
-}
+/* ⚠️ 宽/高都在 shared 的 `.c-work-preview-dialog` 里（这里别再写一份尺寸 —— 平台端那份就是这么漂的）。 */
 
-/* ⭐ 2026-10-02（用户口径「老师端/机构端的分享怎么没了」「作品预览为什么不能自适应，
-   交互一下还需要滚轮条么」）：作品预览弹窗改**纵向 flex、整窗不滚** ——
-   ① 页眉（标题 + 右上角的「分享」）常驻：此前整个弹窗滚动，页眉连同分享按钮一起滚出视野
-      （分享"消失"的真因——它一直都在，只是滚上去了）；
-   ② 中间内容格自己滚（flex:1 + overflow:auto），预览舞台吃满剩余高度（见 .classroom-work-preview），
-      作品的滚动条在 iframe **内部**，像一扇小浏览器窗口；
-   ③ 页脚（下载原文件 / 关闭预览）常驻。
-   只作用于 wide 变体 —— 作品预览弹窗是它唯一的用户，其余确认弹窗照旧。 */
-.classroom-dialog-wide {
-  display: flex;
-  flex-direction: column;
-  height: 88vh;
-}
-
+/* ⭐ 2026-10-03（§一百）：这一段的**尺寸/一屏/整窗不滚**口径已经挪到 shared 的
+   `.c-work-preview-dialog`（+ `__body` / `__fill`，见 packages/shared/src/console/pages.css）——
+   原因是平台端那份预览弹窗各写了一份、漂成了 480px 的小框（用户 2026-10-03：「图3 的整个作品
+   预览页太小了吧太窄了吧，大气一点呀」）。留在这里的只有**机构端自己的**两件：页眉/页脚不参与滚动。 */
 .classroom-dialog-wide > .classroom-dialog-head {
   flex: none;
-}
-
-.classroom-dialog-wide > .classroom-dialog-fields {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
 }
 
 .classroom-dialog-wide > .classroom-dialog-fields.row-actions:last-child {
   flex: none;
   overflow: visible;
-}
-
-/* 预览舞台吃满内容格里剩下的高度（fill 形态，见 workbench.css 的 .c-preview__stage--fill）。
-   ⚠️ 弹窗高度 88vh − 页眉/元信息/页脚之后，预览至少还有 ~55vh；min-height 防极端挤压。 */
-.classroom-dialog-wide .classroom-work-preview {
-  flex: 1 1 auto;
-  min-height: 260px;
-  display: flex;
-  flex-direction: column;
-}
-
-.classroom-dialog-wide .classroom-work-preview > .c-preview__stage--fill {
-  flex: 1 1 auto;
-  min-height: 0;
 }
 
 /* 弹窗页眉：标题在左、可选的动作按钮在右（分享按钮就落在这里，与作品库那处"详情右上角"同款）。 */

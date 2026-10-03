@@ -394,8 +394,8 @@ console.log('⑫ 预览沙箱 CSP：放行 blob/data 子框架（两层都要放
   const project = readSource('packages/shared/src/vibecodingProject.js');
   check('⑫ 学生侧注入了 PDF 桥（接管 iframe.src = createObjectURL(pdfBlob)）',
     /PDF_BRIDGE/.test(project) && /vibecoding-pdf-render/.test(project) && /HTMLIFrameElement\.prototype,\s*'src'/.test(project));
-  check('⑫ PDF 桥装在学生脚本之前（preamble 里排在最后）',
-    /\$\{PREVIEW_HEIGHT_BRIDGE\}\$\{PDF_BRIDGE\}/.test(project));
+  check('⑫ 桥都装在学生脚本之前（preamble 里 PDF 桥仍排最后；素材 fetch 桥在它之前）',
+    /\$\{PREVIEW_HEIGHT_BRIDGE\}\$\{ASSET_FETCH_BRIDGE\}\$\{PDF_BRIDGE\}/.test(project));
   const frame = readSource('packages/shared/src/console/PreviewFrame.jsx');
   check('⑫ 应用侧真的用 pdf.js 渲染（legacy 构建，老浏览器才有 Iterator）',
     /pdfjs-dist\/legacy\/build\/pdf\.mjs/.test(frame) && /renderPdfImages/.test(frame));
@@ -403,9 +403,10 @@ console.log('⑫ 预览沙箱 CSP：放行 blob/data 子框架（两层都要放
   //    桥要认它，而且**白名单必须在应用侧**（学生递上来的 url 不能变成"让平台去打任意地址"的口子）。
   check('⑫ 学生侧也拦"指向 PDF 的地址"（不只 blob）',
     /looksLikePdfUrl/.test(project) && /requestUrl\(this,/.test(project));
-  check('⑫ 应用侧对地址做白名单：本站路径 / 同源 / OSS 桶 / data:（别的统统拒）',
-    /function safePdfUrl/.test(frame) && /OSS_HOST\.test\(parsed\.hostname\)/.test(frame)
-    && /parsed\.origin === window\.location\.origin/.test(frame) && /data:application\\\/pdf/i.test(frame));
+  check('⑫ 应用侧对地址做白名单：本站路径 / 同源 / OSS 桶 / data:（别的统统拒）——PDF 桥与素材 fetch 桥共用一份',
+    /function safeAssetUrl/.test(frame) && /OSS_HOST\.test\(parsed\.hostname\)/.test(frame)
+    && /parsed\.origin === window\.location\.origin/.test(frame) && /data:application\\\/pdf/i.test(frame)
+    && !/function safePdfUrl/.test(frame));
   check('⑫ 注释里不许在模板字符串内出现反引号（会把 PDF_BRIDGE 模板提前闭合 —— 本探针踩过一次）',
     !/`[^`]*\n[^`]*`/.test(project.split('export const PDF_BRIDGE = `')[1]?.split('`;\n')[0] || ''));
   // ⭐ 2026-10-03（§九十九）生产实测抓到的**第三类写法**：客户端的「文件管理」是
@@ -424,6 +425,36 @@ console.log('⑫ 预览沙箱 CSP：放行 blob/data 子框架（两层都要放
     /var RENDER_TIMEOUT=(\d+);/.test(project) && Number(project.match(/var RENDER_TIMEOUT=(\d+);/)[1]) >= 45000);
   check('⑫ 页数超上限时说一句（应用回传 total，学生侧只在"总页数 > 已渲染页数"时加那行）',
     /total: rendered\.totalPages/.test(frame) && /total>data\.images\.length/.test(project));
+  // ⭐ 2026-10-03（§一百）「素材 fetch 桥」：页面自己 `fetch(src)` 取 docx/pptx 这种**文档字节**，
+  //    沙箱里既禁网、又过不了 CORS（opaque origin ⇒ Origin: null，OSS 不给 ACAO；生产实测原话见
+  //    ASSET_FETCH_BRIDGE 的注释）⇒ 字节由平台代取回贴。四条腿（上行/下行 + 学生侧打包/还原）都要在。
+  check('⑫ 学生侧装了素材 fetch 桥（拦截普通 GET 的 fetch，交给平台代取）',
+    /ASSET_FETCH_BRIDGE/.test(project) && /window\.fetch=function\(input,init\)/.test(project)
+    && /new Response\(toBytes\(data\.base64\)/.test(project));
+  check('⑫ 素材 fetch 桥在 preamble 里、PDF 桥仍排最后',
+    /\$\{PREVIEW_HEIGHT_BRIDGE\}\$\{ASSET_FETCH_BRIDGE\}\$\{PDF_BRIDGE\}/.test(project));
+  check('⑫ 预览壳把素材 fetch 的**两条腿**都接上（上行 + 下行，别只写一半）',
+    /payload\.source === 'vibecoding-asset-fetch'[\s\S]{0,160}parent\.postMessage/.test(shell)
+    && /payload\.source === 'vibecoding-asset-fetched'[\s\S]{0,160}stage\.contentWindow\.postMessage/.test(shell));
+  check('⑫ 应用侧代取字节：白名单同一份 + 上限 + 回贴 base64',
+    /function safeAssetUrl/.test(frame) && /fetchAssetBridge/.test(frame) && /ASSET_MAX_BYTES/.test(frame)
+    && /vibecoding-asset-fetched/.test(frame));
+  // ⭐ 2026-10-03（§一百）作品预览弹窗的**口径只有一份**（机构端/平台端共用 shared 的类）：
+  //    此前两端各写一套，平台端那份被 `.admin-console .admin-confirm` 的 480px 压着 ——
+  //    用户原话「图3 的整个作品预览页太小了吧太窄了吧，大气一点呀」。
+  const pages = readSource('packages/shared/src/console/pages.css');
+  check('⑫ 弹窗口径在 shared 定义（宽 + 一屏 + 整窗不滚 + 舞台吃满）',
+    /\.c-work-preview-dialog \{[\s\S]{0,320}width: min\(1280px, 96vw\)/.test(pages)
+    && /\.c-work-preview-dialog__body \{[\s\S]{0,200}min-height: 0;/.test(pages)
+    && /\.c-work-preview-dialog__body > \.c-preview__stage--fill/.test(pages));
+  check('⑫ 平台端弹窗挂的是这份共用口径（+ 不许再退回 480px 小框）',
+    /className="admin-confirm admin-work-preview c-work-preview-dialog"/.test(readSource('apps/admin/src/components/WorkPreview.jsx'))
+    && /c-work-preview-dialog__body/.test(readSource('apps/admin/src/components/WorkPreview.jsx'))
+    && /\.admin-console \.admin-confirm:not\(\.c-work-preview-dialog\)/.test(readSource('apps/admin/src/admin.css')));
+  check('⑫ 机构端弹窗挂的是同一份口径（页面自己不再写尺寸）',
+    /wide \? ' classroom-dialog-wide c-work-preview-dialog'/.test(readSource('apps/org/src/pages/classroom/ui.jsx'))
+    && /c-work-preview-dialog__body/.test(readSource('apps/org/src/pages/classroom/ui.jsx'))
+    && /c-work-preview-dialog__fill/.test(readSource('apps/org/src/pages/classroom/ClassroomWork.jsx')));
   // ⚠️ 只看**那个 iframe 标签**：文件顶上的注释里正解释着"内层不带 allow-same-origin"，
   //    整文件扫会把说明文字当成违规（写这条时当场踩到）。
   const stageTag = (shell.match(/<iframe id="stage"[^>]*>/) || [''])[0];

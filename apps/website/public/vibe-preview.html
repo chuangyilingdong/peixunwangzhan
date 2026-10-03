@@ -44,6 +44,18 @@
         try { stage.contentWindow.postMessage(payload, '*'); } catch (error) { /* 忽略 */ }
         return;
       }
+      // 素材 fetch 桥（2026-10-03，见 vibecodingProject.js 的 ASSET_FETCH_BRIDGE）：学生页 fetch 文档字节
+      // （docx/pptx 这种页面自己解析的）在沙箱里既禁网、又过不了 CORS（opaque origin ⇒ Origin: null，
+      // 我们的 OSS 不给它 ACAO，生产实测原话见那处注释）—— 所以请求转上去、应用取到字节再按同一条回程送回来。
+      // 四条腿与 PDF 桥同款（上行/下行各一条），别只写一半。
+      if (payload.source === 'vibecoding-asset-fetch') {
+        try { parent.postMessage(payload, '*'); } catch (error) { /* 忽略 */ }
+        return;
+      }
+      if (payload.source === 'vibecoding-asset-fetched') {
+        try { stage.contentWindow.postMessage(payload, '*'); } catch (error) { /* 忽略 */ }
+        return;
+      }
       if (payload.source === 'vibecoding-preview' && typeof payload.html === 'string') {
         stage.srcdoc = payload.html;
       }

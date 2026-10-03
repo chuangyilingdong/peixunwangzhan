@@ -133,7 +133,7 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
         : (data.canvasSnapshot
           ? <CanvasEditor key={data.id} initialSnapshot={data.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={snapshotImage} />
           : <Empty title="暂无画布快照" />))
-        : <div data-console="vibecoding" className="classroom-work-preview">
+        : <div data-console="vibecoding" className="classroom-work-preview c-work-preview-dialog__fill">
           {views.length > 1 ? <label>作品文件<select value={entry || ''} onChange={(event) => setActiveName(event.target.value)}>
             {views.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
           </select></label> : null}

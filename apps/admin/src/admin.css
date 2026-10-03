@@ -436,15 +436,23 @@
  
 }
 
+/* 外观（内边距/描边/圆角/投影）：所有确认弹窗共用，**含**作品预览弹窗 */
 .admin-console .admin-confirm {
-  width:min(480px,calc(100vw - 32px));
-  max-height:85dvh;
-  overflow:auto;
   padding:26px;
   border:1px solid var(--line);
   border-radius:12px;
   color:var(--ink);
   box-shadow:0 24px 80px #201b3930;
+}
+
+/* 尺寸：**除作品预览外**的小确认框。
+   ⚠️ 作品预览那份口径在 shared 的 `.c-work-preview-dialog`（宽 + 一屏 + 整窗不滚），
+   而这条的优先级比单类选择器高，所以在这里显式排除（2026-10-03，用户图3：
+   「整个作品预览页太小了吧太窄了吧，大气一点呀」）。 */
+.admin-console .admin-confirm:not(.c-work-preview-dialog) {
+  width:min(480px,calc(100vw - 32px));
+  max-height:85dvh;
+  overflow:auto;
  
 }
 
@@ -790,8 +798,13 @@ body {
 .work-detail__views .text-button.is-on{color:#fff;background:var(--purple,#7058d5)}
 .work-detail__canvas{max-height:520px;overflow:auto;border:1px solid #e8e3f2;border-radius:12px}
 
-/* 作品预览弹窗（2026-09-27 用户口径：操作列按钮 → 弹窗，不再渲染在表格下面） */
-.admin-work-preview{width:min(1100px,92vw);max-height:88vh}
-.admin-work-preview__body{max-height:calc(88vh - 150px);overflow:auto}
+/* 作品预览弹窗（2026-09-27 用户口径：操作列按钮 → 弹窗，不再渲染在表格下面）
+   ⭐ 2026-10-03（§一百）：**尺寸/一屏/整窗不滚不再写在这里** —— 挪去 shared 的
+   `.c-work-preview-dialog`（与机构端同一份口径）。这里只留"归这个弹窗独有"的两条。
+   ⚠️ 上面 `.admin-console .admin-confirm` 那条 `width:min(480px,…)` 的优先级更高（两个类 vs 一个），
+   所以那条要显式排除本弹窗（见它的选择器 `:not(.c-work-preview-dialog)`）—— 之前正是它把
+   作品预览压成 480px 的小框（用户 2026-10-03：「图3 的整个作品预览页太小了吧太窄了吧，大气一点呀」）。 */
 .admin-work-preview .work-media{margin-top:8px}
 .admin-work-preview .work-detail__canvas{max-height:60vh}
+/* 网兜：万一 shared 那份 CSS 没加载（历史产物/裁剪），至少别退回 480px 的小框 */
+.admin-work-preview{width:min(1280px,96vw);height:min(920px,90dvh)}
