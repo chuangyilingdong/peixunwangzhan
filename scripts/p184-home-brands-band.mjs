@@ -109,6 +109,28 @@ check('② 走马灯：三段完全一样 + translateX(-33.3333%) ⇒ 无缝；�
   /const track = \[\.\.\.set, \.\.\.set, \.\.\.set\];/.test(site)
   && /@keyframes hp-brands-marquee\{0%\{transform:translateX\(0\)\}100%\{transform:translateX\(-33\.3333%\)\}\}/.test(css)
   && /\.hp-brands-marquee:hover \.hp-brands-track/.test(css));
+// ⭐ 2026-10-03 用户口径（原话）：「**标题没居中**，**色调跟上下屏不一致**」——
+//    ① 标题组整块居中（标题一行居中，数字/头像/评分在下面居中排一行）；
+//    ② 底色换成与视频屏/三步栏同族的暗红，而且**两头接得上缝**：末色 = 视频屏首色
+//       （与 p147 那条「视频屏末色 = 三步栏首色」同一条规矩）。
+// ⚠️ 这两行照抄 p147 的写法：`\\${selector}` —— 在模板串里 `\\` 才是正则要的反斜杠，
+//    写成 `\${selector}` 会让插入的 selector 变成**字面量**（匹配不到任何规则，两条接缝断言当场假红）。
+const ruleOf = (selector) => (css.match(new RegExp(`\\${selector}\\{[^}]*\\}`)) || [])[0] || '';
+const stopsOf = (rule) => [...String(rule).matchAll(/#([0-9a-f]{3,8})\s+(\d+)%/gi)].map((match) => `#${match[1].toLowerCase()}`);
+const brandStops = stopsOf(ruleOf('.hp-brands'));
+const vidStops = stopsOf(ruleOf('.hp-vid'));
+check('② 标题组居中（用户 2026-10-03：「标题没居中」）',
+  /\.hp-brands-top\{[^}]*align-items:center[^}]*text-align:center/.test(css)
+  && /\.hp-brands-title\{[^}]*margin:0 auto/.test(css)
+  && /\.hp-brands-facts\{[^}]*justify-content:center/.test(css));
+check('② 底色与上下屏同族（暗红渐变，不是参考稿那支中性黑）',
+  /\.hp-brands\{[^}]*linear-gradient\(180deg/.test(css) && brandStops.length >= 3,
+  ruleOf('.hp-brands').slice(0, 140));
+check('② ⭐ 这一屏末色 = 视频屏首色（下行接得住，不留深色缝）',
+  Boolean(brandStops.length && vidStops.length) && brandStops[brandStops.length - 1] === vidStops[0],
+  `品牌末色=${brandStops[brandStops.length - 1]} 视频屏首色=${vidStops[0]}`);
+check('② 这一屏顶色接近首屏收尾的黑（上行也接得住）',
+  /#0f0508|#0b0509|#120609/.test(brandStops[0] || ''), `品牌首色=${brandStops[0]}`);
 check('② 每段至少铺 7 条（只有一两个品牌时不会出现"一段比一屏还窄"的抽搐）',
   /Math\.max\(1, Math\.ceil\(7 \/ logos\.length\)\)/.test(site));
 check('② 品牌图只允许后台传的地址（没有外域写死；站点 CSP 也是 self）',

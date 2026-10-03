@@ -755,7 +755,7 @@ function HomeBrands({ block }) {
   return <section className={'hp-brands' + (shown ? ' is-in' : '')} ref={ref} aria-label={t('section.brands')}>
     <div className="hp-brands-inner">
       <div className="hp-brands-top">
-        {title ? <h2 className="hp-brands-title">{title}</h2> : <span />}
+        {title ? <h2 className="hp-brands-title">{title}</h2> : null}
         {(metric || rating || avatars.length) ? <div className="hp-brands-facts">
           {metric ? <div className="hp-brands-metric">
             <button type="button" className="hp-brands-number" onClick={() => setReplay((value) => value + 1)} title="点一下再滚一次">
