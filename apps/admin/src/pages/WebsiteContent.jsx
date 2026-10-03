@@ -2,7 +2,7 @@ import { useAdminConfirm } from '../components/AdminConfirm.jsx';
 import { readSession, errorText } from '@platform/shared';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Empty, ErrorState, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, HANDBOOK_POLICY_DEFAULT, HANDBOOK_SKILLS_DEFAULT, formatDate, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
+import { Empty, ErrorState, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_BRANDS_DEFAULT, HOME_BRANDS_SAMPLE, HOME_VIDEOS_DEFAULT, HANDBOOK_POLICY_DEFAULT, HANDBOOK_SKILLS_DEFAULT, formatDate, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
 import { WEBSITE_CONTENT_LABELS } from '../shared.jsx';
 
 export function parseWebsiteDraft(value) {
@@ -22,6 +22,17 @@ export function WebsitePreview({ content, selectedKey }) {
       const items = cmsListOf(content.steps ? content.steps.items : HOME_STEPS_DEFAULT.items);
       return items.length ? `页脚上方的三步一栏：${items.map((item) => `${item.number || ''} ${item.title || '（未填标题）'}`.trim()).join(' / ')}` : '页脚上方的三步一栏：已清空 —— 官网不显示这一栏。';
     })()}</p>
+    {/* ⭐ 合作品牌（2026-10-03 用户口径）：预览按**官网的真实结果**给 ——
+        一条品牌都没有（且标题/数字/评分/头像都空）时官网整屏不显示，这里就直说。 */}
+    {(() => {
+      const brands = content.brands && typeof content.brands === 'object' ? content.brands : HOME_BRANDS_DEFAULT;
+      const logos = cmsListOf(brands.logos);
+      const metricText = String(brands?.metric?.value ?? '').trim();
+      const ratingText = String(brands?.rating?.score ?? '').trim();
+      const filled = logos.length || String(brands.title || '').trim() || metricText || ratingText || cmsListOf(brands.avatars).length;
+      if (!filled) return <div className="cms-preview-trust"><strong>合作品牌</strong><span>还是空的 —— 官网不显示这一屏（点「填入示例品牌」先看排版）。</span></div>;
+      return <div className="cms-preview-trust"><strong>合作品牌</strong><span>{brands.title ? `${brands.title} · ` : ''}{metricText ? `数字 ${metricText}${brands?.metric?.suffix || ''} · ` : ''}{ratingText ? `评分 ${ratingText} · ` : ''}{logos.length ? `品牌 ${logos.length} 条：${logos.slice(0, 4).map((item) => item?.name || '（未命名）').join(' / ')}${logos.length > 4 ? ' …' : ''}` : '没有品牌（这一屏只显示标题与数字）'}</span></div>;
+    })()}
   </div>;
   // 常见问题：预览按**官网的真实结果**给（顺序 = audienceOrder；某一档为空则官网不显示那一档），
   // 这样运营在保存前就能看出"这一档删空之后官网会怎样"。
@@ -213,6 +224,20 @@ export function WebsiteContent({ api }) {
   function updateVideo(index, patch) { updateVideos({ items: videoItems.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)) }); }
   function removeVideo(index) { updateVideos({ items: videoItems.filter((_, itemIndex) => itemIndex !== index) }); }
   function addVideo() { updateVideos({ items: [...videoItems, { tag: '', title: '', desc: '', videoUrl: '', posterUrl: '' }] }); }
+  // ⭐ 合作品牌（2026-10-03 用户口径：「在灵动AI，让每个少年都成为创造者下方一屏插入……可以后台配置」）。
+  //    位置：官网首页**第一屏下方、视频屏上方**。字段是**嵌套的**（title / metric{} / rating{} / avatars[] / logos[]），
+  //    所以走 updateSection（分区内字段）这条路；数字与评分再往里合并一层。
+  //    ⚠️ 默认**全空**：合作品牌与那些数字是机构自己的事实，平台不编（参考稿里那 7 个品牌是别家的）。
+  //      一条品牌都没有（且标题/数字/评分/头像都空）= **官网不显示这一屏**。
+  const brandsBlock = structured?.brands && typeof structured.brands === 'object' ? structured.brands : HOME_BRANDS_DEFAULT;
+  const brandLogos = cmsListOf(brandsBlock.logos);
+  const brandAvatars = cmsListOf(brandsBlock.avatars);
+  const brandMetric = brandsBlock.metric && typeof brandsBlock.metric === 'object' ? brandsBlock.metric : HOME_BRANDS_DEFAULT.metric;
+  const brandRating = brandsBlock.rating && typeof brandsBlock.rating === 'object' ? brandsBlock.rating : HOME_BRANDS_DEFAULT.rating;
+  function updateBrands(patch) { updateSection('brands', patch); }
+  function updateBrandMetric(patch) { updateBrands({ metric: { ...brandMetric, ...patch } }); }
+  function updateBrandRating(patch) { updateBrands({ rating: { ...brandRating, ...patch } }); }
+  function fillBrandsSample() { updateBrands(JSON.parse(JSON.stringify(HOME_BRANDS_SAMPLE))); }
   // ── 机构手册「政策」一栏（2026-09-28 用户口径：给了各地公告截图，形状定成**地区卡（按地区排）**）──
   // 与「三步一栏」同一条做法：草稿里**还没有这一块**时，用官网内置默认（HANDBOOK_POLICY_DEFAULT，
   // 与官网兜底、数据库种子同一份）预填 —— 运营打开就看到官网正在显示的那 11 张卡，改哪张写哪张。
@@ -422,6 +447,47 @@ export function WebsiteContent({ api }) {
               <div className="row-actions top-gap"><label className="inline-file-upload">{uploading === `hp-step-${index}` ? '上传中…' : '上传配图'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url) => updateStep(index, { imageUrl: url }), `hp-step-${index}`); }} /></label></div>
             </div>)}</div>
             <button type="button" className="secondary-button top-gap" onClick={addStep}>新增一步</button>
+            {/* ⭐ 合作品牌（2026-10-03 用户口径：「在灵动AI，让每个少年都成为创造者下方一屏插入……
+                这个是合作品牌的一屏，可以后台配置」）。位置：官网首页**第一屏下方、视频屏上方**。
+                品牌没有 logo 图时官网按**文字商标**画，所以先只填名字也能看到整条走马灯。
+                ⚠️ 默认全空 ⇒ 官网不显示这一屏（合作品牌与那些数字是您自己的事实，平台不替您编）。 */}
+            <div className="cms-section-heading top-gap"><strong>合作品牌（首页第一屏下方 · 视频屏上方）</strong><span>大标题 / 数字 / 评分 / 头像 / 品牌 · 一条品牌都没有 ＝ 官网不显示这一屏</span></div>
+            {(brandLogos.length || String(brandsBlock.title || '').trim()) ? null : <Notice tone="warning">这一屏现在是空的，<strong>官网上不会显示</strong>。点下面的<strong>「填入示例品牌」</strong>先看排版，再把名字与 logo 换成真实的合作品牌，然后记得点<strong>「发布」</strong>（只保存草稿官网看不到）。</Notice>}
+            <div className="form-grid">
+              <label>大标题<input value={brandsBlock.title || ''} onChange={(event) => updateBrands({ title: event.target.value })} maxLength={80} placeholder="例如：和这些伙伴一起，把 AI 创作带进课堂" /></label>
+              <label>数字说明<input value={brandMetric.label || ''} onChange={(event) => updateBrandMetric({ label: event.target.value })} maxLength={80} placeholder="例如：累计生成的 AI 作品" /></label>
+            </div>
+            <div className="form-grid">
+              <label>数字<input value={brandMetric.value ?? ''} onChange={(event) => updateBrandMetric({ value: event.target.value })} inputMode="numeric" placeholder="例如：73（留空则不显示大数字）" /><small className="muted">官网滚到这一屏时从 0 滚上去；点一下数字还会再滚一次。</small></label>
+              <label>数字后缀<input value={brandMetric.suffix || ''} onChange={(event) => updateBrandMetric({ suffix: event.target.value })} maxLength={12} placeholder="例如：M+ / 万件 / 所" /></label>
+            </div>
+            <div className="form-grid">
+              <label>评分<input value={brandRating.score || ''} onChange={(event) => updateBrandRating({ score: event.target.value })} maxLength={12} placeholder="例如：4.8（留空则不显示评分）" /></label>
+              <label>评价数<input value={brandRating.count || ''} onChange={(event) => updateBrandRating({ count: event.target.value })} maxLength={24} placeholder="例如：(728k 条评价)" /></label>
+            </div>
+            <label>评分说明<input value={brandRating.note || ''} onChange={(event) => updateBrandRating({ note: event.target.value })} maxLength={80} placeholder="例如：来自真实课堂的家长与老师" /></label>
+            <div className="cms-section-heading"><strong>头像（可选）</strong><span>最多 6 张，堆叠显示 · 全部删掉 ＝ 官网上不画这一组</span></div>
+            <div className="cms-faq-list">{brandAvatars.map((url, index) => <div className="cms-faq-item" key={`hp-brand-avatar-${index}`}>
+              <div className="cms-faq-heading"><strong>头像 {index + 1}</strong><div className="row-actions"><button type="button" className="text-button danger-text" onClick={() => removeSectionList('brands', 'avatars', index)}>删除</button></div></div>
+              <label>图片地址<input value={url || ''} onChange={(event) => updateSectionList('brands', 'avatars', index, event.target.value)} placeholder="留空则删掉这一张" /></label>
+              <div className="row-actions top-gap"><label className="inline-file-upload">{uploading === `hp-brand-avatar-${index}` ? '上传中…' : '上传头像'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url2) => updateSectionList('brands', 'avatars', index, url2), `hp-brand-avatar-${index}`); }} /></label></div>
+            </div>)}</div>
+            <button type="button" className="secondary-button top-gap" disabled={brandAvatars.length >= 6} onClick={() => addSectionList('brands', 'avatars', '')}>新增头像</button>
+            <div className="cms-section-heading top-gap"><strong>品牌（走马灯里那一条）</strong><span>名称 + logo 图（没有图就按文字商标画）· 可上下移、可删</span></div>
+            <div className="cms-faq-list">{brandLogos.map((item, index) => <div className="cms-faq-item" key={`hp-brand-logo-${index}`}>
+              <div className="cms-faq-heading"><strong>品牌 {index + 1}{item?.name ? ` · ${item.name}` : ''}</strong>{item?.imageUrl ? null : <span>⚠️ 没有 logo 图，官网按文字商标显示</span>}<div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveSectionList('brands', 'logos', index, -1)} aria-label={`品牌 ${index + 1} 上移`}>↑</button><button type="button" className="text-button" disabled={index === brandLogos.length - 1} onClick={() => moveSectionList('brands', 'logos', index, 1)} aria-label={`品牌 ${index + 1} 下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeSectionList('brands', 'logos', index)}>删除</button></div></div>
+              <div className="form-grid">
+                <label>名称<input value={item?.name || ''} onChange={(event) => updateSectionList('brands', 'logos', index, { name: event.target.value })} maxLength={40} placeholder="品牌 / 机构名称" /></label>
+                <label>跳转链接（可选）<input value={item?.linkUrl || ''} onChange={(event) => updateSectionList('brands', 'logos', index, { linkUrl: event.target.value })} placeholder="https://…（留空则不可点）" /></label>
+              </div>
+              <label>logo 图地址<input value={item?.imageUrl || ''} onChange={(event) => updateSectionList('brands', 'logos', index, { imageUrl: event.target.value })} placeholder="建议 PNG/SVG 透明底、高 88px 以内" /></label>
+              <div className="row-actions top-gap"><label className="inline-file-upload">{uploading === `hp-brand-logo-${index}` ? '上传中…' : '上传 logo'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url2) => updateSectionList('brands', 'logos', index, { imageUrl: url2 }), `hp-brand-logo-${index}`); }} /></label></div>
+              <small className="muted">logo 会按 72% 不透明度显示、悬停变亮；一排大约 7 个，建议宽度接近（高 44px 以内）。</small>
+            </div>)}</div>
+            <div className="row-actions top-gap">
+              <button type="button" className="secondary-button" onClick={() => addSectionList('brands', 'logos', { name: '', imageUrl: '', linkUrl: '' })}>新增品牌</button>
+              <button type="button" className="secondary-button" onClick={fillBrandsSample}>填入示例品牌（先看排版）</button>
+            </div>
             {/* 第二屏「视频展示」（2026-09-26 用户口径：「做一个官网的第二屏，放在第一屏下方，后台可配置
                 视频，我要上传多个视频来展示，文案也要可配置」）。位置：官网首页**第一屏下方、三步一栏上方**。
                 视频走平台已有的文件资产接口（category=MEDIA_ASSET + PUBLIC_PLATFORM 才能被公开口读到）。

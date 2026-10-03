@@ -68,6 +68,60 @@ export const HOME_VIDEOS_DEFAULT = {
 };
 
 /**
+ * 官网首页「合作品牌」一屏的内置默认内容（2026-10-03 用户口径）。
+ *
+ * 用户原话：「首页官网，在灵动AI，让每个少年都成为创造者下方一屏插入以下代码……**这个是合作品牌的一屏，
+ * 可以后台配置**」。参考稿是暗底一屏：左边一句大标题，右边「大数字（滚到这一屏时从 0 滚上去）+ 头像堆叠
+ * + 评分（4.8 / 728k rating）」，底部一条品牌 logo 的**无缝走马灯**（两端渐隐、悬停暂停、可点）。
+ *
+ * ⚠️⚠️ **默认是空的，一条都没有时官网整屏不显示** —— 这是故意的：
+ *   合作品牌与那些数字（73M+ / 4.8 分）是**这家机构自己的事实**，平台不能替它编；
+ *   参考稿里那 7 个品牌（Spotify / Stripe / …）是**别家的**，照抄上线等于谎称合作方，还涉商标。
+ *   要上线：后台「官网内容 → 首页 → 合作品牌」点**「填入示例品牌」**先看排版，再换成真品牌与真数据，
+ *   然后**保存草稿 + 发布**（只保存草稿官网看不到，与视频那一屏同一条口径）。
+ *
+ * 与「三步一栏 / 视频展示 / 对比一栏」同一条做法：官网兜底与后台表单预填共用这一份；
+ * ⚠️ `packages/database/src/websiteContentDefaults.js`（零依赖、不能 import 本包）里手抄一份，
+ *    两份由守卫 `scripts/p184-home-brands-band.mjs` 钉住逐字段一致。
+ *
+ * 字段：
+ *   title                  左上那句大标题
+ *   metric.value/suffix/label   右边的数字（滚进视野时从 0 滚上去，鼠标移到数字上会再滚一次）
+ *   rating.score/count/note     评分：分数 / 括号里的评价数 / 一行小字
+ *   avatars[]              头像图片地址（最多显示 6 个，堆叠；留空则整块不画）
+ *   logos[]                品牌：`name`（没有 logo 图时按文字商标显示）+ `imageUrl`（后台可上传）+ `linkUrl`（可选）
+ */
+export const HOME_BRANDS_DEFAULT = {
+  title: '',
+  metric: { value: '', suffix: '', label: '' },
+  rating: { score: '', count: '', note: '' },
+  avatars: [],
+  logos: [],
+};
+
+/**
+ * 后台「填入示例品牌」按钮用的那一组（**故意写成"示例"**：一眼能看出是占位，替换掉再发布）。
+ * 不进 HOME_BRANDS_DEFAULT —— 官网在一条真品牌都没有时不显示这一屏（理由见上）。
+ * 品牌名是「示例品牌 一…七」、没有 logo 图：官网对没有图的品牌按**文字商标**渲染，
+ * 所以运营点一下按钮就能看到整条走马灯动起来，换上真 logo 图即可。
+ */
+export const HOME_BRANDS_SAMPLE = {
+  title: '和这些伙伴一起，把 AI 创作带进课堂',
+  metric: { value: 73, suffix: 'M+', label: '示例：这个数字请换成您自己的数据' },
+  rating: { score: '4.8', count: '(728k 条评价)', note: '示例：请换成平台的真实评分与说明' },
+  avatars: [],
+  logos: [
+    { name: '示例品牌 一', imageUrl: '', linkUrl: '' },
+    { name: '示例品牌 二', imageUrl: '', linkUrl: '' },
+    { name: '示例品牌 三', imageUrl: '', linkUrl: '' },
+    { name: '示例品牌 四', imageUrl: '', linkUrl: '' },
+    { name: '示例品牌 五', imageUrl: '', linkUrl: '' },
+    { name: '示例品牌 六', imageUrl: '', linkUrl: '' },
+    { name: '示例品牌 七', imageUrl: '', linkUrl: '' },
+  ],
+};
+
+/**
  * 官网首页「对比一栏」的内置默认内容（2026-09-25 用户口径）。
  *
  * 用户原话：「参考以下代码，在官网首页页脚上面加一个以上代码的页面，后台可以配置」——

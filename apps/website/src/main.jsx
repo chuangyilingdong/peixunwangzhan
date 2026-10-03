@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { AppErrorBoundary, DEFAULT_LOCALE, I18nProvider, LOCALES, applyLocaleAlternates, applyLocaleDocument, getHref, localeFromPath, readStoredLocale, useI18n, useT, LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_VIDEOS_DEFAULT, CONTACT_DEFAULT, HANDBOOK_POLICY_DEFAULT, HANDBOOK_SKILLS_DEFAULT, Icon, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { AppErrorBoundary, DEFAULT_LOCALE, I18nProvider, LOCALES, applyLocaleAlternates, applyLocaleDocument, getHref, localeFromPath, readStoredLocale, useI18n, useT, LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, HOME_COMPARE_DEFAULT, HOME_BRANDS_DEFAULT, HOME_VIDEOS_DEFAULT, CONTACT_DEFAULT, HANDBOOK_POLICY_DEFAULT, HANDBOOK_SKILLS_DEFAULT, Icon, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { StudentAccountPage } from './pages/AccountSecurity.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
 // 学生个人主页（对外公开，路由 /u/:token）—— 用户口径 2026-09-27：「学生创建了账号应该就有个主页的专属链接」
@@ -710,6 +710,112 @@ function titleUnits(text) {
  *   ③ 封面图若是**站内 file-asset**，自动加 `?w=960` 取缩略图（运营传的原图常有几 MB，
  *      见 §二十七那次的教训：首页配图不缩就是 6MB）。
  */
+/**
+ * 首页「合作品牌」一屏（2026-10-03 用户口径）。
+ *
+ * 用户原话：「首页官网，在灵动AI，让每个少年都成为创造者下方一屏插入以下代码……**这个是合作品牌的一屏，
+ * 可以后台配置**」。参考稿是暗底一屏：左边一句大标题，右边「大数字（滚进视野时从 0 滚上去）+ 头像堆叠
+ * + 评分」，底部一条品牌 logo 的**无缝走马灯**（两端渐隐、悬停暂停）。
+ *
+ * ⚠️ 三条硬约束（与视频屏同一条口径，别改）：
+ *   ① 这一屏必须在 `.hp-first` **外面** —— 它一变高不许改变第一屏（含背景视频）的取景（p135/p142 钉着）；
+ *   ② **一条品牌都没有（且标题/数字/评分/头像全空）时整屏不显示** —— 合作品牌与那些数字是**运营自己的
+ *      事实**，平台不编（参考稿里那 7 个是别家的品牌）；后台「官网内容 → 首页 → 合作品牌」可配，
+ *      还带「填入示例品牌」一键看排版；
+ *   ③ 只用站内写法（自写 CSS + IntersectionObserver + requestAnimationFrame）—— 不引 framer-motion /
+ *      lucide / Tailwind（本仓库官网没有这些依赖，p135/p142 也钉着"官网不引第三方依赖"）。
+ *
+ * 品牌没有 logo 图时按**文字商标**渲染（运营点「填入示例品牌」时没有图也能看到整条走马灯动起来）。
+ */
+function HomeBrands({ block }) {
+  const t = useT();
+  const [ref, shown] = useRevealOnce();
+  const [replay, setReplay] = useState(0);
+  const title = String(block?.title || '').trim();
+  const rawMetric = block?.metric && typeof block.metric === 'object' ? block.metric : {};
+  const rawRating = block?.rating && typeof block.rating === 'object' ? block.rating : {};
+  const avatars = (Array.isArray(block?.avatars) ? block.avatars : []).map((url) => String(url || '').trim()).filter(Boolean).slice(0, 6);
+  const logos = (Array.isArray(block?.logos) ? block.logos : [])
+    .map((item) => ({ name: String(item?.name || '').trim(), imageUrl: String(item?.imageUrl || '').trim(), linkUrl: String(item?.linkUrl || '').trim() }))
+    .filter((item) => item.name || item.imageUrl);
+  const metricValue = Number(rawMetric.value);
+  const metric = Number.isFinite(metricValue) && metricValue > 0
+    ? { value: metricValue, suffix: String(rawMetric.suffix || ''), label: String(rawMetric.label || '').trim() }
+    : null;
+  const rating = String(rawRating.score || '').trim()
+    ? { score: String(rawRating.score).trim(), count: String(rawRating.count || '').trim(), note: String(rawRating.note || '').trim() }
+    : null;
+  const count = useHomeCountUp(metric ? metric.value : 0, shown ? replay + 1 : 0);
+  // 走马灯：每"段"都补齐到至少 7 条（只有一两个品牌时也不会出现"一段比一屏还窄"的抽搐），三段完全一样
+  // ⇒ CSS 里那条 `translateX(-33.333%)` 收到无缝（与参考稿同一套做法）。
+  const perSet = logos.length ? Math.max(1, Math.ceil(7 / logos.length)) : 0;
+  const set = logos.length ? Array.from({ length: perSet }).flatMap(() => logos) : [];
+  const track = [...set, ...set, ...set];
+  if (!title && !metric && !rating && !avatars.length && !logos.length) return null;
+  return <section className={'hp-brands' + (shown ? ' is-in' : '')} ref={ref} aria-label={t('section.brands')}>
+    <div className="hp-brands-inner">
+      <div className="hp-brands-top">
+        {title ? <h2 className="hp-brands-title">{title}</h2> : <span />}
+        {(metric || rating || avatars.length) ? <div className="hp-brands-facts">
+          {metric ? <div className="hp-brands-metric">
+            <button type="button" className="hp-brands-number" onClick={() => setReplay((value) => value + 1)} title="点一下再滚一次">
+              {count}{metric.suffix}
+            </button>
+            {metric.label ? <p>{metric.label}</p> : null}
+          </div> : null}
+          {(avatars.length || rating) ? <div className="hp-brands-rating">
+            {avatars.length ? <div className="hp-brands-avatars">
+              {avatars.map((url, index) => <img key={index + '-' + url} src={url} alt="" loading="lazy" style={{ zIndex: index + 1 }} />)}
+            </div> : null}
+            {rating ? <>
+              <div className="hp-brands-score">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6l2.9 5.9 6.5.95-4.7 4.6 1.1 6.5-5.8-3.05L6.2 20.5l1.1-6.5-4.7-4.6 6.5-.95z" /></svg>
+                <strong>{rating.score}</strong>
+                {rating.count ? <span>{rating.count}</span> : null}
+              </div>
+              {rating.note ? <p>{rating.note}</p> : null}
+            </> : null}
+          </div> : null}
+        </div> : null}
+      </div>
+      {logos.length ? <div className="hp-brands-marquee">
+        <div className="hp-brands-track">
+          {track.map((logo, index) => {
+            const body = logo.imageUrl
+              ? <img src={logo.imageUrl} alt={logo.name || '合作品牌'} loading="lazy" />
+              : <span className="hp-brands-wordmark">{logo.name}</span>;
+            const key = (logo.name || 'logo') + '-' + index;
+            return logo.linkUrl
+              ? <a className="hp-brands-logo" key={key} href={logo.linkUrl} target="_blank" rel="noreferrer noopener" title={logo.name || ''}>{body}</a>
+              : <span className="hp-brands-logo" key={key} title={logo.name || ''}>{body}</span>;
+          })}
+        </div>
+      </div> : null}
+    </div>
+  </section>;
+}
+
+/** 「合作品牌」一屏的数字滚动（参考稿是 1.2s 四次方缓出；`run` 变一次就重滚一次）。 */
+function useHomeCountUp(target, run) {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    if (!run || !target) { setCount(0); return undefined; }
+    if (typeof requestAnimationFrame !== 'function' || typeof performance === 'undefined') { setCount(target); return undefined; }
+    // 减弱动效的机器直接给终值（滚动数字对前庭敏感的人不友好）
+    try { if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) { setCount(target); return undefined; } } catch { /* 没 matchMedia 就当正常 */ }
+    let raf = 0;
+    const start = performance.now();
+    const step = (now) => {
+      const progress = Math.min((now - start) / 1200, 1);
+      setCount(Math.floor((1 - Math.pow(1 - progress, 4)) * target));
+      if (progress < 1) raf = requestAnimationFrame(step); else setCount(target);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, run]);
+  return count;
+}
+
 function HomeVideos({ block }) {
   const t = useT();
   const [ref, shown] = useRevealOnce();
@@ -985,6 +1091,11 @@ function HomeLanding() {
         视频，我要上传多个视频来展示，文案也要可配置」）—— 所以它排在**第一屏之后、三步一栏之前**。
         与 steps/compare 同一条口径：整块没配用内置默认，运营把 items 删空就是不要这一屏（不回退）。
         ⚠️ 同样在 `.hp-first` **外面**：加它不许改变第一屏（含背景视频）的取景。 */}
+    {/* 「合作品牌」一屏（2026-10-03 用户口径）：「在灵动AI，让每个少年都成为创造者下方一屏插入」——
+        位置在**第一屏下方、视频屏上方**；与 videos/steps/compare 同一条口径：整块没配用内置默认
+        （内置默认是**空的**），运营把 logos 全删 = 官网不显示这一屏。
+        ⚠️ 同样在 `.hp-first` 外面：加它不许改变第一屏（含背景视频）的取景。 */}
+    {ready ? <HomeBrands block={content.brands === undefined || content.brands === null ? HOME_BRANDS_DEFAULT : content.brands} /> : null}
     {ready ? <HomeVideos block={content.videos === undefined || content.videos === null ? HOME_VIDEOS_DEFAULT : content.videos} /> : null}
     {/* 三步一栏（用户口径 2026-09-23：**在页脚上方**做一栏，文字与图片后台可配）—— 所以它排在
         首页内容的最后一段，紧接着就是全站页脚。与 stats 同一条口径：**整块没配**用内置默认，

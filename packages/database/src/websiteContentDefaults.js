@@ -80,6 +80,20 @@ export const WEBSITE_CONTENT_DEFAULTS = {
       lead: '一节课一件作品：点开就是学生自己动手做出来的样子。',
       items: [],
     },
+    // 首页「合作品牌」一屏（2026-10-03 用户口径：「在灵动AI，让每个少年都成为创造者下方一屏插入……
+    // 这个是合作品牌的一屏，可以后台配置」）。位置：官网首页**第一屏下方、视频屏上方**。
+    // ⚠️ 这一份必须与 `packages/shared/src/siteDefaults.js` 的 HOME_BRANDS_DEFAULT **逐字段一致**
+    //    （那一份是官网兜底与后台表单预填共用的；本文件要零依赖、不能 import 它，所以手抄一份）。
+    //    守卫 scripts/p184-home-brands-band.mjs 会比对这两份 —— 别只改一边。
+    // ⚠️ 默认**全空**：合作品牌与那些数字是机构自己的事实，平台不编（参考稿里那 7 个品牌是别家的）。
+    //    **一条品牌都没有 = 官网不显示这一屏**（与视频屏同一条口径）；后台点「填入示例品牌」看排版。
+    brands: {
+      title: '',
+      metric: { value: '', suffix: '', label: '' },
+      rating: { score: '', count: '', note: '' },
+      avatars: [],
+      logos: [],
+    },
     // 首页「对比一栏」（2026-09-25 用户口径：「在官网首页页脚上面加一个以上代码的页面，后台可以配置」，
     // 参考稿是 Codecraft AI 的对比区：暗底 + 打字标题 + 高亮词 + 一正一反两张卡片）。
     // ⚠️ 这一份必须与 `packages/shared/src/siteDefaults.js` 的 HOME_COMPARE_DEFAULT **逐字一致**
