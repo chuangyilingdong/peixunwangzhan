@@ -117,6 +117,25 @@ try {
           { tone: 'with', title: '灵动ai平台', items: ['条目甲', '条目乙', '条目丙'] },
         ],
       },
+      // ⑨ 合作品牌（2026-10-03）：夹具里写**中文原文**（与线上 CMS 形状一致），
+      //    下面在 /en 上断言它显示成语言包里的英文（非中文 = CMS 当底 + 语言包只盖文字）。
+      brands: {
+        title: '合作品牌',
+        metric: { value: '', suffix: '', label: '' },
+        rating: { score: '', count: '', note: '' },
+        avatars: [],
+        logos: [
+          { name: '网易有道卡搭', imageUrl: '', linkUrl: '' },
+          { name: '腾讯扣叮', imageUrl: '', linkUrl: '' },
+          { name: '西瓜创客', imageUrl: '', linkUrl: '' },
+          { name: '童程童美', imageUrl: '', linkUrl: '' },
+          { name: '优必选', imageUrl: '', linkUrl: '' },
+          { name: '拓维信息', imageUrl: '', linkUrl: '' },
+          { name: 'Khan Academy', imageUrl: '', linkUrl: '' },
+          { name: 'Coursera', imageUrl: '', linkUrl: '' },
+          { name: 'Udemy', imageUrl: '', linkUrl: '' },
+        ],
+      },
       videos: {
         title: '视频区标题（夹具）', lead: '',
         items: [
@@ -125,6 +144,14 @@ try {
         ],
       },
     };
+    // ⑨ 课程译名（按 series id 查语言包，2026-10-03）：造一条**用生产 id** 的课包，
+    //    标题写中文原文 —— 英文站该显示语言包里的英文名；简体站仍是中文原文。
+    {
+      const stamp = new Date().toISOString();
+      await aq(`INSERT INTO course_series(id,title,description,owner_type,visibility,version,sort,status,difficulty_level,tags,stock_total,created_at,updated_at)
+        VALUES(?,?,?,'PLATFORM','PUBLIC','1.44',1,'PUBLISHED',2,'[]',0,?,?)`,
+      ['series_ee83eed5780a46489d2c', 'S1课包：AI 魔法启蒙营', 'AI 魔法启蒙营是专为 8-16 岁零基础孩子打造的 AI 入门课程。', stamp, stamp]);
+    }
     const patch = JSON.stringify(fixtureHome);
     await aq("UPDATE website_contents SET draft_content=?, published_content=?, updated_at=? WHERE content_key='HOME'", [patch, patch, new Date().toISOString()]);
   }
@@ -275,6 +302,45 @@ try {
   check('⑧ /zh-TW 对比栏两段同样齐全（语言包的繁體文案盖在 CMS 结构上）',
     zhHomeStruct.compareTitle.includes('同樣都是 AI 課程') && zhHomeStruct.compareTitle.includes('為什麼選擇靈動 AI 課程'),
     JSON.stringify(zhHomeStruct.compareTitle));
+
+  // ⑨ 2026-10-03（用户报「合作品牌没适配成英文」「课程列表也是」）：
+  //    首页那一屏走的是「CMS 当底 + 语言包只盖文字」，课程名走的是**按 series id 查**的译名表
+  //    （`cms.courseNames`）。两条都在真浏览器上验一遍：英文站是英文，简体站仍是中文原文。
+  await page.goto(base + '/en/marketplace', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(2500);
+  const mktEn = await page.evaluate(() => Array.from(document.querySelectorAll('.mp-name')).map((el) => el.textContent.trim()));
+  check('⑨ /en 课程列表显示语言包里的英文课包名（按 series id 查，不是按顺序）',
+    mktEn.includes('S1: AI Magic Starter Camp') && !mktEn.some((n) => /课包/.test(n)), JSON.stringify(mktEn.slice(0, 3)));
+  // ⚠️ 这里同样**不能**用 '/'（本机记忆会把不带前缀的首页纠正去 /en/，见第 ⑤ 组那条注释）；
+  //    用显式带前缀的 /zh-TW/ —— URL 前缀优先于本机记忆。
+  await page.goto(base + '/zh-TW/marketplace', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(2500);
+  const mktZh = await page.evaluate(() => Array.from(document.querySelectorAll('.mp-name')).map((el) => el.textContent.trim()));
+  check('⑨ 中文（/zh-TW）课程列表仍是中文原文（默认语言不走译名表）',
+    mktZh.some((n) => n.includes('S1课包')), JSON.stringify(mktZh.slice(0, 3)));
+
+  const brandText = async () => {
+    await page.evaluate(() => document.querySelector('.hp-brands')?.scrollIntoView({ block: 'center' }));
+    await page.waitForTimeout(900);
+    return page.evaluate(() => ({
+      title: (document.querySelector('.hp-brands-title')?.textContent || '').trim(),
+      names: Array.from(document.querySelectorAll('.hp-brands-wordmark')).map((el) => el.textContent.trim()),
+    }));
+  };
+  await page.goto(base + '/en/', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(2500);
+  const brandsEn = await brandText();
+  check('⑨ /en 合作品牌一屏的题头是英文（不是「合作品牌」）',
+    Boolean(brandsEn.title) && !/[一-鿿]/.test(brandsEn.title), brandsEn.title);
+  check('⑨ /en 的合作品牌名是英文（中文品牌名不再出现在英文站）',
+    brandsEn.names.includes('NetEase Youdao Kada') && brandsEn.names.includes('UBTECH')
+    && !brandsEn.names.some((n) => /[一-鿿]/.test(n)), JSON.stringify([...new Set(brandsEn.names)].slice(0, 4)));
+  await page.goto(base + '/zh-TW/', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(2500);
+  const brandsZh = await brandText();
+  check('⑨ 中文（/zh-TW）首页那一屏仍是 CMS 里的中文原文（非英文语种不换品牌名）',
+    brandsZh.title === '合作品牌' && brandsZh.names.includes('网易有道卡搭'),
+    JSON.stringify([...new Set(brandsZh.names)].slice(0, 3)));
 
   await browser.close();
 } finally {

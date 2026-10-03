@@ -1830,8 +1830,30 @@ function deliveryModeText(item, t){
   const label = (mode) => (t ? t(mode === 'CANVAS' ? 'mkt.modeCanvas' : 'mkt.modeVibecoding') : MKT_DELIVERY_LABEL[mode]);
   return modes.length ? modes.map(label).join('/') : (t ? t('mkt.notSet') : '未设置');
 }
+/**
+ * 课程（课包）的**译名表**（2026-10-03 用户口径：英文站「图2 课程列表」还是中文）。
+ *
+ * 为什么不是走 CMS：课包的标题/简介是**数据库里的行**（公开接口 `public/marketplace` 下发），
+ * 不在官网 CMS 里；而官网的多语言口径是「结构跟数据源、**文字跟语言包**」（§八十八）。
+ * 所以这里按 **series id** 查语言包里的 `cms.courseNames`（`{ "<id>": { title, description } }`）：
+ *   · 按 id 查 ⇒ 与课包顺序无关，运营调整排序不会串行；
+ *   · 缺译（新开课包还没译）⇒ **回落中文原文**，不会渲染成 key 或空白；
+ *   · 简体页面**完全不走这条路**（与改动前逐字一致）。
+ * ⚠️ 新开课包要英文名时，在 `apps/website/src/locales/en.json` 的 `cms.courseNames` 里加一条。
+ */
+function useCourseText() {
+  const { locale, messages } = useI18n();
+  const table = locale === DEFAULT_LOCALE ? null : localeBlock(messages, 'cms.courseNames');
+  return (item) => {
+    const hit = table && item?.id ? table[item.id] : null;
+    const pick = (value, fallback) => (typeof value === 'string' && value.trim() ? value : fallback);
+    return { title: pick(hit?.title, item?.title), description: pick(hit?.description, item?.description) };
+  };
+}
+
 function Marketplace(){
   const t = useT();
+  const courseText = useCourseText();
   const headCms = useWebsiteContent('MARKETPLACE');
   const content = headCms.data || {};
   const [items,setItems]=useState([]);
@@ -1890,7 +1912,7 @@ function Marketplace(){
        return <article className="mp-row" key={item.id}>
          <div className="mp-main">
            <div className={'mp-cover'+(cover?' has-image':'')} style={cover?{backgroundImage:'url('+cover+')'}:undefined}>{cover?null:<span>{item.title?.charAt(0)||t('mkt.course').charAt(0)}</span>}</div>
-           <div className="mp-info"><h2 className="mp-name">{item.title}</h2><p className="mp-desc">{item.description||t('mkt.descPending')}</p></div>
+           <div className="mp-info"><h2 className="mp-name">{courseText(item).title}</h2><p className="mp-desc">{courseText(item).description||t('mkt.descPending')}</p></div>
            {/* 价格整块已删（用户口径 2026-09-20：「不要显示价格和按课包开通」）：
                这一行现在只有右边那个按钮。 */}
            <div className="mp-side">
@@ -1909,6 +1931,7 @@ function Marketplace(){
 
 function MarketplaceDetail(){
   const t = useT();
+  const courseText = useCourseText();
   const pathParts=window.location.pathname.split('/');
   const id=pathParts[pathParts.length-1];
   const [data,setData]=useState(null);
@@ -1925,6 +1948,8 @@ function MarketplaceDetail(){
   if(loading) return <><Title eyebrow={t('meta.courseDetail')} title={<>{t('mkt.loading')}</>} desc=""/><main className="inner"><div className="mkt-grid">{Array.from({length:4},(_,i)=><div key={i} className="mkt-skeleton"/>)}</div></main></>;
   if(error) return <><Title eyebrow={t('meta.courseDetail')} title={<>{t('mkt.notFound')}</>} desc={error}/><main className="inner"><div className="note">⚠ <div><b>{t('mkt.cantLoad')}</b><p>{error}</p></div><Link to="/marketplace" className="button" style={{marginTop:'20px'}}>{t('mkt.viewList')}</Link></div></main></>;
   const d=data;
+  // 列表页与详情页同一张译名表（英文站上这一页的课包名/简介也一起英文化）
+  const dText=courseText(d);
   // ⚠️ 2026-09-18 晚用户口径（图2）：**原来那个页头整块删掉了**（「课程广场」眉题 + 课包标题 + 简介）——
   // 课包名称改到下面那排信息（图3）里当标题，「开始学习」那一条也一起删（图1 红框）。
   return <main className="inner">
@@ -1932,8 +1957,8 @@ function MarketplaceDetail(){
     <div className="mkt-detail">
       {(d.coverAssetId || d.coverImageUrl)&&<div className="mkt-detail-cover" role="img" aria-label={t('mkt.coverAlt', { title: d.title || t('mkt.course') })} style={{backgroundImage:'url('+(d.coverAssetId ? '/api/public/file-assets/'+d.coverAssetId+'/download' : d.coverImageUrl)+')'}}/>}
       <div className="mkt-detail-info">
-        <h1 className="mkt-detail-title">{d.title}</h1>
-        {d.description&&<p className="mkt-detail-desc">{d.description}</p>}
+        <h1 className="mkt-detail-title">{dText.title}</h1>
+        {dText.description&&<p className="mkt-detail-desc">{dText.description}</p>}
         <div className="mkt-detail-row"><span className="mkt-label2">{t('mkt.difficulty')}</span><DifficultyStars level={d.difficultyLevel}/></div>
         {/* 适学年龄整行已删（用户口径 2026-09-20：「适学年龄删除」）——
             线上 4 个课包全是「未设置」，留着只是一行空话。 */}

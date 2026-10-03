@@ -122,7 +122,39 @@
         "suffix": " console",
         "label": "Organization console"
       }
-    ]
+    ],
+    "brands": {
+      "title": "Our partners",
+      "logos": [
+        {
+          "name": "NetEase Youdao Kada"
+        },
+        {
+          "name": "Tencent Kouding"
+        },
+        {
+          "name": "Xigua Keji"
+        },
+        {
+          "name": "TCTM Kids IT Education"
+        },
+        {
+          "name": "UBTECH"
+        },
+        {
+          "name": "Talkweb"
+        },
+        {
+          "name": "Khan Academy"
+        },
+        {
+          "name": "Coursera"
+        },
+        {
+          "name": "Udemy"
+        }
+      ]
+    }
   },
   "home.cta.contact": "Contact us",
   "home.cta.courses": "Browse courses",
@@ -573,6 +605,28 @@
     "cta": {
       "headline": "Launch your AI class",
       "text": "Contact us and we will tailor an enrolment plan for you."
+    }
+  },
+  "cms.courseNames": {
+    "series_ee83eed5780a46489d2c": {
+      "title": "S1: AI Magic Starter Camp",
+      "description": "An entry-level AI course for ages 8–16 with no prior experience. Starting from playful interaction, students get to know AI tools and basic prompting, then create AI artwork, stories, simple animations and block-based coding projects — building early AI literacy along with expression, imagination and logical thinking."
+    },
+    "series_5b64dc87d89a43419ee8": {
+      "title": "S2: AI Humanities & Digital Explorer Camp",
+      "description": "A cross-disciplinary course for ages 9–16 who already have some AI basics. It breaks the boundary between tools and subjects, applying AI to Chinese, history, English and maths through hands-on tasks such as old-photo restoration, classical-poetry illustration, an English conversation assistant and a personal bookkeeping tool. Students learn to turn knowledge into visible work."
+    },
+    "series_d18516029446496fac5f": {
+      "title": "S3: AI Full-Stack Project Camp",
+      "description": "An advanced project course for ages 10–16 with AI and coding basics. Centred on complete projects — PPT automation, information-organising tools, a private knowledge base, a smart customer-service system and age-friendly apps — students go from requirements to a finished product, building systems thinking, project skills and engineering habits. Outcomes can be used for science fairs and portfolio reviews."
+    },
+    "series_0e5ad7ca398047138227": {
+      "title": "AI Canvas + Vibe Coding Taster (90 min)",
+      "description": "Course: AI Magic Academy — summon your star mecha beast and build a character gallery site;\nDuration: 90 minutes;\nFor: children meeting AI creation for the first time;\nGoals: understand text-to-image and text-to-video, and get a first look at the AI Vibe Coding environment;\nTools: Lingdong AI Canvas, Lingdong Vibe Coding client;\nOutcome: 3 polished AI pet / mecha hero key visuals, a 15-second storyboard video, 2 free-creation images and an interactive character gallery site."
+    },
+    "series_384df1b85d5d446cb135": {
+      "title": "AI Canvas Taster (60 min)",
+      "description": "Course: AI Magic Academy — summon your star mecha beast;\nDuration: 60 minutes;\nFor: children meeting AI creation for the first time;\nGoals: understand text-to-image and text-to-video;\nTools: Lingdong AI Canvas;\nOutcome: 3 polished AI pet / mecha hero key visuals, a 15-second storyboard video and 2 free-creation images."
     }
   }
 }
