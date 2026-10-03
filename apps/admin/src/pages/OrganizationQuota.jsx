@@ -292,7 +292,7 @@ export function OrganizationQuota({ api }) {
   if (!orgId) return <Panel title="机构课包与授权次数"><Empty title="缺少机构标识" body="请从机构列表点「查看详情」，再用「授权次数」入口进入本页。" /></Panel>;
 
   return <>
-    <PageHeader eyebrow="平台教务 · 机构与课包人次" title="机构课包与授权次数" description="给本机构开通课包、调整总授权次数；已授权次数是机构已经分给学生的部分，剩余 = 总授权次数 − 已授权次数。" actions={<><button className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(orgId)}`)}>← 返回机构详情</button><Link className="secondary-button" to={`/authorizations?orgId=${encodeURIComponent(orgId)}`}>前往授权与人次流水</Link></>} />
+    <PageHeader eyebrow="平台教务 · 创建机构与授权" title="机构课包与授权次数" description="给本机构开通课包、调整总授权次数；已授权次数是机构已经分给学生的部分，剩余 = 总授权次数 − 已授权次数。" actions={<><button className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(orgId)}`)}>← 返回机构详情</button><Link className="secondary-button" to={`/authorizations?orgId=${encodeURIComponent(orgId)}`}>前往授权与人次流水</Link></>} />
     {message ? <Notice tone={message.tone}>{message.text}</Notice> : null}
     {detail.loading ? <Loading label="正在读取机构课包…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : !detail.data ? <Panel title="机构课包与授权次数"><Empty title="没有找到该机构" body="机构可能已被删除，或链接里的机构标识不正确。" /></Panel> : <>
       <OrganizationCard organization={organization} meta={<p className="muted">共 {assignments.length} 个课包，其中有效 {assignments.filter((item) => item.status === 'ACTIVE').length} 个。</p>} />

@@ -67,6 +67,11 @@ console.log('P77 passed: explicit credentials, organization capacity, teacher de
   // ③ 列表行的「授权课包」按钮直达本机构的课包与授权次数页
   if (!/授权课包/.test(page)) problems.push('机构列表行没有「授权课包」按钮（用户 2026-10-03 口径）');
   if (!/organizations\/\$\{encodeURIComponent\(item\.id\)\}\/quota/.test(page)) problems.push('「授权课包」按钮没有跳到 /organizations/<id>/quota（机构课包与授权次数）');
+  // ⭐ 2026-10-03 用户口径：「图1的菜单栏名字改成：创建机构与授权」——
+  //    按本文件的老口径（2026-09-18「一个页面一个名字」），菜单 / 页面标题一起改。
+  const nav = fs.readFileSync(new URL('../apps/admin/src/shared.jsx', import.meta.url), 'utf8');
+  if (!/\{ to: '\/organizations'[^}]*label: '创建机构与授权'/.test(nav)) problems.push('侧边菜单里 /organizations 这项应当叫「创建机构与授权」（2026-10-03 用户口径）');
+  if (!/<PageHeader[^>]*title="创建机构与授权"/.test(page)) problems.push('机构列表页的标题应当与菜单同名（老口径：一个页面一个名字）');
   assert.equal(problems.length, 0, problems.join('；'));
   console.log('P77 UI 口径通过：必填段常驻、登录名与密码相邻、列表行「授权课包」直达课包与授权次数页');
 }

@@ -300,7 +300,7 @@ export function OrganizationDetail({ api }) {
   if (!orgId) return <Panel title="机构详情"><Empty title="缺少机构标识" body="请从机构列表点「查看详情」进入本页。" /></Panel>;
 
   return <>
-    <PageHeader eyebrow="平台教务 · 机构与课包人次" title={organization?.name || '机构详情'} description="机构卡、四个业务入口与数据概览；禁用机构需要填写原因。" actions={<button className="secondary-button" onClick={() => navigate('/organizations')}>← 返回机构列表</button>} />
+    <PageHeader eyebrow="平台教务 · 创建机构与授权" title={organization?.name || '机构详情'} description="机构卡、四个业务入口与数据概览；禁用机构需要填写原因。" actions={<button className="secondary-button" onClick={() => navigate('/organizations')}>← 返回机构列表</button>} />
     {confirmation}
     {message ? <Notice tone={message.tone}>{message.text}</Notice> : null}
     {detail.loading ? <Loading label="正在读取机构详情…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : !detail.data ? <Panel title="机构详情"><Empty title="没有找到该机构" body="机构可能已被删除，或链接里的机构标识不正确。" /></Panel> : <>
