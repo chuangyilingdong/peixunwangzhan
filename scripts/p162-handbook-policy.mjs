@@ -106,6 +106,21 @@ check('⑤ 后台能增删与排序地区、能传卡片图',
 check('⑤ 草稿预览里也认这一块（否则"后台预览"与官网不一致）',
   /政策地区卡 \{policyCards\.length\} 张/.test(admin));
 
+// ⭐ 2026-10-03（用户口径）：「机构手册这里我上传了一个图片，但是图片只能显示不全，能不能在这个地方，
+//    **保证图片显示完整**」—— 真因是手册那条**全局**规则 `.hb img{object-fit:cover}`（填满＝裁掉），
+//    而卡片档 `.hb-card{height:68vh;overflow:hidden}` 当时**没有**单独覆盖（`.hb-about__media img`
+//    与 `.hb-poster__frame img` 早就各自改成 contain 了，只有卡片漏了）。
+//    这组钉住：卡片里的图必须 contain（整张显示）+ 空档有同图模糊副本兜底 + 层次显式化。
+const cardRule = (css.match(/\.hb-card\s*img\{[^}]*\}/) || [''])[0];
+check('⑥ 手册卡片里的图**整张显示**（object-fit:contain，不再被全局 cover 裁掉）',
+  /object-fit:contain/.test(cardRule), cardRule.slice(0, 120));
+check('⑥ 卡片空档有**同图模糊副本**兜底（background 由行内样式给，::before 模糊+压暗）',
+  /\.hb-card\{[^}]*background-size:cover/.test(css) && /\.hb-card::before\{[^}]*backdrop-filter:blur/.test(css));
+check('⑥ 层次显式化：::after（底部渐变给文字压暗）要 z-index:1 压住 contain 后的 img',
+  /\.hb-card::after\{[^}]*z-index:1/.test(css) && /\.hb-card img\{[^}]*z-index:0/.test(cardRule));
+check('⑥ 卡片行内样式给了 backgroundImage（否则模糊层没有底图）',
+  /style=\{card\.imageUrl \? \{ backgroundImage:/.test(site));
+
 console.log('');
 if (failures) { console.log(`✗ p162 有 ${failures} 处不符合预期`); process.exit(1); }
 console.log('✓ p162 机构手册「政策」地区卡：全部通过');
