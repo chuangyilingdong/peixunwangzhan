@@ -399,6 +399,15 @@ console.log('⑫ 预览沙箱 CSP：放行 blob/data 子框架（两层都要放
   const frame = readSource('packages/shared/src/console/PreviewFrame.jsx');
   check('⑫ 应用侧真的用 pdf.js 渲染（legacy 构建，老浏览器才有 Iterator）',
     /pdfjs-dist\/legacy\/build\/pdf\.mjs/.test(frame) && /renderPdfImages/.test(frame));
+  // ⭐ 2026-10-03 第二类写法：学生页直接给**地址**（客户端的"文件管理"就是 `iframe.src = f.src`）。
+  //    桥要认它，而且**白名单必须在应用侧**（学生递上来的 url 不能变成"让平台去打任意地址"的口子）。
+  check('⑫ 学生侧也拦"指向 PDF 的地址"（不只 blob）',
+    /looksLikePdfUrl/.test(project) && /requestUrl\(this,/.test(project));
+  check('⑫ 应用侧对地址做白名单：本站路径 / 同源 / OSS 桶 / data:（别的统统拒）',
+    /function safePdfUrl/.test(frame) && /OSS_HOST\.test\(parsed\.hostname\)/.test(frame)
+    && /parsed\.origin === window\.location\.origin/.test(frame) && /data:application\\\/pdf/i.test(frame));
+  check('⑫ 注释里不许在模板字符串内出现反引号（会把 PDF_BRIDGE 模板提前闭合 —— 本探针踩过一次）',
+    !/`[^`]*\n[^`]*`/.test(project.split('export const PDF_BRIDGE = `')[1]?.split('`;\n')[0] || ''));
   // ⚠️ 只看**那个 iframe 标签**：文件顶上的注释里正解释着"内层不带 allow-same-origin"，
   //    整文件扫会把说明文字当成违规（写这条时当场踩到）。
   const stageTag = (shell.match(/<iframe id="stage"[^>]*>/) || [''])[0];

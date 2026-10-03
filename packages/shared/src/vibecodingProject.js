@@ -178,6 +178,29 @@ export const PDF_BRIDGE = `<script>(function(){
       try{parent.postMessage({source:'vibecoding-pdf-render',id:id,base64:base64,pages:12},'*');}catch(error){}
     }).catch(function(){var entry=pending.get(id);if(entry)clearTimeout(entry.timer);pending.delete(id);try{frame.srcdoc=fallbackText('读取失败');}catch(error){}});
   }
+  // ⭐ 2026-10-03 再补一类：**不是 blob 的 PDF 地址**（学生的"文件管理"类页面直接把
+  //    iframe.src 设成 f.src，那是平台改写过的作品素材地址或 OSS 签名直链）。
+  //    这类同样在沙箱里渲染不出（Chrome 不启用内置 PDF 查看器），所以把**地址**交给平台应用去取字节
+  //    （它不在沙箱里、有 cookie/签名都能取），取回来照样渲染成图片贴回来。
+  //    ⚠️ 白名单在**应用侧**（只允许本站路径、本站同源地址、OSS 桶、data:）——学生页面递上来的 url
+  //    不能变成"让平台去请求任意内网地址"的口子。
+  //    ⚠️⚠️ 这段注释本身在**模板字符串里**：这里绝不能出现反引号（会当场把模板闭合、整个文件语法错）。
+  function requestUrl(frame,url){
+    var id='pdf'+(++seq);
+    var timer=setTimeout(function(){var entry=pending.get(id);pending.delete(id);if(entry&&entry.frame)try{entry.frame.srcdoc=fallbackText('timeout');}catch(error){}},25000);
+    pending.set(id,{frame:frame,timer:timer});
+    try{parent.postMessage({source:'vibecoding-pdf-render',id:id,url:String(url).slice(0,2000),pages:12},'*');}catch(error){}
+  }
+  function looksLikePdfUrl(value){
+    var raw=String(value||'').split('#')[0];
+    if(!/\\.pdf(?:[?#].*)?$/i.test(raw))return false;
+    if(/^data:application\\/pdf/i.test(raw))return true;
+    if(/^\\/(?!\\/)/.test(raw))return true;                                  // 本站绝对路径
+    try{var parsed=new URL(raw,location.href);
+      if(parsed.origin===location.origin)return true;
+      return /(^|\\.)oss-[a-z0-9-]+\\.aliyuncs\\.com$/i.test(parsed.hostname);
+    }catch(error){return false;}
+  }
   window.addEventListener('message',function(event){
     var data=event.data;if(!data||typeof data!=='object')return;
     if(data.source!=='vibecoding-pdf-rendered')return;
@@ -192,11 +215,15 @@ export const PDF_BRIDGE = `<script>(function(){
       configurable:true,enumerable:descriptor.enumerable,
       get:descriptor.get,
       set:function(value){
-        var blob=(typeof value==='string'&&pdfBlobs.has(value))?pdfBlobs.get(value):null;
-        if(!blob){descriptor.set.call(this,value);return;}
+        var text=typeof value==='string'?value:'';
+        var blob=text&&pdfBlobs.has(text)?pdfBlobs.get(text):null;
+        // 三类都拦：① 我们登记过的 PDF blob；② **指向 PDF 的地址**（本站路径 / 同源 / OSS / data:）。
+        // 其余（普通网页、图片…）原样放行 —— 只碰 PDF，别影响学生页的正常内嵌。
+        var isPdfUrl=!blob&&text&&looksLikePdfUrl(text);
+        if(!blob&&!isPdfUrl){descriptor.set.call(this,value);return;}
         // 不设置真地址：沙箱里 Chrome 不启用 PDF 查看器，设了只会得到一块"已阻止/未知内容"的灰块。
         try{this.srcdoc='<body style="margin:0;display:grid;place-items:center;height:100%;font:13px sans-serif;color:#6b7280">PDF 预览：正在由平台渲染…</body>';}catch(error){}
-        request(this,blob);
+        if(blob)request(this,blob);else requestUrl(this,text.split('#')[0]);
       },
     });
   }

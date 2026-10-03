@@ -66,6 +66,25 @@ function loadPdfjs() {
   return pdfjsPromise;
 }
 
+const OSS_HOST = /(^|\.)oss-[a-z0-9-]+\.aliyuncs\.com$/i;
+/**
+ * PDF 桥的**地址白名单**：只允许 ① data:application/pdf（字节本来就在学生页里）；
+ * ② 本站根路径 `/…`（作品素材的公开代理口）；③ 本站同源地址；④ 我们的 OSS 桶（签名直链）。
+ * 其余一律拒绝 —— 学生代码不能借平台的 fetch 去打内网或第三方。
+ */
+function safePdfUrl(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  if (/^data:application\/pdf/i.test(value)) return value;
+  if (value.startsWith('/') && !value.startsWith('//')) return value;
+  try {
+    const parsed = new URL(value, window.location.origin);
+    if (parsed.origin === window.location.origin) return parsed.href;
+    if (OSS_HOST.test(parsed.hostname)) return parsed.href;
+  } catch { /* 解析不了就是不合法 */ }
+  return '';
+}
+
 /**
  * 把学生页里的 blob PDF 渲染成图片（PDF 桥的服务端……其实是我们这一层）。
  * 规格：最多 `pages` 页、按宽度 1000px 渲染、逐页 dataURL —— 学生文档那边直接 `<img>` 铺开。
@@ -108,7 +127,21 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
     if (!frame?.contentWindow || !id) return;
     const reply = (body) => { try { frame.contentWindow.postMessage({ source: 'vibecoding-pdf-rendered', id, ...body }, '*'); } catch { /* 外壳没了就算了 */ } };
     try {
-      const images = await renderPdfImages(payload.base64, payload.pages);
+      // ⭐ 2026-10-03：两种来源 —— 学生页直接给了字节（base64），或者给了一个**PDF 地址**
+      //    （学生页写 `iframe.src = "…/x.pdf"` 那种）。地址这条必须**白名单**：
+      //    学生代码递上来的 url 绝不能变成"让平台去请求任意地址"的口子。
+      let base64 = String(payload.base64 || '');
+      if (!base64 && payload.url) {
+        const target = safePdfUrl(String(payload.url));
+        if (!target) { reply({ error: '这个 PDF 地址不在允许的范围内' }); return; }
+        const response = await fetch(target, { credentials: 'include' });
+        if (!response.ok) { reply({ error: `取 PDF 失败（HTTP ${response.status}）` }); return; }
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        let text = '';
+        for (let index = 0; index < bytes.length; index += 0x8000) text += String.fromCharCode.apply(null, bytes.subarray(index, index + 0x8000));
+        base64 = btoa(text);
+      }
+      const images = await renderPdfImages(base64, payload.pages);
       if (!images.length) { reply({ error: '这份 PDF 没有可显示的页面' }); return; }
       reply({ images });
     } catch (error) {
