@@ -428,6 +428,13 @@
  
 }
 
+/* 创建机构弹窗里的「签约信息 / 人数上限 / 管理员账号」小节（2026-10-03：原来是 `<details>` 折叠区，
+   用户口径「既然是必填项，就不应该是展开形式」—— 现在常驻可见，这里只给个段落间距，与
+   上面 .admin-detail 的间距保持一致）。 */
+.org-section {
+  margin-bottom: 18px;
+}
+
 .admin-detail>summary {
   cursor:pointer;
   padding:12px 0;

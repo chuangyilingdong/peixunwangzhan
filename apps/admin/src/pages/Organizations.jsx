@@ -45,9 +45,10 @@ function newOrganizationForm() {
 function CreateOrganizationDialog({ form, setForm, saving, error, onClose, onSubmit }) {
   const dialogRef = useRef(null);
   const [fieldErrors, setFieldErrors] = useState({});
-  // 签约/人数/管理员账号收在折叠区里；折叠区的必填项校验失败时**自动展开**，
-  // 否则用户只会看到「点创建没反应」而看不见红字（折叠的内容也不在可访问文本里）。
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  // ⚠️ 2026-10-03（用户口径）：这些字段**不再收在折叠区里** —— 它们是服务端必填项，
+  //    藏起来等于"先让用户点开才知道要填"（用户原话：「既然……是必填项，就不应该是展开形式」）；
+  //    连带那套"校验失败自动展开折叠区"的逻辑（detailsOpen）也一并删了：字段一直在屏幕上，
+  //    红字就地可见。
   useEffect(() => {
     const opener = document.activeElement;
     dialogRef.current?.showModal();
@@ -76,17 +77,14 @@ function CreateOrganizationDialog({ form, setForm, saving, error, onClose, onSub
     return errors;
   }
 
-  // 折叠区里的字段（合同日期、人数上限、管理员账号）——它们的错误要不要展开折叠区看这里。
-  const DETAIL_FIELDS = ['contractStartAt', 'teacherSeats', 'studentSeats', 'adminLogin', 'adminDisplayName', 'adminPassword'];
+  // ⚠️ 2026-10-03：原来这里有一份 `DETAIL_FIELDS`（折叠区字段清单），用来在"折叠区里的字段校验失败时
+  //    自动展开折叠区"。字段现在常驻可见，这份清单没有用武之地，删掉。
 
   function submit(event) {
     event.preventDefault();
     const errors = validate();
     setFieldErrors(errors);
-    if (Object.keys(errors).length) {
-      if (DETAIL_FIELDS.some((key) => errors[key])) setDetailsOpen(true);
-      return;
-    }
+    if (Object.keys(errors).length) return;
     onSubmit(event);
   }
 
@@ -112,18 +110,23 @@ function CreateOrganizationDialog({ form, setForm, saving, error, onClose, onSub
       </div>
       <label>所属区域<input value={form.region} onChange={(event) => setForm({ ...form, region: event.target.value })} maxLength={100} placeholder="如：北京市·海淀区" /><small className="muted">选填；机构课包与授权次数、变更记录页会显示。</small></label>
       <label>备注<textarea rows={3} maxLength={200} value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} placeholder="填机构服务的约定事项或口头承诺" /><small className="muted">{form.notes.length}/200</small>{errorText('notes')}</label>
-      <details className="admin-detail" open={detailsOpen} onToggle={(event) => setDetailsOpen(event.currentTarget.open)}>
-        <summary>签约信息、人数上限与机构管理员账号（服务端必填项）</summary>
+      {/* ⭐ 2026-10-03（用户口径）：「既然创建机构这里图1是必填项，就不应该是展开形式」——
+          这七格是**服务端必填**，原来包在 `<details>` 里默认收起，等于让用户"点开才知道要填"。
+          现在改成**常驻小节**（标题 + 三列网格）。
+          ⭐ 同一轮的第二条口径：「机构管理员登录名和初始密码应该挨在一起」——原来中间夹着
+          「机构管理员姓名」，两格被隔开；现在把它们排成相邻两格，姓名挪到其后。 */}
+      <section className="org-section">
+        <p className="org-field-label">签约信息、人数上限与机构管理员账号（均为必填）</p>
         <div className="form-grid">
           <label>签约开始日期 *<input type="date" value={form.contractStartAt} onChange={(event) => setForm({ ...form, contractStartAt: event.target.value })} required />{errorText('contractStartAt')}</label>
           <label>签约到期日期 *<input type="date" value={form.contractExpiresAt} onChange={(event) => setForm({ ...form, contractExpiresAt: event.target.value })} required /></label>
           <label>教师数量上限 *<input type="number" min="0" max="1000000" value={form.teacherSeats} onChange={(event) => setForm({ ...form, teacherSeats: event.target.value })} required />{errorText('teacherSeats')}</label>
           <label>学生数量上限 *<input type="number" min="0" max="1000000" value={form.studentSeats} onChange={(event) => setForm({ ...form, studentSeats: event.target.value })} required />{errorText('studentSeats')}</label>
           <label>机构管理员登录名 *<input autoComplete="username" value={form.adminLogin} onChange={(event) => setForm({ ...form, adminLogin: event.target.value })} required maxLength={100} />{errorText('adminLogin')}</label>
-          <label>机构管理员姓名 *<input value={form.adminDisplayName} onChange={(event) => setForm({ ...form, adminDisplayName: event.target.value })} required maxLength={200} />{errorText('adminDisplayName')}</label>
           <label>管理员初始密码 *<input type="password" autoComplete="new-password" value={form.adminPassword} onChange={(event) => setForm({ ...form, adminPassword: event.target.value })} required minLength={6} />{errorText('adminPassword')}</label>
+          <label>机构管理员姓名 *<input value={form.adminDisplayName} onChange={(event) => setForm({ ...form, adminDisplayName: event.target.value })} required maxLength={200} />{errorText('adminDisplayName')}</label>
         </div>
-      </details>
+      </section>
       {error ? <Notice tone="danger">{error}</Notice> : null}
       <div className="row-actions">
         <button type="button" className="secondary-button" disabled={saving} onClick={onClose}>取消</button>
@@ -219,8 +222,8 @@ export function Organizations({ api }) {
   return <>
     <PageHeader eyebrow="平台教务" title="机构与课包人次" description="创建与维护机构资料、服务状态，并为每家机构配置课包与授权次数。" actions={<><button className="secondary-button" disabled={exporting} onClick={exportOrganizations}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={() => { organizations.refresh(); setMessage(null); }}>刷新</button></>} />
     {showCreateDialog ? <CreateOrganizationDialog form={form} setForm={setForm} saving={saving} error={dialogError} onClose={() => setShowCreateDialog(false)} onSubmit={create} /> : null}
-    <Notice tone="info">先选机构 → 再配置课包与授权次数（总授权次数 / 已授权次数 / 剩余授权次数）：列表里「查看详情」进机构详情，详情页的「授权次数」入口进本机构的课包与授权次数。</Notice>
-    {message ? <Notice tone={message.tone}>{message.text}{createdId ? <> 下一步：<Link to={`/organizations/${encodeURIComponent(createdId)}`}>查看机构详情</Link> · <Link to={`/authorizations?orgId=${encodeURIComponent(createdId)}`}>去授权课包</Link></> : null}</Notice> : null}
+    <Notice tone="info">先选机构 → 再配置课包与授权次数（总授权次数 / 已授权次数 / 剩余授权次数）：列表里<b>「授权课包」直达</b>本机构的课包与授权次数，「查看详情」进机构详情。</Notice>
+    {message ? <Notice tone={message.tone}>{message.text}{createdId ? <> 下一步：<Link to={`/organizations/${encodeURIComponent(createdId)}/quota`}>去授权课包</Link> · <Link to={`/organizations/${encodeURIComponent(createdId)}`}>查看机构详情</Link></> : null}</Notice> : null}
     <Panel title="机构列表">
       <form className="filter-form" onSubmit={submitFilters}>
         <label>机构名称<input value={draft.search} placeholder="机构名称 / 机构 ID" onChange={(event) => setDraft({ ...draft, search: event.target.value })} /></label>
@@ -251,7 +254,13 @@ export function Organizations({ api }) {
             <td>{item.studentUsedSeats}</td>
             {showPackageColumn ? <td>{openedPackageCount(item) ?? '—'}</td> : null}
             <td>{formatDate(item.createdAt)}</td>
-            <td><div className="row-actions"><button type="button" className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(item.id)}`)}>查看详情</button></div></td>
+            <td><div className="row-actions">
+              <button type="button" className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(item.id)}`)}>查看详情</button>
+              {/* ⭐ 2026-10-03（用户口径）：「创建完机构，在图2位置多个按钮，授权课包。跳转到图3页面」——
+                  列表里**直达**该机构的「课包与授权次数」页（原来要先点进机构详情、再找「授权次数」入口，
+                  多两步；详情页那个入口保留，两条路都能到）。 */}
+              <button type="button" className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(item.id)}/quota`)}>授权课包</button>
+            </div></td>
           </tr>)}</tbody>
         </table></div>
         <Pagination page={organizations.data.page} totalPages={organizations.data.totalPages} onChange={setPage} disabled={organizations.loading} />
