@@ -68,7 +68,10 @@ await rejects(() => admin(`/organizations/${created.id}`, 'PUT', { status: 'DISA
 
 const source = fs.readFileSync(path.join(root, 'apps/admin/src/pages/Organizations.jsx'), 'utf8').split('export function Authorizations')[0];
 assert.doesNotMatch(source, /window\.confirm/, 'organization actions must use accessible confirmation dialogs');
-assert.match(source, /authorizations\?orgId=/, 'authorization next step must carry the created organization id');
+// ⚠️ 2026-10-03 重钉（用户口径变更，不是漂移）：「授权课包」统一落到**图3那页**（机构课包与授权次数），
+//    所以创建成功后的"下一步"链接也从 /authorizations?orgId= 改成 /organizations/<id>/quota。
+//    这条断言的**意图不变**：下一步必须带着刚创建的那家机构 id（否则运营会落在没有上下文的页面上）。
+assert.match(source, /organizations\/\$\{encodeURIComponent\(createdId\)\}\/quota/, 'authorization next step must carry the created organization id');
 
 // 2026-09-18：机构详情页的「机构管理员」改成了三个弹窗（新增 / 编辑 / 停用），代码搬到
 // `OrganizationDetail.jsx` —— 上面那条只扫了 `Organizations.jsx`，**等于没覆盖新弹窗**。

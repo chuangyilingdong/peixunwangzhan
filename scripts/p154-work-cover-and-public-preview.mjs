@@ -190,8 +190,13 @@ try {
   //   所以改成：列表**不放图**（操作列一枚「预览」）→ 弹窗，弹窗里的图经 `api.fetchDataUrl` 取成 data:。
   check('⑥ 平台端：操作列有「预览」按钮，且**不再**在列表里放缩略图（用户 2026-09-27 口径）',
     /onClick=\{\(\) => setPreviewItem\(item\)\}>预览</.test(adminWorks) && !/work-cell__thumb/.test(adminWorks));
+  // ⚠️ 2026-10-03 重钉：这个弹窗在 §一百 挂了**共用口径类**（`c-work-preview-dialog` + `__body`，
+  //    与机构端同一份尺寸/一屏/整窗不滚的口径），所以 className 不再是只有两个类。行为没变（仍是
+  //    原生 dialog + showModal），这里连口径类一起钉住 —— 少一个类就等于掉回 480px 小框/整窗滚动。
   check('⑥ 平台端：预览是**弹窗**（原生 dialog + showModal），不再渲染在表格下面',
-    /function PreviewDialog/.test(workPreview) && /showModal\(\)/.test(workPreview) && /className="admin-confirm admin-work-preview"/.test(workPreview)
+    /function PreviewDialog/.test(workPreview) && /showModal\(\)/.test(workPreview)
+    && /className="admin-confirm admin-work-preview c-work-preview-dialog"/.test(workPreview)
+    && /c-work-preview-dialog__body/.test(workPreview)
     && !/<Panel title=\{`作品预览/.test(adminWorks));
   check('⑥ 平台端：弹窗里的图走**带 token 的接口**（fetchDataUrl → data:），不依赖 cookie',
     /api\.fetchDataUrl\(path\)/.test(workPreview) && /\/api\/admin\/works\/\$\{encodeURIComponent\(workId\)\}\/images\//.test(workPreview));
