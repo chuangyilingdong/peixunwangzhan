@@ -1153,8 +1153,27 @@ background:radial-gradient(120% 80% at 50% 0%,rgb(255 60 90 / 26%),transparent 6
    ⚠️ 弹层里的 <video> 打开才创建（关掉即卸载）—— 不在首屏预加载任何东西。 */
 .hp-vid-modal{position:fixed;inset:0;z-index:70;display:grid;place-items:center;padding:clamp(14px,3vw,40px);background:rgb(8 3 6 / 88%);backdrop-filter:blur(6px);animation:hp-vid-fade .22s ease-out}
 @keyframes hp-vid-fade{from{opacity:0}to{opacity:1}}
-.hp-vid-modal-box{position:relative;width:min(1080px,96vw);max-height:92vh;display:flex;flex-direction:column;gap:12px;padding:14px;border-radius:18px;background:#140a10;border:1px solid rgb(255 255 255 / 12%);box-shadow:0 30px 80px rgb(0 0 0 / 60%)}
-.hp-vid-modal-video{display:block;width:100%;max-height:74vh;border-radius:12px;background:#000}
+.hp-vid-modal-box{position:relative;width:min(1080px,96vw);max-height:92vh;display:flex;flex-direction:column;gap:12px;padding:14px;border-radius:18px;background:#140a10;border:1px solid rgb(255 255 255 / 12%);box-shadow:0 30px 80px rgb(0 0 0 / 60%);overflow:hidden}
+/* ⭐⭐ 2026-10-03（用户报「官网播放视频，视频播放器**显示不全**」）：**媒体格自己伸缩，视频等比缩进去**。
+   原来的写法是 `.hp-vid-modal-video{width:100%; max-height:74vh}`，两个坑叠在一起：
+     ① `74vh` 是**硬上限**，矮窗口里视频元素被压扁，而 `width:100%` 不变 ⇒ 画面在里面变成"两边黑边"；
+     ② flex 子项的 `min-height` 默认是 `auto`（≈内容尺寸），于是视频**缩不下去**，
+        底下那行文字/翻页被挤出弹层（实测 1280×620 时内容溢出 18px，控制条正好落在被裁的位置）。
+   现在：媒体格 `flex:1 1 auto; min-height:0` 吃掉"弹层高 − 文字/翻页/内边距"剩下的高度，
+   视频用 `max-width/max-height:100%` 等比缩放 ⇒ **永不裁切、控制条永远在框内**，
+   宽高比不匹配时黑边落在媒体格上（看起来是播放器的一部分，不是被切掉的一块）。 */
+/* ⚠️ 视频用**绝对定位铺满媒体格** + `object-fit:contain`：别写 `max-height:100%` ——
+   媒体格的高度是 flex 算出来的，对子项来说**不是"确定高度"**，百分比上限不被解析
+   （实测 1280×620 下视频仍是 591 高，比分配到的 427 还大 ⇒ 又回到被裁的样子）。
+   绝对定位 + inset:0 则严格等于媒体格的框，画面按 contain 等比缩（黑边落在格子的黑底上，
+   看起来就是播放器本身的一部分）；控制条永远贴在**格子内**的视频底边。 */
+/* 高度来源：媒体格自己按 16:9 定高（视频是绝对定位的，撑不出高度 —— 第一版就因此塌成 0，
+   弹层只剩 143px 高）。矮窗口由 `max-height: calc(92vh - …)` 让位给底下那行文字/翻页：
+   此时格子会比 16:9 更"扁"，画面按 contain 缩进去（黑边落在格子黑底上）。 */
+.hp-vid-modal-media{position:relative;flex:0 1 auto;width:100%;aspect-ratio:16 / 9;max-height:calc(92vh - 168px);min-height:180px;background:#000;border-radius:12px;overflow:hidden}
+.hp-vid-modal-video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;background:#000}
+/* 文字与翻页永远不参与伸缩（被挤掉的只会是媒体格，而它自己会缩放） */
+.hp-vid-modal-meta,.hp-vid-modal-nav{flex:none}
 .hp-vid-modal-meta{padding:0 4px;color:#e9d3d9}
 .hp-vid-modal-meta h3{margin:0;color:#fff;font-size:clamp(15px,1.7vw,19px);font-weight:700}
 .hp-vid-modal-meta p{margin:6px 0 0;font-size:13.5px;line-height:1.7}

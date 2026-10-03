@@ -342,6 +342,45 @@ try {
     brandsZh.title === '合作品牌' && brandsZh.names.includes('网易有道卡搭'),
     JSON.stringify([...new Set(brandsZh.names)].slice(0, 3)));
 
+  // ⑩ 2026-10-03（用户报「官网播放视频，视频播放器**显示不全**」）：首页视频弹层在**矮窗口**下
+  //    曾经把画面挤成"黑边 + 控制条被裁"（`width:100%` + `max-height:74vh` + flex 子项 min-height:auto
+  //    缩不下去 ⇒ 内容溢出）。现在媒体格自己定高（16:9 + max-height 让位），视频绝对定位 +
+  //    `object-fit:contain`。这组在**矮窗口**（1280×620）上量几何：画面必须完整装进媒体格、
+  //    控制条那一行与文字/翻页都必须在弹层**框内**。
+  await page.setViewportSize({ width: 1280, height: 620 });
+  await page.goto(base + '/en/', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(2600);
+  await page.evaluate(() => document.querySelector('.hp-vid')?.scrollIntoView({ block: 'center' }));
+  await page.waitForTimeout(900);
+  const playCount = await page.locator('.hp-vid-play').count();
+  if (!playCount) {
+    check('⑩ 矮窗口下首页视频弹层的几何（夹具里得先有视频）', false, '找不到 .hp-vid-play（夹具视频区空了？）');
+  } else {
+    await page.locator('.hp-vid-play').first().click();
+    await page.waitForTimeout(2200);
+    const geo = await page.evaluate(() => {
+      const box = document.querySelector('.hp-vid-modal-box');
+      const media = document.querySelector('.hp-vid-modal-media');
+      const video = document.querySelector('.hp-vid-modal-video');
+      const meta = document.querySelector('.hp-vid-modal-meta');
+      const nav = document.querySelector('.hp-vid-modal-nav');
+      const b = box.getBoundingClientRect(); const m = media.getBoundingClientRect(); const v = video.getBoundingClientRect();
+      return {
+        box: `${Math.round(b.width)}×${Math.round(b.height)}`,
+        fitsViewport: b.top >= -1 && b.bottom <= window.innerHeight + 1,
+        pictureInside: v.left >= m.left - 1 && v.right <= m.right + 1 && v.top >= m.top - 1 && v.bottom <= m.bottom + 1,
+        mediaHasHeight: m.height >= 150,
+        metaInside: meta ? meta.getBoundingClientRect().bottom <= b.bottom + 1 : null,
+        navInside: nav ? nav.getBoundingClientRect().bottom <= b.bottom + 1 : null,
+        overflow: box.scrollHeight - box.clientHeight,
+      };
+    });
+    check('⑩ 矮窗口（1280×620）下：弹层装进视口、画面完整在媒体格里、控制条那行与文字/翻页都在框内',
+      geo.fitsViewport && geo.pictureInside && geo.mediaHasHeight && geo.metaInside !== false && geo.navInside !== false && geo.overflow <= 1,
+      JSON.stringify(geo));
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+
   await browser.close();
 } finally {
   server.kill();

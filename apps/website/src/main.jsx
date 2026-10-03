@@ -931,8 +931,14 @@ function HomeVideos({ block }) {
       {openedItem ? <div className="hp-vid-modal" role="dialog" aria-modal="true" aria-label={openedItem.title || t('videos.playing')} onClick={close}>
       <div className="hp-vid-modal-box" onClick={(event) => event.stopPropagation()}>
           <button type="button" className="hp-vid-modal-close" onClick={close} aria-label={t('works.close')}>×</button>
-        <video className="hp-vid-modal-video" src={openedItem.videoUrl || undefined} poster={openedItem.posterUrl || undefined}
-          controls autoPlay playsInline preload="metadata" />
+        {/* ⭐ 2026-10-03（用户报「官网播放视频，视频播放器显示不全」）：视频外面套一层**媒体格**，
+            由它自己伸缩（`flex:1 1 auto; min-height:0`），视频按 `max-*:100%` 等比缩进去 ——
+            见 styles.css 里 .hp-vid-modal-media 的长注释（原来的写法在矮窗口里会把画面挤成
+            "黑边 + 控制条被裁"）。 */}
+        <div className="hp-vid-modal-media">
+          <video className="hp-vid-modal-video" src={openedItem.videoUrl || undefined} poster={openedItem.posterUrl || undefined}
+            controls autoPlay playsInline preload="metadata" />
+        </div>
         {(openedItem.title || openedItem.desc) && <div className="hp-vid-modal-meta">
           {openedItem.title ? <h3>{openedItem.title}</h3> : null}
           {openedItem.desc ? <p>{openedItem.desc}</p> : null}
