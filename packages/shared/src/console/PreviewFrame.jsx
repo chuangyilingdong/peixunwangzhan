@@ -88,6 +88,7 @@ function safePdfUrl(raw) {
 /**
  * 把学生页里的 blob PDF 渲染成图片（PDF 桥的服务端……其实是我们这一层）。
  * 规格：最多 `pages` 页、按宽度 1000px 渲染、逐页 dataURL —— 学生文档那边直接 `<img>` 铺开。
+ * 返回值带 `totalPages`：学生侧要在"只渲染了前 N 页"时说一句（2026-10-03）。
  */
 async function renderPdfImages(base64, pageLimit) {
   const pdfjs = await loadPdfjs();
@@ -108,7 +109,7 @@ async function renderPdfImages(base64, pageLimit) {
     images.push(canvas.toDataURL('image/png'));
     page.cleanup();
   }
-  return images;
+  return { images, totalPages: document_.numPages };
 }
 
 export function PreviewFrame({ html, className = '', stageClassName = '', title = '预览', onConsole, reloadKey = 0, fitToLogical = false, fitContent = false, responsive = false, fill = false }) {
@@ -141,9 +142,9 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
         for (let index = 0; index < bytes.length; index += 0x8000) text += String.fromCharCode.apply(null, bytes.subarray(index, index + 0x8000));
         base64 = btoa(text);
       }
-      const images = await renderPdfImages(base64, payload.pages);
-      if (!images.length) { reply({ error: '这份 PDF 没有可显示的页面' }); return; }
-      reply({ images });
+      const rendered = await renderPdfImages(base64, payload.pages);
+      if (!rendered.images.length) { reply({ error: '这份 PDF 没有可显示的页面' }); return; }
+      reply({ images: rendered.images, total: rendered.totalPages });
     } catch (error) {
       reply({ error: String(error?.message || error).slice(0, 120) });
     }

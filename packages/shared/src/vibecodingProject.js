@@ -148,6 +148,11 @@ export const PDF_BRIDGE = `<script>(function(){
   var pdfBlobs=new Map();      // blob: 地址 → PDF Blob（返回的仍是**真地址**，只是顺手记一笔）
   var pending=new Map();       // 请求 id → {frame, timer}
   var seq=0;
+  // 等待渲染时贴进那个框子的话（三条接管路径共用一份，别再各写一遍）
+  var PLACEHOLDER='<body style="margin:0;display:grid;place-items:center;height:100%;font:13px sans-serif;color:#6b7280">PDF 预览：正在由平台渲染…</body>';
+  // 渲染结果最多等多久：真作品里有 6.7MB / 十几页的 PDF，应用侧取字节 + 逐页栅格化是**秒级到十几秒**，
+  // 20~25 秒会把"其实正在渲染"的那种判成超时（学生侧于是永久停在超时文案上）。45 秒留够。
+  var RENDER_TIMEOUT=45000;
   var realCreate=URL.createObjectURL?URL.createObjectURL.bind(URL):null;
   if(realCreate){URL.createObjectURL=function(value){
     var url=realCreate(value);
@@ -162,15 +167,17 @@ export const PDF_BRIDGE = `<script>(function(){
   function fallbackText(state){return state==='timeout'
     ?'PDF 预览：平台渲染超时。可以点开「查看作品源文件」下载原件。'
     :'PDF 预览：这份 PDF 没能渲染出来（'+(state||'未知原因')+'）。可以点开「查看作品源文件」下载原件。';}
-  function paint(frame,images){
+  function paint(frame,images,note){
     var html='<body style="margin:0;background:#f3f4f6">';
     for(var i=0;i<images.length;i++){html+='<img src="'+images[i]+'" style="display:block;width:100%;margin:0 0 8px">';}
+    // 页数超上限时说一句（不然"只看到前 12 页"会被当成"平台把后面的吃了"）
+    if(note)html+='<p style="margin:0;padding:8px 12px;font:12px/1.6 sans-serif;color:#6b7280">'+note+'</p>';
     html+='</body>';
     try{frame.srcdoc=html;}catch(error){}
   }
   function request(frame,blob){
     var id='pdf'+(++seq);
-    var timer=setTimeout(function(){var entry=pending.get(id);pending.delete(id);if(entry&&entry.frame)try{entry.frame.srcdoc=fallbackText('timeout');}catch(error){}},20000);
+    var timer=setTimeout(function(){var entry=pending.get(id);pending.delete(id);if(entry&&entry.frame)try{entry.frame.srcdoc=fallbackText('timeout');}catch(error){}},RENDER_TIMEOUT);
     pending.set(id,{frame:frame,timer:timer});
     blob.arrayBuffer().then(function(buffer){
       var base64=toBase64(buffer);
@@ -187,7 +194,7 @@ export const PDF_BRIDGE = `<script>(function(){
   //    ⚠️⚠️ 这段注释本身在**模板字符串里**：这里绝不能出现反引号（会当场把模板闭合、整个文件语法错）。
   function requestUrl(frame,url){
     var id='pdf'+(++seq);
-    var timer=setTimeout(function(){var entry=pending.get(id);pending.delete(id);if(entry&&entry.frame)try{entry.frame.srcdoc=fallbackText('timeout');}catch(error){}},25000);
+    var timer=setTimeout(function(){var entry=pending.get(id);pending.delete(id);if(entry&&entry.frame)try{entry.frame.srcdoc=fallbackText('timeout');}catch(error){}},RENDER_TIMEOUT);
     pending.set(id,{frame:frame,timer:timer});
     try{parent.postMessage({source:'vibecoding-pdf-render',id:id,url:String(url).slice(0,2000),pages:12},'*');}catch(error){}
   }
@@ -206,7 +213,10 @@ export const PDF_BRIDGE = `<script>(function(){
     if(data.source!=='vibecoding-pdf-rendered')return;
     var key=String(data.id||'');var entry=pending.get(key);if(!entry)return;
     clearTimeout(entry.timer);pending.delete(key);
-    if(data.images&&data.images.length)paint(entry.frame,data.images);
+    if(data.images&&data.images.length){
+      var total=Number(data.total)||0;
+      paint(entry.frame,data.images,total>data.images.length?('这份 PDF 共 '+total+' 页，预览渲染了前 '+data.images.length+' 页。'):'');
+    }
     else try{entry.frame.srcdoc=fallbackText(data.error);}catch(error){}
   });
   var descriptor=Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype,'src');
@@ -222,11 +232,70 @@ export const PDF_BRIDGE = `<script>(function(){
         var isPdfUrl=!blob&&text&&looksLikePdfUrl(text);
         if(!blob&&!isPdfUrl){descriptor.set.call(this,value);return;}
         // 不设置真地址：沙箱里 Chrome 不启用 PDF 查看器，设了只会得到一块"已阻止/未知内容"的灰块。
-        try{this.srcdoc='<body style="margin:0;display:grid;place-items:center;height:100%;font:13px sans-serif;color:#6b7280">PDF 预览：正在由平台渲染…</body>';}catch(error){}
+        try{this.__pdfBridgeSrc=text;}catch(error){}
+        try{this.srcdoc=PLACEHOLDER;}catch(error){}
         if(blob)request(this,blob);else requestUrl(this,text.split('#')[0]);
       },
     });
   }
+  // ⭐ 2026-10-03（§九十九）：**经 HTML 解析器 / 属性写进来的 iframe 也要拦**。
+  //    客户端「文件管理」那类是 body.innerHTML = '<iframe class="pdf-frame" src="…">' ——
+  //    解析器设的是**内容属性**，不经过上面那个 JS setter，所以只改 setter 接不住：
+  //    框子真的去请求那个 PDF 地址，被沙箱 CSP 的 frame-src 拦成
+  //    「该内容被屏蔽了。请联系网站所有者以解决此问题。」（平台端生产实测，2026-10-03）。
+  //    这里补四条口子：innerHTML / insertAdjacentHTML / setAttribute / DOM 突变兜底。
+  //    判据不变：只碰 looksLikePdfUrl 认得的地址，其余 iframe 一律原样放行。
+  function takeOver(frame){
+    if(!frame||frame.tagName!=='IFRAME')return;
+    var raw='';
+    try{raw=frame.getAttribute('src')||'';}catch(error){}
+    // 我们已经把 src 摘掉之后会再进来一次（属性突变会再报一条）——这里就是出口
+    if(!raw||!looksLikePdfUrl(raw))return;
+    if(frame.__pdfBridgeSrc===raw)return;      // 同一地址只接管一次；同一个框换新地址（复用它）再接管
+    try{frame.__pdfBridgeSrc=raw;}catch(error){}
+    try{frame.removeAttribute('src');}catch(error){}   // 先断掉真实导航：别再让 CSP 拦一次，也别真去下这个文件
+    try{frame.srcdoc=PLACEHOLDER;}catch(error){}
+    requestUrl(frame,String(raw).split('#')[0]);
+  }
+  function scanForPdfFrames(node){
+    try{
+      if(!node||node.nodeType!==1)return;
+      if(node.tagName==='IFRAME')takeOver(node);
+      var list=node.querySelectorAll('iframe[src]');
+      for(var i=0;i<list.length;i+=1)takeOver(list[i]);
+    }catch(error){}
+  }
+  try{
+    var htmlDescriptor=Object.getOwnPropertyDescriptor(Element.prototype,'innerHTML');
+    if(htmlDescriptor&&htmlDescriptor.set){
+      Object.defineProperty(Element.prototype,'innerHTML',{
+        configurable:true,enumerable:htmlDescriptor.enumerable,get:htmlDescriptor.get,
+        set:function(value){htmlDescriptor.set.call(this,value);scanForPdfFrames(this);},
+      });
+    }
+    var realInsertAdjacentHTML=Element.prototype.insertAdjacentHTML;
+    if(realInsertAdjacentHTML){Element.prototype.insertAdjacentHTML=function(){
+      var out=realInsertAdjacentHTML.apply(this,arguments);scanForPdfFrames(this);return out;};}
+    var realSetAttribute=Element.prototype.setAttribute;
+    if(realSetAttribute){Element.prototype.setAttribute=function(name,value){
+      realSetAttribute.call(this,name,value);
+      if(String(name).toLowerCase()==='src')takeOver(this);};}
+    // 兜底：appendChild / document.write / 框架自己造节点这些不走上面任何一条的路
+    if(typeof MutationObserver==='function'){
+      var observer=new MutationObserver(function(records){
+        for(var i=0;i<records.length;i+=1){
+          var record=records[i];
+          if(record.type==='attributes'){takeOver(record.target);continue;}
+          var added=record.addedNodes||[];
+          for(var j=0;j<added.length;j+=1)scanForPdfFrames(added[j]);
+        }
+      });
+      observer.observe(document.documentElement||document,{childList:true,subtree:true,attributes:true,attributeFilter:['src']});
+    }
+    // 桥注入时文档里**已经**有的（解析顺序特殊的写法）：再扫一遍兜底
+    if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){scanForPdfFrames(document.documentElement||document);});
+    else scanForPdfFrames(document.documentElement||document);
+  }catch(error){}
 })();</script>`;
 
 function svgDataUrl(content) {

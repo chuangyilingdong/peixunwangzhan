@@ -408,6 +408,22 @@ console.log('⑫ 预览沙箱 CSP：放行 blob/data 子框架（两层都要放
     && /parsed\.origin === window\.location\.origin/.test(frame) && /data:application\\\/pdf/i.test(frame));
   check('⑫ 注释里不许在模板字符串内出现反引号（会把 PDF_BRIDGE 模板提前闭合 —— 本探针踩过一次）',
     !/`[^`]*\n[^`]*`/.test(project.split('export const PDF_BRIDGE = `')[1]?.split('`;\n')[0] || ''));
+  // ⭐ 2026-10-03（§九十九）生产实测抓到的**第三类写法**：客户端的「文件管理」是
+  //    `body.innerHTML = '<iframe class="pdf-frame" src="…pdf">'` —— HTML 解析器设的是**内容属性**，
+  //    不经过 IDL setter，所以只拦 setter 接不住：框子真的去请求那个 PDF 地址，被沙箱 CSP 的
+  //    frame-src 拦成「该内容被屏蔽了。请联系网站所有者以解决此问题。」（平台端截图，一字不差）。
+  check('⑫ 桥也拦"经 HTML 解析器/属性写进来"的 iframe（innerHTML / insertAdjacentHTML / setAttribute / DOM 突变）',
+    /MutationObserver/.test(project) && /Element\.prototype,\s*'innerHTML'/.test(project)
+    && /insertAdjacentHTML/.test(project) && /var realSetAttribute=Element\.prototype\.setAttribute;/.test(project)
+    && /scanForPdfFrames/.test(project) && /function takeOver\(frame\)/.test(project));
+  check('⑫ 接管时先摘掉真地址（不再让 CSP 拦一次、也不真去下这个文件）',
+    /frame\.removeAttribute\('src'\)/.test(project));
+  check('⑫ 同一地址不重复接管（摘 src 会再报一条属性突变 —— 靠 __pdfBridgeSrc 收口，别递归打架）',
+    /__pdfBridgeSrc/.test(project));
+  check('⑫ 渲染超时给够（≥45s：真作品里有 6.7MB/十几页的 PDF，20~25s 会把"正在渲染"误判成超时）',
+    /var RENDER_TIMEOUT=(\d+);/.test(project) && Number(project.match(/var RENDER_TIMEOUT=(\d+);/)[1]) >= 45000);
+  check('⑫ 页数超上限时说一句（应用回传 total，学生侧只在"总页数 > 已渲染页数"时加那行）',
+    /total: rendered\.totalPages/.test(frame) && /total>data\.images\.length/.test(project));
   // ⚠️ 只看**那个 iframe 标签**：文件顶上的注释里正解释着"内层不带 allow-same-origin"，
   //    整文件扫会把说明文字当成违规（写这条时当场踩到）。
   const stageTag = (shell.match(/<iframe id="stage"[^>]*>/) || [''])[0];
