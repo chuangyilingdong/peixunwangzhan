@@ -6,7 +6,7 @@
 //
 // ⚠️ 显示哪一份产物由服务端按提交时的 entryFile 决定；每条提交只包含该主产物及必要依赖。
 // 文档产物（PPT/Word/Excel）在这里先预览、再下载真文件（下载走公开地址）。
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
 import { artifactGroup, buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayPanel, ReplayPreview, ReplayShell, WorkMediaGallery, resolveWorkMediaUrl } from '@platform/shared';
@@ -43,6 +43,7 @@ export function WorkDetailPage({ api }) {
   // 站内素材（`/api/student/file-assets/…`）要转成 data: 才显示得出（<img> 发不出 Authorization 头）；
   // 上游图床的 https 外链原样用（与「我的作品」那一屏同一条规则）。
   const [imageData, setImageData] = useState({});
+  const stageRef = useRef(null);
 
   useEffect(() => {
     let live = true;
@@ -115,6 +116,35 @@ export function WorkDetailPage({ api }) {
   // （原来这里还有一个 `sourceDefault`：「它是怎么写出来的」那个源码清单默认停在哪个文件。
   //   2026-09-27 用户口径把那块删掉之后它没有调用方了，一并删。）
 
+  // ⭐ 2026-10-03（§九十九）：`--screen` 舞台的高度是 `calc(100dvh - var(--wd-chrome, 232px))`，
+  //    而 232 只是**默认值** —— 这一页"舞台上面的头/操作区"真实高度随路由与文案变
+  //    （实测 `/my-home/…` 这条路上是 298px），差出来那 66px 就是"作品底部掉到首屏外"，
+  //    而用户口径正是「不要有滚动」。这里量一次**舞台自己距文档顶的距离**写进变量：
+  //    它只取决于舞台**上面**的内容，改舞台高度不会反过来影响它（没有自反馈）。
+  //    量不到（老浏览器没有 ResizeObserver）就退回 CSS 里那个默认值，行为与今天一致。
+  useLayoutEffect(() => {
+    const node = stageRef.current;
+    if (!node || typeof window === 'undefined') return undefined;
+    const measure = () => {
+      const top = Math.round(node.getBoundingClientRect().top + window.scrollY);
+      if (top > 0) node.style.setProperty('--wd-chrome', `${top}px`);
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    // 首帧布局可能还没落定（字体 / 描述文案的行数会变）—— 再补一次
+    const raf = window.requestAnimationFrame(measure);
+    let observer = null;
+    if (typeof ResizeObserver === 'function') {
+      observer = new ResizeObserver(measure);
+      observer.observe(document.body);
+    }
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.cancelAnimationFrame(raf);
+      observer?.disconnect();
+    };
+  }, [work, current]);
+
   if (isVibeToken) {
     const label = current?.document ? artifactGroup(current.kind).label : '互动网页';
     return <main className="inner">
@@ -149,7 +179,10 @@ export function WorkDetailPage({ api }) {
                 不要有滚动」—— 网页作品这一档改 `--screen`：**占满一屏**（视口高 − 这一页的头尾），
                 里面 `fill` 铺满、原生比例、无缩放；作品自身按容器自适应、滚动条只在作品**内部**
                 （页面本身不再滚）。文档/空态那一档保持原来的 62vh 固定舞台。 */}
-            <div className={`c-replay__stage${current && !current.document ? ' c-replay__stage--screen' : ''}`}>
+            <div
+              ref={stageRef}
+              className={`c-replay__stage${current && !current.document ? ' c-replay__stage--screen' : ''}`}
+            >
               {views.length > 1 ? (
                 <div className="c-file-tabs">
                   {views.map((item) => (

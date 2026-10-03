@@ -991,7 +991,9 @@ try {
   });
   console.log(`  · 点「分享这个主页」：反馈可见 ${shareFeedback.visible ? '是' : '否'}、文案「${shareFeedback.text.slice(0, 60)}」`);
   if (!shareFeedback.visible) problems.push('主页：⭐ 点「分享」面板收起时也要有可见反馈（用户 2026-09-27 报的「没反应」）');
-  if (!/\/u\/ust_/.test(shareFeedback.text)) problems.push(`主页：分享反馈里应当带上主页地址（实际「${shareFeedback.text.slice(0, 80)}」）`);
+  // ⭐ 2026-10-03 口径（§九十七）：复制成功后**只提示「链接已复制」** —— 原来把一整串地址倒出来，
+  //    用户原话「实际这个操作根本不可能用」。所以这里钉的是这句人话，**不再**要求反馈里带 `/u/ust_`。
+  if (!/链接已复制/.test(shareFeedback.text)) problems.push(`主页：分享反馈应当是「链接已复制」这种能照做的一句（实际「${shareFeedback.text.slice(0, 80)}」）`);
   // 点头像 → 设置面板
   await page.locator('[data-testid="home-avatar"]').first().click();
   await settle();
@@ -1133,29 +1135,33 @@ try {
   await page.setViewportSize({ width: 1440, height: 960 });
   await settle();
 
-  // 静态钉子（**2026-09-30 新口径**）：对外看作品的详情页要开 `responsive`（不缩放、按容器宽度自适应）
-  // 且不再套「作品预览」面板。用户原话：「图1 不管是电脑端还是手机端，有办法自适应吗？像图2 这种界面，
-  // 怎么玩？那么小的界面。为什么非要用作品预览把作品框上呢？不需要这些东西。」
-  // ⚠️ 旧口径（2026-09-27）钉的是"必须开 fitContent"——那是"固定舞台 + 整体缩放"那一版的配套；
-  //    缩放实测把 640 逻辑宽的页面压到 0.52，手机上根本点不着，已被用户否掉。
+  // 静态钉子（**2026-10-03 新口径**）：网页作品这一档要 `fill`（铺满一屏、原生比例、不缩放），
+  // 舞台由页面给**确定高度**（`--screen`），**页面本身不滚**（作品自己的滚动条在 iframe 内部）。
+  // 用户原话（§九十五）：「我不希望网页作品可滚动，体验非常差……**必须是自适应的，不要有滚动**」。
+  // ⚠️ 两版老口径都别退回去：2026-09-27 钉过 fitContent（固定舞台 + 整体缩放，被"那么小的界面"否掉）；
+  //    2026-09-30 钉过 responsive（宽度跟容器、**高度跟内容** ⇒ 页面自己变长，用户看到的还是"在滚"）。
   for (const file of ['apps/website/src/pages/WorkDetail.jsx']) {
     const source = fs.readFileSync(path.join(root, file), 'utf8');
-    if (!/<ReplayPreview[^>]*responsive/.test(source)) {
-      problems.push(`${file}：作品预览应当开着 responsive（用户 2026-09-30 口径：不要塞在缩放的小框里）`);
+    if (!/<ReplayPreview[^>]*\bfill\b/.test(source)) {
+      problems.push(`${file}：网页作品预览应当开着 fill（用户 2026-10-03 口径：铺满一屏、不缩放、不滚动）`);
+    }
+    if (/<ReplayPreview[^>]*responsive/.test(source)) {
+      problems.push(`${file}：不该再开 responsive（那一版高度跟着内容长，页面自己会滚 —— 已被用户否掉）`);
     }
     if (!/<ReplayPreview[^>]*chrome=\{false\}/.test(source)) {
       problems.push(`${file}：看作品不该再套「作品预览」面板（要 chrome={false}）`);
     }
+    if (!/c-replay__stage--screen/.test(source)) {
+      problems.push(`${file}：网页作品那一档的舞台要 --screen（占满一屏，见 pages.css）`);
+    }
   }
 
-  // ── ⑤g 学生自己的**网页作品**点开：要能玩，且**内层不能出现滚动条**（口径㉕，用户报的
-  //    「作品预览里出现滚动条」）。做法是"内层按不小于 640×768 的逻辑视口渲染、再整体等比缩放到
-  //    可用空间"，所以这里断言的是**结构**：iframe 的布局尺寸 ≥640×768、带一个 ≤1 的 scale、
-  //    外面套着裁剪的舞台。内层文档自己的滚动条在外层读不到（沙箱是 opaque origin），
-  //    所以另存截图 20-work-preview 供人眼复核。
-  // ⭐ 2026-09-27 新增：把**内层自报的内容高度**记下来（见 vibecodingProject.js 的 PREVIEW_HEIGHT_BRIDGE）。
-  //    为什么要它：内层是 opaque origin 的沙箱，外层**读不到**内层文档，所以"内层会不会出现滚动条"
-  //    只能靠"内层视口高度 ≥ 内容高度"这条不变式来判 —— 而内容高度只有内层自己知道。
+  // ── ⑤g 学生自己的**网页作品**点开：要能玩，且**页面自己不许出现滚动条**（用户 2026-10-03 口径：
+  //    「我不希望网页作品可滚动……不要有滚动」）。做法是**占满一屏**（舞台 `--screen` = 视口高 − 页头页脚）
+  //    + 里面 `fill` 铺满、原生比例、不缩放；**作品自己的滚动条在 iframe 内部**（沙箱是 opaque origin，
+  //    外层读不到内层文档），所以这里判的是**外层**的几条不变式：不缩放、宽度＝容器宽、整页不滚。
+  // ⭐ 内层自报的内容高度仍然收着（见 vibecodingProject.js 的 PREVIEW_HEIGHT_BRIDGE）——
+  //    它现在用来证明"学生页真的跑起来了"，不再用来判"内层会不会滚"（那一档内层本来就允许滚）。
   await page.addInitScript(() => {
     window.__previewHeights = [];
     window.addEventListener('message', (event) => {
@@ -1177,6 +1183,7 @@ try {
       hasStage: Boolean(stage),
       stageOverflow: stage ? getComputedStyle(stage).overflow : null,
       stageH: stage ? Math.round(stage.getBoundingClientRect().height) : 0,
+      stageTop: stage ? Math.round(stage.getBoundingClientRect().top) : 0,
       stageClass: stage ? String(stage.className) : '(无舞台)',
       // 容器宽度 = iframe 的父元素（responsive 档要求 iframe 宽度＝它，学生页的媒体查询才会生效）
       containerW: frame.parentElement ? Math.round(frame.parentElement.getBoundingClientRect().width) : 0,
@@ -1193,31 +1200,33 @@ try {
   console.log(`  · 作品预览：舞台=${viewer.hasStage}（高 ${viewer.stageH}px，class「${viewer.stageClass}」）容器宽=${viewer.containerW} iframe=${viewer.layoutW}×${viewer.layoutH} transform=${viewer.transform} 内层自报内容高=${viewer.reportedHeight}`);
   if (!viewer.found) problems.push('作品详情：找不到作品预览的 iframe');
   else {
-    // ⭐ 2026-09-30 新口径（用户原话见上面静态钉子的注释）：**不缩放 + 宽度跟容器 + 高度跟内容**。
-    //    旧口径那三条（逻辑视口 ≥640×768 / 必须带 scale / 舞台固定 62~78vh 且不许跟内容长）是
-    //    "塞进小框"那一版的配套，已被用户否掉 —— 这里整段换成新不变式。
+    // ⭐ **2026-10-03 新口径**（用户原话见上面静态钉子）：**铺满一屏、不缩放、不滚动**。
+    //    留意与上一版的分工：`responsive` 是"高度跟着内层内容长"（页面自己变长 ⇒ 用户看到的还是滚），
+    //    现在是"给一屏高度、里面铺满"——所以**内层自报高度不再是"必须 ≥ 内容高"**，
+    //    作品自己的滚动条就该在 iframe **内部**（沙箱 opaque origin，外层本来就读不到内层）。
+    //    外层不变式只剩三条：不缩放、宽度＝容器宽、**这一屏不滚**。
     if (/scale\(/.test(String(viewer.transform))) {
       problems.push(`作品预览：不该再整体缩放了（transform 实际「${viewer.transform}」）—— 用户 2026-09-30 口径要"自适应"`);
     }
     if (viewer.containerW && Math.abs(viewer.layoutW - viewer.containerW) > 4) {
       problems.push(`作品预览：iframe 宽度应当等于容器宽度（容器 ${viewer.containerW}，实际 ${viewer.layoutW}）—— 宽度不跟容器，学生页的媒体查询就不生效`);
     }
-    // ⭐⭐ 用户 2026-09-27 报的那根滚动条，就是这条不变式被破坏：
-    //    内层视口比内容矮 → 内层文档自己滚起来 → 右侧出现滚动条。（口径变了，这条不变式**保留**）
+    // 桥要活着（内层自报高度存在）——它同时是"学生页真的跑起来了"的证据
     if (!viewer.reportedHeight) problems.push('作品预览：内层没有自报高度（PREVIEW_HEIGHT_BRIDGE 没装上？）');
-    else if (viewer.layoutH + 1 < viewer.reportedHeight) {
-      problems.push(`作品预览：⭐ 内层视口 ${viewer.layoutH} 比内容 ${viewer.reportedHeight} 矮 —— 内层会出现滚动条（用户 2026-09-27 报的那根）`);
-    }
-    // 舞台必须是**流动容器**（class 带 --flow、不裁剪、高度＝作品高度）。
-    // ⚠️ 旧口径要求的正是"舞台不跟内容长"；现在反过来 —— 作品铺开，页面该长就长。
-    if (!/--flow/.test(viewer.stageClass)) problems.push(`作品预览：舞台应当是流动容器（class 实际「${viewer.stageClass}」）—— 固定高度的舞台就是"小框"的来处`);
-    if (viewer.stageOverflow !== 'visible') problems.push(`作品预览：流动舞台不该裁剪（overflow 实际 ${viewer.stageOverflow}）`);
-    if (Math.abs(viewer.stageH - viewer.layoutH) > 8) problems.push(`作品预览：舞台高度（${viewer.stageH}）应当就是作品高度（${viewer.layoutH}）`);
-    // 整页高度：**口径变了**（作品铺开 ⇒ 页面会长，这是用户要的），所以不再钉 1.9 倍那种比值；
-    // 只留一条"防跑飞"的上限 —— 防的是"内容随视口一起长"那类自反馈（实测能把页面撑到几万像素）。
+    // 舞台必须是"占满一屏"的那一档（`--screen`：视口高 − 页头页脚，不裁剪外层滚动）
+    if (!/--screen/.test(viewer.stageClass)) problems.push(`作品预览：舞台应当是"占满一屏"的容器（class 实际「${viewer.stageClass}」）—— 见 pages.css 的 --screen`);
+    if (viewer.stageOverflow !== 'hidden') problems.push(`作品预览：一屏式舞台不该让外层滚动（overflow 实际 ${viewer.stageOverflow}）`);
     const viewportH = await page.evaluate(() => window.innerHeight);
+    if (viewer.stageH > viewportH) problems.push(`作品预览：舞台高 ${viewer.stageH}px 比视口 ${viewportH}px 还高 —— 一屏式舞台不该超过一屏`);
+    // ⭐ 这条才是用户 2026-10-03 那句「不要有滚动」的落点：**作品本身不超一屏** ——
+    //    舞台（顶 + 高）装得进首屏；页面往下当然还有页脚那些东西（返回广场/说明），
+    //    但"作品"这一屏是完整的、不需要滚着看。⚠️ 别把整页高钉死：那会把页脚也一起否掉。
+    if (viewer.stageTop + viewer.stageH > viewportH + 8) {
+      problems.push(`作品预览：舞台（顶 ${viewer.stageTop} + 高 ${viewer.stageH}）超出了一屏 ${viewportH}px —— 作品该在一屏里看全（用户口径："不要有滚动"）`);
+    }
     const pageHeight = await page.evaluate(() => document.documentElement.scrollHeight);
-    console.log(`  · 整页高度 ${pageHeight}px（视口 ${viewportH}px，比值 ${(pageHeight / viewportH).toFixed(2)}）`);
+    console.log(`  · 整页高度 ${pageHeight}px（视口 ${viewportH}px；舞台顶 ${viewer.stageTop} + 高 ${viewer.stageH} ⇒ 作品占首屏的 ${Math.round(((viewer.stageTop + viewer.stageH) / viewportH) * 100)}%，其余 ${pageHeight - viewer.stageTop - viewer.stageH}px 是页脚那些）`);
+    // 兜底那条「防跑飞」保留（内容随视口一起涨的自反馈，实测能把页面撑到几万像素）
     if (pageHeight > viewportH * 12) problems.push(`作品详情：整页高 ${pageHeight}px（视口的 ${(pageHeight / viewportH).toFixed(2)} 倍）—— 像是"内容随视口一起长"的自反馈，查 PREVIEW_MAX_HEIGHT 那道闸`);
     if (!/allow-scripts/.test(viewer.sandbox) || /allow-same-origin/.test(viewer.sandbox)) problems.push(`作品预览：沙箱属性不对（${viewer.sandbox}）`);
     // 顺手量一下右上角那排按钮：`.c-page__actions` 是 `flex:none` **不换行**，按钮一多就会挤到一起
