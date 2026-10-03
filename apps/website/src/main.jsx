@@ -1491,7 +1491,10 @@ function Handbook() {
             <h2>{workLines.map((line, index) => <span className={index === 1 ? 'hb-outline' : ''} key={index}>{line}</span>)}</h2>
             <span className="hb-intro__rule" />
           </article>
-          {cards.map((card, index) => <article className="hb-card hb-interactive" key={index + '-' + (card.title || '')}>
+          {cards.map((card, index) => <article className="hb-card hb-interactive" key={index + '-' + (card.title || '')}
+            /* ⭐ 2026-10-03：图完整显示（contain）后空档用**同图的模糊副本**兜底 —— 背景图写在行内样式里，
+               CSS 里的 `::before` 负责把它模糊+压暗（见 .hb-card 那段注释）。 */
+            style={card.imageUrl ? { backgroundImage: `url("${String(card.imageUrl).replace(/"/g, '%22')}")` } : undefined}>
             <img src={card.imageUrl} alt={card.imageAlt || card.title || ''} loading="lazy" />
             <div className="hb-card__meta">
               <span>{String(index + 1).padStart(2, '0')}</span>
