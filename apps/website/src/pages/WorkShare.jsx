@@ -64,9 +64,9 @@ export function WorkSharePage() {
   const initial = String(student?.name || '同学').slice(0, 1);
 
   return <main className="inner share-page">
-    {/* 头：品牌 + 「学生来自：X机构」（用户口径点名要这一行） */}
+    {/* 移动端分享页只保留一处品牌标识：扫码页不再渲染官网完整顶栏。 */}
     <header className="share-page__head">
-      <BrandLogo height={30} />
+      <Link className="share-page__brand" to="/" aria-label="返回灵动 AI 首页"><BrandLogo height={28} /></Link>
       {org?.name ? <p className="share-page__from"><Icon name="book" /> 学生来自：{org.name}</p> : null}
     </header>
 
@@ -116,7 +116,7 @@ export function WorkSharePage() {
  *    所以网页这一件不再只给一个「打开体验」的跳转按钮 —— 服务端把**这一份产物文档**一起给过来
  *    （`document.files` / `document.entry`，里面的私有素材已换成这一枚码专属的免登录代理），
  *    这里直接跑起来：扫码看到的就是作品本身，随手就能点着玩（沙箱里 localStorage 有替身、脚本能跑）。
- *    跳转那条路降级成下面一行小字（"在完整页面里打开"），要回到主页/广场的人才用得上。
+ *    扫码页只保留就地体验，不再提供「在完整页面里打开」——手机链路里它会造成二次跳转和视觉重复。
  */
 function PieceView({ piece, document: doc }) {
   if (!piece) return <p className="muted">这一件已经不在最新版本里了。</p>;
@@ -135,8 +135,6 @@ function PieceView({ piece, document: doc }) {
       {playable ? null : (openUrl
         ? <p className="share-piece__play"><Link className="button" to={openUrl}>打开体验 · 直接玩 <b>↗</b></Link></p>
         : <p className="muted">这一件是网页作品，用电脑/手机打开就能玩。</p>)}
-      {/* 就地能玩之后，跳转那条路只留一行小字（桌面端想要大屏/带导航的那份时才点） */}
-      {playable && openUrl ? <p className="share-piece__more"><Link to={openUrl}>在完整页面里打开 ↗</Link></p> : null}
     </>;
   }
   // 文档类（PPT / Word / Excel / 文本件）

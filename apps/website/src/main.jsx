@@ -121,6 +121,17 @@ function Header({ userBadge, signedIn }){
 function FooterLink({ to, href, children }) {
   return to ? <Link to={to}>{children}</Link> : <a href={href}>{children}</a>;
 }
+function ShareFooter(){
+  return <footer className="share-footer" aria-label="合规信息">
+    <Link className="share-footer__brand" to="/" aria-label="返回灵动 AI 首页"><Logo /></Link>
+    <div className="share-footer__legal">
+      <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">鄂ICP备2025162545号-2</a>
+      <a href="https://beian.mps.gov.cn/#/query/webSearch?code=42011102006378" target="_blank" rel="noreferrer">鄂公网安备42011102006378号</a>
+      <span>鄂B2-20260353</span>
+      <span>(鄂)字第03159号</span>
+    </div>
+  </footer>;
+}
 function Footer(){
   const t = useT();
   return <footer className="site-footer">
@@ -2219,9 +2230,8 @@ export function App(){
         <Route path='/my-stats' element={<Navigate to='/learn' replace/>}/>
         <Route path='*' element={<Home/>}/>
       </Routes>
-      {/* ⚠️ 2026-09-23 用户口径：「官网下方也要有页脚」—— 这里原来把首页排除了
-              （`loc.pathname !== '/'`），所以首页到底也没有页脚。现在所有非全屏页（含首页）都有。 */}
-      {!isFullPage && <Footer/>}
+      {/* 扫码作品分享页走紧凑合规页脚，不带官网的长导航页脚。 */}
+      {!isFullPage && (loc.pathname.startsWith('/s/') ? <ShareFooter/> : <Footer/>)}
     </div>
   );
 }

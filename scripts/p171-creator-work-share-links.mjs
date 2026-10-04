@@ -360,6 +360,27 @@ console.log('⑫ 网页作品（入口 + 引用文件）只算一件，零件不
   server.kill('SIGTERM');
 }
 
+/* ── ⑦ 移动端分享页视觉口径（2026-10-04 用户图1/2/3/4） ────────────────
+   图1：扫码后出现两份「灵动 AI」；图2：「在完整页面里打开」没有用；图3：页脚很长；图4：整体需要精致、移动优先。 */
+{
+  const pageSource = fs.readFileSync(new URL('../apps/website/src/pages/WorkShare.jsx', import.meta.url), 'utf8');
+  const appSource = fs.readFileSync(new URL('../apps/website/src/main.jsx', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../apps/website/src/styles.css', import.meta.url), 'utf8');
+  const pageWithoutComments = stripComments(pageSource);
+  check('⑦ 分享页只保留一处品牌 header（品牌包在 share-page__brand，不能再套官网整套顶栏）',
+    /className="share-page__brand"/.test(pageSource) && !/在完整页面里打开/.test(pageWithoutComments));
+  check('⑦ 分享页明确不渲染「在完整页面里打开」', !/share-piece__more/.test(pageWithoutComments));
+  check('⑦ 分享页是移动优先的紧凑布局（窄宽度/两按钮网格/不复用长官网 footer）',
+    /\.share-page\s*\{[^}]*max-width:\s*620px/.test(css)
+    && /\.share-page__actions\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*1fr\s+1fr/.test(css)
+    && /className="share-footer"/.test(appSource));
+  const footerBegin = appSource.indexOf('function ShareFooter');
+  const footerEnd = appSource.indexOf('function Footer(){');
+  check('⑦ 分享页脚只放合规信息（不带官网导航列与语言切换器）',
+    /className="share-footer__legal"/.test(appSource) && footerBegin >= 0 && footerEnd > footerBegin
+    && !/LanguageSwitcher/.test(appSource.slice(footerBegin, footerEnd)));
+}
+
 // ⑩ 静态：三处「分享」入口的**位置**必须同款（用户 2026-09-30 点名要"右上角"）。
 //    ⚠️ 2026-10-01：机构端**课堂**里那份原来落在弹窗底部按钮行（当时那个弹窗没有页眉插槽）——
 //    已经给弹窗加了 `headerAction` 并挪到右上角；这条钉住别再掉回去。
