@@ -139,6 +139,14 @@ check('⑥ 徽标是真 PNG（不是 HTML/空文件）',
   iconBytes.length > 200 && iconBytes.slice(1, 4).toString() === 'PNG',
   `前 8 字节 ${iconBytes.slice(0, 8).toString('hex')}，${iconBytes.length} 字节`);
 
+// ⭐ 2026-10-04 用户口径「灵动ai的logo居中」：`.ft-brand` 从 space-between（logo 左 / 版权右）
+//    改成**居中堆叠**（logo 一行居中、版权跟在下面），与备案行（.ft-filings）同一条中轴。
+//    钉住：不能退回 space-between，也不能退回水平排布。
+const brandRule = (css.match(/\.site-footer \.ft-brand\{[^}]*\}/) || [''])[0];
+check('⑦ logo 行居中堆叠（用户 2026-10-04：「灵动ai的logo居中」）',
+  /flex-direction:column/.test(brandRule) && /align-items:center/.test(brandRule) && !/space-between/.test(brandRule),
+  brandRule.slice(0, 120));
+
 console.log('');
 if (failures) { console.log(`✗ p132 有 ${failures} 处不符合预期`); process.exit(1); }
 console.log('✓ p132 页脚（含首页）：全部通过');
