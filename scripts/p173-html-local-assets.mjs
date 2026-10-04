@@ -77,13 +77,13 @@ let serverLog = '';
 server.stdout.on('data', (x) => { serverLog += x; });
 server.stderr.on('data', (x) => { serverLog += x; });
 
-const api = async (pathname, { method = 'GET', token, body, raw = false } = {}) => {
+const api = async (pathname, { method = 'GET', token, body, raw = false, headers = {} } = {}) => {
   const response = await fetch(`http://127.0.0.1:${PORT}${pathname}`, {
     method,
-    headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    headers: { ...headers, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (raw) return { status: response.status, buffer: Buffer.from(await response.arrayBuffer()), type: response.headers.get('content-type') || '', disposition: response.headers.get('content-disposition') || '' };
+  if (raw) return { status: response.status, buffer: Buffer.from(await response.arrayBuffer()), type: response.headers.get('content-type') || '', disposition: response.headers.get('content-disposition') || '', contentRange: response.headers.get('content-range') || '', acceptRanges: response.headers.get('accept-ranges') || '' };
   const payload = await response.json().catch(() => ({}));
   return { status: response.status, data: payload?.data ?? payload };
 };
@@ -91,11 +91,13 @@ const api = async (pathname, { method = 'GET', token, body, raw = false } = {}) 
 // 素材字节：一张 1×1 PNG + 一个最小 mp4（`ftyp` 开头，过得了服务端的魔术字节嗅探）
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6360000002000154a24f5f0000000049454e44ae426082', 'hex');
 const MP4 = Buffer.concat([Buffer.from('00000018667479706d703432', 'hex'), Buffer.from('0000000066726565', 'hex'), Buffer.from('000000006d646174', 'hex'), Buffer.alloc(64, 0x11)]);
+const WAV = Buffer.concat([Buffer.from('524946462400000057415645666d74201000000001000100401f0000803e0000020010006461746100000000', 'hex'), Buffer.alloc(8, 0x22)]);
 const ENTRY = [
   '<!doctype html><html><head><meta charset="utf-8"><title>星光战甲兽</title></head><body>',
   '<h1>我的星光战甲兽</h1>',
   '<img src="assets/character_mecha.png" alt="立绘">',
   '<video id="tfVideo" controls><source src="assets/transform.mp4" type="video/mp4"></video>',
+  '<audio id="bgAudio" controls src="assets/theme.wav"></audio>',
   '</body></html>',
 ].join('');
 
@@ -125,9 +127,10 @@ try {
       { name: 'index.html', content: ENTRY, binary: false },
       { name: 'assets/character_mecha.png', content: PNG.toString('base64'), binary: true },
       { name: 'assets/transform.mp4', content: MP4.toString('base64'), binary: true },
+      { name: 'assets/theme.wav', content: WAV.toString('base64'), binary: true },
     ],
   });
-  check('① 带子目录的素材能随作品提交（assets/*.png + assets/*.mp4）',
+  check('① 带子目录的素材能随作品提交（assets/*.png + assets/*.mp4 + assets/*.wav）',
     submitted.status === 200, JSON.stringify(submitted.data).slice(0, 300));
   const workId = submitted.data?.id || '';
 
@@ -200,15 +203,15 @@ try {
 
   /* ───────── ② 引用被改写成私有下载地址 ───────── */
   const html = String(files['index.html'] || '');
-  check('② 入口 HTML 里的相对引用被改写成私有下载地址（图 + 视频都改到）',
-    (html.match(/\/api\/student\/file-assets\/[\w-]+\/download/g) || []).length === 2 && !/assets\/character_mecha\.png|assets\/transform\.mp4/.test(html),
-    html.slice(0, 400));
+  check('② 入口 HTML 里的本地引用改写成私有下载地址（图片、视频、音频各一条）',
+    (html.match(/\/api\/student\/file-assets\/[\w-]+\/download/g) || []).length === 3 && !/assets\/character_mecha\.png|assets\/transform\.mp4|assets\/theme\.wav/.test(html),
+    html.slice(0, 500));
 
   /* ───────── ③ 快照的准入名单 ───────── */
   const embeddedAssets = Array.isArray(entryArtifact.embeddedAssets) ? entryArtifact.embeddedAssets : [];
   const embeddedImages = Array.isArray(entryArtifact.embeddedImages) ? entryArtifact.embeddedImages : [];
-  check('③ 入口产物带 embeddedAssets（图 + 视频各一条）', embeddedAssets.length === 2, JSON.stringify(entryArtifact).slice(0, 300));
-  check('③ embeddedImages 只收图片那一半（PPT 那套按图读，别混进视频）', embeddedImages.length === 1, JSON.stringify(embeddedImages));
+  check('③ 入口产物带 embeddedAssets（图、视频、音频各一条）', embeddedAssets.length === 3, JSON.stringify(entryArtifact).slice(0, 300));
+  check('③ embeddedImages 只收图片那一半（PPT 那套按图读，别混进视频和音频）', embeddedImages.length === 1, JSON.stringify(embeddedImages));
   check('④ coverFileId 在快照里活着（客户端截的封面）', Boolean(entryArtifact.coverFileId), JSON.stringify(entryArtifact).slice(0, 200));
 
   /* ───────── ④/⑤ 机构端（老师后台）详情 + 取图/取视频 ───────── */
@@ -254,14 +257,55 @@ try {
   //    顺序由服务端拼装顺序决定 —— 按顺序取会把封面当成"视频"来断言（本守卫第一版就这么错过一次）。
   const imageAsset = await arow("SELECT id FROM file_assets WHERE mime_type='image/png' AND file_name='character_mecha.png'");
   const videoAsset = await arow("SELECT id FROM file_assets WHERE mime_type='video/mp4' AND file_name='transform.mp4'");
-  check('⑤ imageUrls 里同时有那张立绘和那段变身视频',
-    Boolean(imageUrls[imageAsset?.id]) && Boolean(imageUrls[videoAsset?.id]), JSON.stringify(Object.keys(imageUrls)));
+  const audioAsset = await arow("SELECT id FROM file_assets WHERE mime_type='audio/wav' AND file_name='theme.wav'");
+  check('⑤ imageUrls 里同时有立绘、变身视频和背景音频',
+    Boolean(imageUrls[imageAsset?.id]) && Boolean(imageUrls[videoAsset?.id]) && Boolean(imageUrls[audioAsset?.id]), JSON.stringify(Object.keys(imageUrls)));
+  const adminToken = await login('root', 'admin123');
+  const adminDetail = await api(`/api/admin/vibecoding-works/${encodeURIComponent(workId)}`, { token: adminToken });
+  const adminImageUrls = adminDetail.data?.imageUrls || {};
+  check('⑤ 平台端作品详情也包含视频和音频代理地址',
+    Boolean(adminImageUrls[videoAsset?.id]) && Boolean(adminImageUrls[audioAsset?.id]), JSON.stringify(Object.keys(adminImageUrls)));
+  const adminVideoRange = adminImageUrls[videoAsset?.id] ? await api(adminImageUrls[videoAsset.id], { token: adminToken, raw: true, headers: { range: 'bytes=0-7' } }) : { status: 0 };
+  check('⑤ 平台端视频预览支持 inline Range（206 + video/mp4 + Content-Range）',
+    adminVideoRange.status === 206 && adminVideoRange.type.startsWith('video/mp4') && /inline/i.test(adminVideoRange.disposition)
+      && adminVideoRange.contentRange.startsWith('bytes 0-7/') && adminVideoRange.buffer.length === 8,
+    `status=${adminVideoRange.status} type=${adminVideoRange.type} disposition=${adminVideoRange.disposition} range=${adminVideoRange.contentRange}`);
   const imageBytes = imageUrls[imageAsset?.id] ? await api(imageUrls[imageAsset.id], { token: orgToken, raw: true }) : { status: 0 };
   const videoBytes = imageUrls[videoAsset?.id] ? await api(imageUrls[videoAsset.id], { token: orgToken, raw: true }) : { status: 0 };
   check('⑤ 机构端真取到图的字节（与上传逐字一致）',
     imageBytes.status === 200 && Buffer.compare(imageBytes.buffer, PNG) === 0, `status=${imageBytes.status} bytes=${imageBytes.buffer?.length}`);
   check('⑤ 机构端真取到视频的字节',
     videoBytes.status === 200 && Buffer.compare(videoBytes.buffer, MP4) === 0, `status=${videoBytes.status} bytes=${videoBytes.buffer?.length}`);
+  const orgVideoRange = imageUrls[videoAsset?.id] ? await api(imageUrls[videoAsset.id], { token: orgToken, raw: true, headers: { range: 'bytes=0-7' } }) : { status: 0 };
+  check('⑤ 机构端视频预览支持 inline Range（206 + video/mp4 + Content-Range）',
+    orgVideoRange.status === 206 && orgVideoRange.type.startsWith('video/mp4') && /inline/i.test(orgVideoRange.disposition)
+      && orgVideoRange.contentRange.startsWith('bytes 0-7/') && orgVideoRange.buffer.length === 8,
+    `status=${orgVideoRange.status} type=${orgVideoRange.type} disposition=${orgVideoRange.disposition} range=${orgVideoRange.contentRange}`);
+  const orgAudioRange = imageUrls[audioAsset?.id] ? await api(imageUrls[audioAsset.id], { token: orgToken, raw: true, headers: { range: 'bytes=0-7' } }) : { status: 0 };
+  check('⑤ 机构端音频预览支持 inline Range（206 + audio/wav + Content-Range）',
+    orgAudioRange.status === 206 && orgAudioRange.type.startsWith('audio/wav') && /inline/i.test(orgAudioRange.disposition)
+      && orgAudioRange.contentRange.startsWith('bytes 0-7/') && orgAudioRange.buffer.length === 8,
+    `status=${orgAudioRange.status} type=${orgAudioRange.type} disposition=${orgAudioRange.disposition} range=${orgAudioRange.contentRange}`);
+
+  /* ───────── ⑤b 官网已发布作品：公开快照和公开媒体代理 ───────── */
+  const publicToken = `p173-published-${workId.slice(-12)}`;
+  await aq('UPDATE vibecoding_submissions SET is_public=1, share_token=? WHERE id=?', [publicToken, workId]);
+  const publicDetail = await api(`/api/public/vibecoding-works/${encodeURIComponent(publicToken)}`);
+  const publicHtml = String(publicDetail.data?.files?.['index.html'] || '');
+  check('⑤b 官网公开详情把入口 HTML 的视频和音频改成作品专属代理',
+    publicDetail.status === 200 && publicHtml.includes(`/api/public/vibecoding-works/${publicToken}/images/${videoAsset?.id}`)
+      && publicHtml.includes(`/api/public/vibecoding-works/${publicToken}/images/${audioAsset?.id}`)
+      && !publicHtml.includes('/api/student/file-assets/'), publicHtml.slice(0, 500));
+  const publicVideo = videoAsset?.id ? await api(`/api/public/vibecoding-works/${encodeURIComponent(publicToken)}/images/${videoAsset.id}`, { raw: true, headers: { range: 'bytes=0-7' } }) : { status: 0 };
+  check('⑤b 官网视频代理支持 inline Range（206 + video/mp4 + Content-Range）',
+    publicVideo.status === 206 && publicVideo.type.startsWith('video/mp4') && /inline/i.test(publicVideo.disposition)
+      && publicVideo.contentRange.startsWith('bytes 0-7/') && publicVideo.buffer.length === 8,
+    `status=${publicVideo.status} type=${publicVideo.type} disposition=${publicVideo.disposition} range=${publicVideo.contentRange}`);
+  const publicAudio = audioAsset?.id ? await api(`/api/public/vibecoding-works/${encodeURIComponent(publicToken)}/images/${audioAsset.id}`, { raw: true, headers: { range: 'bytes=0-7' } }) : { status: 0 };
+  check('⑤b 官网音频代理支持 inline Range（206 + audio/wav + Content-Range）',
+    publicAudio.status === 206 && publicAudio.type.startsWith('audio/wav') && /inline/i.test(publicAudio.disposition)
+      && publicAudio.contentRange.startsWith('bytes 0-7/') && publicAudio.buffer.length === 8,
+    `status=${publicAudio.status} type=${publicAudio.type} disposition=${publicAudio.disposition} range=${publicAudio.contentRange}`);
 
   /* ───────── ⑥/⑦ 分享页：网页件就地可玩 ───────── */
   const shared = await api('/api/student/share-links', { method: 'POST', token, body: { source: 'VIBECODING', workId, pieceKey: 'artifact:index.html' } });
@@ -280,6 +324,17 @@ try {
   const publicBytes = publicMedia ? await api(`/api/public/share-links/${encodeURIComponent(code)}/media/${publicMedia}`, { raw: true }) : { status: 0 };
   check('⑦ 不带 cookie 也能取到那一件的素材字节（沙箱里没有 cookie）',
     publicBytes.status === 200 && Buffer.compare(publicBytes.buffer, PNG) === 0, `status=${publicBytes.status} bytes=${publicBytes.buffer?.length}`);
+  const publicVideoPath = `/api/public/share-links/${encodeURIComponent(code)}/media/${videoAsset?.id || ''}`;
+  const publicVideoRange = videoAsset?.id ? await api(publicVideoPath, { raw: true, headers: { range: 'bytes=0-7' } }) : { status: 0 };
+  check('⑦ 分享码视频代理支持 inline Range（206 + video/mp4 + Content-Range）',
+    publicVideoRange.status === 206 && publicVideoRange.type.startsWith('video/mp4') && /inline/i.test(publicVideoRange.disposition)
+      && publicVideoRange.contentRange.startsWith('bytes 0-7/') && publicVideoRange.buffer.length === 8,
+    `status=${publicVideoRange.status} type=${publicVideoRange.type} disposition=${publicVideoRange.disposition} range=${publicVideoRange.contentRange}`);
+  const shareAudioRange = audioAsset?.id ? await api(`/api/public/share-links/${encodeURIComponent(code)}/media/${audioAsset.id}`, { raw: true, headers: { range: 'bytes=0-7' } }) : { status: 0 };
+  check('⑦ 分享码音频代理支持 inline Range（206 + audio/wav + Content-Range）',
+    shareAudioRange.status === 206 && shareAudioRange.type.startsWith('audio/wav') && /inline/i.test(shareAudioRange.disposition)
+      && shareAudioRange.contentRange.startsWith('bytes 0-7/') && shareAudioRange.buffer.length === 8,
+    `status=${shareAudioRange.status} type=${shareAudioRange.type} disposition=${shareAudioRange.disposition} range=${shareAudioRange.contentRange}`);
   check('⑩ 分享卡也带 missingAssets（空 = 素材齐）',
     Array.isArray(card.data?.missingAssets) && card.data.missingAssets.length === 0, JSON.stringify(card.data?.missingAssets));
 

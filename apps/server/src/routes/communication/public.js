@@ -23,7 +23,7 @@ import { Readable } from 'node:stream';
 import { assertTransition } from '../../services/domainState.js';
 import { plazaCategoryLabelOf, plazaCategoryMap, plazaCategoryOf } from '../../services/plazaCategories.js';
 import { WEBSITE_CONTENT_KEYS } from '../../services/websiteContentKeys.js';
-import { prepareFileDownload, prepareFilePreview } from '../fileAssets.js';
+import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from '../fileAssets.js';
 import { kindForName } from '../../services/vibecodingArtifacts.js';
 import {
   missingLocalAssets,
@@ -482,6 +482,12 @@ export async function handlePublicCommunication(ctx) {
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+    if (link.source === 'VIBECODING') {
+      const mime = String(file.mime_type || '').toLowerCase();
+      if (/^(image|audio|video)\//.test(mime)) {
+        return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFilePreview(ctx, file, { ossOffload: true });
+      }
+    }
     return prepareFileDownload(ctx, file);
   }
 
@@ -537,6 +543,10 @@ export async function handlePublicCommunication(ctx) {
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
     if (!/^(image|audio|video)\//.test(String(file.mime_type || ''))) throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_WORK_IMAGE_NOT_FOUND');
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+    if (source === 'VIBECODING') {
+      const mime = String(file.mime_type || '').toLowerCase();
+      return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFilePreview(ctx, file, { ossOffload: true });
+    }
     return prepareFileDownload(ctx, file);
   }
 
@@ -598,9 +608,10 @@ export async function handlePublicCommunication(ctx) {
     const file = await arow('SELECT * FROM file_assets WHERE id=?', [publicWorkImageMatch[2]]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
-    if (!String(file.mime_type || '').startsWith('image/')) throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_VIBECODING_IMAGE_NOT_FOUND');
+    const mime = String(file.mime_type || '').toLowerCase();
+    if (!/^(image|audio|video)\//.test(mime)) throw errors.notFound('作品媒体不可用', 'PUBLIC_VIBECODING_MEDIA_NOT_FOUND');
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
-    return prepareFileDownload(ctx, file);
+    return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFilePreview(ctx, file, { ossOffload: true });
   }
 
   // P5-W05: 公开课包列表（无需登录）。公开口径 = 平台自有的 PUBLISHED 且「上架课程广场」的课包

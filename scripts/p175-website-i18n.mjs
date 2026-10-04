@@ -170,6 +170,18 @@ try {
 
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  let downloadManifestMode = 'valid';
+  await page.route('**/downloads/manifest.json', async (route) => {
+    if (downloadManifestMode === 'http-error') return route.fulfill({ status: 503, body: 'unavailable' });
+    if (downloadManifestMode === 'network-error') return route.abort();
+    const body = downloadManifestMode === 'missing-windows'
+      ? { version: '1.0.0', files: { 'mac-arm64': { name: 'client.dmg', size: 100 } } }
+      : { version: '1.0.0', files: {
+        'win-x64': { name: 'client.exe', size: 100, version: '1.0.0' },
+        'mac-arm64': { name: 'client.dmg', size: 200, version: '1.0.0' },
+      } };
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  });
   const snapshot = async () => page.evaluate(() => ({
     lang: document.documentElement.getAttribute('lang'),
     nav: Array.from(document.querySelectorAll('.site-topbar nav a')).map((a) => a.textContent.trim()),
@@ -251,6 +263,21 @@ try {
   const enDownload = await pageSnapshot('/en/download');
   check('⑥ /en/download 两张安装卡片是英文',
     /Windows/.test(enDownload.text) && /Mac \(Apple silicon\)/.test(enDownload.text), enDownload.text.slice(0, 160));
+  check('⑥ /en/download 合法清单显示 Windows 下载入口',
+    /Download/.test(enDownload.text) && !/Reading installer information/.test(enDownload.text), enDownload.text.slice(0, 220));
+
+  downloadManifestMode = 'missing-windows';
+  const missingWindowsDownload = await pageSnapshot('/en/download');
+  check('⑥ /en/download 缺少 win-x64 时结束 loading 并显示错误',
+    !/Reading installer information/.test(missingWindowsDownload.text) && /manifest|unavailable|missing|installer/i.test(missingWindowsDownload.text),
+    missingWindowsDownload.text.slice(0, 260));
+
+  downloadManifestMode = 'http-error';
+  const failedDownload = await pageSnapshot('/en/download');
+  check('⑥ /en/download HTTP 失败时结束 loading 并显示错误',
+    !/Reading installer information/.test(failedDownload.text) && /HTTP 503|unavailable|installer/i.test(failedDownload.text),
+    failedDownload.text.slice(0, 260));
+  downloadManifestMode = 'valid';
 
   const enHome = await pageSnapshot('/en/');
   // 品牌名（灵动ai学院）是专有名词，**不翻**——所以这里只要求"是英文主标题 + 不含 key"。

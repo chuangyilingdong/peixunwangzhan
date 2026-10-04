@@ -867,14 +867,15 @@ export async function handleOrg(ctx) {
     if (imageId) {
       if (!allowedImages.has(imageId)) throw errors.notFound('图片不属于此作品', 'SESSION_WORK_IMAGE_NOT_FOUND');
       const file = await arow('SELECT * FROM file_assets WHERE id=?', [imageId]);
+      const mime = String(file?.mime_type || '').toLowerCase();
       if (!file || file.storage_kind !== 'INTERNAL_PROXY' || file.status !== 'ACTIVE' || !['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml',
-        // ⭐ 2026-10-01：svg 与字体也放行（用户口径「字体 woff/woff2/ttf/otf/svg 都要能上传」）——
-        //    svg 的 XSS 补偿在**发出去时的 attachment**（见 fileAssets.js 的 svgLike），不在这里挡。
         'font/woff', 'font/woff2', 'font/ttf', 'font/otf',
-        'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4', 'video/mp4', 'video/webm'].includes(String(file.mime_type || '').toLowerCase())
+        'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4', 'audio/aac', 'audio/flac', 'audio/x-flac', 'video/mp4', 'video/webm', 'video/quicktime'].includes(mime)
         || (file.owner_user_id !== work.student_id && !['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility))
-        || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品图片不可用', 'SESSION_WORK_IMAGE_NOT_FOUND');
-      return String(file.mime_type || '').toLowerCase().startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFileDownload(ctx, file);
+        || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品媒体不可用', 'SESSION_WORK_IMAGE_NOT_FOUND');
+      if (mime.startsWith('image/')) return prepareWorkImage(ctx, file);
+      if (mime.startsWith('font/')) return prepareFileDownload(ctx, file);
+      return prepareFilePreview(ctx, file, { ossOffload: true });
     }
     const base = { id: work.id, source, title: work.title, studentId: work.student_id, studentName: work.student_name || null, status: work.status, submittedAt: work.submitted_at };
     const imageUrls = Object.fromEntries([...allowedImages].map((fileId) => [fileId, `${scope.base}/${source}/${encodeURIComponent(work.id)}/images/${encodeURIComponent(fileId)}`]));

@@ -1627,15 +1627,30 @@ function Faq() {
 function Download() {
   const t = useT();
   const [manifest, setManifest] = useState(null);
+  const [downloadState, setDownloadState] = useState('loading');
   const [error, setError] = useState('');
   useEffect(() => {
     let live = true;
     fetch('/downloads/manifest.json', { cache: 'no-store' })
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
-      .then((data) => { if (live) setManifest(data); })
-      .catch((reason) => { if (live) setError(reason.message || t('faq.readError')); });
+      .then((data) => {
+        if (!live) return;
+        const file = data?.files?.['win-x64'];
+        if (!file || typeof file.name !== 'string' || !file.name.trim() || !Number.isFinite(Number(file.size)) || Number(file.size) <= 0) {
+          setError(t('download.manifestInvalid'));
+          setDownloadState('error');
+          return;
+        }
+        setManifest(data);
+        setDownloadState('ready');
+      })
+      .catch((reason) => {
+        if (!live) return;
+        setError(reason.message || t('faq.readError'));
+        setDownloadState('error');
+      });
     return () => { live = false; };
-  }, []);
+  }, [t]);
   const windows = manifest?.files?.['win-x64'] || null;
   const mac = manifest?.files?.['mac-arm64'] || null;
   const mb = (bytes) => (bytes ? (bytes / 1048576).toFixed(0) + ' MB' : '');
@@ -1650,10 +1665,10 @@ function Download() {
       <article className="dl-card">
         <Icon name="windows" size={30} />
         <h3>{t('download.win')}</h3>
-        {windows
+        {downloadState === 'ready' && windows
           ? <><p>{t('download.version')} {windows.version || manifest.version} · {mb(windows.size)}</p><a className="button" href={'/downloads/' + windows.name}>{t('download.download')}</a>
             <small>{t('download.winHint')}</small></>
-          : <><p>{error ? t('download.errorPrefix', { error }) : t('download.loading')}</p><small>{t('download.retry')}</small></>}
+          : <><p>{downloadState === 'error' ? t('download.errorPrefix', { error }) : t('download.loading')}</p><small>{t('download.retry')}</small></>}
       </article>
       <article className="dl-card">
         <Icon name="apple" size={30} />

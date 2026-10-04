@@ -260,8 +260,11 @@ export async function handleWorks(ctx, part, method) {
     const fileId = vibeImageMatch[2];
     if (!snapshotImageFileIds(submission).has(fileId)) throw errors.notFound('图片不属于此作品', 'VIBECODING_WORK_IMAGE_NOT_FOUND');
     const file = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
-    if (!file || file.status !== 'ACTIVE' || (file.owner_user_id !== submission.student_id && !['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility)) || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品图片不可用', 'VIBECODING_WORK_IMAGE_NOT_FOUND');
-    return prepareWorkImage(ctx, file);
+    const mime = String(file?.mime_type || '').toLowerCase();
+    if (!file || file.status !== 'ACTIVE' || (file.owner_user_id !== submission.student_id && !['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility)) || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品媒体不可用', 'VIBECODING_WORK_IMAGE_NOT_FOUND');
+    if (mime.startsWith('image/')) return prepareWorkImage(ctx, file);
+    if (/^(audio|video)\//.test(mime)) return prepareFilePreview(ctx, file, { ossOffload: true });
+    throw errors.notFound('作品媒体不可用', 'VIBECODING_WORK_IMAGE_NOT_FOUND');
   }
   let vibeDetailMatch = part.match(/^\/vibecoding-works\/([^/]+)$/);
   if (vibeDetailMatch && method === 'GET') {

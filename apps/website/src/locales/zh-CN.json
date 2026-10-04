@@ -232,6 +232,7 @@
   "download.loading": "正在读取安装包信息…",
   "download.retry": "稍后再试，或联系我们获取安装包。",
   "download.errorPrefix": "安装包暂时取不到（{error}）",
+  "download.manifestInvalid": "Windows 安装包清单缺少有效文件名或文件大小。",
   "faq.title": "常见问题",
   "faq.tabsAria": "按角色查看常见问题",
   "faq.student": "学生端",

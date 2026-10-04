@@ -232,6 +232,7 @@
   "download.loading": "Reading installer information…",
   "download.retry": "Please try again later, or contact us for the installer.",
   "download.errorPrefix": "The installer is unavailable for now ({error})",
+  "download.manifestInvalid": "The Windows installer manifest is missing a valid file name or size.",
   "faq.title": "FAQ",
   "faq.tabsAria": "Browse FAQ by role",
   "faq.student": "Students",
