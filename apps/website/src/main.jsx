@@ -147,6 +147,12 @@ function Footer(){
     <div className="ft-filings">
       <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">鄂ICP备2025162545号-2</a>
       <a href="https://beian.mps.gov.cn/#/query/webSearch?code=42011102006378" target="_blank" rel="noreferrer"><img className="ft-filings__icon" src="/assets/beian-gongan.png" alt="" />鄂公网安备42011102006378号</a>
+      {/* 两条**经营许可证**（2026-10-03 用户口径：「这2个也加到页脚」，号码逐字照抄）。
+          与备案那两条同一行、同一套样式；广电那条按惯例带全角括号（用户原文如此）。
+          许可证没有官方"查询站"这种统一入口，用户也没给链接，所以这两条**不做链接**（纯文本，
+          与备案那条"必须可点"的监管要求不同）。 */}
+      <span>增值电信业务经营许可证：鄂B2-20260353</span>
+      <span>广播电视节目制作经营许可证：(鄂)字第03159号</span>
       {/* 语言切换（2026-10-01）：页脚这一行是**全站都在的**入口（顶栏那颗在内页窄屏会被折叠）*/}
       <LanguageSwitcher variant="footer" />
     </div>
