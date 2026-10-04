@@ -367,9 +367,18 @@ console.log('⑫ 网页作品（入口 + 引用文件）只算一件，零件不
   const appSource = fs.readFileSync(new URL('../apps/website/src/main.jsx', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../apps/website/src/styles.css', import.meta.url), 'utf8');
   const pageWithoutComments = stripComments(pageSource);
+  const appWithoutComments = stripComments(appSource);
   check('⑦ 分享页只保留一处品牌 header（品牌包在 share-page__brand，不能再套官网整套顶栏）',
-    /className="share-page__brand"/.test(pageSource) && !/在完整页面里打开/.test(pageWithoutComments));
+    /className="share-page__brand"/.test(pageSource)
+    && /const isSharePage\s*=\s*loc\.pathname\.startsWith\('\/s\/'\)/.test(appWithoutComments)
+    && /!isFullPage\s*&&\s*!isSharePage\s*&&\s*<Header/.test(appWithoutComments)
+    && !/在完整页面里打开/.test(pageWithoutComments));
   check('⑦ 分享页明确不渲染「在完整页面里打开」', !/share-piece__more/.test(pageWithoutComments));
+  check('⑦ 分享页机构信息居中且页脚不重复品牌',
+    /className="share-page__from"/.test(pageSource)
+    && /\.share-page__head\s*\{[^}]*flex-direction:\s*column[^}]*align-items:\s*center/.test(css)
+    && !/className="share-footer__brand"/.test(appSource)
+    && !/share-footer__brand/.test(css));
   check('⑦ 分享页是移动优先的紧凑布局（窄宽度/两按钮网格/不复用长官网 footer）',
     /\.share-page\s*\{[^}]*max-width:\s*620px/.test(css)
     && /\.share-page__actions\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*1fr\s+1fr/.test(css)

@@ -123,7 +123,6 @@ function FooterLink({ to, href, children }) {
 }
 function ShareFooter(){
   return <footer className="share-footer" aria-label="合规信息">
-    <Link className="share-footer__brand" to="/" aria-label="返回灵动 AI 首页"><Logo /></Link>
     <div className="share-footer__legal">
       <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">鄂ICP备2025162545号-2</a>
       <a href="https://beian.mps.gov.cn/#/query/webSearch?code=42011102006378" target="_blank" rel="noreferrer">鄂公网安备42011102006378号</a>
@@ -2167,10 +2166,11 @@ export function App(){
   // ⚠️ 老师的「画布备课」（/learn/prep/<课时 id>）也是**全屏画布课堂**（用户 2026-09-30 口径：
   //    「我是说可以直接进入到画布课堂啊」）—— 与学生课堂同一个全屏待遇，不叠站内导航。
   const isFullPage = loc.pathname.startsWith('/learn/canvas') || loc.pathname.startsWith('/learn/prep');
+  const isSharePage = loc.pathname.startsWith('/s/');
   return (
     <div className='site'>
       {INTERNAL_TEST && <div className='internal-test-banner' role='status'>{t('account.internalTest')}</div>}
-      {!isFullPage && <Header userBadge={userBadge} signedIn={Boolean(session)} />}
+      {!isFullPage && !isSharePage && <Header userBadge={userBadge} signedIn={Boolean(session)} />}
       <Routes>
         <Route path='/' element={<Home/>}/>
         <Route path='/login' element={<LoginPage/>}/>
