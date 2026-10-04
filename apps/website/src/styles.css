@@ -1062,7 +1062,11 @@ background:radial-gradient(120% 80% at 50% 0%,rgb(255 60 90 / 26%),transparent 6
 .site-footer .foot a:after{content:"↗";font-size:11px;opacity:0;transform:translate(-3px,3px);transition:opacity .3s ease-out,transform .3s ease-out}
 .site-footer .foot a:hover:after{opacity:1;transform:translate(0,0)}
 /* 品牌行：用户 2026-09-23 把描述那句与那一排图标按钮都删了 → 只剩「logo 左 / 版权右」一行 */
-.site-footer .ft-brand{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:14px 28px;padding-top:24px;border-top:1px solid rgb(255 255 255 / 10%)}
+/* ⚠️ 2026-10-04 用户口径「灵动ai的logo居中」：原来这行是 `justify-content:space-between`
+   （logo 靠左、版权那行靠右）。改成**居中堆叠**：logo 一行居中，版权那行跟在下面（也居中）——
+   与最底下那条备案行（`.ft-filings`，本来就是居中）对齐，页脚从上到下三条都是中轴。
+   窄屏那条 `display:grid`（700px 断点）本来就是堆叠，不用动。 */
+.site-footer .ft-brand{display:flex;flex-direction:column;align-items:center;gap:14px;padding-top:24px;border-top:1px solid rgb(255 255 255 / 10%)}
 .site-footer .ft-legal{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 14px;color:rgb(255 255 255 / 46%);font-size:11px}
 /* 备案行（2026-09-28 用户口径）：页脚**最底部、居中**。ICP 在前、公安备案在后（对外展示的惯例顺序）。
    颜色跟着版权那行的浅白走，别给它们上强调色 —— 这一行是合规信息，不是入口。
