@@ -1287,6 +1287,9 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 .share-card__who h1{margin:0;font-size:20px;line-height:1.25;color:#2a2540}
 .share-card__who .sw-avatar{width:44px;height:44px;font-size:19px}
 .share-card__piece{margin:14px 0}
+/* 作品名称（2026-10-05 用户口径：老师在机构端改名后分享页要同步）—— 居中的标题，
+   与下面的「作品简介」区分开：这里是**这件作品的名字**，简介那行是这节课的标题。 */
+.share-card__title{margin:16px 0 0;text-align:center;font-size:19px;line-height:1.35;font-weight:700;color:#2a2540;word-break:break-word}
 .share-piece__media{width:100%;display:block;border-radius:12px;background:#f6f4ff}
 .share-piece__audio{width:100%}
 .share-piece__play{display:flex;gap:10px;flex-wrap:wrap}

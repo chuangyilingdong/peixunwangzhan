@@ -78,6 +78,10 @@ export function WorkSharePage() {
         <h1>{student?.name || '同学'}</h1>
       </div>
 
+      {/* ⭐ 2026-10-05 用户口径：老师在机构端改了作品名称后，**分享页也要同步** ——
+          所以这里把作品名称单独显示出来（「作品简介」那一行按老口径仍是这节课的标题）。 */}
+      {work?.title ? <h2 className="share-card__title">{work.title}</h2> : null}
+
       <div className="share-card__piece">
         <PieceView piece={piece} document={state.data.document} />
         {missingAssets.length ? <Notice tone="warning">

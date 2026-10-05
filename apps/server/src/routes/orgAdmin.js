@@ -918,6 +918,40 @@ export async function handleOrg(ctx) {
     return { ...base, files: content.files, entryFile: content.entryFile, artifacts: (content.artifacts || []).map((item) => ({ ...item, pieceKey: `artifact:${item.name}`, shareable: shareablePieces.has(item.name) })), preview: content.preview, imageUrls, ossUrls, fileUrls, missingAssets: missingLocalAssets(content.files, content.entryFile) };
   }
 
+  // ⭐ 2026-10-05 用户口径：「学生提交上来的作品，**老师/机构/平台都可以改作品名称**；改名后分享页、
+  //    官网作品都要同步」。改的就是 `works.title` / `vibecoding_submissions.title` —— 三端与分享页、
+  //    作品广场读的都是这一列（分享卡 public.js 里给的就是 `submission.title`），所以**只改一处即可全同步**。
+  //
+  // ⚠️ 作用域**照抄读面**（`resolveWorkScope` + `vibeWorkWhere` + 读面同一段 SELECT）：查不到就是看不见，
+  //    一律 404 —— 老师改不了别人课堂的作品、也改不了别的机构的；机构管理员在"作品管理"里可改全机构。
+  // ⚠️ `works` 表**没有 updated_at 列**（见 packages/database/src/schema.js），别顺手写上。
+  const sessionWorkRenameMatch = part.match(/^\/sessions\/([^/]+)\/works\/(CANVAS|VIBECODING)\/([^/]+)$/);
+  const orgWorkRenameMatch = part.match(/^\/works\/(CANVAS|VIBECODING)\/([^/]+)$/);
+  if ((sessionWorkRenameMatch || orgWorkRenameMatch) && method === 'PUT') {
+    const scope = sessionWorkRenameMatch ? await resolveWorkScope(sessionWorkRenameMatch[1]) : await resolveWorkScope(null);
+    const [source, workId] = sessionWorkRenameMatch
+      ? [sessionWorkRenameMatch[2], sessionWorkRenameMatch[3]]
+      : [orgWorkRenameMatch[1], orgWorkRenameMatch[2]];
+    const title = nonEmptyString(ctx.body?.title, '作品名称', { max: 200 });
+    const work = source === 'CANVAS'
+      ? await arow(`SELECT work.*,student.display_name student_name FROM works work
+          JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
+          WHERE work.id=? AND work.org_id=?${scope.sessionId ? ' AND work.class_session_id=?' : ''}`,
+          scope.sessionId ? [workId, currentOrgId, scope.sessionId] : [workId, currentOrgId])
+      : await arow(`SELECT submission.*,student.display_name student_name FROM vibecoding_submissions submission
+          JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id
+            AND conversation.org_id=submission.org_id AND conversation.student_id=submission.student_id
+          JOIN users student ON student.id=submission.student_id AND student.org_id=submission.org_id
+          WHERE ${vibeWorkWhere(scope).sql}`,
+          scope.sessionId ? [workId, currentOrgId, scope.sessionId] : [workId, currentOrgId]);
+    if (!work) throw errors.notFound(scope.sessionId ? '作品不属于此课堂' : '作品不存在', 'SESSION_WORK_NOT_FOUND');
+    if (source === 'CANVAS') await aq('UPDATE works SET title=? WHERE id=?', [title, workId]);
+    else await aq('UPDATE vibecoding_submissions SET title=?, updated_at=? WHERE id=?', [title, nowIso(), workId]);
+    await audit(ctx, 'WORK_TITLE_RENAME', source === 'CANVAS' ? 'WORK' : 'VIBECODING_SUBMISSION', workId,
+      { title: work.title }, { title }, { orgId: currentOrgId, via: scope.sessionId ? 'SESSION' : 'ORG' });
+    return { id: workId, source, title, previousTitle: work.title };
+  }
+
   if (part === '/sessions' && method === 'GET') {
     // 2026-09-17：补上真分页与四态计数。原先是硬编码 LIMIT 200、不返回总数 ——
     // 界面上做不出「共 N 条 / 翻页」，超过 200 个课堂的机构还会**静默**看不到后面的，

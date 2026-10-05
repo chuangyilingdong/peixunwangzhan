@@ -4,7 +4,7 @@
 // 父级行、字段栅格都是纯排版，四个页面（列表 / 创建 / 详情 / 添加学生）反复要用。
 // 样式尽量复用 packages/shared/src/styles.css 里已有的原语
 // （.publish-check / .wizard-steps / .status / .notice），本项目自己有的一套就够用。
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Notice } from '@platform/shared';
 
 /**
@@ -115,4 +115,41 @@ export function DefinitionGrid({ items, columns }) {
 /** 「本页不包含 / 页面边界」这类灰底说明条。 */
 export function BoundaryNote({ title, lines = [], tone = 'warning' }) {
   return <Notice tone={tone}>{title ? <strong>{title}</strong> : null}{lines.map((line) => <p key={line} className="classroom-boundary-line">{line}</p>)}</Notice>;
+}
+
+/**
+ * 修改作品名称（2026-10-05 用户口径：「学生提交上来的作品，老师/机构/平台都可以改作品名称；
+ * 改名后分享页、官网作品都要同步」）。
+ *
+ * 三处入口共用这一个弹窗（课堂详情表、作品预览弹窗页眉、作品管理列表），别再各写一份。
+ * 改的就是作品行的 `title` 一列 —— 三端列表、作品广场、分享卡读的都是它，所以改一次全同步；
+ * 作用域由服务端按**与读面同一套 WHERE** 判定（老师只改得了自己课堂的，越权是 404）。
+ */
+export function RenameWorkDialog({ api, workBase, work, onClose, onRenamed }) {
+  const [title, setTitle] = useState(String(work?.title || ''));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const next = title.trim();
+  async function save() {
+    if (!next || busy) return;
+    setBusy(true); setError('');
+    try {
+      await api.put(`${workBase}/${encodeURIComponent(work?.source || 'CANVAS')}/${encodeURIComponent(work?.id)}`, { title: next });
+      onRenamed?.(next);
+      onClose();
+    } catch (reason) {
+      setError(reason?.message || '改名没有成功，请重试。');
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <Modal title="修改作品名称" busy={busy} error={error} onClose={onClose}
+    footer={<>
+      <button className="secondary-button" disabled={busy} onClick={onClose}>取消</button>
+      <button className="primary-button" disabled={busy || !next} onClick={save}>{busy ? '保存中…' : '保存名称'}</button>
+    </>}>
+    <label>作品名称 *<input value={title} maxLength={200} autoFocus placeholder="例如：布布的小窝"
+      onChange={(event) => setTitle(event.target.value)} /></label>
+    <p className="muted top-gap">改完之后，老师端 / 机构端 / 平台端 / 官网作品广场 / 分享页显示的都会是这个新名称；学生的作品内容一个字节都不动。</p>
+  </Modal>;
 }

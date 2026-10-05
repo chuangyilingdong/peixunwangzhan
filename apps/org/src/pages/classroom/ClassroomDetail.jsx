@@ -11,7 +11,7 @@
 //    ⚠️ 名单里的「最近活动」**列**保留了（那只是活动时间；这次删的是课堂操作里那行汇总文案）。
 import { useEffect, useRef, useState } from 'react';
 import { Empty, ErrorState, formatDate, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
-import { Block, BoundaryNote, Checklist, DefinitionGrid, InfoStrip, Modal, ParentLine, RuleList } from './ui.jsx';
+import { Block, BoundaryNote, Checklist, DefinitionGrid, InfoStrip, Modal, ParentLine, RenameWorkDialog, RuleList } from './ui.jsx';
 import { ClassroomWork } from './ClassroomWork.jsx';
 import { DELIVERY_LABEL, removedReasonLabel, SESSION_STATE, StateBadge, STUDENT_STATE } from './states.jsx';
 
@@ -216,7 +216,12 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
                 <td>{DELIVERY_LABEL[work.source] || work.source}</td><td>{work.status}</td>
                 <td>{formatDate(work.updatedAt || work.submittedAt || work.createdAt)}</td>
                 <td>{['CANVAS', 'VIBECODING'].includes(work.source)
-                  ? <button className="text-button" onClick={() => showModal({ kind: 'work', work })}>查看作品</button>
+                  // ⭐ 2026-10-05 用户口径（图2）：「这里增加个修改作品名称的按钮」——
+                  //    与「查看作品」并排；改名后这张表随 `detail.refresh()` 一起更新。
+                  ? <div className="row-actions">
+                    <button className="text-button" onClick={() => showModal({ kind: 'work', work })}>查看作品</button>
+                    <button className="text-button" data-testid="work-rename" onClick={() => showModal({ kind: 'workTitle', work })}>修改作品名称</button>
+                  </div>
                   : <span className="muted">暂不支持预览</span>}</td>
               </tr>)}</tbody>
             </table></div> : <p className="muted">暂无作品记录。</p>}
@@ -235,7 +240,12 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
         发码走机构作用域（与作品库同一条 `/api/org/share-links`，p171 ⑧ 验过课堂老师可以发）。 */}
     {modal?.kind === 'work' ? <ClassroomWork api={api} workBase={`org/sessions/${encodeURIComponent(openId)}/works`} work={modal.work} onClose={closeModal}
       canShare
+      onRenamed={() => detail.refresh()}
       shareCreate={(pieceKey) => api.post('org/share-links', { source: modal.work.source || 'CANVAS', workId: modal.work.id, pieceKey })} /> : null}
+
+    {/* 005-03B 修改作品名称（2026-10-05）：与上面同一个弹窗组件，改名后刷新这张表 */}
+    {modal?.kind === 'workTitle' ? <RenameWorkDialog api={api} workBase={`org/sessions/${encodeURIComponent(openId)}/works`} work={modal.work}
+      onClose={closeModal} onRenamed={() => detail.refresh()} /> : null}
 
     {/* 005-03A 编辑课堂名称 */}
     {modal?.kind === 'title' ? <Modal title="编辑课堂名称" parent={['课堂详情']} busy={busy} error={error} onClose={closeModal}

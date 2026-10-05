@@ -1,8 +1,8 @@
-// 课堂里「只读作品预览」弹窗（2026-09-17 从 pages/Classrooms.jsx 原样搬进来，逻辑未改）。
+// 课堂里的「作品预览」弹窗（2026-09-17 从 pages/Classrooms.jsx 原样搬进来，逻辑未改）。
 import { useEffect, useState } from 'react';
 import { CanvasEditor } from '@platform/canvas';
 import { buildPreviewDocument, Empty, ErrorState, formatDate, Loading, Notice, ReplayDocument, ReplayFiles, ReplayPreview, WorkMediaGallery, resolveWorkMediaUrl, useData, WorkSharePanel, shareablePiecesOf } from '@platform/shared';
-import { Modal } from './ui.jsx';
+import { Modal, RenameWorkDialog } from './ui.jsx';
 
 export function previewHref(value) {
   if (!value || typeof value !== 'string') return null;
@@ -17,7 +17,7 @@ export function previewHref(value) {
 //    渲染到 canvas 的路线（那时 `connect-src blob:` 正好够用）。见 §九十三。
 
 /**
- * 只读作品预览弹窗（画布 / VibeCoding 产物都走它）。
+ * 作品预览弹窗（画布 / VibeCoding 产物都走它）。
  *
  * `workBase` 是接口前缀，**两种作用域共用这一个组件**（2026-09-20）：
  *   · 课堂详情里：`org/sessions/<sessionId>/works` —— 只认挂在这堂课里的作品；
@@ -25,9 +25,12 @@ export function previewHref(value) {
  *     用课堂作用域根本打不开）。
  * 服务端两种作用域返回同一套图片 / 文件地址前缀，所以这里只换前缀、渲染逻辑一个字不动。
  */
-export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = false, shareCreate = null }) {
+export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = false, shareCreate = null, onRenamed = null }) {
   const detail = useData(() => api.get(`${workBase}/${encodeURIComponent(work.source)}/${encodeURIComponent(work.id)}`), [api, workBase, work.source, work.id]);
   const [shareOpen, setShareOpen] = useState(false);
+  // ⭐ 2026-10-05：改名后**就地换掉页眉标题**（列表由调用方的 `onRenamed` 去刷），不必等整页重新拉。
+  const [renamedTitle, setRenamedTitle] = useState('');
+  const [renameOpen, setRenameOpen] = useState(false);
   const [activeName, setActiveName] = useState('');
   // 作品先看**做出来的东西**（图/视频/音频）；画布放到「创作画布」那一档（用户 2026-09-21 口径）。
   const [workView, setWorkView] = useState('media');
@@ -99,12 +102,17 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
     //    没有 OSS 素材的作品那串为空、CSP 恰好合法 —— 所以本地怎么都复现不出来（生产一测就现形）。
     ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
     : '';
-  return <Modal title={`只读作品 · ${work.title || '未命名作品'}`} wide onClose={onClose}
+  return <Modal title={renamedTitle || work.title || '未命名作品'} wide onClose={onClose}
+    // ⭐ 2026-10-05 用户口径：页眉不再挂"只读"那类前缀，直接就是**作品名称**本身。
     // ⭐ 2026-10-01：分享入口**从底部按钮行挪到页眉右上角**（用户口径：与作品库那处「详情右上角」
     //    以及网站端预览弹窗的 `pl-viewer-head__actions` 对齐 —— 三处同款位置）。
-    headerAction={canShare && shareCreate && data
-      ? <button type="button" className="secondary-button" data-testid="work-share" onClick={() => setShareOpen(true)}>分享</button>
-      : null}
+    //    2026-10-05：「修改名称」也放这一格（与分享并排）。
+    headerAction={<div className="row-actions">
+      <button type="button" className="secondary-button" data-testid="work-rename" onClick={() => setRenameOpen(true)}>修改名称</button>
+      {canShare && shareCreate && data
+        ? <button type="button" className="secondary-button" data-testid="work-share" onClick={() => setShareOpen(true)}>分享</button>
+        : null}
+    </div>}
     footer={<>
       {documentFile?.download ? <a className="secondary-button" href={documentFile.download}>下载原文件</a> : null}
       <button className="secondary-button" onClick={onClose}>关闭预览</button>
@@ -163,10 +171,14 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
 
     {/* 分享面板（与网站端同一个 `@platform/shared` 组件）：选哪一件 + 二维码 */}
     {shareOpen && data && shareCreate ? <WorkSharePanel
-      title={work.title || '作品'}
+      title={renamedTitle || work.title || '作品'}
       pieces={shareablePiecesOf(data, data.source || work.source || 'VIBECODING')}
       createShare={shareCreate}
       onClose={() => setShareOpen(false)}
     /> : null}
+
+    {/* 修改作品名称（2026-10-05）：改完就地换页眉标题，并通知调用方刷新它的列表 */}
+    {renameOpen ? <RenameWorkDialog api={api} workBase={workBase} work={work} onClose={() => setRenameOpen(false)}
+      onRenamed={(value) => { setRenamedTitle(value); onRenamed?.(value); }} /> : null}
   </Modal>;
 }

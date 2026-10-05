@@ -397,8 +397,16 @@ console.log('⑩ 三处「分享」入口都在右上角（面板/弹窗页眉�
 {
   const readFile = (file) => fs.readFileSync(path.join(process.cwd(), file), 'utf8');
   const classroom = readFile('apps/org/src/pages/classroom/ClassroomWork.jsx');
-  check('⑩ 机构端课堂弹窗：分享按钮在 `headerAction`（页眉右上角）',
-    /headerAction=\{[^}]*data-testid="work-share"|headerAction=[\s\S]{0,200}data-testid="work-share"/.test(classroom));
+  // ⚠️ 2026-10-05：页眉那一格里现在有**两颗**按钮（修改名称 + 分享），原来"距 headerAction 200 字符内"
+  //    的写法被撑爆了。改成**按位置**判：分享按钮必须落在 `headerAction={` 与 `footer={<` 之间。
+  {
+    const headerAt = classroom.indexOf('headerAction={');
+    const footerAt = classroom.indexOf('footer={<');
+    const shareAt = classroom.indexOf('data-testid="work-share"');
+    check('⑩ 机构端课堂弹窗：分享按钮在 `headerAction`（页眉右上角）',
+      headerAt > -1 && footerAt > headerAt && shareAt > headerAt && shareAt < footerAt,
+      JSON.stringify({ headerAt, footerAt, shareAt }));
+  }
   const footerChunk = classroom.slice(classroom.indexOf('footer={<'), classroom.indexOf('footer={<') + 400);
   check('⑩ 机构端课堂弹窗：底部按钮行里**不再**有分享入口', !/work-share/.test(footerChunk), footerChunk.slice(0, 120));
   const modal = readFile('apps/org/src/pages/classroom/ui.jsx');

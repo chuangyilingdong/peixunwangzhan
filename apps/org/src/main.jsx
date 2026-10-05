@@ -9,7 +9,7 @@ import { SeriesOverview } from './pages/SeriesOverview.jsx';
 import { Classrooms } from './pages/Classrooms.jsx';
 import { TeachingAssetViewer } from './components/TeachingAssetViewer.jsx';
 import { ClassroomWork } from './pages/classroom/ClassroomWork.jsx';
-import { Modal } from './pages/classroom/ui.jsx';
+import { Modal, RenameWorkDialog } from './pages/classroom/ui.jsx';
 import '@platform/shared/styles.css';
 import './theme.css';
 
@@ -355,6 +355,9 @@ function Works({ api }) {
   const snapshotImage = (value) => resolveWorkMediaUrl(value, selectedWork?.imageUrls);
   // VibeCoding 产物的预览走弹窗（画布那半仍是就地开只读画布）
   const [vibeWork, setVibeWork] = useState(null);
+  // ⭐ 2026-10-05（用户口径「老师/机构/平台都可以改作品名称」）：作品管理里也要能改名 ——
+  //    改的就是列表读的那一列 `title`，改完 `refresh()` 一下这张表就是新名字。
+  const [renameWork, setRenameWork] = useState(null);
   const [featureAction, setFeatureAction] = useState(null);
   const [featureForm, setFeatureForm] = useState({ featured: true, reason: '' });
   const [featureBusy, setFeatureBusy] = useState(false);
@@ -402,7 +405,7 @@ function Works({ api }) {
       {data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生</th><th>提交时间</th><th>状态与授权</th><th>举报</th><th>操作</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.source === 'VIBECODING' ? `VibeCoding 产物${item.entryFile ? '（' + item.entryFile + '）' : ''}` : '画布作品'} · {item.description || '暂无说明'} · {item.seriesTitle || '—'} / {item.courseLessonTitle || '—'}{item.sessionTitle ? ' · 课堂：' + item.sessionTitle : ''}</div></td><td>{item.studentName}</td><td>{formatDate(item.submittedAt)}</td>{/* ⚠️ 2026-09-26 全站审计：这里原来直接用 <Status value={item.status} /> —— 表格里是 PENDING/APPROVED */}
         {/*    这样的**英文枚举**、色调还靠正则猜，而同页的筛选下拉是中文（已提交/已通过…）。 */}
         {/*    改用 shared 的作品五态词表 WorkPlazaStatus：中文 + 正确色调 + 下架原因挂在 title 上。 */}
-<td><WorkPlazaStatus item={item} /><div className="muted">{item.copyrightConfirmedAt ? '已确认机构内展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td><div className="row-actions"><button className="text-button" onClick={() => openWork(item)}>查看作品</button>{item.status === 'PUBLISHED' && <button className="text-button" onClick={() => { setFeatureAction(item); setFeatureForm({ featured: !item.featured, reason: item.featuredReason || '' }); }}>{item.featured ? '取消精选' : '设为精选'}</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="尚未收到作品" />}
+<td><WorkPlazaStatus item={item} /><div className="muted">{item.copyrightConfirmedAt ? '已确认机构内展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td><div className="row-actions"><button className="text-button" onClick={() => openWork(item)}>查看作品</button><button className="text-button" data-testid="work-rename" onClick={() => setRenameWork(item)}>修改作品名称</button>{item.status === 'PUBLISHED' && <button className="text-button" onClick={() => { setFeatureAction(item); setFeatureForm({ featured: !item.featured, reason: item.featuredReason || '' }); }}>{item.featured ? '取消精选' : '设为精选'}</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="尚未收到作品" />}
     </Panel>
     {featureAction && <Panel title={`机构精选 · ${featureAction.title}`}><Notice tone="info">精选作品会在机构作品墙优先展示；取消精选不会下架作品。</Notice><div className="form-grid"><label>精选状态<select value={featureForm.featured ? 'true' : 'false'} onChange={(event) => setFeatureForm({ ...featureForm, featured: event.target.value === 'true' })}><option value="true">设为机构精选</option><option value="false">取消机构精选</option></select></label></div>{featureForm.featured && <label>精选理由（可选）<input value={featureForm.reason} maxLength={500} placeholder="例如：故事结构完整，画面表达清晰。" onChange={(event) => setFeatureForm({ ...featureForm, reason: event.target.value })} /></label>}<div className="row-actions top-gap"><button className="primary-button" disabled={featureBusy} onClick={handleFeature}>{featureBusy ? '处理中…' : '确认精选设置'}</button><button className="secondary-button" disabled={featureBusy} onClick={() => setFeatureAction(null)}>取消</button></div></Panel>}
     <Panel title={`待处理举报 · ${reports.data?.pending || 0} 条`}>{reports.loading ? <Loading /> : reports.error ? <ErrorState error={reports.error} onRetry={reports.refresh} /> : reports.data.items.length ? <><div className="table-wrap"><table><thead><tr><th>作品</th><th>举报人</th><th>类型 / 说明</th><th>时间</th><th>操作</th></tr></thead><tbody>{reports.data.items.map((item) => <tr key={item.id}><td>{item.workTitle}<div className="muted"><Status value={item.workStatus} /></div></td><td>{item.reporterName || '学生'}</td><td>{item.category}<div className="muted">{item.details || '未补充说明'}</div></td><td>{formatDate(item.createdAt)}</td><td><button className="text-button" onClick={() => { setReportAction(item); setReportForm({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); }}>处理</button></td></tr>)}</tbody></table></div><Pagination page={reports.data.page} totalPages={reports.data.totalPages} onChange={setReportsPage} disabled={reports.loading} /></> : <Empty title="暂无待处理举报" />}</Panel>
@@ -428,7 +431,12 @@ function Works({ api }) {
     {/* VibeCoding 产物的只读预览（网页能玩、文档给服务端转的 PDF）—— 机构作用域 */}
     {vibeWork ? <ClassroomWork api={api} workBase="org/works" work={vibeWork} onClose={() => setVibeWork(null)}
       canShare
+      onRenamed={() => refresh()}
       shareCreate={(pieceKey) => api.post('org/share-links', { source: 'VIBECODING', workId: vibeWork.id, pieceKey })} /> : null}
+
+    {/* 修改作品名称（2026-10-05）：机构作用域 —— 没有课堂的提交在这里也改得了 */}
+    {renameWork ? <RenameWorkDialog api={api} workBase="org/works" work={renameWork} onClose={() => setRenameWork(null)}
+      onRenamed={() => refresh()} /> : null}
 
     {/* 分享面板（与网站端**同一个组件**）：选哪一件 + 二维码。码归学生（分享卡上是学生与他的机构），
         老师替学生分享时拿到的与学生自己那枚是**同一枚**（服务端幂等）。 */}
