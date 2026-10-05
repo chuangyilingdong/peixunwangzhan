@@ -156,10 +156,22 @@ function writeSamplePdf(file, pageCount = 3) {
   fs.writeFileSync(path.join(uploadRoot, slideRelKey), fs.readFileSync(samplePdf));
   await aq(`INSERT INTO file_assets(id,owner_type,storage_kind,storage_key,file_name,mime_type,category,visibility,status,review_status,metadata,created_at,updated_at)
     VALUES(?,'PLATFORM','INTERNAL_PROXY',?,'P111 幻灯片.pptx','application/pdf','TEACHING_ASSET','PUBLIC_PLATFORM','ACTIVE','NOT_REQUIRED','{}',?,?)`, [slideFileId, slideRelKey, now, now]);
+  const videoFileId = 'file-ui-video';
+  // ⭐ 2026-10-05（用户报「点『全屏观看』没法真正全屏，但播放器自带的全屏按钮可以」）：
+  //    夹具里补一件**视频**素材 —— 这条守卫要能复现并钉住"面板全屏时视频必须铺满整屏"。
+  //    字节用一个最小 mp4（不是真视频也无妨：断言量的是 CSS 盒，不依赖有没有音视频轨）。
+  const videoRelKey = 'teaching/ui-video.mp4';
+  fs.writeFileSync(path.join(uploadRoot, videoRelKey), Buffer.concat([
+    Buffer.from('00000018667479706d703432', 'hex'), Buffer.from('0000000066726565', 'hex'),
+    Buffer.from('000000006d646174', 'hex'), Buffer.alloc(64, 0x11),
+  ]));
+  await aq(`INSERT INTO file_assets(id,owner_type,storage_kind,storage_key,file_name,mime_type,category,visibility,status,review_status,metadata,created_at,updated_at)
+    VALUES(?,'PLATFORM','INTERNAL_PROXY',?,'ui-video.mp4','video/mp4','TEACHING_ASSET','PUBLIC_PLATFORM','ACTIVE','NOT_REQUIRED','{}',?,?)`, [videoFileId, videoRelKey, now, now]);
   await aq(`INSERT INTO course_series(id,title,description,owner_type,visibility,version,status,created_at,updated_at)
     VALUES(?,'P111 教学素材课包','用于验证教学素材预览','PLATFORM','PUBLIC','1.0','PUBLISHED',?,?)`, [seriesId, now, now]);
   // 快照里那张票据**故意写成早已过期**（1000000000000 = 2001 年）
   const deadPreviewUrl = `/api/org/file-assets/${fileId}/preview?t=1000000000000.deadbeef`;
+  const deadVideoPreviewUrl = `/api/org/file-assets/${videoFileId}/preview?t=1000000000000.deadbeef`;
   const snapshot = {
     // ⚠️ 夹具必须与**生产同形状**：读面判断「这节能不能被机构端/学生端/官网看到」看的是快照里的
     //    status（lib.js 的 publishedLessonVisibilitySql）。直接往库里插课时、快照里不带 status，
@@ -169,6 +181,8 @@ function writeSamplePdf(file, pageCount = 3) {
     teachingGroups: [{ id: 'tg-ui', title: '备课资料', sort: 1, assets: [
       { id: 'ta-ui', title: 'P111 讲义', description: '端到端素材', assetType: 'FILE', fileAssetId: fileId, assetUrl: null, sort: 1, previewKind: 'PDF', previewUrl: deadPreviewUrl },
       { id: 'ta-ui-slides', title: 'P111 幻灯片', description: '放映形态素材', assetType: 'FILE', fileAssetId: slideFileId, assetUrl: null, sort: 2, previewKind: 'PDF', previewUrl: deadPreviewUrl },
+    ] }, { id: 'tg-ui-video', title: '视频演示', sort: 2, assets: [
+      { id: 'ta-ui-video', title: '画布课堂视频', description: '全屏要真正铺满', assetType: 'FILE', fileAssetId: videoFileId, assetUrl: null, sort: 1, previewKind: 'VIDEO', previewUrl: deadVideoPreviewUrl },
     ] }],
   };
   await aq(`INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,delivery_mode,published_content,created_at,updated_at)
@@ -580,6 +594,42 @@ try {
   await page.getByRole('button', { name: '关闭预览' }).click().catch(() => {});
   await page.waitForTimeout(400);
 
+  // ── ⑥ 视频素材：页眉那颗「全屏观看」必须**真的铺满整屏**（2026-10-05 用户报，图2）
+  //    真因：`.preview-stage video{max-height:74vh}` 在**面板全屏**时仍然生效 —— 面板铺满了，
+  //    视频只有 74vh，上下留白；而播放器自带的全屏按钮全屏的是 <video> 自己（Chrome 用 UA 样式
+  //    把它铺满），所以"图1 可以、图2 不行"。这条断言量的是**视频盒 vs 视口**，防它再被卡住。
+  {
+    const row = page.locator('.teaching-asset-row', { hasText: '画布课堂视频' });
+    if (!(await row.count())) problems.push('视频素材：抽屉里找不到「画布课堂视频」（夹具没进快照？）');
+    else {
+      await row.getByRole('button', { name: '在线预览' }).click();
+      await page.waitForTimeout(2000);
+      await expectText('视频素材查看器', ['画布课堂视频', '全屏观看']);
+      await page.getByRole('button', { name: '全屏观看' }).click();
+      await page.waitForTimeout(1600);
+      const box = await page.evaluate(() => {
+        const node = document.querySelector('.preview-stage video');
+        const rect = node?.getBoundingClientRect();
+        return {
+          fullscreen: Boolean(document.fullscreenElement),
+          isPanel: String(document.fullscreenElement?.className || '').includes('ta-panel'),
+          height: Math.round(rect?.height || 0), width: Math.round(rect?.width || 0),
+          viewportHeight: window.innerHeight, viewportWidth: window.innerWidth,
+        };
+      });
+      console.log('视频全屏几何:', JSON.stringify(box));
+      if (!box.fullscreen || !box.isPanel) problems.push('视频素材：点「全屏观看」没有真的进入全屏（全屏元素应当是查看器面板）');
+      if (!(box.height >= box.viewportHeight * 0.9)) {
+        problems.push(`视频素材：全屏后视频没铺满整屏（${box.height}/${box.viewportHeight}px，${box.width}/${box.viewportWidth}px）—— 又被 max-height 卡住了？`);
+      }
+      await shot('15b-material-video-fullscreen');
+      await page.evaluate(() => document.exitFullscreen?.());
+      await page.waitForTimeout(500);
+      await page.getByRole('button', { name: '关闭预览' }).click().catch(() => {});
+      await page.waitForTimeout(400);
+    }
+  }
+
   // ── 原生渲染（2026-09-25 用户口径「我需要的原生渲染效果…缩略在左边…全屏播放时跟 PPT 一样」）
   //    这一节只钉**静态契约**：真·pptx 的端到端（解析保真、翻页、全屏）是在真课件上人工验过的
   //    （见交接 §二十六），这里保证"那条路还在、没被改回去"：
@@ -594,9 +644,14 @@ try {
     // 这条守卫的报错口径是 problems.push，这里包一层好读
     const check = (label, ok, detail = '') => { if (!ok) problems.push(`${label}${detail ? ` — ${detail}` : ''}`); };
     check('原生渲染：只有拿到 sourceUrl 才走原生（其它格式仍旧转 PDF）',
-      /const isNative = Boolean\(state\.sourceUrl\) && kind === 'OFFICE'/.test(viewer));
-    check('原生渲染：按需加载 pptx-preview（不是进页面就下这 1.3MB）',
+      /const isNative = Boolean\(state\.sourceUrl\) && kind === 'OFFICE'/.test(viewer));    check('原生渲染：按需加载 pptx-preview（不是进页面就下这 1.3MB）',
       /import\('pptx-preview'\)/.test(viewer) && /loadPptxPreview/.test(viewer));
+    // ⭐ 2026-10-05（用户报「点页眉那颗『全屏观看』没法真正全屏，播放器自带的可以」）：
+    //    面板全屏那条路**没有** Chrome UA 的 `:fullscreen` 尺寸兜底 —— 视频是面板的子元素，
+    //    基础规则 `.preview-stage video{max-height:74vh}` 会把它压在 74% 屏高。全靠下面这条覆盖规则，
+    //    删了它就退回"看着像全屏、其实只占 3/4 屏"（浏览器那条路已有实测几何断言，这里再钉源码）。
+    check('视频全屏：面板全屏时视频/音频按高度撑满（覆盖基础规则的 max-height:74vh）',
+      /\.ta-panel:fullscreen \.preview-stage video,\n\.ta-panel:fullscreen \.preview-stage audio \{ width:auto; height:100%;/.test(css));
     check('原生渲染：缩略图栏在**左边**（在 .preview-stage 里，靠 flex 并排）',
       /{isNative && nativeCount \? <div className="ta-native-rail">/.test(viewer)
       && /\.preview-stage:has\(\.ta-native-stage\) \{ display:flex; \}/.test(css)

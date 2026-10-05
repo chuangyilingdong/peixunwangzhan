@@ -1313,6 +1313,16 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
    ⚠️ 打印样式把查看器整个藏掉 —— 万一从浏览器菜单走打印，打出来也应该是白纸。
    全部挂在 .ta-panel 作用域下，不动同一个 .preview-* 家族的既有样式（管理端也在用）。 */
 .ta-panel:fullscreen { width:100vw; height:100vh; max-height:100vh; border-radius:0; }
+/* ⚠️ 2026-10-05 用户报（图2）：「点页眉那颗『全屏观看』没法真正全屏，但播放器自带的全屏按钮可以」。
+   真因：上面 `.preview-stage video{width:100%;max-height:74vh}` 在**面板全屏**时仍然生效 ——
+   面板虽然铺满了屏幕，视频只占 74vh，上下留白（自带按钮全屏的是 `<video>` 自己，
+   Chrome 用 UA 的 `:fullscreen` 样式把它铺满，所以那条路看着正常）。
+   修法：面板全屏时舞台居中、音视频按可用高度撑满（保持比例、不拉伸）。 */
+.ta-panel:fullscreen .preview-stage { display:flex; align-items:center; justify-content:center; }
+.ta-panel:fullscreen .preview-stage video,
+.ta-panel:fullscreen .preview-stage audio { width:auto; height:100%; max-width:100%; max-height:100%; }
+/* 播放器自带按钮那条路也钉一下（video 自己全屏时必须铺满整屏，别被 max-height 卡住）。 */
+.preview-stage video:fullscreen, .preview-stage audio:fullscreen { width:100vw; height:100vh; max-width:100vw; max-height:100vh; }
 /* 连续滚动：所有页纵向排开、按宽度铺满，滚轮就是往下滑。
    gap 必须与组件里的 PAGE_GAP（16）一致 —— 滚动到第 N 页是按这个间距算偏移的。 */
 .ta-scroll { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; gap:16px; padding:18px; overflow-y:auto; overflow-x:hidden; }
