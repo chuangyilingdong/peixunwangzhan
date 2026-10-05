@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { errors } from '../lib.js';
@@ -200,25 +200,54 @@ function scannerRequired() {
   return String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 }
 
-function scannerCommand() {
-  return String(process.env.FILE_UPLOAD_SCANNER || '').trim();
+/**
+ * 扫描器配置（2026-10-05 改）：
+ *   · `off` / `none` / `disabled` / `skip` → **不扫**（内部教学平台的自有素材，运营方明确要求；
+ *     代价与边界写在 `scannerDisabledNotice` 里，别当成"忘了配"）；
+ *   · 其它非空值 → 当成扫描器命令（另见 `FILE_UPLOAD_SCANNER_ARGS`）；
+ *   · 空 → 走老口径：`FILE_UPLOAD_REQUIRE_SCANNER`（缺省＝生产必须扫）。
+ * ⚠️ 关闭是**显式**的：`off` 一律不抛 `FILE_SCANNER_UNAVAILABLE`，只在启动后第一次用到时告警一次。
+ */
+const SCANNER_OFF_VALUES = new Set(['off', 'none', 'disabled', 'skip']);
+function scannerSetting() {
+  const raw = String(process.env.FILE_UPLOAD_SCANNER || '').trim();
+  if (!raw) return { mode: 'unset', command: '' };
+  if (SCANNER_OFF_VALUES.has(raw.toLowerCase())) return { mode: 'off', command: '' };
+  return { mode: 'command', command: raw };
+}
+/** 扫描器参数：默认 `--no-summary`（clamscan 那套），生产可用 FILE_UPLOAD_SCANNER_ARGS 覆盖。 */
+function scannerArgs() {
+  const raw = String(process.env.FILE_UPLOAD_SCANNER_ARGS || '').trim();
+  return raw ? raw.split(/\s+/).filter(Boolean) : ['--no-summary'];
+}
+let scannerOffWarned = false;
+function scannerDisabledNotice() {
+  if (scannerOffWarned) return;
+  scannerOffWarned = true;
+  console.warn('[upload] 病毒扫描已关闭（FILE_UPLOAD_SCANNER=off）：上传只做扩展名/魔术字节/大小校验，不做内容扫描。');
 }
 
-async function scanWithConfiguredScanner(buffer) {
-  const command = scannerCommand();
-  if (!command) {
-    if (scannerRequired()) throw errors.serviceUnavailable('文件安全扫描器未配置，生产环境拒绝上传', 'FILE_SCANNER_UNAVAILABLE');
-    return { scanner: 'not-configured', status: 'BUILTIN_ONLY' };
-  }
-  return await new Promise((resolve, reject) => {
-    const child = spawn(command, ['--no-summary', '-'], { windowsHide: true });
+/**
+ * 扫描结果缓存（2026-10-05）：key = 内容 SHA256，**只缓存 PASSED**。
+ * 为什么要有：课堂里同一张图/同一段视频会被反复提交（学生改一次交一次），
+ * 每次重新扫一遍毫无意义；命中缓存连扫描器都不用起。
+ */
+const SCAN_CACHE_LIMIT = 500;
+const scanPassedCache = new Map();
+function scanCacheGet(hash) { if (!scanPassedCache.has(hash)) return false; const value = scanPassedCache.get(hash); scanPassedCache.delete(hash); scanPassedCache.set(hash, value); return true; }
+function scanCacheSet(hash) { scanPassedCache.set(hash, true); while (scanPassedCache.size > SCAN_CACHE_LIMIT) scanPassedCache.delete(scanPassedCache.keys().next().value); }
+
+/** 起一次扫描器扫**一批**文件（临时目录 + 一次调用）——见 scanUploadBuffers 的注释。 */
+function runScanner(command, paths, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [...scannerArgs(), ...paths], { windowsHide: true });
     let settled = false;
     // 扫描超时（2026-09-16 实测后从 30s 放宽到 120s，可用 FILE_UPLOAD_SCANNER_TIMEOUT_MS 调）：
     // 生产上配的是 `clamscan`（**独立**扫描器，每次调用都要重新加载 108MB 的病毒库），
     // 实测冷启动 16–40 秒、热缓存约 10 秒 —— 原来那个 30 秒在机器忙的时候必然超时，
     // 结果是**所有上传都间歇性失败**（学生看到的是一句「文件安全扫描超时」）。
-    // 真正的解法是改用 clamd（常驻、毫秒级）或改成异步扫描，但那个要占内存（这台机器内存紧张），
-    // 得先定口径；在那之前先把阈值放到「冷启动也能过」的位置，别让上传功能性失败。
+    // ⚠️ 2026-10-05：现在**一次提交只起一次**扫描器（不会再 N 个文件 N 次冷启动），
+    //    并且生产已按运营口径把扫描关掉（`FILE_UPLOAD_SCANNER=off`）。
     const timeoutMs = Number(process.env.FILE_UPLOAD_SCANNER_TIMEOUT_MS || 120_000);
     const timer = setTimeout(() => {
       if (settled) return;
@@ -231,21 +260,77 @@ async function scanWithConfiguredScanner(buffer) {
     child.on('close', (code) => {
       if (settled) return;
       settled = true; clearTimeout(timer);
-      if (code === 0) return resolve({ scanner: command, status: 'PASSED' });
+      if (code === 0) return resolve({ status: 'PASSED' });
       if (code === 1) return reject(errors.badRequest('检测到恶意文件', 'MALICIOUS_FILE_BLOCKED'));
       reject(errors.serviceUnavailable('文件安全扫描失败，上传已拒绝', 'FILE_SCANNER_FAILED', { exitCode: code }));
     });
-    child.stdin.on('error', () => {});
-    child.stdin.end(buffer);
   });
 }
 
-export async function persistSecureUpload({ fileName, mimeType, buffer }) {
+/**
+ * 扫描一批字节（一次提交里的**所有二进制文件一起扫**）。
+ *
+ * 为什么是"一批"：`clamscan` 是**非驻留**扫描器，每起一次都要把 108MB 病毒库读进内存
+ * （实测冷启动 16–40 秒）。原来一个作品有几个二进制文件就起几次 —— 3 个文件＝3 次冷启动，
+ * 21.7MB 的作品要让客户端等几十秒（客户端 2026-10-05 报的就是这条）。
+ * 现在把待扫的字节落到临时目录，**一次 `clamscan a b c` 搞定整单**，并把结果按内容 SHA256 缓存。
+ *
+ * ⚠️ 语义不变：检出（exit 1）仍然 400 `MALICIOUS_FILE_BLOCKED`、超时/失败仍然 503，一个字节都不落库。
+ * ⚠️ 关闭（`FILE_UPLOAD_SCANNER=off`）时连临时目录都不建 —— 直接返回 `SCANNER_DISABLED`。
+ */
+export async function scanUploadBuffers(buffers, { tempDir = null } = {}) {
+  const list = (buffers || []).filter((item) => Buffer.isBuffer(item) && item.length);
+  if (!list.length) return { scanner: 'skipped', status: 'NOTHING_TO_SCAN', scanned: 0, cached: 0, ms: 0 };
+  const { mode, command } = scannerSetting();
+  if (mode === 'off') {
+    scannerDisabledNotice();
+    return { scanner: 'disabled', status: 'SCANNER_DISABLED', scanned: 0, cached: 0, ms: 0 };
+  }
+  if (mode === 'unset') {
+    if (scannerRequired()) throw errors.serviceUnavailable('文件安全扫描器未配置，生产环境拒绝上传', 'FILE_SCANNER_UNAVAILABLE');
+    return { scanner: 'not-configured', status: 'BUILTIN_ONLY', scanned: 0, cached: 0, ms: 0 };
+  }
+  const started = Date.now();
+  const pending = [];
+  let cached = 0;
+  for (const buffer of list) {
+    const hash = createHash('sha256').update(buffer).digest('hex');
+    if (scanCacheGet(hash)) { cached += 1; continue; }
+    pending.push({ hash, buffer });
+  }
+  if (!pending.length) return { scanner: command, status: 'PASSED', scanned: 0, cached, ms: Date.now() - started };
+  const root = tempDir || path.join(uploadRoot(), '.scan-batch');
+  // ⚠️ 父目录不保证存在（新机器首次上传、或清理脚本把 uploads 下的临时目录删过）——
+  //    `mkdtemp` 在父目录缺失时直接 ENOENT，那会让**整个提交 500**（本守卫第一版就踩到）。
+  await mkdir(path.resolve(root), { recursive: true, mode: 0o750 });
+  const dir = await mkdtemp(path.join(path.resolve(root), 'run-'));
+  try {
+    const paths = [];
+    for (const [index, item] of pending.entries()) {
+      const target = path.join(dir, `artifact-${index}`);
+      await writeFile(target, item.buffer, { mode: 0o600 });
+      paths.push(target);
+    }
+    const result = await runScanner(command, paths, Number(process.env.FILE_UPLOAD_SCANNER_TIMEOUT_MS || 120_000));
+    for (const item of pending) scanCacheSet(item.hash);
+    return { scanner: command, status: result.status, scanned: pending.length, cached, ms: Date.now() - started };
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** 单个字节的扫描（等价于"一批里只有一个"）——沿用老调用方的语义。 */
+async function scanWithConfiguredScanner(buffer) {
+  return await scanUploadBuffers([buffer]);
+}
+
+export async function persistSecureUpload({ fileName, mimeType, buffer, scan = null }) {
   if (!Buffer.isBuffer(buffer)) throw errors.badRequest('文件内容无效', 'INVALID_FILE_CONTENT');
   if (buffer.length < 1) throw errors.badRequest('不能上传空文件', 'EMPTY_FILE');
   if (buffer.length > maxUploadBytes()) throw errors.badRequest(`文件大小不能超过 ${Math.floor(maxUploadBytes() / 1024 / 1024)} MB`, 'FILE_TOO_LARGE');
   const validated = validateMimeAndExtension(fileName, mimeType, buffer);
-  const scan = await scanWithConfiguredScanner(buffer);
+  // `scan`：调用方已经**整单扫过**时把它传进来（见 studentRuntime 的提交链路），别再逐个文件起扫描器。
+  const scanResult = scan || await scanWithConfiguredScanner(buffer);
   const root = uploadRoot();
   const now = new Date();
   const relative = path.join(String(now.getUTCFullYear()), String(now.getUTCMonth() + 1).padStart(2, '0'), `${randomUUID()}${validated.extension}`);
@@ -283,6 +368,6 @@ export async function persistSecureUpload({ fileName, mimeType, buffer }) {
     mimeType: validated.mimeType,
     fileSize: buffer.length,
     checksum: createHash('sha256').update(buffer).digest('hex'),
-    security: { signature: validated.detectedMime || 'textual', scanner: scan.scanner, status: scan.status },
+    security: { signature: validated.detectedMime || 'textual', scanner: scanResult.scanner, status: scanResult.status },
   };
 }

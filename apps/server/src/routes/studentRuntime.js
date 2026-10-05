@@ -17,6 +17,7 @@ import { isSubmittableArtifactKind, kindForName } from '../services/vibecodingAr
 import { documentMime } from '../services/ooxml/documents.js';
 import { ensureRuntimeConversation, recordRuntimeSubmission, rewriteLocalReferences, runtimeSubmissionWorkItem, textDefaultModel, textModelOptions } from './vibecoding.js';
 import { storeStudentArtifactAsset } from './fileAssets.js';
+import { scanUploadBuffers } from '../services/fileUploadSecurity.js';
 
 // 客户端运行时（dsh / VibeCoding）**只认"这节课声明了 VibeCoding"**。
 //
@@ -577,6 +578,7 @@ function collectUploadedArtifacts(body) {
  *       ② 文本产物落库并改写本地引用；③ 产物清单在这一刻定格（广场靠它认版本与图）。
  */
 async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, collected }) {
+  const submitStartedAt = Date.now();
   const entryFile = safeArtifactName(collected.name);
   const entryKind = kindForName(entryFile);
   if (!isSubmittableArtifactKind(entryKind)) {
@@ -596,8 +598,17 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
   const embeddedAssets = [];
   let entryFileId = null;
   let coverFileId = null;
-  for (const file of collected.files || []) {
-    if (!file.binary) continue;
+  // ⭐ 2026-10-05（客户端报「21.7MB 作品要等几十秒」）：**整单只扫一次**。
+  //    原来每个二进制文件各起一次非驻留扫描器（`clamscan` 每次冷启动 16–40 秒、重新加载 108MB 病毒库），
+  //    3 个文件＝3 次；现在把所有待交字节收成一批一次扫完，并按 SHA256 复用已扫过的结果。
+  //    生产已按运营口径把扫描关掉（`FILE_UPLOAD_SCANNER=off`）——这里仍然保留批次语义，
+  //    将来重建扫描体系（clamd/worker）时不会退回"每文件一次"。
+  const binaries = (collected.files || []).filter((file) => file.binary);
+  const scanStartedAt = Date.now();
+  const batchScan = await scanUploadBuffers(binaries.map((file) => Buffer.from(file.content, 'base64')));
+  const scanMs = Date.now() - scanStartedAt;
+  let storageMs = 0;
+  for (const file of binaries) {
     const name = safeArtifactName(file.name);
     const mimeType = mimeForArtifact(name);
     if (!mimeType) {
@@ -606,6 +617,7 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
       continue;
     }
     try {
+      const assetStartedAt = Date.now();
       const asset = await storeStudentArtifactAsset({
         buffer: Buffer.from(file.content, 'base64'),
         mimeType,
@@ -614,7 +626,9 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
         fileName: name.split('/').pop(),
         ownerUserId: auth.user.id,
         ownerOrgId: orgId,
+        scan: batchScan,
       });
+      storageMs += Date.now() - assetStartedAt;
       // key 用**全路径**：下面回写 HTML 时按它匹配 `src="assets/hero.png"`（与 normalizeLocalReference 同一套规矩）
       assetUrls.set(name, asset.url);
       if (name === entryFile) {
@@ -685,10 +699,12 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
   const title = body.title === undefined || String(body.title).trim() === ''
     ? String(conversation.title || '我的作品').slice(0, 60)
     : String(body.title).trim().slice(0, 60);
+  const dbStartedAt = Date.now();
   const submission = await recordRuntimeSubmission({
     ctx, auth, conversation, entryFile, files, artifacts, title,
     description: String(body.description || '').slice(0, 1000),
   });
+  const dbMs = Date.now() - dbStartedAt;
   // 拍平改名 / 丢了素材这些事要让学生看见 —— 提交成功了但作品缺了东西，比提交失败更糟。
   // ⭐ 2026-09-29（客户端契约《平台接口契约-zcode.md》「作品提交」）：除了 `warnings` / `missing`
   //    还要回 **`works`** —— 客户端拿它直接回显"这次交上来了哪几条"，省掉一次「我的作品」往返。
@@ -698,5 +714,19 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
   const submittedWork = submission?.id
     ? await runtimeSubmissionWorkItem(submission.id, { classSessionId: classroom.id })
     : null;
-  return { ...submission, warnings, missing: collected.missing || [], works: submittedWork ? [submittedWork] : [] };
+  // ⭐ 2026-10-05（客户端报「按钮长期处理中」，要求补分阶段耗时）：一行看清时间花在哪。
+  //    `scan` 那档现在是 `disabled`（生产 FILE_UPLOAD_SCANNER=off）或 `PASSED/…`；
+  //    真出问题时光看这一行就能判断是扫描、落盘还是数据库。
+  const contentBytes = binaries.reduce((sum, file) => sum + Math.floor(String(file.content || '').length * 3 / 4), 0);
+  const timings = {
+    fileCount: binaries.length,
+    contentBytes,
+    jsonBytes: Buffer.byteLength(JSON.stringify(body), 'utf8'),
+    scanMs, storageMs, dbMs,
+    totalMs: Date.now() - submitStartedAt,
+    scanStatus: batchScan.status,
+    scanCached: batchScan.cached || 0,
+  };
+  console.log(`[submit-upload] files=${timings.fileCount} bytes=${timings.contentBytes} scan=${timings.scanStatus}(cached=${timings.scanCached}) scanMs=${timings.scanMs} storageMs=${timings.storageMs} dbMs=${timings.dbMs} totalMs=${timings.totalMs}`);
+  return { ...submission, warnings, missing: collected.missing || [], works: submittedWork ? [submittedWork] : [], timings };
 }

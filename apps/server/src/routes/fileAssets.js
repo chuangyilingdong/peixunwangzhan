@@ -493,8 +493,10 @@ export async function storeGeneratedAsset({ buffer, mimeType, fileName, ownerUse
  *     `publicSnapshotFiles` 正是按这个前缀把它改写成作品专属的公开代理地址（前缀不一致就改写不到）；
  *   · 仍走 `persistSecureUpload`（验扩展名/魔术字节/大小），所以生成物与学生手传的图共用一条路。
  */
-export async function storeStudentArtifactAsset({ buffer, mimeType, fileName, ownerUserId, ownerOrgId = null, metadata = {} }) {
-  const stored = await persistSecureUpload({ fileName, mimeType, buffer });
+export async function storeStudentArtifactAsset({ buffer, mimeType, fileName, ownerUserId, ownerOrgId = null, metadata = {}, scan = null }) {
+  // `scan`：整单已经扫过就把结果透传进来（见 studentRuntime 的 `scanUploadBuffers`）——
+  // 一个作品有几个二进制文件就少起几次扫描器（`clamscan` 每次冷启动 16–40 秒，2026-10-05）。
+  const stored = await persistSecureUpload({ fileName, mimeType, buffer, scan });
   const fileId = id('file');
   const now = nowIso();
   await aq(
