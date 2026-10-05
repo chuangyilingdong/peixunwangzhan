@@ -370,6 +370,30 @@ try {
      接口路由 `fetch('./api/upload?name='…)` 全都成了"缺素材"（那份作品实际报了 13 条，一条真的没有）。
      判据收紧成：**只认真正取文件的上下文 + 必须带已知资源扩展名**。 */
   const { missingLocalAssets } = await import('../apps/server/src/routes/vibecoding.js');
+  /* ⑬ 视频声音：预览文档构建器对**非 autoplay** 的 `<video muted>` 去掉静音
+     （2026-10-05 用户报「昨天那件视频带音频的作品还是没声音」——生产快照里三个 video 都写了 `muted`，
+     浏览器因此强制静音；平台侧统一在回放文档里摘掉，但**带 autoplay 的保留**，否则自动播放会被浏览器拦）。 */
+  {
+    const { buildPreviewDocument } = await import('../packages/shared/src/vibecodingProject.js');
+    const entryHtml = [
+      '<!doctype html><html><body>',
+      '<video id="a" src="v.mp4" muted playsinline preload="auto"></video>',
+      '<video id="b" src="v.mp4" muted="muted" playsinline></video>',
+      '<video id="c" src="v.mp4" muted autoplay playsinline loop></video>',
+      '<video id="d" src="v.mp4" playsinline></video>',
+      '</body></html>',
+    ].join('');
+    const built = buildPreviewDocument({ 'index.html': entryHtml }, 'index.html');
+    const first = (built.match(/<video id="a"[\s\S]*?>/i) || [''])[0];
+    const second = (built.match(/<video id="b"[\s\S]*?>/i) || [''])[0];
+    const autoplay = (built.match(/<video id="c"[\s\S]*?>/i) || [''])[0];
+    check('⑬ 预览文档去掉非 autoplay 视频的 muted（否则有音轨也不出声）',
+      first && !/\bmuted\b/i.test(first) && /\bplaysinline\b/i.test(first) && /\bpreload=/i.test(first)
+        && second && !/\bmuted\b/i.test(second),
+      JSON.stringify({ first, second }).slice(0, 300));
+    check('⑬ 带 autoplay 的 muted 必须保留（浏览器自动播放策略）',
+      Boolean(autoplay) && /\bmuted\b/i.test(autoplay) && /\bautoplay\b/i.test(autoplay), autoplay);
+  }
   const NO_FALSE_POSITIVE = [
     ["<script>const u = URL.createObjectURL(new Blob([b], { type: mimeOf(name, path) }))</script>", 'createObjectURL 里的 url('],
     ["<script>const BUILTIN=[{name:'萌宠角色.png', size:2990481}];</script>", '内置演示清单'],

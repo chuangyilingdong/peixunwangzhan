@@ -383,6 +383,13 @@ function embedLocalAssets(value, files) {
     });
 }
 
+function normalizePreviewVideoAudio(value) {
+  return String(value || '').replace(/<video\b([^>]*?)\s+muted(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?([^>]*)>/gi, (match, before, after) => {
+    if (/\bautoplay\b/i.test(`${before} ${after}`)) return match;
+    return `<video${before}${after}>`;
+  });
+}
+
 /**
  * 把入口 HTML 里引用的本地 css/js 内联进预览文档；外链保持原样（sandbox 内没有同源权限）。
  * 工作区预览与官网公开作品页共用这一份，保证「学生看到的」和「作品广场看到的」一致。
@@ -407,13 +414,14 @@ export function buildPreviewDocument(files, entryFile) {
       return `<script>${content}</script>`;
     });
   const embedded = embedLocalAssets(html, files);
+  const normalizedMedia = normalizePreviewVideoAudio(embedded);
   // 存储替身与桥都必须装在学生脚本**之前**：前者要抢在那行顶层 localStorage 之前，
   // 后者要抢在 head 里的早期 console/error 调用之前（fetch 桥也一样：学生页可能一上来就 fetch 素材）。
   // 顺序：存储替身 → 控制台桥 → 高度上报 → 素材 fetch 桥 → PDF 桥（PDF 桥仍排最后，见它自己的注释）。
   const preamble = `${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}${PREVIEW_HEIGHT_BRIDGE}${ASSET_FETCH_BRIDGE}${PDF_BRIDGE}`;
-  if (/<head[^>]*>/i.test(embedded)) return embedded.replace(/<head[^>]*>/i, (match) => `${match}${preamble}`);
-  if (/<body[^>]*>/i.test(embedded)) return embedded.replace(/<body[^>]*>/i, (match) => `${match}${preamble}`);
-  return preamble + embedded;
+  if (/<head[^>]*>/i.test(normalizedMedia)) return normalizedMedia.replace(/<head[^>]*>/i, (match) => `${match}${preamble}`);
+  if (/<body[^>]*>/i.test(normalizedMedia)) return normalizedMedia.replace(/<body[^>]*>/i, (match) => `${match}${preamble}`);
+  return preamble + normalizedMedia;
 }
 
 /** 只有真正能在工作台里展示的主产物才允许单独提交。 */
