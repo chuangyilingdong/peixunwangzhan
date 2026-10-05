@@ -27,17 +27,11 @@ export function Modal({ title, parent, description, children, onClose, footer, b
     {/* `headerAction`：页眉右上角那格（2026-10-01 用户口径 —— 作品分享按钮要跟其它入口一致，
         放**右上角**而不是底部按钮行；见 ClassroomWork 里的用法）。 */}
     <div className="classroom-dialog-head"><h3 id={titleId}>{title}</h3>{headerAction}</div>
-    {parent?.length ? <ParentLine items={parent} /> : null}
     {description ? <p className="muted">{description}</p> : null}
     {error ? <div role="alert"><Notice tone="danger">{error}</Notice></div> : null}
     <fieldset disabled={busy} className={`classroom-dialog-fields${wide ? ' c-work-preview-dialog__body' : ''}`}>{children}</fieldset>
     <fieldset disabled={busy} className="classroom-dialog-fields row-actions top-gap">{footer}</fieldset>
   </dialog>;
-}
-
-/** 子页标题下面那行灰字：父级：005-01 | 我的课堂（线框图每个子页都有）。 */
-export function ParentLine({ items }) {
-  return <p className="classroom-parent-line">父级：{items.filter(Boolean).join(' | ')}</p>;
 }
 
 /** 弹窗/页面顶部那条三格信息带：当前课堂 / 课包·课程 / 学生数。 */
@@ -74,30 +68,6 @@ export function Checklist({ title, checks = [], passedLabel = '全部通过', fa
   </section>;
 }
 
-/** 带小标题的段落块（弹窗里「保存后的影响 / 确认开始后的状态变化」这些段）。 */
-export function Block({ title, children }) {
-  return <section className="classroom-block">
-    {title ? <div className="classroom-block-head"><h4>{title}</h4></div> : null}
-    {children}
-  </section>;
-}
-
-/** 带编号的规则/边界说明（蓝色=说明，橙色=边界与影响，绿色=结果）。 */
-export function RuleList({ title, items = [], tone = 'info', footer }) {
-  return <Notice tone={tone}>
-    {title ? <strong>{title}</strong> : null}
-    <ol className="classroom-rule-list">{items.map((item, index) => <li key={typeof item === 'string' ? item : index}>{item}</li>)}</ol>
-    {footer ? <p className="muted">{footer}</p> : null}
-  </Notice>;
-}
-
-/** 保存后的业务链（创建课堂页底部那四个带编号的步骤）。 */
-export function FlowSteps({ steps }) {
-  return <ol className="wizard-steps">{steps.map((step, index) => (
-    <li key={step.title} className={index === 0 ? 'is-active' : ''}><span>{index + 1}</span>{step.title}</li>
-  ))}</ol>;
-}
-
 /** 字段栅格：课堂信息那类「标签 + 值」的成对信息。 */
 export function DefinitionGrid({ items, columns }) {
   return <dl className="classroom-facts" data-columns={columns || undefined}>{items.map((item) => (
@@ -110,11 +80,6 @@ export function DefinitionGrid({ items, columns }) {
       </dd>
     </div>
   ))}</dl>;
-}
-
-/** 「本页不包含 / 页面边界」这类灰底说明条。 */
-export function BoundaryNote({ title, lines = [], tone = 'warning' }) {
-  return <Notice tone={tone}>{title ? <strong>{title}</strong> : null}{lines.map((line) => <p key={line} className="classroom-boundary-line">{line}</p>)}</Notice>;
 }
 
 /**
