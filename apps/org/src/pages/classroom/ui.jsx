@@ -1,7 +1,7 @@
 // 课堂四个页面的共用展示件（2026-09-17，按线框图改造）。
 //
 // 这一层只负责「长什么样」，不碰数据：线框图里的信息条、校验清单、规则条、业务链、
-// 父级行、字段栅格都是纯排版，四个页面（列表 / 创建 / 详情 / 添加学生）反复要用。
+// 字段栅格、字段栅格都是纯排版，四个页面（列表 / 创建 / 详情 / 添加学生）反复要用。
 // 样式尽量复用 packages/shared/src/styles.css 里已有的原语
 // （.publish-check / .wizard-steps / .status / .notice），本项目自己有的一套就够用。
 import { useEffect, useId, useRef, useState } from 'react';
@@ -9,7 +9,7 @@ import { Notice } from '@platform/shared';
 
 /**
  * 课堂页统一的对话弹窗（原生 <dialog>，自动获得焦点陷阱与 Esc 关闭）。
- * 线框图的确认弹窗都长这样：标题 + 父级行 + 信息带 + 若干带色块 → 底部两个按钮。
+ * 线框图的确认弹窗都长这样：标题 + 信息带 + 若干带色块 → 底部两个按钮。
  */
 export function Modal({ title, parent, description, children, onClose, footer, busy, error, wide = false, headerAction = null }) {
   const ref = useRef(null);

@@ -286,7 +286,7 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
   const openGrant = items.find((item) => item.id === openGrantId) || null;
 
   return <>
-    <PageHeader eyebrow="002-04" title="学生授权详情" description="父级：002-03 | 学生授权中心"
+    <PageHeader eyebrow="002-04" title="学生授权详情"
       actions={<><button className="secondary-button" onClick={onBack}>← 返回学生授权中心</button><button className="primary-button" onClick={() => setAdding(true)}>添加课包</button></>} />
     {data.loading ? <Loading label="正在读取该学生的授权…" /> : data.error ? <ErrorState error={data.error} onRetry={data.refresh} /> : <>
       <Panel title="学生">
@@ -563,7 +563,7 @@ export function SeriesOverview({ api }) {
       {openStudentId ? <><span className="muted" aria-hidden="true">/</span><span>学生授权详情</span></> : null}
     </nav> : null}
 
-    {openId ? <PageHeader eyebrow="002-02" title="单课包库存详情" description="父级：002-01 | 机构课包库存"
+    {openId ? <PageHeader eyebrow="002-02" title="单课包库存详情"
       actions={<button className="secondary-button" onClick={() => setOpenId('')}>← 返回课包库存</button>} />
       : openStudentId ? null
         : meta ? <PageHeader eyebrow={meta.eyebrow} title={meta.title} description={meta.description}
