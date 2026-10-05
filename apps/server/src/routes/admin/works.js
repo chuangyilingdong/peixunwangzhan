@@ -263,7 +263,7 @@ export async function handleWorks(ctx, part, method) {
     const mime = String(file?.mime_type || '').toLowerCase();
     if (!file || file.status !== 'ACTIVE' || (file.owner_user_id !== submission.student_id && !['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility)) || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品媒体不可用', 'VIBECODING_WORK_IMAGE_NOT_FOUND');
     if (mime.startsWith('image/')) return prepareWorkImage(ctx, file);
-    if (/^(audio|video)\//.test(mime)) return prepareFilePreview(ctx, file);
+    if (/^(audio|video)\//.test(mime)) return prepareFilePreview(ctx, file, { ossOffload: true });
     throw errors.notFound('作品媒体不可用', 'VIBECODING_WORK_IMAGE_NOT_FOUND');
   }
   let vibeDetailMatch = part.match(/^\/vibecoding-works\/([^/]+)$/);
@@ -284,7 +284,12 @@ export async function handleWorks(ctx, part, method) {
     const ossUrls = {};
     for (const fileId of snapshotImageFileIds(submission)) {
       const row = await arow('SELECT * FROM file_assets WHERE id=?', [String(fileId)]);
-      const signed = row && /^image\//i.test(String(row.mime_type || '')) ? ossRedirectUrl(row, { expires: 7200 }) : null;
+      // ⚠️ 2026-10-05：**音视频也必须留在 ossUrls 里**（别按图片过滤）。
+      //    实测定论（生产真机，IAB 浏览器内嵌 `<video>` 加载 OSS 签名直链）：
+      //    `readyState=4 / videoWidth=1440 / duration=5.17s / play() 成功` —— OSS 那个
+      //    `Content-Disposition: attachment` 只作用于**顶层导航**，对 `<video src>` 这类嵌入媒体无效。
+      //    教训：曾把它按图片过滤掉，结果老师端/平台端只能退回 base64 内联（2MB 勉强、20MB 必挂）→ 白屏。
+      const signed = row ? ossRedirectUrl(row, { expires: 7200 }) : null;
       if (signed) ossUrls[fileId] = signed;
     }
     // 与机构端同一条口径：这件作品里**还指着本地文件、但没随作品交上来**的引用（旧客户端不带素材），

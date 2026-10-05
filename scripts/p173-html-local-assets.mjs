@@ -237,12 +237,18 @@ try {
     check(`①d ${label}沙箱 CSP 放行了直链来源（mediaSources）`,
       /img-src data: blob: \$\{mediaSources\}/.test(source) && /media-src data: blob: \$\{mediaSources\}/.test(source), file);
   }
-  const imageOnlyOssUrl = (source) => source.includes("const signed = row && /^image\\//i.test(String(row.mime_type || '')");
-  check('①d 服务端给老师端/平台端的作品详情都带 ossUrls（图片直链，音视频走应用代理）',
-    /ossRedirectUrl\(row, \{ expires: 7200 \}\)/.test(fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'orgAdmin.js'), 'utf8'))
-    && /ossRedirectUrl\(row, \{ expires: 7200 \}\)/.test(fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'admin', 'works.js'), 'utf8'))
-    && imageOnlyOssUrl(fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'orgAdmin.js'), 'utf8'))
-    && imageOnlyOssUrl(fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'admin', 'works.js'), 'utf8')));
+  // ⭐ 2026-10-05 实测结论（生产真机，嵌在页面里的 `<video src=OSS签名直链>`）：
+  //    `readyState=4 / videoWidth=1440 / duration=5.17s / play() 成功` —— OSS 的
+  //    `Content-Disposition: attachment` 只作用于**顶层导航**，对嵌入媒体无效。
+  //    所以 ossUrls **必须同时给图与音视频**：把它按 mime 过滤成"只有图片"会让老师端/平台端
+  //    退回 base64 内联（2MB 勉强、20MB 的 transform.mp4 必挂）→ 预览白屏。
+  const orgSource = fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'orgAdmin.js'), 'utf8');
+  const adminWorksSource = fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'admin', 'works.js'), 'utf8');
+  const imageOnlyFilter = "/^image\\//i.test(String(row.mime_type";
+  check('①d 服务端给老师端/平台端的作品详情都带 ossUrls（**含音视频**，别按图片过滤）',
+    /ossRedirectUrl\(row, \{ expires: 7200 \}\)/.test(orgSource) && /ossRedirectUrl\(row, \{ expires: 7200 \}\)/.test(adminWorksSource)
+    && !orgSource.includes(imageOnlyFilter) && !adminWorksSource.includes(imageOnlyFilter),
+    `orgOld=${orgSource.includes(imageOnlyFilter)} adminOld=${adminWorksSource.includes(imageOnlyFilter)}`);
   check('①c 学生域下载口也带 attachment',
       ![404, 403].includes(ownSvg.status) && /attachment/i.test(String(ownSvg.disposition || '')),
       `status=${ownSvg.status} disposition=${ownSvg.disposition}`);
