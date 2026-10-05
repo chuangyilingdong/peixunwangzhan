@@ -485,7 +485,7 @@ export async function handlePublicCommunication(ctx) {
     if (link.source === 'VIBECODING') {
       const mime = String(file.mime_type || '').toLowerCase();
       if (/^(image|audio|video)\//.test(mime)) {
-        return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFilePreview(ctx, file, { ossOffload: true });
+        return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFilePreview(ctx, file);
       }
     }
     return prepareFileDownload(ctx, file);
@@ -545,7 +545,7 @@ export async function handlePublicCommunication(ctx) {
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
     if (source === 'VIBECODING') {
       const mime = String(file.mime_type || '').toLowerCase();
-      return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFilePreview(ctx, file, { ossOffload: true });
+      return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFilePreview(ctx, file);
     }
     return prepareFileDownload(ctx, file);
   }
@@ -611,7 +611,7 @@ export async function handlePublicCommunication(ctx) {
     const mime = String(file.mime_type || '').toLowerCase();
     if (!/^(image|audio|video)\//.test(mime)) throw errors.notFound('作品媒体不可用', 'PUBLIC_VIBECODING_MEDIA_NOT_FOUND');
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
-    return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFilePreview(ctx, file, { ossOffload: true });
+    return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFilePreview(ctx, file);
   }
 
   // P5-W05: 公开课包列表（无需登录）。公开口径 = 平台自有的 PUBLISHED 且「上架课程广场」的课包

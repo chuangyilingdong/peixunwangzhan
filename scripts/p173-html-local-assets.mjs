@@ -237,9 +237,12 @@ try {
     check(`①d ${label}沙箱 CSP 放行了直链来源（mediaSources）`,
       /img-src data: blob: \$\{mediaSources\}/.test(source) && /media-src data: blob: \$\{mediaSources\}/.test(source), file);
   }
-  check('①d 服务端给老师端/平台端的作品详情都带 ossUrls（2 小时有效期）',
+  const imageOnlyOssUrl = (source) => source.includes("const signed = row && /^image\\//i.test(String(row.mime_type || '')");
+  check('①d 服务端给老师端/平台端的作品详情都带 ossUrls（图片直链，音视频走应用代理）',
     /ossRedirectUrl\(row, \{ expires: 7200 \}\)/.test(fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'orgAdmin.js'), 'utf8'))
-    && /ossRedirectUrl\(row, \{ expires: 7200 \}\)/.test(fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'admin', 'works.js'), 'utf8')));
+    && /ossRedirectUrl\(row, \{ expires: 7200 \}\)/.test(fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'admin', 'works.js'), 'utf8'))
+    && imageOnlyOssUrl(fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'orgAdmin.js'), 'utf8'))
+    && imageOnlyOssUrl(fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'admin', 'works.js'), 'utf8')));
   check('①c 学生域下载口也带 attachment',
       ![404, 403].includes(ownSvg.status) && /attachment/i.test(String(ownSvg.disposition || '')),
       `status=${ownSvg.status} disposition=${ownSvg.disposition}`);

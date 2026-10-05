@@ -263,7 +263,7 @@ export async function handleWorks(ctx, part, method) {
     const mime = String(file?.mime_type || '').toLowerCase();
     if (!file || file.status !== 'ACTIVE' || (file.owner_user_id !== submission.student_id && !['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility)) || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品媒体不可用', 'VIBECODING_WORK_IMAGE_NOT_FOUND');
     if (mime.startsWith('image/')) return prepareWorkImage(ctx, file);
-    if (/^(audio|video)\//.test(mime)) return prepareFilePreview(ctx, file, { ossOffload: true });
+    if (/^(audio|video)\//.test(mime)) return prepareFilePreview(ctx, file);
     throw errors.notFound('作品媒体不可用', 'VIBECODING_WORK_IMAGE_NOT_FOUND');
   }
   let vibeDetailMatch = part.match(/^\/vibecoding-works\/([^/]+)$/);
@@ -284,7 +284,7 @@ export async function handleWorks(ctx, part, method) {
     const ossUrls = {};
     for (const fileId of snapshotImageFileIds(submission)) {
       const row = await arow('SELECT * FROM file_assets WHERE id=?', [String(fileId)]);
-      const signed = row ? ossRedirectUrl(row, { expires: 7200 }) : null;
+      const signed = row && /^image\//i.test(String(row.mime_type || '')) ? ossRedirectUrl(row, { expires: 7200 }) : null;
       if (signed) ossUrls[fileId] = signed;
     }
     // 与机构端同一条口径：这件作品里**还指着本地文件、但没随作品交上来**的引用（旧客户端不带素材），

@@ -875,7 +875,7 @@ export async function handleOrg(ctx) {
         || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品媒体不可用', 'SESSION_WORK_IMAGE_NOT_FOUND');
       if (mime.startsWith('image/')) return prepareWorkImage(ctx, file);
       if (mime.startsWith('font/')) return prepareFileDownload(ctx, file);
-      return prepareFilePreview(ctx, file, { ossOffload: true });
+      return prepareFilePreview(ctx, file);
     }
     const base = { id: work.id, source, title: work.title, studentId: work.student_id, studentName: work.student_name || null, status: work.status, submittedAt: work.submitted_at };
     const imageUrls = Object.fromEntries([...allowedImages].map((fileId) => [fileId, `${scope.base}/${source}/${encodeURIComponent(work.id)}/images/${encodeURIComponent(fileId)}`]));
@@ -888,7 +888,7 @@ export async function handleOrg(ctx) {
     const ossUrls = {};
     for (const fileId of allowedImages) {
       const row = await arow('SELECT * FROM file_assets WHERE id=?', [String(fileId)]);
-      const signed = row ? ossRedirectUrl(row, { expires: 7200 }) : null;
+      const signed = row && /^image\//i.test(String(row.mime_type || '')) ? ossRedirectUrl(row, { expires: 7200 }) : null;
       if (signed) ossUrls[fileId] = signed;
     }
     // 作品页要展示的**媒体**（图/视频/音频）——老师端预览也要看"做出来的东西"，不是画布
