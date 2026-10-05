@@ -31,7 +31,7 @@ export function Dashboard({ api }) {
   const yuan = (value) => `¥${Number(value || 0).toFixed(2)}`;
   const definition = (key) => definitions[key] || '';
   return <>
-    <PageHeader eyebrow="平台控制台" title="运营总览" description="按机构和时间查看真实经营、课程、作品与模型调用指标。" actions={<button className="secondary-button" onClick={() => { organizations.refresh(); refresh(); }}>刷新</button>} />
+    <PageHeader eyebrow="平台控制台" title="运营总览"  actions={<button className="secondary-button" onClick={() => { organizations.refresh(); refresh(); }}>刷新</button>} />
     <Panel title="筛选条件">
       <div className="form-grid">
         <label>机构<select value={filters.orgId} onChange={(event) => setFilters({ ...filters, orgId: event.target.value })}>

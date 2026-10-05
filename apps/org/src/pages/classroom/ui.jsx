@@ -150,6 +150,5 @@ export function RenameWorkDialog({ api, workBase, work, onClose, onRenamed }) {
     </>}>
     <label>作品名称 *<input value={title} maxLength={200} autoFocus placeholder="例如：布布的小窝"
       onChange={(event) => setTitle(event.target.value)} /></label>
-    <p className="muted top-gap">改完之后，老师端 / 机构端 / 平台端 / 官网作品广场 / 分享页显示的都会是这个新名称；学生的作品内容一个字节都不动。</p>
   </Modal>;
 }

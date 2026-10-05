@@ -44,7 +44,7 @@ export function PlatformAudit({ api }) {
     } catch (err) { setMessage(errorText(err)); } finally { setExporting(false); }
   }
   return <>
-    <PageHeader eyebrow="平台系统" title="操作审计中心" description="按机构、动作、操作者、目标、时间和请求路径检索全平台审计记录，导出 CSV 供归档与合规使用。" actions={<><button className="secondary-button" onClick={() => { list.refresh(); summary.refresh(); actions.refresh(); }}>刷新</button><button className="primary-button" disabled={exporting} onClick={exportCsv}>{exporting ? '导出中…' : '导出 CSV'}</button></>} />
+    <PageHeader eyebrow="平台系统" title="操作审计中心"  actions={<><button className="secondary-button" onClick={() => { list.refresh(); summary.refresh(); actions.refresh(); }}>刷新</button><button className="primary-button" disabled={exporting} onClick={exportCsv}>{exporting ? '导出中…' : '导出 CSV'}</button></>} />
     <Panel title="筛选条件">
       <div className="form-grid">
         <label>动作<select value={actionFilter} onChange={(e) => { setActionFilter(e.target.value); setPage(1); }}><option value="">全部动作</option>{(actions.data?.items || []).map((item) => <option key={item.action} value={item.action}>{item.action}（{item.count}）</option>)}</select></label>

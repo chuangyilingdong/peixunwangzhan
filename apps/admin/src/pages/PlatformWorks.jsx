@@ -134,7 +134,7 @@ export function PlatformWorks({ api }) {
     finally { setExporting(false); }
   }
   return <>
-    <PageHeader eyebrow="作品发布" title="平台作品库" description="查看学生提交的作品，选择发布到官网学生作品广场。由平台管理发布，教师无需审核。" actions={<>{kind === 'canvas' && <button className="secondary-button" disabled={exporting} onClick={exportWorks}>{exporting ? '导出中…' : '导出画布 CSV'}</button>}<button className="secondary-button" onClick={refresh}>刷新</button></>} />
+    <PageHeader eyebrow="作品发布" title="平台作品库"  actions={<>{kind === 'canvas' && <button className="secondary-button" disabled={exporting} onClick={exportWorks}>{exporting ? '导出中…' : '导出画布 CSV'}</button>}<button className="secondary-button" onClick={refresh}>刷新</button></>} />
     <Panel title="作品筛选">
       <div className="row-actions" role="group" aria-label="作品类型">
         <button className={kind === 'canvas' ? 'primary-button' : 'secondary-button'} aria-pressed={kind === 'canvas'} disabled={saving} onClick={() => changeKind('canvas')}>画布作品</button>

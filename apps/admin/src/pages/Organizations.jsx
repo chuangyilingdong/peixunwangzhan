@@ -223,7 +223,7 @@ export function Organizations({ api }) {
   const showPackageColumn = items.some((item) => openedPackageCount(item) !== null);
 
   return <>
-    <PageHeader eyebrow="平台教务" title="创建机构与授权" description="创建与维护机构资料、服务状态，并为每家机构配置课包与授权次数。" actions={<><button className="secondary-button" disabled={exporting} onClick={exportOrganizations}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={() => { organizations.refresh(); setMessage(null); }}>刷新</button></>} />
+    <PageHeader eyebrow="平台教务" title="创建机构与授权"  actions={<><button className="secondary-button" disabled={exporting} onClick={exportOrganizations}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={() => { organizations.refresh(); setMessage(null); }}>刷新</button></>} />
     {showCreateDialog ? <CreateOrganizationDialog form={form} setForm={setForm} saving={saving} error={dialogError} onClose={() => setShowCreateDialog(false)} onSubmit={create} /> : null}
     <Notice tone="info">先选机构 → 再配置课包与授权次数（总授权次数 / 已授权次数 / 剩余授权次数）：列表里<b>「授权课包」直达</b>本机构的课包与授权次数，「查看详情」进机构详情。</Notice>
     {message ? <Notice tone={message.tone}>{message.text}{createdId ? <> 下一步：<Link to={`/organizations/${encodeURIComponent(createdId)}/quota`}>去授权课包</Link> · <Link to={`/organizations/${encodeURIComponent(createdId)}`}>查看机构详情</Link></> : null}</Notice> : null}
@@ -320,7 +320,7 @@ export function Authorizations({ api }) {
   //   （`/organizations/:orgId/quota`，机构采购与平台调整在同一个抽屉里二选一）。
   //   本页保留**课包视角**：库存总次数（平台自己的池子）+ 各机构已分到多少，只读。）
   return <>
-    <PageHeader title="授权管理" description="选择一个课包和一家机构，查看当前授权后再追加次数或调整有效期。" />
+    <PageHeader title="授权管理"  />
     {confirmation}
     {message && <Notice tone="success">{message}</Notice>}
     {inventory.loading || organizations.loading ? <Loading /> : inventory.error ? <ErrorState error={inventory.error} onRetry={inventory.refresh} /> : organizations.error ? <ErrorState error={organizations.error} onRetry={organizations.refresh} /> : <>

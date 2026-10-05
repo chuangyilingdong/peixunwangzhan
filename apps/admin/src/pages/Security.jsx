@@ -45,7 +45,7 @@ export function Security({ api, onSignedOut }) {
   }
   const enabled = !!status.data?.enabled;
   return <>
-    <PageHeader eyebrow="我的账号" title="账号安全" description="维护登录密码，并为平台管理员账号开启二次验证（TOTP 动态码 + 一次性恢复码）。" />
+    <PageHeader eyebrow="我的账号" title="账号安全"  />
     {error ? <Notice tone="danger">{error}</Notice> : null}
     {notice ? <Notice tone="success">{notice}</Notice> : null}
     <Panel title="登录密码">

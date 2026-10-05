@@ -129,7 +129,7 @@ export function ClientUpdate({ api }) {
   const PLATFORM_LABEL = { 'win-x64': 'Windows（x64）', 'mac-arm64': 'macOS（Apple 芯片）' };
   const PLATFORM_EXAMPLE = { 'win-x64': 'lingdong-client-<版本>-win-x64.exe', 'mac-arm64': 'lingdong-client-<版本>-mac-arm64.dmg' };
   return <>
-    <PageHeader eyebrow="系统管理" title="客户端更新" description="上传新安装包并发布，或配置客户端启动时的更新提示。发布后客户端下次启动检查时即可收到更新。" />
+    <PageHeader eyebrow="系统管理" title="客户端更新"  />
     {error ? <Notice tone="danger">{error}</Notice> : null}
     {notice ? <Notice tone="success">{notice}</Notice> : null}
     {loading ? <Loading /> : !data ? <ErrorState error={error || '没有返回配置'} onRetry={load} /> : <>

@@ -16,7 +16,7 @@ const ORG_ROLE_LABEL = { ORG_ADMIN: '机构管理员', TEACHER: '授课教师' }
  */
 export function AccountSecurity({ api, user, onSignedOut }) {
   return <>
-    <PageHeader eyebrow="我的账号" title="账号安全" description="修改你自己的登录密码。机构管理员与老师都能自己改，不用再找机构管理员代改。" />
+    <PageHeader eyebrow="我的账号" title="账号安全" />
     <Panel title="当前账号">
       <p className="muted">登录名 <strong>{user?.login || '—'}</strong> · 角色 <strong>{ORG_ROLE_LABEL[user?.role] || user?.role || '—'}</strong></p>
     </Panel>

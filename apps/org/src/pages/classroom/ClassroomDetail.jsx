@@ -11,7 +11,7 @@
 //    ⚠️ 名单里的「最近活动」**列**保留了（那只是活动时间；这次删的是课堂操作里那行汇总文案）。
 import { useEffect, useRef, useState } from 'react';
 import { Empty, ErrorState, formatDate, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
-import { Block, BoundaryNote, Checklist, DefinitionGrid, InfoStrip, Modal, ParentLine, RenameWorkDialog, RuleList } from './ui.jsx';
+import { Checklist, DefinitionGrid, InfoStrip, Modal, RenameWorkDialog } from './ui.jsx';
 import { ClassroomWork } from './ClassroomWork.jsx';
 import { DELIVERY_LABEL, removedReasonLabel, SESSION_STATE, StateBadge, STUDENT_STATE } from './states.jsx';
 
@@ -116,7 +116,6 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
   return <div className="classrooms-page">
     <PageHeader eyebrow="开课与上课" title="课堂详情"
       actions={<button className="secondary-button" disabled={busy} onClick={onBack}>← 返回列表</button>} />
-    <ParentLine items={[current?.title ? `我的课堂列表` : '我的课堂列表']} />
 
     {message ? <div role="status"><Notice tone="success">{message}</Notice></div> : null}
     {error && !modal ? <div role="alert"><Notice tone="danger">{error}</Notice></div> : null}
@@ -137,10 +136,7 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
           {current.status === 'ACTIVE' ? <Notice tone="success">课堂进行中：仍可添加符合条件的新学生，但开始后不可移除学生。</Notice> : null}
           {terminal ? <Notice tone="info">{current.status === 'ENDED'
             ? '课堂已结束，完课结果固定。'
-            : '课堂已解散，学生占用已解除。'} 结果、作品与事件均为只读记录。</Notice> : null}
-          {/* 口径 2026-09-20：可管理 = 负责老师本人，或**本机构的机构管理员**（见服务端 canManageSession）；
-              文案跟这条一起改，别让界面继续只说"仅负责老师" —— 机构管理员看得到按钮才不困惑。 */}
-          {!canManage && !terminal ? <Notice tone="info">只读课堂：只有负责老师或本机构的机构管理员可以管理。</Notice> : null}
+            : '课堂已解散，学生占用已解除。'}</Notice> : null}
 
           <div className="classroom-detail-grid">
             <Panel title="课堂信息">
@@ -179,7 +175,6 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
                   : null}
               </div>
               {current.status === 'PENDING' && !summary.pending ? <p className="muted">名单为空：添加学生后才能开始上课。</p> : null}
-              {current.status === 'PENDING' ? <p className="muted">开始或解散均需二次确认。</p> : null}
             </Panel>
           </div>
 
@@ -248,29 +243,19 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
       onClose={closeModal} onRenamed={() => detail.refresh()} /> : null}
 
     {/* 005-03A 编辑课堂名称 */}
-    {modal?.kind === 'title' ? <Modal title="编辑课堂名称" parent={['课堂详情']} busy={busy} error={error} onClose={closeModal}
+    {modal?.kind === 'title' ? <Modal title="编辑课堂名称" busy={busy} error={error} onClose={closeModal}
       footer={<><button className="secondary-button" onClick={closeModal}>取消</button>
         <button className="primary-button" disabled={!allowed('canEdit') || busy || Boolean(titleValidation)} onClick={saveTitle}>{busy ? '保存中…' : '保存名称'}</button></>}>
       <InfoStrip items={[
         { label: '当前课堂', value: current?.title || '—', badge: SESSION_STATE[current?.status]?.label },
         { label: '课包 / 课程', value: current?.seriesTitle || '—', note: current?.lessonTitle || null },
-        { label: '学生数', value: `${summary.total ?? 0} 人`, note: '学生名单保持不变' },
+        { label: '学生数', value: `${summary.total ?? 0} 人` },
       ]} />
       <label>课堂名称 *<input value={titleDraft} maxLength={50} onChange={(event) => setTitleDraft(event.target.value)} /></label>
-      <small className="muted">仅修改显示名称，不改变课堂绑定关系或状态。</small>
-      <div className="top-gap"><Block title="保存后的影响"><DefinitionGrid columns={2} items={[
-        { label: '课堂状态', value: `仍为「${SESSION_STATE[current?.status]?.label || '—'}」` },
-        { label: '课包 / 课程', value: '保持不变' },
-        { label: '学生名单', value: `保持 ${summary.total ?? 0} 人不变` },
-        { label: '课堂记录', value: '仅更新课堂名称显示' },
-      ]} /></Block></div>
-      <div className="top-gap"><BoundaryNote lines={[
-        '不在此页更换课包 / 课程，不增删学生，不开始或解散课堂，也不修改任何课包授权。',
-      ]} /></div>
     </Modal> : null}
 
     {/* 005-03C 移除学生确认 */}
-    {modal?.kind === 'remove' ? <Modal title="移除学生确认" parent={['课堂详情']} busy={busy} error={error} onClose={closeModal}
+    {modal?.kind === 'remove' ? <Modal title="移除学生确认" busy={busy} error={error} onClose={closeModal}
       footer={<><button className="secondary-button" onClick={closeModal}>取消</button>
         <button className="primary-button danger-solid" disabled={!allowed('canRemoveStudents') || busy} onClick={actAndClose}>{busy ? '处理中…' : '确认移除'}</button></>}>
       <InfoStrip items={[
@@ -290,22 +275,10 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
           <span className="muted">加入时间：{formatDate(modal.student?.addedAt)}</span>
         </div>
       </section>
-      <Block title="确认移除后的影响"><DefinitionGrid columns={2} items={[
-        { label: '课堂学生数', value: `${summary.total ?? 0} → ${Math.max(0, (summary.total ?? 0) - 1)}` },
-        { label: '当前课堂关系', value: '解除' },
-        { label: '课包授权', value: '保持不变' },
-        { label: '学生账号', value: '保持正常' },
-        { label: '学习结果', value: '不产生' },
-        { label: '作品 / 算力消耗', value: '不产生、不修改' },
-      ]} /></Block>
-      <div className="top-gap"><RuleList tone="info" title="课程状态回溯规则" items={[
-        '移除后如果没有其他课堂关系，该学生的课程状态回到「未开课」。',
-        '若仍存在其他课堂的待上课 / 上课中关系，则按那个课堂的状态显示。',
-      ]} /></div>
     </Modal> : null}
 
     {/* 005-03D 开始上课确认 */}
-    {modal?.kind === 'start' ? <Modal title="开始上课确认" parent={['课堂详情']} busy={busy} error={error} onClose={closeModal}
+    {modal?.kind === 'start' ? <Modal title="开始上课确认" busy={busy} error={error} onClose={closeModal}
       footer={<><button className="secondary-button" onClick={closeModal}>取消</button>
         <button className="primary-button" disabled={!allowed('canStart') || busy || startBlocked} onClick={actAndClose}>{busy ? '处理中…' : '确认开始'}</button></>}>
       <InfoStrip items={[
@@ -315,27 +288,16 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
       ]} />
       {precheck.error ? <Notice tone="danger">校验结果读取失败：{precheck.error.message || '请重试'}</Notice> : null}
       <Checklist title="开始前资格校验" checks={checks} />
-      <Block title="确认开始后的状态变化"><DefinitionGrid columns={2} items={[
-        { label: '课堂状态', value: `${SESSION_STATE[current?.status]?.label || '—'} → 上课中` },
-        { label: '实际开始时间', value: '记录当前实际开始时间' },
-        { label: `${summary.pending ?? 0} 名学生课程状态`, value: '待上课 → 上课中' },
-        { label: '实际结束时间', value: '仍为 —' },
-      ]} /></Block>
-      <div className="top-gap"><BoundaryNote lines={[
-        '仍可添加符合条件的新学生；不可移除已加入学生；课包 / 课程继续锁定。',
-        '本模板不计算计划时间、课表或预约。',
-      ]} /></div>
     </Modal> : null}
 
     {/* 课堂结束确认（线框图未覆盖；沿用原有口径，不做校验清单） */}
-    {modal?.kind === 'end' ? <Modal title="确认结束课堂？" parent={['课堂详情']} busy={busy} error={error} onClose={closeModal}
+    {modal?.kind === 'end' ? <Modal title="确认结束课堂？" busy={busy} error={error} onClose={closeModal}
       footer={<><button className="secondary-button" onClick={closeModal}>取消</button>
         <button className="primary-button" disabled={!allowed('canEnd') || busy} onClick={actAndClose}>{busy ? '处理中…' : '确认结束'}</button></>}>
-      <p className="muted">按结课时已记录的真实成功 AI 调用结算完课结果。结束后课堂只读，完课结果固定；迟到回执仅计入用量账目，不改变完课结果。</p>
     </Modal> : null}
 
     {/* 005-03E 解散课堂确认 */}
-    {modal?.kind === 'dissolve' ? <Modal title="解散课堂确认" parent={['课堂详情']} busy={busy} error={error} onClose={closeModal}
+    {modal?.kind === 'dissolve' ? <Modal title="解散课堂确认" busy={busy} error={error} onClose={closeModal}
       footer={<><button className="secondary-button" onClick={closeModal}>取消</button>
         <button className="primary-button danger-solid" disabled={!allowed('canDissolve') || busy || dissolveBlocked} onClick={actAndClose}>{busy ? '处理中…' : '确认解散'}</button></>}>
       <InfoStrip items={[
@@ -345,20 +307,6 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
       ]} />
       {precheck.error ? <Notice tone="danger">校验结果读取失败：{precheck.error.message || '请重试'}</Notice> : null}
       <Checklist title="解散前校验" checks={checks} passedLabel="允许解散" failedLabel="暂不可解散" />
-      <Block title="确认解散后的状态变化"><DefinitionGrid columns={2} items={[
-        { label: '课堂状态', value: `${SESSION_STATE[current?.status]?.label || '—'} → 已解散` },
-        { label: '解散时间', value: '记录当前实际解散时间' },
-        { label: '实际开始时间', value: '仍为 —' },
-        { label: '实际结束时间', value: '仍为 —' },
-        { label: `${summary.total ?? 0} 名学生课程状态`, value: '待上课 → 未开课' },
-        { label: '课堂数据', value: '进入只读历史记录' },
-      ]} /></Block>
-      <div className="top-gap"><RuleList tone="info" title="不会发生的事情" items={[
-        '不取消学生课包授权，也不返还或再次扣减课包人次。',
-        '不产生有效算力消耗，不创建课程学习结果。',
-        '不归档课堂作品，不产生「未完课」课程结果。',
-        '不创建补课课堂；后续需要上课时重新创建。',
-      ]} footer="解散后不可重新开始此课堂；该课堂只保留为「已解散」历史记录。" /></div>
     </Modal> : null}
   </div>;
 }

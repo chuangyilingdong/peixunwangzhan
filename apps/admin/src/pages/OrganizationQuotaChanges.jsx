@@ -99,7 +99,7 @@ export function OrganizationQuotaChanges({ api }) {
   if (!orgId) return <Panel title="授权次数变更记录"><Empty title="缺少机构标识" body="请从机构列表点「查看详情」，再用「授权次数 → 查看变更记录」进入本页。" /></Panel>;
 
   return <>
-    <PageHeader eyebrow="平台教务 · 创建机构与授权" title="授权次数变更记录" description="本机构每个课包的授权次数变动流水（总授权次数、已授权次数的前后值）。" actions={<><button className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(orgId)}/quota`)}>← 返回课包与授权次数</button><button className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(orgId)}`)}>机构详情</button></>} />
+    <PageHeader eyebrow="平台教务 · 创建机构与授权" title="授权次数变更记录"  actions={<><button className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(orgId)}/quota`)}>← 返回课包与授权次数</button><button className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(orgId)}`)}>机构详情</button></>} />
     {detail.loading ? <Loading label="正在读取机构…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : <OrganizationCard organization={organization || {}} meta={<p className="muted">共 {assignments.length} 个课包。</p>} />}
     <Panel title="筛选">
       <form className="filter-form" onSubmit={submitFilters}>

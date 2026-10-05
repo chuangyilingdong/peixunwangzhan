@@ -179,7 +179,7 @@ export function AdminMaterials({ api }) {
   const filterChange = (values) => { setFilters({ ...filters, ...values }); setPage(1); };
 
   return <>
-    <PageHeader eyebrow="平台内容" title="素材与宣传物料" description="招生海报、课程介绍与活动资料：授权范围与真实使用统计。"
+    <PageHeader eyebrow="平台内容" title="素材与宣传物料" 
       actions={<><button className="primary-button" onClick={() => setAdding(true)}>+ 添加物料</button><button className="secondary-button" onClick={materials.refresh}>刷新</button></>} />
     {message ? <Notice tone="success">{message}</Notice> : null}
     <div className="filters">

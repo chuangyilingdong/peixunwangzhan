@@ -745,7 +745,7 @@ function CourseList({ api, onOpen }) {
   }
 
   return <>
-    <PageHeader eyebrow="课程资产" title="平台课包" description="维护平台级课程资料、课时编排、发布状态与机构授权；改完点「更新发布」填新版本号。"
+    <PageHeader eyebrow="课程资产" title="平台课包" 
       actions={<button className="primary-button" onClick={() => setShowCreate(true)}>＋ 新建课包</button>} />
     {message && <Notice tone="success">{message}</Notice>}
     <Panel title="筛选">

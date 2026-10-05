@@ -46,7 +46,7 @@ export function AdminInbox({ api }) {
   }
   function toggleRole(role) { setForm((old) => ({ ...old, roles: old.roles.includes(role) ? old.roles.filter((item) => item !== role) : [...old.roles, role] })); }
   return <>
-    <PageHeader eyebrow="平台运营" title="站内信" description="向机构管理员、教师和学生投递可追踪的站内通知。" actions={<button className="secondary-button" onClick={() => { inbox.refresh(); templates.refresh(); }}>刷新</button>} />
+    <PageHeader eyebrow="平台运营" title="站内信"  actions={<button className="secondary-button" onClick={() => { inbox.refresh(); templates.refresh(); }}>刷新</button>} />
     <div className="split"><Panel title="新建通知"><form onSubmit={create}>
       <label>标题<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label>
       <label>内容<textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} required /></label>
@@ -62,7 +62,6 @@ export function AdminInbox({ api }) {
     </form></Panel><Panel title="通知模板">
       <div className="form-grid"><label>模板名称<input value={templateName} onChange={(e) => setTemplateName(e.target.value)} placeholder="例如：课程更新提醒" /></label><label>保存当前内容<button type="button" className="secondary-button top-gap" onClick={saveTemplate}>保存为模板</button></label></div>
       {templates.loading ? <Loading /> : templates.error ? <ErrorState error={templates.error} onRetry={templates.refresh} /> : templates.data.items.length ? <div className="card-list">{templates.data.items.map((item) => <article className="item-card" key={item.id}><div className="row-actions"><strong>{item.name}</strong><Status value={item.status} /></div><p>{item.title}</p><div className="row-actions"><button className="secondary-button" disabled={item.status !== 'ACTIVE'} onClick={() => applyTemplate(item)}>套用</button><button className="text-button" onClick={() => toggleTemplate(item)}>{item.status === 'ACTIVE' ? '停用' : '启用'}</button></div></article>)}</div> : <Empty title="暂无通知模板" body="填写左侧通知内容后可保存为复用模板。" />}
-      <Notice tone="info">定时通知由服务进程内调度器发布，并在站内信请求到达时补偿扫描；邮件、短信和微信通道仍未接入。</Notice>
     </Panel></div>
     <Panel title="平台通知记录">{inbox.loading || organizations.loading ? <Loading /> : inbox.error ? <ErrorState error={inbox.error} onRetry={inbox.refresh} /> : inbox.data?.items?.length ? <>
       <div className="filters"><input value={filters.search} placeholder="搜索通知标题或内容" onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPage(1); }} /><select value={filters.status} onChange={(e) => { setFilters({ ...filters, status: e.target.value }); setPage(1); }}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="SCHEDULED">已排期</option><option value="PUBLISHED">已发布</option><option value="RECALLED">已撤回</option></select><select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="created">创建时间</option><option value="updated">更新时间</option><option value="publish">发布时间</option><option value="title">标题</option><option value="pinned">置顶优先</option></select><select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value="10">10 条/页</option><option value="20">20 条/页</option><option value="50">50 条/页</option></select></div>

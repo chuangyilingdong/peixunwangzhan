@@ -50,7 +50,7 @@ export function PlatformUsers({ api }) {
   }
   return <>
     {confirmation}
-    <PageHeader eyebrow="平台教务" title="平台用户" description="按角色、机构和关键词查看全平台真实账号与状态，并可执行启停、重置密码与解绑手机。" actions={<><button className="secondary-button" disabled={exporting} onClick={exportUsers}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={users.refresh}>刷新</button></>} />
+    <PageHeader eyebrow="平台教务" title="平台用户"  actions={<><button className="secondary-button" disabled={exporting} onClick={exportUsers}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={users.refresh}>刷新</button></>} />
     <Panel title="筛选条件">
       <div className="form-grid">
         <label>角色<select value={filters.role} onChange={(e) => { setFilters({ ...filters, role: e.target.value }); setPage(1); }}><option value="">全部角色</option>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>

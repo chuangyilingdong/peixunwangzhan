@@ -207,7 +207,7 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
     } catch (err) { setError(errorText(err)); } finally { setBusy(false); }
   }
 
-  return <Modal title="添加课包" description="选学生、选课包；体验课包填次数，普通课包确认即可。"
+  return <Modal title="添加课包"
     onClose={onClose} busy={busy} error={error}
     footer={<>
       <button className="primary-button" disabled={busy || !studentId || !picked} onClick={submit}>
@@ -261,7 +261,7 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
           <button type="button" className="secondary-button" disabled={units >= maxUnits} onClick={() => setUnits((value) => Math.min(maxUnits, value + 1))} aria-label="增加">＋</button>
         </span>
         <span className="muted">次（本课包剩余 {picked.remaining} 次，最多 {maxUnits} 次）</span>
-      </div> : <p className="muted">普通课包每人只能授权一次，点「确认授权」即可。</p>}
+      </div> : null}
       <p className="muted">授权后：{picked.title}{isExperience ? ` 该学生 +${useNow} 次` : ' 一笔学习许可（待激活）'}，本课包剩 {Math.max(0, Number(picked.remaining || 0) - useNow)} 次。</p>
     </> : null}
   </Modal>;
@@ -299,7 +299,6 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
           <MetricCard label="当前授权课包" value={summary.activeSeriesCount ?? 0} hint="当前未取消的授权" />
           <MetricCard label="已产生正式学习记录" value={summary.learnedSeriesCount ?? 0} hint={`其中学习中 ${summary.learningCount ?? 0} · 待激活 ${summary.pendingActivationCount ?? 0}`} tone="teal" />
         </div>
-        <p className="muted top-gap">账号信息仅用于确认授权对象；学生基础资料请前往「机构成员管理」。</p>
       </Panel>
 
       <Panel title={`当前课包授权（当前未取消授权：${activeItems.length} 条）`}
@@ -580,7 +579,6 @@ export function SeriesOverview({ api }) {
           <span className="muted">开通时间：{formatDate(current?.assignedAt)}</span>
           <EntitlementBadge status={current?.assignmentStatus} />
         </div>
-        <p className="muted">机构已获得该课包的人次权益，可继续为符合条件的学生进行授权。</p>
       </Panel>
       <div className="metrics">
         <MetricCard label="总人次" value={current?.quotaTotal ?? 0} hint="平台授予 · 只读" />
@@ -598,7 +596,6 @@ export function SeriesOverview({ api }) {
               <td><span className="status success">有效</span></td>
             </tr>)}</tbody>
           </table></div> : <Empty title="这个课包还没有分给任何学生" body="到「学生授权中心」把课包分给学生；每分给一人用掉 1 次。" />}
-          <p className="muted top-gap">完整授权管理前往「学生授权中心」。撤销由平台兜底执行（机构侧没有撤销入口）；撤销后学生立刻进不去，已上过的课次数不退。</p>
         </Panel>
         <Panel title="最近授权">
           {recentGrants.length ? <div className="card-list">{recentGrants.map((row) => <div className="row-actions" key={row.id}>

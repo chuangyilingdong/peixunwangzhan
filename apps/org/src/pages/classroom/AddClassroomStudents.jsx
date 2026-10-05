@@ -6,7 +6,7 @@
 // 未开课 / 无 / 待上课。这里照实算出来，规则哪天变了这几列会跟着变，不写死文案。
 import { useMemo, useState } from 'react';
 import { Empty, ErrorState, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
-import { ParentLine } from './ui.jsx';
+import { Modal } from './ui.jsx';
 import { SESSION_STATE, StateBadge } from './states.jsx';
 
 // 线框图的 A / B / C 三类「不可添加」原因，映射到服务端真实的原因码。
@@ -80,7 +80,6 @@ export function AddClassroomStudents({ api, openId, onBack }) {
   return <div className="classrooms-page">
     <PageHeader eyebrow="开课与上课" title="添加学生"
       actions={<button className="secondary-button" disabled={busy} onClick={onBack}>← 返回课堂详情</button>} />
-    <ParentLine items={['课堂详情']} />
 
     {detail.loading ? <Loading label="正在读取课堂…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : current ? <>
       <div className="classroom-add-head">
@@ -95,7 +94,6 @@ export function AddClassroomStudents({ api, openId, onBack }) {
 
       {!canAdd ? <Notice tone="warning">
         当前课堂状态为「{SESSION_STATE[current.status]?.label || current.status}」，不能再添加学生。
-        <div className="muted">只有待上课与上课中的课堂可以添加学生；已结束或已解散的课堂名单固定。</div>
       </Notice> : <>
         {message ? <div role="status"><Notice tone="success">{message}</Notice></div> : null}
         {error ? <div role="alert"><Notice tone="danger">{error}</Notice></div> : null}
@@ -123,7 +121,6 @@ export function AddClassroomStudents({ api, openId, onBack }) {
               {busy ? '添加中…' : '添加到课堂'}
             </button>
           </>}>
-            <p className="muted">仅显示当前可加入本课堂的学生。</p>
             {visibleSelectable.length ? <>
               <div className="table-wrap"><table>
                 <thead><tr>
@@ -149,10 +146,6 @@ export function AddClassroomStudents({ api, openId, onBack }) {
                   <td className="muted">可添加</td>
                 </tr>)}</tbody>
               </table></div>
-              <div className="top-gap"><Notice tone="success">
-                <strong>添加成功后的结果：</strong>所选学生加入后，当前课程状态由「未开课」变为「待上课」；课堂学生数同步增加。
-                <div className="muted">不会重复消耗课包人次，不改变原有课包授权状态，不会创建学习结果或算力消耗。</div>
-              </Notice></div>
             </> : <Empty title={keyword ? '没有匹配的可添加学生' : '暂无可添加学生'}
               body={keyword ? '换一个姓名或登录账号再查。' : '请检查这些学生的账号状态、课包许可与课堂占用。'} />}
           </Panel>
@@ -171,26 +164,16 @@ export function AddClassroomStudents({ api, openId, onBack }) {
                   ? <>{student.session.title}<div className="muted">{SESSION_STATE[student.session.status]?.label || student.session.status} · {student.session.teacherName || '未知老师'}</div></>
                   : <span className="muted">—</span>}</td>
               </tr>)}</tbody>
-            </table></div> : <Empty title="搜到的学生不在不可添加名单里" body="他要么可以添加，要么本来就没进候选池。" />)
+            </table></div> : <Empty title="搜到的学生不在不可添加名单里" />)
               : <Notice tone="warning">
                 <strong>本机构共有 {blocked.length} 人暂时不可添加。</strong>
-                <div className="muted">人数较多时整列铺开既没用又没法查，所以这里不列出姓名。在上面搜姓名或登录账号，就会显示具体是谁、因为什么进不来。</div>
               </Notice>}
           </Panel>
         )}
 
-        {ready ? <Panel title="不可添加判定说明">
-          <div className="classroom-block-groups">
-            {blockedGroups.map((group) => <article className="item-card" key={group.key}>
-              <div className="row-actions">
-                <span className="status warning">{group.key}</span>
-                <strong>{group.title}</strong>
-                <span className="muted">{group.count} 人</span>
-              </div>
-              <p className="muted">{group.hint}</p>
-            </article>)}
-          </div>
-        </Panel> : null}
+        {/* ⚠️ 2026-10-05 用户口径：「这种（解释型）文案全部删除」——原来这里还有一块
+            「不可添加判定说明」面板（逐类解释"为什么不能加"）。每个学生的原因在**上表「原因」列**里
+            已经如实列出，这块属于重复说明，已删。 */}
       </>}
     </> : null}
   </div>;

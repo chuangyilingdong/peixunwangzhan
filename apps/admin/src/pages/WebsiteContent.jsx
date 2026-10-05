@@ -411,7 +411,7 @@ export function WebsiteContent({ api }) {
   const preview = structured;
   return <>
     {confirmation}
-    <PageHeader eyebrow="官网运营" title="官网内容 CMS" description="用结构化表单维护首页、灵动课程、机构手册、常见问题与品牌信息；公开端只读取已发布版本，保留历史版本供回滚。" actions={<button className="secondary-button" disabled={busy} onClick={reloadContent}>刷新</button>} />
+    <PageHeader eyebrow="官网运营" title="官网内容 CMS"  actions={<button className="secondary-button" disabled={busy} onClick={reloadContent}>刷新</button>} />
     {message && <Notice tone="success">{message}</Notice>}
     <div className="split website-cms">
       <Panel title="内容区块">

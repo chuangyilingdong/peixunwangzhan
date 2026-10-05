@@ -310,6 +310,14 @@ try {
       if (!body.includes(text)) problems.push(`${label}：页面上找不到「${text}」`);
     }
   };
+  // ⭐ 2026-10-05 用户口径：「这种（解释平台机制的）文案全部删除」——删过的说明块用**反向断言**钉住，
+  //    免得以后又照着线框图加回来（这条比"删掉断言"强：它证明那些话真的不在页面上了）。
+  const expectAbsent = async (label, texts) => {
+    const body = await page.locator('body').innerText();
+    for (const text of texts) {
+      if (body.includes(text)) problems.push(`${label}：说明型文案又回来了「${text}」`);
+    }
+  };
   const shot = async (name) => { await page.screenshot({ path: path.join(shotDir, `${name}.png`), fullPage: true }); };
   const settle = async () => { await page.waitForLoadState('networkidle').catch(() => {}); await page.waitForTimeout(350); };
 
@@ -342,10 +350,11 @@ try {
   await page.goto(`${base}/dashboard`, { waitUntil: 'domcontentloaded' });
   await settle();
   await expectText('教师工作台', [
-    '教师工作台', '我的教学执行中心',
+    '教师工作台',
     '我的待上课课堂', '我的上课中课堂', '最近已结束课堂', '最近学生作品',
     '当前教学', '创建课堂', '常用入口',
   ]);
+  await expectAbsent('教师工作台（说明型文案已删）', ['我的教学执行中心', '机构运营管理中心']);
   await shot('17-teacher-dashboard');
 
   // ── 005-01 列表
@@ -361,7 +370,10 @@ try {
   // ── 005-02 创建课堂（被占用时按钮该是灰的，且顶部给红/橙提示）
   await page.goto(`${base}/classrooms/new`, { waitUntil: 'domcontentloaded' });
   await settle();
-  await expectText('创建页', ['创建课堂', '父级：', '课堂基础信息', '课堂名称', '课包', '课程', '所选课程摘要', '保存后的业务链', '添加学生', '满足条件后开始上课']);
+  await expectText('创建页', ['创建课堂', '课堂基础信息', '课堂名称', '课包', '课程', '所选课程摘要']);
+  // ⚠️ 2026-10-05 用户口径：「这种（解释平台机制的）文案全部删除」——本页原来的「父级：」
+  //    与「保存后的业务链」「第一阶段只建立课堂」等说明块都已删；下面这条**反向断言**钉住它们别再回来。
+  await expectAbsent('创建页（说明型文案已删）', ['父级：', '保存后的业务链', '第一阶段只建立课堂']);
   // 此刻账号上还有一个待上课课堂 → 必须是橙色「不能创建」，不能是一句写死的绿话
   await expectText('创建页（有占用时）', ['当前账号已有 1 个「待上课 / 上课中」课堂', '因此不能创建新的课堂']);
   if (!(await page.getByRole('button', { name: '保存课堂' }).isDisabled())) problems.push('创建页：有占用时「保存课堂」应该禁用');
@@ -379,7 +391,8 @@ try {
   // ── 005-03D 开始上课确认（校验清单必须来自服务端预检）
   await page.getByRole('button', { name: '开始上课' }).first().click();
   await page.waitForTimeout(700);
-  await expectText('开始确认', ['开始上课确认', '开始前资格校验', '课堂状态 = 待上课', '教师账号可正常教学', '课包 / 课程当前可用', '课堂至少有 1 名学生', '3 名学生资格仍有效', '全部通过', '确认开始后的状态变化', '不可移除已加入学生']);
+  await expectText('开始确认', ['开始上课确认', '开始前资格校验', '课堂状态 = 待上课', '教师账号可正常教学', '课包 / 课程当前可用', '课堂至少有 1 名学生', '3 名学生资格仍有效', '全部通过', '确认开始']);
+  await expectAbsent('开始确认（说明型文案已删）', ['确认开始后的状态变化', '不可移除已加入学生']);
   await shot('04-modal-start');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
@@ -389,7 +402,8 @@ try {
   await page.waitForTimeout(500);
   // ⚠️ 原来这里钉的「页面边界」来自**背后那页**的说明面板（弹窗自己那个 BoundaryNote 没有标题），
   //    面板 2026-09-20 已删 —— 改成钉弹窗自己那条说明，别再去背景页里找。
-  await expectText('改名弹窗', ['编辑课堂名称', '当前课堂', '学生数', '保存后的影响', '保持不变', '仅更新课堂名称显示', '不在此页更换课包', '保存名称']);
+  await expectText('改名弹窗', ['编辑课堂名称', '当前课堂', '学生数', '课堂名称', '保存名称']);
+  await expectAbsent('改名弹窗（说明型文案已删）', ['保存后的影响', '保持不变', '不在此页更换课包']);
   await shot('05-modal-rename');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
@@ -397,7 +411,8 @@ try {
   // ── 005-03C 移除学生确认
   await page.getByRole('button', { name: '移除' }).first().click();
   await page.waitForTimeout(500);
-  await expectText('移除弹窗', ['移除学生确认', '即将移除学生', '登录账号', '确认移除后的影响', '当前课堂关系', '课包授权', '作品 / 算力消耗', '课程状态回溯规则', '确认移除']);
+  await expectText('移除弹窗', ['移除学生确认', '即将移除学生', '登录账号', '确认移除']);
+  await expectAbsent('移除弹窗（说明型文案已删）', ['确认移除后的影响', '课程状态回溯规则', '课包授权']);
   await shot('06-modal-remove');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
@@ -405,7 +420,8 @@ try {
   // ── 005-03E 解散课堂确认
   await page.getByRole('button', { name: '解散课堂' }).first().click();
   await page.waitForTimeout(700);
-  await expectText('解散弹窗', ['解散课堂确认', '解散前校验', '尚未记录实际开始时间', '课堂由你负责，或你是本机构的机构管理员', '允许解散', '确认解散后的状态变化', '不会发生的事情', '不创建补课课堂', '确认解散']);
+  await expectText('解散弹窗', ['解散课堂确认', '解散前校验', '尚未记录实际开始时间', '课堂由你负责，或你是本机构的机构管理员', '允许解散', '确认解散']);
+  await expectAbsent('解散弹窗（说明型文案已删）', ['确认解散后的状态变化', '不会发生的事情', '不创建补课课堂']);
   await shot('07-modal-dissolve');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
@@ -413,12 +429,14 @@ try {
   // ── 005-04 添加学生
   await page.goto(`${base}/classrooms/${c.id}/students/new`, { waitUntil: 'domcontentloaded' });
   await settle();
-  await expectText('添加学生页', ['添加学生', '可添加学生', '不可添加学生', '当前课包授权', '当前课堂占用', '加入后课程状态', '不可添加判定说明', '已完成当前课堂对应课程', '不进入候选池']);
+  await expectText('添加学生页', ['添加学生', '可添加学生', '不可添加学生', '当前课包授权', '当前课堂占用', '加入后课程状态']);
+  await expectAbsent('添加学生页（说明型文案已删）', ['不可添加判定说明', '仅显示当前可加入本课堂的学生']);
   await shot('08-add-students');
   // 「不可添加」默认不铺开，搜索之后才列人（2026-09-16 口径）
   await page.getByRole('button', { name: /不可添加学生/ }).click();
   await page.waitForTimeout(300);
-  await expectText('不可添加页', ['本机构共有', '不列出姓名', '搜姓名或登录账号']);
+  await expectText('不可添加页', ['本机构共有']);
+  await expectAbsent('不可添加页（说明型文案已删）', ['不列出姓名', '搜姓名或登录账号']);
   await shot('09-add-students-blocked-tab');
 
   // ── 改名（只有待上课能改）：改完列表要跟着变

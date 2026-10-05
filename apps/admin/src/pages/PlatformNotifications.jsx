@@ -87,7 +87,7 @@ export function PlatformNotifications({ api }) {
     } catch (err) { setMessage(errorText(err)); } finally { setBusy(false); }
   }
   return <>
-    <PageHeader eyebrow="平台系统" title="通知事件与失败运营" description="站内信（应用内）投递：按 eventKey 投递事件并自动抑制重复；查看、批量重试和忽略投递失败的接收人。当前没有邮件/短信/微信外发通道（按路线图冻结），「失败」指接收人账号已停用或删除，不是外发失败。" actions={<button className="secondary-button" onClick={() => { summary.refresh(); events.refresh(); failures.refresh(); }}>刷新</button>} />
+    <PageHeader eyebrow="平台系统" title="通知事件与失败运营"  actions={<button className="secondary-button" onClick={() => { summary.refresh(); events.refresh(); failures.refresh(); }}>刷新</button>} />
     <Panel title="概要指标">
       {summary.loading ? <Loading /> : summary.error ? <ErrorState error={summary.error} onRetry={summary.refresh} /> : summary.data ? <div className="metrics">
         <MetricCard label="事件总数" value={summary.data.total} hint="已记录的事件源" />

@@ -74,10 +74,9 @@ export function ClassroomList({ api, isAdmin, onOpen, onCreate }) {
 
     {isAdmin ? null : blocking > 0 ? <Notice tone="warning">
       当前账号已有 {blocking} 个「待上课 / 上课中」课堂，因此不能创建新的课堂。
-      <div className="muted">结束或解散当前课堂后，创建课堂按钮会恢复可用。{ongoing ? <> 当前课堂：{ongoing.title}（{SESSION_STATE[ongoing.status]?.label || ongoing.status}）。</> : null}</div>
+      {ongoing ? <div className="muted">当前课堂：{ongoing.title}（{SESSION_STATE[ongoing.status]?.label || ongoing.status}）。</div> : null}
     </Notice> : <Notice tone="success">
       当前账号无「待上课 / 上课中」课堂，可以创建新的课堂。
-      <div className="muted">保存成功后新课堂状态为「待上课」，学生将在课堂创建后单独添加。</div>
     </Notice>}
 
     <div className="metrics">

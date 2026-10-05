@@ -138,7 +138,7 @@ function PieceView({ piece, document: doc }) {
         : (coverUrl ? <img className="share-piece__media" src={coverUrl} alt={name || '网页作品'} /> : null)}
       {playable ? null : (openUrl
         ? <p className="share-piece__play"><Link className="button" to={openUrl}>打开体验 · 直接玩 <b>↗</b></Link></p>
-        : <p className="muted">这一件是网页作品，用电脑/手机打开就能玩。</p>)}
+        : null)}
     </>;
   }
   // 文档类（PPT / Word / Excel / 文本件）

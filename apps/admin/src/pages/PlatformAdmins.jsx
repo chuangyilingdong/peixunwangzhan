@@ -59,7 +59,7 @@ export function PlatformAdmins({ api, currentUser }) {
   }
   return <>
     {confirmation}
-    <PageHeader eyebrow="平台系统" title="平台管理员" description="维护平台运营账号、权限码和登录安全，查看最近登录、活跃会话与操作日志。" actions={<button className="secondary-button" onClick={admins.refresh}>刷新</button>} />
+    <PageHeader eyebrow="平台系统" title="平台管理员"  actions={<button className="secondary-button" onClick={admins.refresh}>刷新</button>} />
     <div className="split">
       <Panel title={editing ? `编辑管理员：${editing.displayName}` : '新建平台管理员'}>
         <form onSubmit={editing ? save : create}>
