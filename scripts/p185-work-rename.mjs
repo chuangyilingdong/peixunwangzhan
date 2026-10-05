@@ -94,27 +94,18 @@ try {
   }
 
   /* ───────── 夹具 ───────── */
-  // ⚠️ 必须取**这个学生所在的那一场课堂**：ensureClassroom 是「每个有许可的学生 × 每节课」各开一场，
-  //    随手 `LIMIT 1` 取一场会取到别的学生的场次 —— 那样作品根本不在这个 session 里，
-  //    课堂作用域一律 404（本守卫第一版就是这么红的，不是产品问题）。
-  const enrolled = await arow(`SELECT student.login, student.id AS student_id,
-         session.id AS session_id, session.teacher_id, session.org_id, session.lesson_id
+  // ⚠️ 取学生所在的课堂时**不要 `LIMIT 1` 随手挑一场**：一个学生可能同时在多场 ACTIVE 课堂里
+  //    （ensureClassroom 是按「学生 × 课时」开场的），随手挑的那场很可能不是**他这次提交挂上去的**那场，
+  //    于是课堂作用域一律 404（本守卫第一版就是这么时红时绿的）。
+  //    正解：先提交，再从提交快照反查它**真正挂在哪堂课**，后面全用那一场。
+  const enrolled = await arow(`SELECT student.login, student.id AS student_id
        FROM session_students part
        JOIN class_sessions session ON session.id = part.session_id AND session.status='ACTIVE'
        JOIN users student ON student.id = part.student_id
       WHERE part.status='ACTIVE' ORDER BY student.created_at LIMIT 1`);
-  assert.ok(enrolled?.session_id && enrolled?.login, '夹具没把学生放进课堂');
-  const session = { id: enrolled.session_id, teacher_id: enrolled.teacher_id, org_id: enrolled.org_id, lesson_id: enrolled.lesson_id };
+  assert.ok(enrolled?.login, '夹具没把学生放进课堂');
   const studentToken = await loginAs(enrolled.login, 'study123');
-  const ownerTeacher = await arow('SELECT login FROM users WHERE id=?', [session.teacher_id]);
-  const otherTeacher = await arow("SELECT login FROM users WHERE role='TEACHER' AND org_id=? AND id<>? LIMIT 1", [session.org_id, session.teacher_id]);
-  const ownerToken = await loginAs(ownerTeacher?.login, 'teach123');
-  const otherToken = await loginAs(otherTeacher?.login, 'teach123');
-  const orgAdminToken = await loginAs('org-admin', 'org123');
-  const rootToken = await loginAs('root', 'admin123');
-  check('① 夹具：学生 / 本课堂老师 / 同机构另一老师 / 机构管理员 / 平台管理员都能登录',
-    Boolean(studentToken && ownerToken && otherToken && orgAdminToken && rootToken),
-    JSON.stringify({ student: Boolean(studentToken), owner: Boolean(ownerToken), other: Boolean(otherToken), org: Boolean(orgAdminToken), root: Boolean(rootToken) }));
+  check('① 夹具：学生可以登录', Boolean(studentToken));
 
   const ENTRY = '<!doctype html><html><head><meta charset="utf-8"><title>P185</title></head><body><h1>P185 作品</h1></body></html>';
   const submitted = await api('/api/student/runtime/submit-upload', {
@@ -124,6 +115,25 @@ try {
   const workId = submitted.data?.id;
   check('① 夹具：VibeCoding 作品提交成功（标题就是 index.html 这种"没起名"的样子）',
     submitted.status === 200 && Boolean(workId), JSON.stringify(submitted.raw).slice(0, 200));
+
+  // 这件作品真正挂的那场课堂（= 提交时的 ACTIVE 课堂）
+  const ownSession = await arow(`SELECT session.id, session.teacher_id, session.org_id, session.lesson_id
+       FROM vibecoding_submissions submission
+       JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id
+       JOIN class_sessions session ON session.id=conversation.class_session_id
+      WHERE submission.id=?`, [workId]);
+  assert.ok(ownSession?.id, '作品没有挂在任何课堂上（夹具前提不成立）');
+  const session = { id: ownSession.id, teacher_id: ownSession.teacher_id, org_id: ownSession.org_id, lesson_id: ownSession.lesson_id };
+
+  const ownerTeacher = await arow('SELECT login FROM users WHERE id=?', [session.teacher_id]);
+  const otherTeacher = await arow("SELECT login FROM users WHERE role='TEACHER' AND org_id=? AND id<>? LIMIT 1", [session.org_id, session.teacher_id]);
+  const ownerToken = await loginAs(ownerTeacher?.login, 'teach123');
+  const otherToken = await loginAs(otherTeacher?.login, 'teach123');
+  const orgAdminToken = await loginAs('org-admin', 'org123');
+  const rootToken = await loginAs('root', 'admin123');
+  check('① 夹具：本课堂老师 / 同机构另一老师 / 机构管理员 / 平台管理员都能登录',
+    Boolean(ownerToken && otherToken && orgAdminToken && rootToken),
+    JSON.stringify({ owner: Boolean(ownerToken), other: Boolean(otherToken), org: Boolean(orgAdminToken), root: Boolean(rootToken) }));
 
   const detailPath = `/api/org/sessions/${encodeURIComponent(session.id)}/works/VIBECODING/${encodeURIComponent(workId)}`;
 

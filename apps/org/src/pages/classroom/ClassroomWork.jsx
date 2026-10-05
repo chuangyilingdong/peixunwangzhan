@@ -104,18 +104,21 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
     : '';
   return <Modal title={renamedTitle || work.title || '未命名作品'} wide onClose={onClose}
     // ⭐ 2026-10-05 用户口径：页眉不再挂"只读"那类前缀，直接就是**作品名称**本身。
-    // ⭐ 2026-10-01：分享入口**从底部按钮行挪到页眉右上角**（用户口径：与作品库那处「详情右上角」
-    //    以及网站端预览弹窗的 `pl-viewer-head__actions` 对齐 —— 三处同款位置）。
-    //    2026-10-05：「修改名称」也放这一格（与分享并排）。
+    // ⭐ 2026-10-05（第二次收口，用户给了图1/图2）：页眉右上角 = **修改作品名称 + 关闭预览**；
+    //    「分享」从页眉挪到**弹窗底部居中**（图2 那个红框位置）。三处分享入口的相对位置不再统一，
+    //    以本次口径为准（机构端课堂弹窗底部居中；作品库面板与网站端弹窗仍在各自右上角）。
     headerAction={<div className="row-actions">
-      <button type="button" className="secondary-button" data-testid="work-rename" onClick={() => setRenameOpen(true)}>修改名称</button>
-      {canShare && shareCreate && data
-        ? <button type="button" className="secondary-button" data-testid="work-share" onClick={() => setShareOpen(true)}>分享</button>
-        : null}
+      <button type="button" className="secondary-button" data-testid="work-rename" onClick={() => setRenameOpen(true)}>修改作品名称</button>
+      <button type="button" className="secondary-button" onClick={onClose}>关闭预览</button>
     </div>}
     footer={<>
       {documentFile?.download ? <a className="secondary-button" href={documentFile.download}>下载原文件</a> : null}
-      <button className="secondary-button" onClick={onClose}>关闭预览</button>
+      {/* 分享单独占一行并居中（`flex:1 1 100%` 把它挤到下一行，免得被"下载原文件"带偏） */}
+      <div className="row-actions" style={{ flex: '1 1 100%', justifyContent: 'center' }}>
+        {canShare && shareCreate && data
+          ? <button type="button" className="primary-button" data-testid="work-share" onClick={() => setShareOpen(true)}>分享</button>
+          : null}
+      </div>
     </>}>
     {detail.loading ? <Loading label="正在读取私有作品…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : data ? <>
       <p className="muted">{data.studentName || '—'} · {formatDate(data.submittedAt)}</p>

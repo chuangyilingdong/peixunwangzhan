@@ -397,18 +397,20 @@ console.log('⑩ 三处「分享」入口都在右上角（面板/弹窗页眉�
 {
   const readFile = (file) => fs.readFileSync(path.join(process.cwd(), file), 'utf8');
   const classroom = readFile('apps/org/src/pages/classroom/ClassroomWork.jsx');
-  // ⚠️ 2026-10-05：页眉那一格里现在有**两颗**按钮（修改名称 + 分享），原来"距 headerAction 200 字符内"
-  //    的写法被撑爆了。改成**按位置**判：分享按钮必须落在 `headerAction={` 与 `footer={<` 之间。
+  // ⚠️ 2026-10-05（第二次收口，用户给了两张图）：机构端课堂弹窗的按钮布局改成
+  //    页眉右上角 = **修改作品名称 + 关闭预览**，**分享挪到底部居中**。这条按位置钉住新布局。
   {
     const headerAt = classroom.indexOf('headerAction={');
     const footerAt = classroom.indexOf('footer={<');
-    const shareAt = classroom.indexOf('data-testid="work-share"');
-    check('⑩ 机构端课堂弹窗：分享按钮在 `headerAction`（页眉右上角）',
-      headerAt > -1 && footerAt > headerAt && shareAt > headerAt && shareAt < footerAt,
-      JSON.stringify({ headerAt, footerAt, shareAt }));
+    const headerChunk = headerAt > -1 && footerAt > headerAt ? classroom.slice(headerAt, footerAt) : '';
+    const footerChunk = footerAt > -1 ? classroom.slice(footerAt, footerAt + 900) : '';
+    check('⑩ 机构端课堂弹窗：页眉右上角是「修改作品名称 + 关闭预览」（分享不再占这一格）',
+      headerChunk.includes('修改作品名称') && headerChunk.includes('关闭预览') && !headerChunk.includes('work-share'),
+      JSON.stringify({ headerAt, footerAt }).slice(0, 120));
+    check('⑩ 机构端课堂弹窗：分享在**底部居中**（图2 那颗按钮）',
+      /data-testid="work-share"/.test(footerChunk) && /justifyContent:\s*'center'|justifyContent:"center"/.test(footerChunk),
+      footerChunk.slice(0, 160));
   }
-  const footerChunk = classroom.slice(classroom.indexOf('footer={<'), classroom.indexOf('footer={<') + 400);
-  check('⑩ 机构端课堂弹窗：底部按钮行里**不再**有分享入口', !/work-share/.test(footerChunk), footerChunk.slice(0, 120));
   const modal = readFile('apps/org/src/pages/classroom/ui.jsx');
   check('⑩ 弹窗组件真的支持 headerAction（页眉右侧那格）',
     /headerAction/.test(modal) && /classroom-dialog-head/.test(modal));
