@@ -15,6 +15,12 @@ export function previewHref(value) {
 //    「已阻止此内容」。⚠️ 但**沙箱内 Chrome 的 PDF 查看器仍然不工作**（受控实验：同一份 PDF
 //    不套沙箱能渲染，套上平台这套 sandbox 就只剩占位图标）——PDF 要显示得用 pdf.js 之类
 //    渲染到 canvas 的路线（那时 `connect-src blob:` 正好够用）。见 §九十三。
+// ⭐ 2026-10-08（§一百一十五）：`connect-src` 再加 `https: wss:` —— 作品里的「大模型桥」要在沙箱里
+//    **直连厂商**（学生填自己的 Key）。官网分享页/作品页本来就放行出网（预览壳 nginx CSP 是
+//    `connect-src https: wss:`），老师端不放的话，同一件作品"在手机上填了 Key 能用、在课堂预览里用不了"。
+//    只放开"出网"这一项：沙箱仍是**不带 allow-same-origin** 的 opaque origin（读不到我们的
+//    cookie/localStorage），form-action / base-uri 仍然 `'none'`，img/media 白名单一个没动。
+//    ⚠️ 这条口径同时被 p173 与 p187 钉着（要改得显式改两处 + 两个守卫）。
 
 /**
  * 作品预览弹窗（画布 / VibeCoding 产物都走它）。
@@ -92,7 +98,8 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
   // 真文件产物（学生创作环境交上来的 PPT/Word/Excel 原文件）：地址由服务端拼好，
   // 预览是服务端转出来的 PDF —— 这类产物没有「规格文本」，客户端渲染不了。
   const documentFile = document ? (data?.fileUrls?.[selected.name] || null) : null;
-  // Run private student code in the existing opaque-origin sandbox, with network access blocked.
+  // Run private student code in the existing opaque-origin sandbox; **出网放行**（2026-10-08 起，
+  // 为的是作品里的「大模型桥」能直连厂商 —— 与官网那几处的口径对齐，见上面 CSP 那段的注释）。
   const html = data?.source === 'VIBECODING' && entry && !document
     // ⚠️⚠️ `mediaSources` **只能出现在 img-src/media-src/font-src 的值里**。2026-10-01（§八十三）我在
     //    `style-src ...;` 后面多写了一个 `${mediaSources}`，于是作品**只要有任一 OSS 素材**（哪怕只是封面），
@@ -100,7 +107,7 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
     //    「https://… img-src data: blob: …」当成**一条名字非法的指令**整条丢弃 ⇒ **真 `img-src` 不存在**、
     //    回落到 `default-src 'none'` ⇒ 老师端预览里**所有图片被拦**（连 data:/blob: 一起）。
     //    没有 OSS 素材的作品那串为空、CSP 恰好合法 —— 所以本地怎么都复现不出来（生产一测就现形）。
-    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
+    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob: https: wss:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
     : '';
   return <Modal title={renamedTitle || work.title || '未命名作品'} wide onClose={onClose}
     // ⭐ 2026-10-05 用户口径：页眉不再挂"只读"那类前缀，直接就是**作品名称**本身。

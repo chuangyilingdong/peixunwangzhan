@@ -136,12 +136,18 @@ export function WorkPreview({ api, workId, title, kind = 'vibecoding', onClose }
   const entry = selected?.name || data?.entryFile;
   const isDocument = Boolean(selected) && (selected.document || ['pptx', 'docx', 'xlsx'].includes(String(selected.kind).toLowerCase()));
   const documentFile = isDocument ? (data?.fileUrls?.[selected.name] || null) : null;
-  // 学生代码跑在不带 allow-same-origin 的沙箱里（口径⑧），网络一律禁掉
+  // 学生代码跑在不带 allow-same-origin 的沙箱里（口径⑧）；**联网放行**（2026-10-08 起，见下面那行 CSP 的注释）
   const html = !isDocument && entry && Object.hasOwn(files, entry)
     // ⚠️⚠️ `mediaSources` 只能出现在 img-src/media-src/font-src 的**值**里（2026-10-02 修：
     //    `style-src …;` 后多写的那个占位符会让整条 img-src 变成"名字非法的指令"被丢弃，
     //    作品只要有任一 OSS 素材就**全图被拦**。详见 ClassroomWork 同处的长注释。）
-    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
+    // ⭐ 2026-10-08（§一百一十五）：`connect-src` 从只给 `blob:` 改成 `blob: https: wss:` —— 作品里的
+    //    「大模型桥」要在沙箱里直连厂商（学生填自己的 Key），**官网分享页/作品页本来就是这么放的**
+    //    （预览壳的 nginx CSP 是 `connect-src https: wss:`）。这里不放 = 同一件作品在平台端"填了 Key 也用不了"。
+    //    放开的只有"出网"这一项：沙箱仍是不带 allow-same-origin 的 opaque origin（读不到我们的 cookie/localStorage），
+    //    form-action / base-uri 仍然 `'none'`，img/media 的来源白名单一个没动。
+    //    p173 与 p187 都钉着这条口径（改要显式）。详见 docs/operations/作品调用大模型-平台约定-20261008.md。
+    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob: https: wss:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
     : '';
 
   return <PreviewDialog title={title || data?.title} onClose={onClose}>

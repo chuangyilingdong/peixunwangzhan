@@ -438,16 +438,25 @@ try {
    （srcdoc 会继承壳的 CSP，只改一层等于没改）。
    ⚠️ 已知边界（受控实验，见 §九十三）：沙箱里 **blob HTML 子框架能显示**，
    而 Chrome 的**内置 PDF 查看器在沙箱框架里不工作**（同一份 PDF 不套沙箱能渲染、套上就只剩占位图标）
-   —— PDF 要显示得走 pdf.js 之类渲染到 canvas 的路线，那时 `connect-src blob:` 正好够用。 */
+   —— PDF 要显示得走 pdf.js 之类渲染到 canvas 的路线，那时 `connect-src blob:` 正好够用。
+   ⭐ 2026-10-08（§一百一十五）：这两处的 `connect-src` **故意**从"只给 blob:"改成"也给 https: wss:"
+   —— 作品里的「大模型桥」要在沙箱里直连厂商（学生填自己的 Key），官网分享页/作品页本来就放行出网
+   （预览壳 nginx CSP 是 `connect-src https: wss:`）；不放 = 同一件作品"手机上有用、课堂预览里没用"。
+   沙箱仍是不带 allow-same-origin 的 opaque origin，收紧项（form-action / base-uri / img-media 白名单）一条没松。 */
 console.log('⑫ 预览沙箱 CSP：放行 blob/data 子框架（两层都要放）');
 {
   const readSource = (file) => fs.readFileSync(path.join(root, file), 'utf8');
   for (const file of ['apps/org/src/pages/classroom/ClassroomWork.jsx', 'apps/admin/src/components/WorkPreview.jsx']) {
     const source = readSource(file);
     check(`⑫ ${file}：注入的 meta CSP 放行 frame-src blob: data:`, /frame-src blob: data:;/.test(source));
-    check(`⑫ ${file}：放行 connect-src blob:（pdf.js 之类要 fetch(blob:)）`, /connect-src blob:;/.test(source));
-    check(`⑫ ${file}：仍然不联网、不许表单、不许 base（收紧的部分一条都没松）`,
-      /connect-src blob:;[^"]*form-action 'none'/.test(source) && !/connect-src [^;]*https?:/.test(source));
+    check(`⑫ ${file}：放行 connect-src blob:（pdf.js 之类要 fetch(blob:)）`, /connect-src blob:/.test(source));
+    // ⭐ 2026-10-08（§一百一十五）：这两处**故意**开了出网 —— 作品里的「大模型桥」要在沙箱里直连厂商
+    //    （学生填自己的 Key），与官网分享页/作品页（预览壳 nginx CSP）口径一致。
+    //    这条把**新口径**钉住：出网必须有；下面那条钉"除了出网，其余收紧项一条都不许松"。
+    check(`⑫ ${file}：⭐ 出网放行（connect-src 含 https: wss: —— 作品的大模型桥要用）`,
+      /connect-src blob: https: wss:;/.test(source));
+    check(`⑫ ${file}：除"出网"外一条都没松（不许表单、不许 base）`,
+      /connect-src blob: https: wss:;[^"]*form-action 'none'/.test(source) && /base-uri 'none'/.test(source));
   }
   const nginx = readSource('deploy/production/nginx-site.conf');
   check('⑫ 预览壳（nginx /vibe-preview.html）的 frame-src 也放行了 blob:/data:',

@@ -19,10 +19,13 @@
  *   ① 源码口径：桥在、preamble 顺序对（PDF 桥仍最后）、**桥体里没有 postMessage**（Key 不出沙箱）、
  *      `/api/fetch` 不代理（SSRF 面另议）、超时给够（≥120s）；
  *   ② 本地真浏览器（真转发壳 + 假厂商，两条腿都要）：成功路径 / 厂商 401 / 厂商不给 CORS /
- *      没填 Key / 机构端那段收紧 meta CSP —— 五种路各自的话必须是人话，而且**不能打到我们自己的 /api/llm**；
+ *      没填 Key / 一份"只给 blob:"的禁网 meta（将来又收紧时的兜底话术）——
+ *      五种路各自的话必须是人话，而且**不能打到我们自己的 /api/llm**；
+ *      另外用**机构端/平台端源码里那两条 meta 原文**（把 `${mediaSources}` 填上）各跑一遍：
+ *      2026-10-08 起那两处是放行出网的，作品的大模型功能在**老师端/平台端也必须真能用**；
  *   ③ 「平台不拦」这条承诺本身：生产 `/vibe-preview.html` 的 CSP 仍放行 https；
- *      官网那四个入口（分享页 / 广场 / 网站端弹窗 / 学生工作台）没有收紧的禁网 meta；
- *      老师端 / 平台端那两处**仍按旧口径禁网**（改动必须是显式的，别悄悄放开）。
+ *      **五个端**（分享页 / 广场 / 网站端弹窗 / 学生工作台 / 老师端课堂 / 平台端预览）都不许有"只给 blob:"的禁网 meta
+ *      —— 手机网页端与老师端、平台端要能跑同一件填了 Key 的作品（改动必须是显式的）。
  *   ④ 生产口径（默认 https://aicyld.com）：把测试页投进**生产**的壳，用**假 Key** 打真 DeepSeek ——
  *      必须拿回"厂商的鉴权错误"（证明 CSP + CORS + 桥三段全通），而不是我们平台自己的 404。
  *
@@ -87,6 +90,25 @@ check('/api/config 仍给非敏感默认值（Key 永远来自本机浏览器）
 check('只管自己的地址：其余 fetch 原样放行（含桥自身异常时的兜底）',
   bridgeText.includes('return realFetch?realFetch(input,init)')
   && bridgeBody.includes('桥自己出问题不能连累作品原本的 fetch'));
+// ⭐ 2026-10-08：「手机网页端 / 老师端 / 平台端都要能用」—— 六个会渲染作品 HTML 的入口，
+//    凡是给作品文档注入了 meta CSP 的，`connect-src` 必须放行 https（否则这件作品在那一端"填了 Key 也没用"）。
+const PREVIEW_SURFACES = [
+  'apps/website/src/pages/WorkShare.jsx',
+  'apps/website/src/pages/WorkDetail.jsx',
+  'apps/website/src/components/WorkPreviewModal.jsx',
+  'packages/shared/src/console/Workbench.jsx',
+  'apps/org/src/pages/classroom/ClassroomWork.jsx',
+  'apps/admin/src/components/WorkPreview.jsx',
+];
+const surfaceProblems = [];
+for (const file of PREVIEW_SURFACES) {
+  const meta = (readSource(file).match(/content="(default-src[^"]+)"/) || [])[1] || '';
+  if (!meta) continue;                                  // 不注入 meta 的入口走预览壳的 CSP（那边已放行 https）
+  const connect = (meta.match(/connect-src([^;]*)/) || [])[1] || '';
+  if (!/https:|\*/.test(connect)) surfaceProblems.push(`${file}: connect-src${connect}`);
+}
+check('① ⭐ 六个作品入口没有一个"禁网"（注了 meta 的必须放行 https:）—— 手机网页/老师端/平台端口径一致',
+  surfaceProblems.length === 0, surfaceProblems.join(' | '));
 
 // ───────────────────── ② 本地真浏览器（真壳 + 假厂商） ─────────────────────
 console.log('② 本地真浏览器（真转发壳 + 假厂商）');
@@ -213,16 +235,23 @@ try {
   check('沙箱里没有未捕获的页面错误（桥自身不许崩）', pageErrors.length === 0, pageErrors.join(' | ').slice(0, 200));
   const providerHitsBefore = seen.provider.length;
 
-  // 机构端/平台端预览那段收紧的 meta CSP（connect-src blob:）：桥要**认出来**，而不是让用户对着"连不上"发懵
-  const META = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src blob:; frame-src blob: data:; form-action \'none\'; base-uri \'none\'">';
+  // 兜底那一档：**任何**一份 `connect-src` 只给 `blob:` 的文档（将来某处又收紧、或第三方嵌我们作品），
+  // 桥都要认出来、先说环境 —— 而不是让用户对着"连不上 api.deepseek.com"发懵。
+  const META_BLOCKED = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src blob:; frame-src blob: data:; form-action \'none\'; base-uri \'none\'">';
   pageErrors = [];
-  const blocked = await runStudent(META + STUDENT);
-  check('收紧 meta CSP（老师端/平台端预览）→ 先说"这个预览窗口关掉了联网"',
+  const blocked = await runStudent(META_BLOCKED + STUDENT);
+  check('"只给 blob:"的禁网 meta → 桥认出并先说"这个预览窗口关掉了作品的联网"',
     blocked.ok?.ok === false && /关掉了作品的联网/.test(blocked.ok?.error || ''), JSON.stringify(blocked.ok).slice(0, 200));
   check('禁网时**不试网**：假厂商一个请求都没多收到', seen.provider.length === providerHitsBefore,
     `多了 ${seen.provider.length - providerHitsBefore} 条`);
   check('禁网不影响本地应答：/api/config 仍可用', blocked.config?.ok === true, JSON.stringify(blocked.config).slice(0, 160));
   check('禁网这一档也没有未捕获错误', pageErrors.length === 0, pageErrors.join(' | ').slice(0, 200));
+
+  // ⚠️ 「老师端/平台端那两条真实 meta 下能不能真连上厂商」这条**不在这一层测**：
+  //    它们要 https 出网，本地没有 https 假厂商；而 Playwright 的路由拦截在这套
+  //    「嵌套沙箱 + 跨域预检」的场景里**并不可靠**（同页同路由，有时拦住、有时真发到网上 ——
+  //    本探针实测：假域名会先撞 DNS 竞态，真域名两次跑一次拦一次不拦）。所以那条挪到第④层，
+  //    用**真 DeepSeek + 假 Key** 在生产沙箱里验（见下面的 ④c）。
 
   check('⭐ 桥接住了：本地"站点"的 /api/llm 一次都没被打（101 里的 404 不会再有）', seen.llmOnSite === 0, `实际 ${seen.llmOnSite} 次`);
   check('不给 CORS 的那家：浏览器确实去试了（它收到 preflight 就不再发 POST）—— 说明我们真在直连，不是假装成功',
@@ -255,6 +284,21 @@ try {
   check('④a 线上 bundle 里带着这座桥（指纹：禁网提示 + 没填 Key 提示 + /api/llm）',
     /关掉了作品的联网/.test(bundle) && /还没有填写 API Key/.test(bundle) && /\/api\/llm/.test(bundle),
     `bundle=${bundlePath || '(没取到)'} len=${bundle.length}`);
+
+  // ④d 那两处的**线上包**里也得是新口径（仓库改了、包没重建 = 线上还是"禁网"，这一条专抓它）
+  for (const [appPath, label] of [['org', '机构端'], ['admin', '平台端']]) {
+    let bundleUrl = '';
+    try {
+      const entry = await (await fetch(`${SITE}/${appPath}/`)).text();
+      const asset = (entry.match(/assets\/index-[A-Za-z0-9_-]+\.js/) || [''])[0];
+      bundleUrl = asset ? `${SITE}/${appPath}/${asset}` : '';
+      const bundleText = bundleUrl ? await (await fetch(bundleUrl)).text() : '';
+      check(`④d ${label}（/${appPath}/）的线上包里已是"出网放行"的 meta（connect-src blob: https: wss:）`,
+        /connect-src blob: https: wss:/.test(bundleText), `bundle=${bundleUrl || '(没取到)'} len=${bundleText.length}`);
+    } catch (error) {
+      check(`④d ${label}（/${appPath}/）的线上包可读`, false, String(error?.message || error).slice(0, 160));
+    }
+  }
 
   const liveBrowser = await chromium.launch({
     executablePath: CHROME,
@@ -295,6 +339,56 @@ try {
     await liveBrowser.close();
   }
   check('④b 从生产沙箱直连真 DeepSeek（假 Key）→ HTTP 401 + 厂商 JSON（CSP + CORS + 网络三段全通）', liveOk, liveDetail);
+
+  // ⭐⭐ ④c「手机网页端 / 老师端 / 平台端都要能用」：拿**机构端与平台端源码里的 meta 原文**
+  //    （把 `${mediaSources}` 填上）+ 真的桥，在生产壳里各跑一遍，作品填了 Key 必须真能打到厂商。
+  //    —— 这是那两处 2026-10-08 放开出网之后**最硬**的一条：meta、桥、CSP、CORS、网络全在同一遍里过。
+  const { buildPreviewDocument } = await import(new URL('../packages/shared/src/vibecodingProject.js', import.meta.url).href);
+  for (const file of ['apps/org/src/pages/classroom/ClassroomWork.jsx', 'apps/admin/src/components/WorkPreview.jsx']) {
+    const template = (readSource(file).match(/content="(default-src[^"]+)"/) || [])[1] || '';
+    const meta = `<meta http-equiv="Content-Security-Policy" content="${template.replaceAll('${mediaSources}', 'https://bucket.example.com ')}">`;
+    const student = `<!doctype html><html><body><script>
+      (async function(){
+        var out;
+        try{
+          var r = await fetch('/api/llm', { method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ apiKey:'sk-p187c-not-a-real-key', baseUrl:'https://api.deepseek.com/v1',
+              model:'deepseek-chat', messages:[{ role:'user', content:'ping' }] }) });
+          out = await r.json();
+        }catch(e){ out = { threw: String((e && e.message) || e) }; }
+        try{ window.top.postMessage({ __p187c:true, out: out }, '*'); }catch(e){}
+      })();
+    <\/script></body></html>`;
+    const doc = meta + buildPreviewDocument({ 'index.html': student }, 'index.html');
+    const label = file.split('/').pop();
+    const liveBrowser2 = await chromium.launch({
+      executablePath: CHROME,
+      headless: true,
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'],
+    });
+    try {
+      const live2 = await liveBrowser2.newPage();
+      await live2.goto(`${SITE}/vibe-preview.html`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      const result2 = await live2.evaluate(async (html) => await new Promise((resolve) => {
+        window.addEventListener('message', (event) => { if (event.data && event.data.__p187c) resolve(event.data.out); });
+        const frame = document.createElement('iframe');
+        frame.style.cssText = 'width:600px;height:400px;position:fixed;left:-9999px;top:0';
+        frame.src = '/vibe-preview.html';
+        frame.onload = () => frame.contentWindow.postMessage({ source: 'vibecoding-preview', html }, '*');
+        document.body.appendChild(frame);
+        setTimeout(() => resolve({ timeout: true }), 40000);
+      }), doc);
+      const blob2 = JSON.stringify(result2 || {});
+      // 期望：桥把请求发到了真厂商、拿回鉴权错误（`status:401` + 厂商原文）。
+      // 若那两处又变回"禁网"，这里会是 `这个预览窗口关掉了作品的联网…`（没有 status）→ 直接判红。
+      check(`⭐ ④c ${label} 的真实 meta 下：作品填了 Key 真能连到厂商（老师端/平台端也能用；假 Key → 厂商 401）`,
+        result2?.ok === false && result2?.status === 401 && /Authentication Fails|invalid/i.test(blob2),
+        blob2.slice(0, 240));
+    } finally {
+      await liveBrowser2.close();
+    }
+  }
 } catch (error) {
   check('③④ 生产口径可跑（网络/站点可达）', false, String(error?.message || error).slice(0, 200));
 }
