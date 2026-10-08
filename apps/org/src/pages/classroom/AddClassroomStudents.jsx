@@ -6,7 +6,6 @@
 // 未开课 / 无 / 待上课。这里照实算出来，规则哪天变了这几列会跟着变，不写死文案。
 import { useMemo, useState } from 'react';
 import { Empty, ErrorState, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
-import { Modal } from './ui.jsx';
 import { SESSION_STATE, StateBadge } from './states.jsx';
 
 // 线框图的 A / B / C 三类「不可添加」原因，映射到服务端真实的原因码。

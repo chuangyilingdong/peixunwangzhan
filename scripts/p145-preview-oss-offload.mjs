@@ -78,8 +78,23 @@ const offloadCalls = [...route.matchAll(/prepareFilePreview\(ctx, file(, \{[^}]*
 check('① 恰有一处传 ossOffload: true', offloadCalls.filter((c) => /ossOffload: true/.test(c)).length === 1, offloadCalls.join(' | '));
 check('① 其余的调用点都不传（作品文件走 <iframe>，跨域会被 CSP 挡成白屏）',
   offloadCalls.filter((c) => !/ossOffload/.test(c)).length === offloadCalls.length - 1, offloadCalls.join(' | '));
-const otherCallers = read('apps/server/src/routes/orgAdmin.js') + read('apps/server/src/routes/admin/works.js');
-check('① 机构端/平台端的作品文件预览（iframe 那条）确实没开', !/ossOffload/.test(otherCallers));
+// ⚠️ 2026-10-08 收窄：这条原来断言的是"这两个文件里**一处都不许出现** ossOffload"，
+//    而 2026-10-05（§一百一十）那轮**故意**给音视频开回了 302 —— 理由记在 orgAdmin 的 `ossUrls` 处：
+//    `<video>/<audio>` 由媒体元素加载、**不吃 iframe 的 `frame-src`**，站点 CSP 的 `media-src` 本来就放行 OSS。
+//    所以这里按**本意**收窄：不许开的是"会被塞进 `<iframe>` 的那些作品文件"（HTML/PDF/文档），
+//    于是改成"每一处 ossOffload 调用点都必须在音视频分支上"。
+// 三种写法都算"音视频分支"：`mime.startsWith('audio/')`、`/^(audio|video)\//`、`['audio/mpeg', …]`
+const MEDIA_BRANCH = /audio\/|video\/|\^\(audio\|video\)|startsWith\('audio|startsWith\('video/;
+const offloadOffenders = [];
+for (const rel of ['apps/server/src/routes/orgAdmin.js', 'apps/server/src/routes/admin/works.js']) {
+  const lines = read(rel).split(/\r?\n/);
+  lines.forEach((line, index) => {
+    if (!/ossOffload:\s*true/.test(line)) return;
+    if (!MEDIA_BRANCH.test(lines.slice(Math.max(0, index - 14), index + 1).join('\n'))) offloadOffenders.push(`${rel}:${index + 1}`);
+  });
+}
+check('① 机构端/平台端：只有**音视频**那条作品媒体预览能开 ossOffload（嵌 iframe 的 HTML/PDF/文档一律不许）',
+  offloadOffenders.length === 0, offloadOffenders.join(' | '));
 
 /* ② 真服务 */
 console.log('② 真服务：OSS 行 302 / 本地行 200 / 票据照旧');
