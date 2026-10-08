@@ -79,11 +79,19 @@ log "6. 上传扫描真的能跑（拿小文件实测，不看配置看行为）
 SCAN_SRC="$PROD/data/platform.db"
 SCANNER="$(grep -E '^FILE_UPLOAD_SCANNER=' /etc/ai-kids-platform/production.env | cut -d= -f2- || true)"
 SCANNER="${SCANNER:-/usr/bin/clamscan}"
-if timeout 180 "$SCANNER" --no-summary "$SCAN_SRC" >/dev/null 2>&1; then
-  ok "扫描器可执行且返回 0（$SCANNER）"
-else
-  bad "扫描器跑不通（$SCANNER）—— 生产 fail-closed，上传会一律被拒"
-fi
+# ⚠️ 2026-10-08 修：`off|none|disabled|skip` 是**运营口径的有效配置**（§一百一十四：内部教学平台不做内容扫描，
+#    应用侧 `SCANNER_OFF_VALUES` 专门认这几个词、连进程都不起）。这里原来会拿单词 `off` 当命令去执行，
+#    必然失败并报一句「上传会一律被拒」——**过期自检**，每次发版都会假装红。行为侧的真断言在 p186。
+case "$(printf '%s' "$SCANNER" | tr '[:upper:]' '[:lower:]')" in
+  off|none|disabled|skip)
+    ok "上传扫描按运营口径**关闭**（$SCANNER）——应用侧不起扫描器、上传照常入库（p186 钉着这条）" ;;
+  *)
+    if timeout 180 "$SCANNER" --no-summary "$SCAN_SRC" >/dev/null 2>&1; then
+      ok "扫描器可执行且返回 0（$SCANNER）"
+    else
+      bad "扫描器跑不通（$SCANNER）—— 生产 fail-closed，上传会一律被拒"
+    fi ;;
+esac
 
 log "7. 学生创作环境（浏览器版）—— **已按用户口径下线**，这里反过来验它确实关着"
 # 2026-09-23 用户口径：vibecoding 课堂只在**学生自己的电脑**上跑（桌面客户端），
