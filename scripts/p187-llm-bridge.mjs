@@ -243,6 +243,19 @@ try {
   check('③ 生产预览壳仍放行 https 出网（connect-src 里有 https:）',
     head.ok && /connect-src[^;]*https:/.test(csp), `HTTP ${head.status} · CSP=${csp.slice(0, 120)}`);
 
+  // ⚠️ 第④层拆成两问，别混成一问（第一版就是混着的，结果假红）：
+  //   ④a **桥有没有随包上线**：线上 bundle 里必须有桥的指纹（桥是在 buildPreviewDocument 里注入的，
+  //       而"投一段裸 HTML 进壳"是拿不到 preamble 的 —— 那种测法永远测不到桥）；
+  //   ④b **这条网络路在这个环境里通不通**：从生产沙箱里直连一次真 DeepSeek（假 Key），
+  //       必须拿回 HTTP 401 + 厂商的 JSON 错误体（证明 CSP 放行 + CORS 放行 + 响应体读得到）。
+  const entryHtml = await (await fetch(`${SITE}/`)).text();
+  // ⚠️ 别写 `String(match(...))[0]` —— 那会取到第一个**字符**（'a'），第一版就这么蠢过一次。
+  const bundlePath = (entryHtml.match(/assets\/index-[A-Za-z0-9_-]+\.js/) || [''])[0];
+  const bundle = bundlePath ? await (await fetch(`${SITE}/${bundlePath}`)).text() : '';
+  check('④a 线上 bundle 里带着这座桥（指纹：禁网提示 + 没填 Key 提示 + /api/llm）',
+    /关掉了作品的联网/.test(bundle) && /还没有填写 API Key/.test(bundle) && /\/api\/llm/.test(bundle),
+    `bundle=${bundlePath || '(没取到)'} len=${bundle.length}`);
+
   const liveBrowser = await chromium.launch({
     executablePath: CHROME,
     headless: true,
@@ -257,10 +270,10 @@ try {
         (async function(){
           var out;
           try{
-            var r = await fetch('/api/llm', { method:'POST', headers:{'Content-Type':'application/json'},
-              body: JSON.stringify({ apiKey:'sk-p187-not-a-real-key', baseUrl:'https://api.deepseek.com/v1',
-                model:'deepseek-chat', messages:[{ role:'user', content:'ping' }] }) });
-            out = await r.json();
+            var r = await fetch('https://api.deepseek.com/v1/chat/completions', { method:'POST',
+              headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer sk-p187-not-a-real-key' },
+              body: JSON.stringify({ model:'deepseek-chat', messages:[{ role:'user', content:'ping' }] }) });
+            out = { status: r.status, body: (await r.text()).slice(0, 200) };
           }catch(e){ out = { threw: String((e && e.message) || e) }; }
           try{ window.top.postMessage({ __p187live:true, out: out }, '*'); }catch(e){}
         })();
@@ -276,12 +289,12 @@ try {
       });
     });
     const blob = JSON.stringify(result || {});
-    liveOk = result?.ok === false && /Authentication Fails|invalid/i.test(blob);
+    liveOk = result?.status === 401 && /Authentication Fails|invalid/i.test(String(result?.body || ''));
     liveDetail = blob.slice(0, 240);
   } finally {
     await liveBrowser.close();
   }
-  check('④ 生产里"假 Key 打真 DeepSeek"拿回**厂商的鉴权错误**（CSP + CORS + 桥三段全通）', liveOk, liveDetail);
+  check('④b 从生产沙箱直连真 DeepSeek（假 Key）→ HTTP 401 + 厂商 JSON（CSP + CORS + 网络三段全通）', liveOk, liveDetail);
 } catch (error) {
   check('③④ 生产口径可跑（网络/站点可达）', false, String(error?.message || error).slice(0, 200));
 }
