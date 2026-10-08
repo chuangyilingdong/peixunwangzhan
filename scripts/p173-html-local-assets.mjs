@@ -482,8 +482,8 @@ console.log('⑫ 预览沙箱 CSP：放行 blob/data 子框架（两层都要放
   const project = readSource('packages/shared/src/vibecodingProject.js');
   check('⑫ 学生侧注入了 PDF 桥（接管 iframe.src = createObjectURL(pdfBlob)）',
     /PDF_BRIDGE/.test(project) && /vibecoding-pdf-render/.test(project) && /HTMLIFrameElement\.prototype,\s*'src'/.test(project));
-  check('⑫ 桥都装在学生脚本之前（preamble 里 PDF 桥仍排最后；素材 fetch 桥在它之前）',
-    /\$\{PREVIEW_HEIGHT_BRIDGE\}\$\{ASSET_FETCH_BRIDGE\}\$\{PDF_BRIDGE\}/.test(project));
+  check('⑫ 桥都装在学生脚本之前（preamble 里 PDF 桥仍排最后；素材 fetch 桥与大模型桥在它之前）',
+    /\$\{PREVIEW_HEIGHT_BRIDGE\}\$\{ASSET_FETCH_BRIDGE\}\$\{LLM_BRIDGE\}\$\{PDF_BRIDGE\}/.test(project));
   const frame = readSource('packages/shared/src/console/PreviewFrame.jsx');
   check('⑫ 应用侧真的用 pdf.js 渲染（legacy 构建，老浏览器才有 Iterator）',
     /pdfjs-dist\/legacy\/build\/pdf\.mjs/.test(frame) && /renderPdfImages/.test(frame));
@@ -519,8 +519,8 @@ console.log('⑫ 预览沙箱 CSP：放行 blob/data 子框架（两层都要放
   check('⑫ 学生侧装了素材 fetch 桥（拦截普通 GET 的 fetch，交给平台代取）',
     /ASSET_FETCH_BRIDGE/.test(project) && /window\.fetch=function\(input,init\)/.test(project)
     && /new Response\(toBytes\(data\.base64\)/.test(project));
-  check('⑫ 素材 fetch 桥在 preamble 里、PDF 桥仍排最后',
-    /\$\{PREVIEW_HEIGHT_BRIDGE\}\$\{ASSET_FETCH_BRIDGE\}\$\{PDF_BRIDGE\}/.test(project));
+  check('⑫ 素材 fetch 桥在 preamble 里、PDF 桥仍排最后（大模型桥也在，见 p187）',
+    /\$\{PREVIEW_HEIGHT_BRIDGE\}\$\{ASSET_FETCH_BRIDGE\}\$\{LLM_BRIDGE\}\$\{PDF_BRIDGE\}/.test(project));
   check('⑫ 预览壳把素材 fetch 的**两条腿**都接上（上行 + 下行，别只写一半）',
     /payload\.source === 'vibecoding-asset-fetch'[\s\S]{0,160}parent\.postMessage/.test(shell)
     && /payload\.source === 'vibecoding-asset-fetched'[\s\S]{0,160}stage\.contentWindow\.postMessage/.test(shell));

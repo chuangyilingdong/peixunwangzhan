@@ -365,6 +365,173 @@ export const ASSET_FETCH_BRIDGE = `<script>(function(){
   };
 })();</script>`;
 
+/**
+ * 「大模型桥」（2026-10-08，§一百一十五）：接住作品那套「自带后端」的 `POST /api/llm` 约定。
+ *
+ * 为什么需要它：客户端生成的一类作品（「智能内容总结」就是）是**前端 + 自带 Node 后端**的完整工程 ——
+ * 网页里 `fetch('/api/llm')` 打的是作者本机那份后端（它再拿用户填的 Key 转发给厂商），旁边还有个
+ * 「启动智能内容总结.bat」。作品提交上来时只有入口 HTML，后端不跟着来，于是：
+ *   · 请求打到我们的 `/api/llm` → 404（平台上没有这条路由）；
+ *   · 更要命的是沙箱文档是 opaque origin（`Origin: null`），我们的 API **不给 null origin 发 ACAO**
+ *     ⇒ 浏览器直接 `net::ERR_FAILED`，作品 `.catch` 把进度文案设成「已中止」。
+ *   生产实测复现（2026-10-08，分享页 + 真浏览器）：`POST /api/llm` → CORS preflight 失败 →「已中止」。
+ *
+ * 约定（与客户端生成侧同款，见 `docs/operations/作品调用大模型-平台约定-20261008.md`）：
+ *   请求：`POST /api/llm`，body `{ apiKey, baseUrl, model, messages, temperature?, json? }`
+ *   应答：`{ ok: true, content }` / `{ ok: false, error, hint? }`（HTTP 恒 200，成败看 `ok` —— 作者后端就是这个形状）
+ * 桥**完全在学生文档里**把这条请求翻译成「浏览器直连厂商的 `baseUrl + /chat/completions`」：
+ *   · **Key 与请求都不经过平台服务器**（作品里那句「不会写入网页源码或本站服务器」仍然成立）；
+ *   · 沙箱本来就能出网（预览壳的 CSP 是 `connect-src https: wss:`），厂商侧给 CORS 就通 ——
+ *     DeepSeek / 月之暗面 / 智谱 / 火山方舟 / 百炼 / 硅基流动实测都放行 `Origin: null`
+ *     （OpenAI 与 Gemini 从国内网络根本连不上，不在讨论范围）。
+ *
+ * ⚠️ 老师端（机构端课堂）与平台端预览会给学生文档再套一段 `connect-src blob:` 的 meta CSP（**故意禁网**，
+ *    见 ClassroomWork / WorkPreview 的注释）。那两处桥也发不出请求 —— 这里**认这段 meta**，
+ *    给一句「这个预览窗口关掉了联网」而不是让用户对着「连不上 api.deepseek.com」发懵。
+ * ⚠️ 不接 `/api/fetch`（按链接抓网页正文）：那是「服务端去抓任意地址」，SSRF 风险面，另议；
+ *    这里只回一句人话（平台不代理网页抓取，请粘贴正文），比 404 之后再让作品说「连不上本站后端」清楚。
+ * ⚠️ 不用 postMessage、不碰平台应用：桥里的 Key 只在本文档里拼进 Authorization 头。
+ */
+export const LLM_BRIDGE = `<script>(function(){
+  var TIMEOUT=120000;                              // 厂商慢起来没谱（长文/推理模型），给足；超时给一句人话
+  var DEFAULT_BASE='https://api.deepseek.com/v1';  // 与平台运行时同一个默认厂商（作品侧可随时改）
+  var DEFAULT_MODEL='deepseek-chat';
+  var NET_BLOCKED='这个预览窗口关掉了作品的联网（老师端 / 平台端预览就是这样）。到分享页或作品页打开，再填 Key 就能用。';
+  var realFetch=typeof window.fetch==='function'?window.fetch.bind(window):null;
+
+  function jsonResponse(payload){
+    return new Response(JSON.stringify(payload),{status:200,headers:{'content-type':'application/json; charset=utf-8'}});
+  }
+  function fail(error,hint){return jsonResponse({ok:false,error:error,hint:hint||''});}
+
+  // 学生文档里那段收紧的 meta CSP（机构端/平台端预览注入的）让不让出网：
+  // 有 meta 且 connect-src（没有就退 default-src）里既没有 https: 也没有 * ⇒ 就是不联网。
+  function metaBlocksNetwork(){
+    try{
+      var metas=document.querySelectorAll('meta[http-equiv]');
+      for(var i=0;i<metas.length;i+=1){
+        if(String(metas[i].getAttribute('http-equiv')||'').toLowerCase()!=='content-security-policy')continue;
+        var content=String(metas[i].getAttribute('content')||'');
+        var matched=content.match(/(?:^|;)\\s*connect-src([^;]*)/i)||content.match(/(?:^|;)\\s*default-src([^;]*)/i);
+        if(!matched)return false;
+        return !/https:|\\*/.test(String(matched[1]||''));
+      }
+    }catch(error){}
+    return false;
+  }
+
+  // ⚠️ 沙箱文档的 location 是 about:srcdoc（hostname 都是空的），**相对地址要靠 document.baseURI 解析**
+  //    —— 它继承自外层那个 /vibe-preview.html，作品里的 '/api/llm' 因此才落回我们的源。
+  function resolve(raw){
+    try{return new URL(String(raw),document.baseURI||window.location.href);}catch(error){return null;}
+  }
+  function urlOf(input){
+    try{return resolve(typeof input==='string'?input:String((input&&input.url)||''));}catch(error){return null;}
+  }
+  function methodOf(input,init){
+    return String((init&&init.method)||(input&&input.method)||'GET').toUpperCase();
+  }
+  // 作者后端的 body 就是 JSON 字符串；也认「直接给对象」那种写法。解析不了返回 null（区别于空对象）。
+  function bodyOf(init,input){
+    try{
+      var raw=(init&&init.body)!==undefined?init.body:(input&&input.body);
+      if(raw===undefined||raw===null||raw==='')return {};
+      if(typeof raw==='string')return JSON.parse(raw);
+      if(typeof raw==='object')return raw;
+    }catch(error){return null;}
+    return null;
+  }
+
+  function callProvider(body,init){
+    var key=String(body.apiKey||'').trim();
+    var base=String(body.baseUrl||'').trim()||DEFAULT_BASE;
+    var model=String(body.model||'').trim()||DEFAULT_MODEL;
+    // 禁网这条先判：老师端/平台端预览里**填了 Key 也发不出去**，先说环境再说 Key 才不误导人。
+    if(metaBlocksNetwork())return Promise.resolve(fail(NET_BLOCKED,'老师端/平台端的预览是故意禁网的安全设置，分享链接与作品页不受影响。'));
+    if(!key){
+      return Promise.resolve(fail('还没有填写 API Key',
+        '在这个作品的「接口设置」里，粘贴你自己在模型服务商申请的 Key（只保存在你的浏览器里，不会上传到平台）。'));
+    }
+    var endpoint=base.replace(/\\/+$/,'')+'/chat/completions';
+    var payload={model:model,messages:body.messages||[]};
+    // 白名单式转发：认得的标准字段原样带过去，其余（apiKey/baseUrl/json 这些是约定的私有字段）不发。
+    ['temperature','top_p','max_tokens','presence_penalty','frequency_penalty','seed','stop','n','response_format'].forEach(function(field){
+      if(body[field]!==undefined)payload[field]=body[field];
+    });
+    if(body.json&&!payload.response_format)payload.response_format={type:'json_object'};
+    var options={
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+      body:JSON.stringify(payload)
+    };
+    // 作品自己带了 signal（有的作品有「停止」按钮）就听它的；否则用我们的超时兜底。
+    var controller=null;
+    if(init&&init.signal){options.signal=init.signal;}
+    else if(typeof AbortController==='function'){controller=new AbortController();options.signal=controller.signal;}
+    var timer=controller?setTimeout(function(){try{controller.abort();}catch(error){}},TIMEOUT):0;
+    var clear=function(){if(timer)clearTimeout(timer);};
+    if(!realFetch)return Promise.resolve(fail('这个浏览器不支持 fetch'));
+    return realFetch(endpoint,options).then(function(response){
+      return response.text().then(function(text){
+        clear();
+        var data=null;
+        try{data=JSON.parse(text);}catch(error){}
+        if(!response.ok){
+          var message=String((data&&((data.error&&data.error.message)||data.message))||'').slice(0,300);
+          var hint='';
+          if(response.status===401||response.status===403)hint='Key 无效、没有权限或已过期 —— 检查一下这个 Key 是不是这家服务商的。';
+          else if(response.status===402)hint='这家服务商的账户余额/额度不足。';
+          else if(response.status===404)hint='接口地址（Base URL）可能不对：多数厂商要写到 …/v1。';
+          else if(response.status===429)hint='请求太频繁或超出限额，等一会儿再试。';
+          return jsonResponse({ok:false,status:response.status,error:'模型服务返回 '+response.status+(message?'：'+message:''),hint:hint});
+        }
+        if(!data)return fail('模型返回的不是 JSON（可能被网关/代理换成了网页）','检查接口地址是不是这家服务商的。');
+        var choice=data.choices&&data.choices[0];
+        var content=choice&&choice.message?choice.message.content:(choice?choice.text:undefined);
+        if(typeof content!=='string'||!content){
+          if(choice&&choice.finish_reason==='length')return fail('模型输出被长度上限截断了（没有正文）','把「每段字数上限」调小一点再试。');
+          return fail('模型没有返回正文（choices[0].message.content 为空）','换一个模型，或再点一次。');
+        }
+        return jsonResponse({ok:true,content:content,model:data.model||model,usage:data.usage||null});
+      });
+    }).catch(function(error){
+      clear();
+      var name=String((error&&error.name)||'');
+      if(name==='AbortError'){
+        if(init&&init.signal)return fail('这次调用被取消了');
+        return fail('等了 '+(TIMEOUT/1000)+' 秒还没等到模型响应，先停掉了','长文可以把「每段字数上限」调小再试。');
+      }
+      return fail('连不上 '+endpoint+'（'+String((error&&error.message)||error).slice(0,160)+'）',
+        '检查网络，以及「接口地址」是不是这家服务商的；有些厂商不允许浏览器直连。');
+    });
+  }
+
+  // /api/config：作者后端原来给的是**非敏感默认值**（Key 永远来自本机浏览器），照旧给一份。
+  function platformConfig(){
+    return {ok:true,baseUrl:DEFAULT_BASE,model:DEFAULT_MODEL,chunkChars:4000,temperature:0.3};
+  }
+
+  window.fetch=function(input,init){
+    try{
+      var url=urlOf(input);
+      if(url){
+        var method=methodOf(input,init);
+        if(method==='GET'&&/\\/api\\/config$/.test(url.pathname))return Promise.resolve(jsonResponse(platformConfig()));
+        if(/\\/api\\/llm$/.test(url.pathname)){
+          if(method!=='POST')return realFetch?realFetch(input,init):Promise.reject(new TypeError('fetch 不可用'));
+          var body=bodyOf(init,input);
+          if(body===null)return Promise.resolve(fail('这个请求的 body 不是 JSON，平台看不懂（约定见「作品调用大模型」文档）'));
+          return callProvider(body,init);
+        }
+        if(method==='POST'&&/\\/api\\/fetch$/.test(url.pathname)){
+          return Promise.resolve(fail('平台不代理「按链接抓取网页正文」（浏览器里跨域也抓不到第三方网页）','请把正文直接粘贴进来，一样能总结。'));
+        }
+      }
+    }catch(error){/* 桥自己出问题不能连累作品原本的 fetch */}
+    return realFetch?realFetch(input,init):Promise.reject(new TypeError('fetch 不可用'));
+  };
+})();</script>`;
+
 function svgDataUrl(content) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(String(content || ''))}`;
 }
@@ -417,8 +584,9 @@ export function buildPreviewDocument(files, entryFile) {
   const normalizedMedia = normalizePreviewVideoAudio(embedded);
   // 存储替身与桥都必须装在学生脚本**之前**：前者要抢在那行顶层 localStorage 之前，
   // 后者要抢在 head 里的早期 console/error 调用之前（fetch 桥也一样：学生页可能一上来就 fetch 素材）。
-  // 顺序：存储替身 → 控制台桥 → 高度上报 → 素材 fetch 桥 → PDF 桥（PDF 桥仍排最后，见它自己的注释）。
-  const preamble = `${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}${PREVIEW_HEIGHT_BRIDGE}${ASSET_FETCH_BRIDGE}${PDF_BRIDGE}`;
+  // 顺序：存储替身 → 控制台桥 → 高度上报 → 素材 fetch 桥 → 大模型桥 → PDF 桥（PDF 桥仍排最后，见它自己的注释）。
+  // ⚠️ 两座 fetch 桥的先后无所谓（各自只认自己那几个地址、其余原样往下传），但都要在 PDF 桥之前。
+  const preamble = `${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}${PREVIEW_HEIGHT_BRIDGE}${ASSET_FETCH_BRIDGE}${LLM_BRIDGE}${PDF_BRIDGE}`;
   if (/<head[^>]*>/i.test(normalizedMedia)) return normalizedMedia.replace(/<head[^>]*>/i, (match) => `${match}${preamble}`);
   if (/<body[^>]*>/i.test(normalizedMedia)) return normalizedMedia.replace(/<body[^>]*>/i, (match) => `${match}${preamble}`);
   return preamble + normalizedMedia;
