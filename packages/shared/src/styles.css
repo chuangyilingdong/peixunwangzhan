@@ -1378,6 +1378,19 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .ta-panel:fullscreen .ta-toolbar { display:none; }
 .ta-panel:fullscreen .ta-slide-stage,
 .ta-panel:fullscreen .ta-native-stage { padding:0; }
+/* ⚠️⚠️ 2026-10-11 用户报（图1）：**PPT 原生放映全屏后幻灯片不见了，只剩水印与左右翻页键**
+   —— 画面里只有一块 46×25 的白色小块，那就是塌掉的幻灯片槽。
+   真因是上面那条 2026-10-05 的「面板全屏时舞台居中」（`.ta-panel:fullscreen .preview-stage
+   { align-items:center }`，当时为了修"视频全屏只占 74vh"）**顺带改了原生台的交叉轴对齐**：
+     · 窗口内：`.preview-stage` 是 `display:flex`（`:has(.ta-native-stage)` 那条）+ 默认 `stretch`
+       ⇒ 台面高度**由布局给**（确定值），量它算 scale 是稳定的；
+     · 全屏后：`align-items:center` 一进来，台面高度变成**由内容决定**，而内容（幻灯片槽）的尺寸
+       又是**量台面自己**算出来的 —— 量一次缩一点、再量再缩，一路收敛到 0。
+       复刻实验实测：1680×1050 的台面被判成 **1680×25**，scale 成了 **-0.015**，槽塌成 46×25。
+   修法：把原生台钉回"撑满"（`align-self` 盖过父级 `align-items`）。PDF 放映档
+   （`.ta-slide-stage` 是 `position:absolute; inset:0`）不受这条影响，别顺手一起改。
+   守卫 p188 钉着这一条（真 CSS + 真浏览器复现那个量算回路）。 */
+.ta-panel:fullscreen .ta-native-stage { align-self:stretch; }
 @media(max-width:900px) {
   .preview-stage:has(.ta-native-stage) { flex-direction:column; }
   .ta-native-rail { flex-direction:row; width:auto; max-height:132px; overflow-x:auto; overflow-y:hidden; border-right:0; border-top:1px solid rgb(255 255 255 / 12%); }
