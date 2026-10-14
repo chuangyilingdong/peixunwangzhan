@@ -317,6 +317,11 @@ export function sendJson(res, status, payload, req, extraHeaders = {}) {
   res.writeHead(status, corsHeaders(req, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(text),
+    // ⭐ 2026-10-14（客户端报「运行时密钥已过期」，它们第 1 条要的就是这个）：**API 的 JSON 响应一律不许被缓存**。
+    //    以前这里一个 `cache-control` 都没有 —— `client-context` 每次都现签一把运行时密钥（见 runtimeGateway），
+    //    响应却没有缓存指示：中间代理/客户端自己的 HTTP 缓存都可能按启发式把旧响应留下，
+    //    下一次就是"拿着一把早过期的密钥去调网关"。要缓存的调用方用 `extraHeaders` 覆盖（它在后面展开）。
+    'cache-control': 'no-store',
     ...internalHeaders,
     ...extraHeaders,
   }));

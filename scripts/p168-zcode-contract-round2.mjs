@@ -30,6 +30,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHmac } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { ensureClassroom } from './lib/classroomFixture.mjs';
 
@@ -357,6 +358,88 @@ try {
   // 用完撤掉这条脏数据：后面的读法（若有）不该继续看到它
   await aq("UPDATE session_students SET status='REMOVED' WHERE session_id=?", [dirtySessionId]);
   await aq("UPDATE class_sessions SET status='ENDED' WHERE id=?", [dirtySessionId]);
+
+  /* ─── ⑧ 运行时密钥的四条口径（2026-10-14 客户端报「运行时密钥已过期」之后补，见交接 §一百一十八）───
+     客户端现场：UI 每 5 秒轮询 client-context（全 200、key 是新的），同一分钟里网关那两条却是 401
+     —— 长活的 Agent 手里那把 key 过期了。它们给的 4 条建议里 1 / 3 / 4 落在平台侧，这里逐条钉住。 */
+  console.log('\n⑧ 运行时密钥：no-store / TTL / 拒签留痕 / 轮换过渡窗口');
+
+  // ⑧-1 「保持 no-store」——这条响应里有**现签**的密钥，一个缓存都不许留下
+  const rawContext = await fetch(`http://127.0.0.1:${PORT}/api/student/runtime/client-context`, { headers: { authorization: `Bearer ${token}` } });
+  await check('⑧ client-context 带 `cache-control: no-store`（客户端第 1 条：不许被任何缓存留下）',
+    () => assert.equal(String(rawContext.headers.get('cache-control') || '').toLowerCase(), 'no-store'));
+  await check('⑧ 也没有 etag / expires（否则客户端可能条件请求拿到旧 key）',
+    () => assert.ok(!rawContext.headers.get('etag') && !rawContext.headers.get('expires')));
+
+  // ⑧-2 「每次都签发新的」+ TTL = 12 小时（客户端第 3 条）
+  const decodeKey = (key) => JSON.parse(Buffer.from(String(key).split('.')[1], 'base64url').toString('utf8'));
+  const ctxA = (await api('/api/student/runtime/client-context', { token })).data || {};
+  const ctxB = (await api('/api/student/runtime/client-context', { token })).data || {};
+  await check('⑧ 每次调用都现签一把新密钥（两次的 key 不同、exp 不倒退）', () => {
+    assert.ok(ctxA.gateway?.key && ctxB.gateway?.key, '没拿到 gateway.key');
+    assert.notEqual(ctxA.gateway.key, ctxB.gateway.key);
+    assert.ok(decodeKey(ctxB.gateway.key).exp >= decodeKey(ctxA.gateway.key).exp);
+  });
+  await check('⑧ ⭐ TTL = **12 小时**（6h → 12h：长课堂里 Agent 手里那把不会中途过期）', () => {
+    const hours = (decodeKey(ctxA.gateway.key).exp - Date.now()) / 3600000;
+    assert.ok(hours > 11.9 && hours < 12.1, `实际 ${hours.toFixed(2)} 小时`);
+  });
+
+  // ⑧-3 拒签要留痕 + 过期那句必须与客户端看到的一字不差
+  const signKey = (secretValue, payload) => {
+    const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+    return `rt1.${body}.${createHmac('sha256', secretValue).update(body).digest('base64url')}`;
+  };
+  const gatewayPost = async (key, port = PORT) => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/gateway/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: 'p168-flash', messages: [{ role: 'user', content: 'ping' }] }),
+    });
+    return { status: response.status, payload: await response.json().catch(() => ({})) };
+  };
+  const expiredRes = await gatewayPost(signKey('p168-guard-secret', { o: 'org_p168', u: enrolled.student_id, s: 'session_p168_expired', l: null, exp: Date.now() - 90_000 }));
+  await check('⑧ 过期密钥 → 401，且 code/message 就是客户端显示的那句', () => {
+    assert.equal(expiredRes.status, 401, JSON.stringify(expiredRes.payload).slice(0, 200));
+    assert.equal(expiredRes.payload?.error?.code, 'RUNTIME_KEY_EXPIRED');
+    assert.equal(expiredRes.payload?.error?.message, '运行时密钥已过期');
+  });
+  await sleep(250);
+  await check('⑧ ⭐ 拒签**留痕**（日志里有 `[gateway] 运行时密钥被拒：已过期 N 分钟` —— 以前一条都不记，只能翻 nginx）',
+    () => assert.match(serverLog, /\[gateway\] 运行时密钥被拒：已过期 \d+ 分钟/));
+
+  // ⑧-4 轮换过渡窗口：上一把密钥装进 RUNTIME_GATEWAY_SECRET_OLD，旧 key 仍然认
+  const PORT2 = 18969;
+  const rotated = spawn(process.execPath, ['apps/server/src/index.js'], {
+    cwd: root,
+    env: { ...baseEnv, PORT: String(PORT2), RUNTIME_GATEWAY_SECRET: 'p168-new-secret', RUNTIME_GATEWAY_SECRET_OLD: 'p168-guard-secret' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let rotatedLog = '';
+  rotated.stdout.on('data', (x) => { rotatedLog += x; });
+  rotated.stderr.on('data', (x) => { rotatedLog += x; });
+  try {
+    const deadline2 = Date.now() + 30_000;
+    for (;;) {
+      try { if ((await fetch(`http://127.0.0.1:${PORT2}/health`)).ok) break; } catch { /* 等 */ }
+      if (Date.now() > deadline2) throw new Error(`轮换实例没起来：${rotatedLog.slice(-400)}`);
+      await sleep(150);
+    }
+    const payload = (exp) => ({ o: 'org_p168_rotate', u: 'u_p168', s: 's_p168', l: null, exp });
+    const oldRes = await gatewayPost(signKey('p168-guard-secret', payload(Date.now() + 3600_000)), PORT2);
+    const newRes = await gatewayPost(signKey('p168-new-secret', payload(Date.now() + 3600_000)), PORT2);
+    const bogusRes = await gatewayPost(signKey('p168-garbage-secret', payload(Date.now() + 3600_000)), PORT2);
+    await check('⑧ ⭐ 轮换过渡窗口：**上一把**密钥签的 key 仍然认（不是 RUNTIME_KEY_INVALID）——轮换不再当场掐断在跑的课堂',
+      () => assert.notEqual(oldRes.payload?.error?.code, 'RUNTIME_KEY_INVALID', JSON.stringify(oldRes.payload).slice(0, 200)));
+    await check('⑧ 当前那把当然也认（签发的永远是当前密钥）',
+      () => assert.notEqual(newRes.payload?.error?.code, 'RUNTIME_KEY_INVALID', JSON.stringify(newRes.payload).slice(0, 200)));
+    await check('⑧ 但**别的**密钥签的一律拒（过渡窗口不是"什么都收"）', () => {
+      assert.equal(bogusRes.status, 401);
+      assert.equal(bogusRes.payload?.error?.code, 'RUNTIME_KEY_INVALID');
+    });
+  } finally {
+    rotated.kill('SIGTERM');
+  }
 } catch (error) {
   console.error('P168 抛错：', error?.message || error);
   console.error(serverLog.split('\n').slice(-15).join('\n'));

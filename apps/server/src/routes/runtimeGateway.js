@@ -31,17 +31,49 @@ import { assertExternalAiAllowed, normalizeProviderError, PROVIDER_ERROR_CODES }
 import { createDsmlStripper, stripDsml } from '../services/dsmlFilter.js';
 
 const PREFIX = 'rt1';
-const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
+/**
+ * ⭐ 2026-10-14（客户端报「运行时密钥已过期」，见交接 §一百一十八）：TTL 从 **6 小时放宽到 12 小时**。
+ * 为什么：客户端 Agent 是长活进程，它把**开局拿到的那把**密钥一直用着；超过 TTL 就一路 401，
+ * 而它的 UI 每 5 秒轮询 `client-context`（拿到的是新 key，但 Agent 手里那把没换）——
+ * 现场日志对得上：UI 轮询全 200，同一分钟内网关那两条是 401。
+ * 放宽 TTL 不放松真正的安全边界：**每一次调用都重过课堂门禁**
+ * （`assertRuntimeClassroomActive`：课堂仍在进行 + 学生仍在名单里），密钥里没有的东西一律不认。
+ */
+const DEFAULT_TTL_MS = 12 * 60 * 60 * 1000;
 
-function secret() {
+function currentSecret() {
   const value = String(process.env.RUNTIME_GATEWAY_SECRET || '').trim();
   // 没有密钥就**拒绝服务**，不退回任何弱默认值：这个端点能让调用方花平台的算力钱。
   if (!value) throw errors.conflict('运行时网关未配置密钥', 'RUNTIME_GATEWAY_UNCONFIGURED');
   return value;
 }
 
+/** 轮换过渡窗口用的**上一把**密钥（只用于验签，不用于签发；见 verifyRuntimeKey 里的说明）。 */
+function previousSecret() {
+  return String(process.env.RUNTIME_GATEWAY_SECRET_OLD || '').trim();
+}
+
+function signWith(value, body) {
+  return createHmac('sha256', value).update(body).digest('base64url');
+}
+
 function sign(body) {
-  return createHmac('sha256', secret()).update(body).digest('base64url');
+  return signWith(currentSecret(), body);
+}
+
+function matches(expected, given) {
+  const want = Buffer.from(expected);
+  return given.length === want.length && timingSafeEqual(given, want);
+}
+
+/**
+ * 拒签要留痕（2026-10-14 补）。以前**一条都不记**：客户端报「运行时密钥已过期」时，
+ * 我们只能去翻 nginx 访问日志才看出"是网关给的 401"，而平台自己的日志里干干净净。
+ * 只记状态与人（学生/课堂），**绝不记密钥本身**。
+ */
+function logRejection(reason, payload) {
+  const who = payload?.u ? `学生 ${payload.u} / 课堂 ${payload.s}` : '（未解出身份）';
+  console.warn(`[gateway] 运行时密钥被拒：${reason} · ${who}`);
 }
 
 /** 平台签发：一个学生一节课一把，随容器一起发出去。 */
@@ -58,16 +90,39 @@ export function issueRuntimeKey({ orgId, userId, sessionId, lessonId = null, ttl
  */
 export function verifyRuntimeKey(token) {
   const parts = String(token || '').split('.');
-  if (parts.length !== 3 || parts[0] !== PREFIX) throw errors.unauthorized('运行时密钥无效', 'RUNTIME_KEY_INVALID');
+  if (parts.length !== 3 || parts[0] !== PREFIX) {
+    logRejection('格式不对', null);
+    throw errors.unauthorized('运行时密钥无效', 'RUNTIME_KEY_INVALID');
+  }
   const [, body, mac] = parts;
-  const expected = sign(body);
   const given = Buffer.from(mac);
-  const want = Buffer.from(expected);
-  if (given.length !== want.length || !timingSafeEqual(given, want)) throw errors.unauthorized('运行时密钥无效', 'RUNTIME_KEY_INVALID');
+  let matched = matches(sign(body), given);
+  if (!matched) {
+    // ⭐ 轮换过渡窗口（客户端第 4 条）：`RUNTIME_GATEWAY_SECRET_OLD` 装着上一把密钥时，
+    //    **轮换前**签出去的密钥仍然认 —— 客户端的长活进程不可能在轮换那一瞬间换 key，
+    //    不给窗口就必然出现"换密钥 = 全部在跑的课堂当场 401"。
+    //    撤销窗口 = 把环境变量删掉重启（那时旧 key 立刻失效）。签发的永远是当前密钥。
+    const previous = previousSecret();
+    if (previous) {
+      matched = matches(signWith(previous, body), given);
+      if (matched) console.warn('[gateway] 这把运行时密钥用的是**上一把**密钥（轮换过渡窗口内）——过渡结束后请撤掉 RUNTIME_GATEWAY_SECRET_OLD');
+    }
+  }
+  if (!matched) {
+    logRejection('验签不过（密钥轮换过？或者是伪造的）', null);
+    throw errors.unauthorized('运行时密钥无效', 'RUNTIME_KEY_INVALID');
+  }
   let payload = null;
   try { payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')); } catch { payload = null; }
-  if (!payload?.o || !payload?.u || !payload?.s) throw errors.unauthorized('运行时密钥无效', 'RUNTIME_KEY_INVALID');
-  if (!Number.isFinite(payload.exp) || payload.exp <= Date.now()) throw errors.unauthorized('运行时密钥已过期', 'RUNTIME_KEY_EXPIRED');
+  if (!payload?.o || !payload?.u || !payload?.s) {
+    logRejection('载荷缺字段', payload);
+    throw errors.unauthorized('运行时密钥无效', 'RUNTIME_KEY_INVALID');
+  }
+  if (!Number.isFinite(payload.exp) || payload.exp <= Date.now()) {
+    const minutes = Number.isFinite(payload.exp) ? Math.max(0, Math.round((Date.now() - payload.exp) / 60000)) : -1;
+    logRejection(`已过期 ${minutes} 分钟（TTL ${Math.round(DEFAULT_TTL_MS / 3600000)} 小时）`, payload);
+    throw errors.unauthorized('运行时密钥已过期', 'RUNTIME_KEY_EXPIRED');
+  }
   return payload;
 }
 
