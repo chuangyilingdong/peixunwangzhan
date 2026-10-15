@@ -176,6 +176,16 @@ function resolveOwner(ctx) {
   return { key: `anon:${anon}`, cookie };
 }
 
+/** 会话消息数：**每次都重新数**，不做 ±1 累加。
+ *  为什么：累加一旦有一处漏了（比如重生成删消息时那条 SQL 报错）就永久漂移，而列表上会一直显示错。
+ *  重新数的代价是每条消息多一次 COUNT，可以忽略。
+ *  ⚠️ 这里也踩过一个 SQLite→MySQL 的坑：别写 `MAX(message_count-1, 0)` ——
+ *     SQLite 的 max(a,b) 是标量函数，MySQL 的 MAX() 只有聚合形式，这句在 RDS 上是语法错误（实测 500）。 */
+async function recountConversation(convId, at) {
+  const n = await arow('SELECT COUNT(*) AS n FROM junshi_messages WHERE conversation_id=?', [convId]);
+  await aq('UPDATE junshi_conversations SET message_count=?, updated_at=? WHERE id=?', [n?.n || 0, at, convId]);
+}
+
 /* ───────────── 对话相关的辅助 ───────────── */
 
 /**
@@ -530,7 +540,7 @@ export async function handleJunshi(ctx) {
       for (let i = stored.length - 1; i >= 0; i--) {
         if (stored[i].role === 'assistant') {
           await aq('DELETE FROM junshi_messages WHERE id=?', [stored[i].id]);
-          await aq('UPDATE junshi_conversations SET message_count=MAX(message_count-1,0) WHERE id=?', [conv.id]);
+          await recountConversation(conv.id, nowIso());
           stored.splice(i, 1);
           break;
         }
@@ -545,7 +555,7 @@ export async function handleJunshi(ctx) {
       const qAt = nowIso();
       await aq('INSERT INTO junshi_messages (id, conversation_id, role, content, citations, created_at) VALUES (?,?,?,?,?,?)',
         [userMsgId, conv.id, 'user', content, null, qAt]);
-      await aq('UPDATE junshi_conversations SET message_count=message_count+1, updated_at=? WHERE id=?', [qAt, conv.id]);
+      await recountConversation(conv.id, qAt);
     }
 
     sseOpen(ctx, owner.cookie);
@@ -575,7 +585,7 @@ export async function handleJunshi(ctx) {
         const aAt = nowIso();
         await aq('INSERT INTO junshi_messages (id, conversation_id, role, content, citations, created_at) VALUES (?,?,?,?,?,?)',
           [id('jm'), conv.id, 'assistant', answer, cites ? JSON.stringify(cites) : null, aAt]);
-        await aq('UPDATE junshi_conversations SET message_count=message_count+1, updated_at=? WHERE id=?', [aAt, conv.id]);
+        await recountConversation(conv.id, aAt);
       }
       sseSend(ctx, 'done', { conversationId: conv.id, model: out.model, provider: out.provider, citations: cites, usage: out.usage });
     } catch (error) {
@@ -586,7 +596,7 @@ export async function handleJunshi(ctx) {
           const aAt = nowIso();
           await aq('INSERT INTO junshi_messages (id, conversation_id, role, content, citations, created_at) VALUES (?,?,?,?,?,?)',
             [id('jm'), conv.id, 'assistant', answer, cites ? JSON.stringify(cites) : null, aAt]);
-          await aq('UPDATE junshi_conversations SET message_count=message_count+1, updated_at=? WHERE id=?', [aAt, conv.id]);
+          await recountConversation(conv.id, aAt);
         } catch { /* 落库失败不能让流断在这儿 */ }
       }
       if (!aborted) {
