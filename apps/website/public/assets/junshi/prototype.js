@@ -389,8 +389,12 @@
       }, bubble);
       if (answer.trim()) {
         state.messages.push({ role: 'assistant', content: answer });
+        renderMessages();
+      } else {
+        // ⚠️ 空回答时**不要**走 renderMessages：它按 state.messages 重建 DOM，此时里面只有用户那条，
+        //    会把刚写上去的「这次没有生成内容」提示一起冲掉（与上面 stopped 分支同一个坑）。
+        bubble.textContent = '（这次没有生成内容，可以再试一次）';
       }
-      renderMessages();
       loadConversations();
     } catch (e) {
       var stopped = e && (e.name === 'AbortError' || String(e.message).indexOf('abort') >= 0);
