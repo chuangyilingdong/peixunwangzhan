@@ -1,66 +1,155 @@
-<!--
-  /junshi/ —— 招生军师 · 专家团（2026-10-15）
-
-  形态：**机构跟 AI 聊**。左侧是专家（营销/话术/文案/转化/续费/合规），中间是对话，
-  右侧显示这次回答引用了他们自己资料库里的哪几份文件。
-  专家定义与知识检索在 apps/server/src/services/junshiChat.js，
-  接口（/experts、/chat 等）在 apps/server/src/routes/junshi.js。
-
-  ⚠️ 脚本必须外链：线上 CSP 是 `script-src 'self'`（见 deploy/production/nginx-site.conf），
-     **内联 <script> 会被直接拦掉**。`<style>` 保持内联——`style-src` 本来就放行内联样式。
-  ⚠️ 两个 script 上的 `?v=__STAMP__` 由 apps/website/scripts/stamp-junshi.mjs 在构建时换成
-     内容哈希，**别手工改成固定值**：nginx 的 /assets/ 是 expires 7d，URL 不变就会拿旧缓存。
-  ⚠️ 按用户口径「暂时先不对外展示」：noindex + 未挂导航。
--->
 <!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow, noarchive">
 <meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="color-scheme" content="light dark">
 <title>招生军师 · 专家团 · 灵动ai学院</title>
 <style>
-  :root{color-scheme:light dark}
-  html,body{margin:0;padding:0}
-  body{
-    background:#eceff5;color:#131922;
-    font-family:"PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,-apple-system,"Segoe UI",sans-serif;
-    padding:18px 16px 44px;
-  }
-  @media (prefers-color-scheme:dark){body{background:#0a0d11;color:#e7ecf3}}
-  .jn-wrap{max-width:1440px;margin:0 auto}
-  .jn-toggle{
-    position:fixed;right:16px;bottom:16px;z-index:99;font:inherit;font-size:12px;
-    padding:6px 13px;border-radius:999px;cursor:pointer;opacity:.5;
-    background:transparent;border:1px solid currentColor;color:inherit;backdrop-filter:blur(6px);
-  }
-  .jn-toggle:hover{opacity:1}
+  /* 铺满全屏：app 自己占满视口，页面不再有外边距与圆角窗口（2026-10-15 用户口径「界面太小了，要铺满全屏」）。
+     高度用 100dvh：移动端地址栏收放时不会跳。 */
+  html{height:100%}
+  body{margin:0;height:100%;overflow:hidden;background:#f0f2f7;font-family:"PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,-apple-system,"Segoe UI",sans-serif}
+  @media (prefers-color-scheme:dark){body{background:#0b0e12}}
 </style>
 </head>
 <body>
-<div class="jn-wrap">
+<!-- 图标 sprite：内联的 18 个 Tabler 图标（MIT），零网络请求、颜色走 currentColor。
+     线上 CSP 是 default-src 'self'，外链图标 CDN 跑不了；整包图标库又有 600KB，而这里只用到 18 个。 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+  <symbol id="i-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 14l-3 -3h-7a1 1 0 0 1 -1 -1v-6a1 1 0 0 1 1 -1h9a1 1 0 0 1 1 1v10" />
+    <path d="M14 15v2a1 1 0 0 1 -1 1h-7l-3 3v-10a1 1 0 0 1 1 -1h2" />
+  </symbol>
+  <symbol id="i-library" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7 3m0 2.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z" />
+    <path d="M4.012 7.26a2.005 2.005 0 0 0 -1.012 1.737v10c0 1.1 .9 2 2 2h10c.75 0 1.158 -.385 1.5 -1" />
+    <path d="M11 7h5" />
+    <path d="M11 10h6" />
+    <path d="M11 13h3" />
+  </symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3a12 12 0 0 0 8.5 3a12 12 0 0 1 -8.5 15a12 12 0 0 1 -8.5 -15a12 12 0 0 0 8.5 -3" />
+    <path d="M9 12l2 2l4 -4" />
+  </symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 10a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+    <path d="M6 4v4" />
+    <path d="M6 12v8" />
+    <path d="M10 16a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+    <path d="M12 4v10" />
+    <path d="M12 18v2" />
+    <path d="M16 7a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+    <path d="M18 4v1" />
+    <path d="M18 9v11" />
+  </symbol>
+  <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4.698 4.034l16.302 7.966l-16.302 7.966a.503 .503 0 0 1 -.546 -.124a.555 .555 0 0 1 -.12 -.568l2.468 -7.274l-2.468 -7.274a.555 .555 0 0 1 .12 -.568a.503 .503 0 0 1 .546 -.124z" />
+    <path d="M6.5 12h14.5" />
+  </symbol>
+  <symbol id="i-new-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 9h8" />
+    <path d="M8 13h6" />
+    <path d="M12.01 18.594l-4.01 2.406v-3h-2a3 3 0 0 1 -3 -3v-8a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v5.5" />
+    <path d="M16 19h6" />
+    <path d="M19 16v6" />
+  </symbol>
+  <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10 10m-7 0a7 7 0 1 0 14 0a7 7 0 1 0 -14 0" />
+    <path d="M21 21l-6 -6" />
+  </symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 12m-4 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" />
+    <path d="M3 12h1m8 -9v1m8 8h1m-9 8v1m-6.4 -15.4l.7 .7m12.1 -.7l-.7 .7m0 11.4l.7 .7m-12.1 -.7l-.7 .7" />
+  </symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+  </symbol>
+  <symbol id="i-sparkle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M16 18a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2zm0 -12a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2zm-7 12a6 6 0 0 1 6 -6a6 6 0 0 1 -6 -6a6 6 0 0 1 -6 6a6 6 0 0 1 6 6z" />
+  </symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5 12l5 5l10 -10" />
+  </symbol>
+  <symbol id="i-loader" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 6l0 -3" />
+    <path d="M16.25 7.75l2.15 -2.15" />
+    <path d="M18 12l3 0" />
+    <path d="M16.25 16.25l2.15 2.15" />
+    <path d="M12 18l0 3" />
+    <path d="M7.75 16.25l-2.15 2.15" />
+    <path d="M6 12l-3 0" />
+    <path d="M7.75 7.75l-2.15 -2.15" />
+  </symbol>
+  <symbol id="i-quote" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10 11h-4a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1h3a1 1 0 0 1 1 1v6c0 2.667 -1.333 4.333 -4 5" />
+    <path d="M19 11h-4a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1h3a1 1 0 0 1 1 1v6c0 2.667 -1.333 4.333 -4 5" />
+  </symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 9v4" />
+    <path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0z" />
+    <path d="M12 16h.01" />
+  </symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4" />
+    <path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
+  </symbol>
+  <symbol id="i-bulb" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 12h1m8 -9v1m8 8h1m-15.4 -6.4l.7 .7m12.1 -.7l-.7 .7" />
+    <path d="M9 16a5 5 0 1 1 6 0a3.5 3.5 0 0 0 -1 3a2 2 0 0 1 -4 0a3.5 3.5 0 0 0 -1 -3" />
+    <path d="M9.7 17l4.6 0" />
+  </symbol>
+  <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 15l6 -6" />
+    <path d="M11 6l.463 -.536a5 5 0 0 1 7.071 7.072l-.534 .464" />
+    <path d="M13 18l-.397 .534a5.068 5.068 0 0 1 -7.127 0a4.972 4.972 0 0 1 0 -7.071l.524 -.463" />
+  </symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7 7h10v10" />
+    <path d="M7 17l10 -10" />
+  </symbol>
+</defs></svg>
+
 <div id="js-app">
 <style>
 #js-app{
-  --p-window: light-dark(#f6f8fb,#12161b);
-  --p-surface: light-dark(#ffffff,#181d24);
-  --p-surface2: light-dark(#f3f5f9,#1e242c);
-  --p-line: light-dark(#e2e7ef,#28303a);
-  --p-line2: light-dark(#eef1f6,#212831);
-  --p-text: light-dark(#131922,#e7ecf3);
-  --p-text2: light-dark(#5d6879,#95a1b2);
-  --p-text3: light-dark(#8c97a6,#6b7686);
-  --p-brand: light-dark(#2f4bd8,#8296ff);
-  --p-brand-soft: light-dark(#eaefff,#1a2140);
-  --p-warm: light-dark(#b9631a,#e9a457);
-  --p-warm-soft: light-dark(#fdf1e3,#2a2015);
-  --p-green: light-dark(#16794e,#4ecb8f);
-  --p-green-soft: light-dark(#e6f6ef,#11241c);
-  --p-red: light-dark(#bb3a2c,#ff8f7e);
-  --p-red-soft: light-dark(#fdeae7,#2b1917);
-  --p-r: 10px;
-  display:block; color:var(--p-text); line-height:1.6;
+  /* ── 颜色 ─────────────────────────────────────────────
+     用 light-dark() 一套声明吃两种主题（Apple §12：大面用重材质、交互元素用轻材质）。 */
+  --bg: light-dark(#f0f2f7,#0b0e12);
+  --surface: light-dark(#ffffff,#171b21);
+  --surface-2: light-dark(#f5f7fa,#1c2128);
+  --surface-3: light-dark(#eceff5,#222831);
+  --line: light-dark(#e3e7ee,#272e37);
+  --line-soft: light-dark(#edf0f5,#20262e);
+  --text: light-dark(#0e131b,#e8edf4);
+  --text-2: light-dark(#5a6575,#95a1b2);
+  --text-3: light-dark(#8b96a5,#68727f);
+  --brand: light-dark(#2c47d4,#8296ff);
+  --brand-soft: light-dark(#eaeeff,#1a2140);
+  --warm: light-dark(#b0620f,#e9a457);
+  --warm-soft: light-dark(#fdf2e4,#2a2015);
+  --green: light-dark(#12734a,#4ecb8f);
+  --red: light-dark(#b43426,#ff8f7e);
+  --red-soft: light-dark(#fdeae7,#2b1917);
+
+  /* ── 动效 token ───────────────────────────────────────
+     Emil：内置 CSS 缓动太弱，要用更强的自定义曲线；UI 动画一律 <300ms。
+     进场上用 ease-out（起步快＝跟手），屏内位移用 ease-in-out，hover/颜色用 ease，
+     持续运动（转圈）用 linear。**不用 ease-in**。 */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --t-press: 140ms;    /* 按压反馈 100–160ms */
+  --t-enter: 220ms;    /* 小面板进场 125–200ms 档，略放宽 */
+  --t-panel: 260ms;    /* 面板切换 200–500ms 档 */
+
+  --r: 12px;
+  display:grid; grid-template-rows:auto minmax(0,1fr);
+  height:100dvh; overflow:hidden;
+  color:var(--text); line-height:1.6;
+  background:var(--bg);
   font-family:"PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,-apple-system,"Segoe UI",sans-serif;
   -webkit-font-smoothing:antialiased;
 }
@@ -68,250 +157,357 @@
 #js-app [hidden]{display:none!important}
 #js-app p{margin:0}
 #js-app button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
-#js-app .js-window{
-  background:var(--p-window);border:1px solid var(--p-line);border-radius:14px;overflow:hidden;
-  box-shadow:0 1px 2px light-dark(rgba(16,24,40,.05),rgba(0,0,0,.4));
+#js-app svg.ic{width:1em;height:1em;flex:none;display:block}
+
+/* ── 顶栏（Apple §12：半透明材质 + 内容从下面滚过；不占一条不透光的横带） */
+#js-app .topbar{
+  display:flex;align-items:center;gap:12px;padding:0 18px;height:52px;flex-wrap:nowrap;
+  background:color-mix(in srgb, var(--surface) 78%, transparent);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);
+  border-bottom:1px solid var(--line-soft);
+  position:relative;z-index:5;
 }
-#js-app .js-topbar{
-  display:flex;align-items:center;gap:14px;padding:10px 16px;flex-wrap:wrap;
-  background:var(--p-surface);border-bottom:1px solid var(--p-line);
+#js-app .brand{display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600;letter-spacing:-.01em;white-space:nowrap}
+#js-app .mark{
+  width:24px;height:24px;border-radius:7px;display:grid;place-items:center;flex:none;
+  background:linear-gradient(150deg,var(--brand),color-mix(in srgb,var(--brand) 60%, #7b5cff));
+  color:#fff;font-size:11px;font-weight:600;
 }
-#js-app .js-brand{display:flex;align-items:center;gap:8px;font-weight:500;font-size:14px;white-space:nowrap}
-#js-app .js-mark{
-  width:22px;height:22px;border-radius:6px;background:var(--p-brand);color:light-dark(#fff,#0c1024);
-  display:grid;place-items:center;font-size:11px;font-weight:500;
+#js-app .topmeta{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-3);white-space:nowrap}
+#js-app .iconbtn{
+  width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:16px;color:var(--text-2);
+  transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease);
 }
-#js-app .js-topright{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--p-text2);white-space:nowrap}
-#js-app .js-body{display:grid;grid-template-columns:150px minmax(0,1fr)}
-#js-app .js-side{
-  background:var(--p-surface);border-right:1px solid var(--p-line);padding:10px 8px;
-  display:flex;flex-direction:column;gap:2px;
+#js-app .iconbtn:hover{background:var(--surface-3);color:var(--text)}
+#js-app .iconbtn:active{transform:scale(.94)}
+
+/* ── 骨架 ── */
+#js-app .body{display:grid;grid-template-columns:212px minmax(0,1fr);min-height:0}
+#js-app .side{
+  background:var(--surface);border-right:1px solid var(--line-soft);
+  padding:10px;display:flex;flex-direction:column;gap:2px;min-height:0;overflow-y:auto;
 }
-#js-app .js-navitem{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;font-size:13px;color:var(--p-text2);width:100%}
-#js-app .js-navitem:hover{background:var(--p-surface2);color:var(--p-text)}
-#js-app .js-navitem[aria-current="true"]{background:var(--p-brand-soft);color:var(--p-brand);font-weight:500}
-#js-app .js-navitem svg{width:15px;height:15px;flex:none;opacity:.9}
-#js-app .js-sidenote{margin:auto 4px 2px;font-size:11px;color:var(--p-text3);border-top:1px solid var(--p-line2);padding-top:10px;line-height:1.6}
-#js-app .js-main{padding:14px;min-width:0}
-/* 对话三栏 */
-#js-app .js-chatwrap{display:grid;grid-template-columns:196px minmax(0,1fr) 236px;gap:12px;align-items:start}
-#js-app .js-panelx{background:var(--p-surface);border:1px solid var(--p-line);border-radius:var(--p-r);min-width:0}
-#js-app .js-ptitle{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:500;padding:11px 13px;border-bottom:1px solid var(--p-line2)}
-#js-app .js-ptitle small{margin-left:auto;font-size:11px;color:var(--p-text3);font-weight:400}
-/* 专家列表 */
-#js-app .js-expert{display:flex;gap:9px;align-items:flex-start;width:100%;padding:9px 11px;border-radius:8px}
-#js-app .js-expert:hover{background:var(--p-surface2)}
-#js-app .js-expert[aria-pressed="true"]{background:var(--p-brand-soft)}
-#js-app .js-eavatar{
-  width:26px;height:26px;border-radius:8px;flex:none;display:grid;place-items:center;
-  background:var(--p-surface2);color:var(--p-text2);font-size:12px;font-weight:500;
+#js-app .navitem{
+  display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:9px;font-size:13px;
+  color:var(--text-2);width:100%;
+  transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease);
 }
-#js-app .js-expert[aria-pressed="true"] .js-eavatar{background:var(--p-brand);color:light-dark(#fff,#0c1024)}
-#js-app .js-ename{font-size:12.5px;font-weight:500;display:block}
-#js-app .js-etag{font-size:10.5px;color:var(--p-text3);display:block;margin-top:1px;line-height:1.45}
-/* 对话区 */
-#js-app .js-conv{display:flex;flex-direction:column;min-height:520px}
-#js-app .js-convhead{display:flex;gap:10px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--p-line2);flex-wrap:wrap}
-#js-app .js-convhead b{font-size:13px;font-weight:500}
-#js-app .js-convhead span{font-size:11.5px;color:var(--p-text3)}
-#js-app .js-msgs{padding:14px;display:flex;flex-direction:column;gap:14px;flex:1;overflow-y:auto;max-height:min(62vh,620px)}
-#js-app .js-msg{display:flex;gap:9px;align-items:flex-start}
-#js-app .js-mavatar{
-  width:26px;height:26px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:500;
-  background:var(--p-brand);color:light-dark(#fff,#0c1024);
+#js-app .navitem svg.ic{font-size:17px;opacity:.85}
+#js-app .navitem:hover{background:var(--surface-2);color:var(--text)}
+#js-app .navitem:active{transform:scale(.985)}
+#js-app .navitem[aria-current="true"]{background:var(--brand-soft);color:var(--brand);font-weight:500}
+#js-app .navitem[aria-current="true"] svg.ic{opacity:1}
+#js-app .sidenote{
+  margin:auto 6px 2px;font-size:11px;color:var(--text-3);border-top:1px solid var(--line-soft);
+  padding-top:12px;line-height:1.7;
 }
-#js-app .js-msg.me{flex-direction:row-reverse}
-#js-app .js-msg.me .js-mavatar{background:var(--p-surface2);color:var(--p-text2)}
-#js-app .js-bubble{
-  background:var(--p-surface2);border-radius:12px;padding:10px 13px;font-size:13px;line-height:1.75;
-  max-width:min(680px,88%);white-space:pre-wrap;word-break:break-word;
+#js-app .main{padding:14px;min-width:0;min-height:0;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+#js-app .screen{flex:1;min-height:0;display:flex;flex-direction:column}
+
+/* ── 面板 ── */
+#js-app .panel{background:var(--surface);border:1px solid var(--line-soft);border-radius:var(--r);min-width:0}
+#js-app .ptitle{
+  display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;letter-spacing:-.005em;
+  padding:12px 14px;border-bottom:1px solid var(--line-soft);
 }
-#js-app .js-msg.me .js-bubble{background:var(--p-brand);color:light-dark(#fff,#0c1024)}
-#js-app .js-status{font-size:11.5px;color:var(--p-text3);padding:2px 0 0 35px}
-#js-app .js-dots::after{content:'…';animation:jndots 1.4s steps(4,end) infinite}
+#js-app .ptitle small{margin-left:auto;font-size:11px;color:var(--text-3);font-weight:400;letter-spacing:0}
+
+/* ── 对话三栏：填满剩余高度，只有消息区内部滚动（app 手感，不是长网页） */
+#js-app .chatwrap{display:grid;grid-template-columns:206px minmax(0,1fr) 244px;gap:12px;align-items:stretch;flex:1;min-height:0}
+#js-app .conv{display:grid;grid-template-rows:auto minmax(0,1fr) auto auto;min-height:0}
+#js-app .convhead{display:flex;gap:10px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--line-soft);flex-wrap:nowrap}
+#js-app .eavatar{
+  width:28px;height:28px;border-radius:9px;flex:none;display:grid;place-items:center;
+  background:var(--surface-2);color:var(--text-2);font-size:12px;font-weight:600;
+  transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease);
+}
+#js-app .convhead b{font-size:13.5px;font-weight:600;letter-spacing:-.01em;display:block}
+#js-app .convhead span{font-size:11px;color:var(--text-3);display:block;margin-top:1px}
+#js-app .msgs{padding:16px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;min-height:0;overscroll-behavior:contain}
+#js-app .msg{display:flex;gap:10px;align-items:flex-start;animation:bubble-in var(--t-enter) var(--ease-out) both}
+#js-app .msg.me{flex-direction:row-reverse}
+@keyframes bubble-in{from{opacity:0;transform:translateY(6px) scale(.985)}to{opacity:1;transform:none}}
+#js-app .mavatar{
+  width:28px;height:28px;border-radius:9px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:600;
+  background:var(--brand);color:#fff;
+}
+#js-app .msg.me .mavatar{background:var(--surface-3);color:var(--text-2)}
+#js-app .bubble{
+  background:var(--surface-2);border-radius:14px;padding:11px 14px;font-size:13.5px;line-height:1.78;
+  max-width:min(720px,86%);white-space:pre-wrap;word-break:break-word;
+}
+#js-app .msg.me .bubble{background:var(--brand);color:#fff}
+#js-app .status{
+  font-size:11.5px;color:var(--text-3);padding:0 0 0 38px;display:flex;align-items:center;gap:6px;
+  min-height:18px;animation:bubble-in var(--t-enter) var(--ease-out) both;
+}
+#js-app .status svg.ic{font-size:13px;animation:spin 850ms linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#js-app .status.dots::after{content:'';animation:jndots 1.3s steps(4,end) infinite}
 @keyframes jndots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
-/* 开场 */
-#js-app .js-hello{padding:6px 14px 0}
-#js-app .js-hello .js-bubble{max-width:100%;background:var(--p-surface2)}
-#js-app .js-starters{display:flex;flex-direction:column;gap:7px;margin-top:12px}
-#js-app .js-starter{
-  border:1px solid var(--p-line);border-radius:9px;padding:9px 12px;font-size:12.5px;color:var(--p-text2);
-  background:var(--p-surface);width:100%;
+
+/* 开场：空状态属于「罕见/首次」，是唯一允许稍微多花一点的地方（Emil 的 delight 预算） */
+#js-app .hello{padding:4px 0 0}
+#js-app .starters{display:flex;flex-direction:column;gap:8px;margin:14px 0 0 38px;max-width:620px}
+#js-app .starter{
+  border:1px solid var(--line);border-radius:10px;padding:10px 13px;font-size:13px;color:var(--text-2);
+  background:var(--surface);width:100%;display:flex;align-items:center;gap:9px;
+  animation:starter-in var(--t-enter) var(--ease-out) both;
+  transition:border-color var(--t-press) var(--ease), color var(--t-press) var(--ease), transform var(--t-press) var(--ease-out), background var(--t-press) var(--ease);
 }
-#js-app .js-starter:hover{border-color:var(--p-brand);color:var(--p-brand)}
-#js-app .js-starter::before{content:'▸ ';opacity:.55}
-/* 输入 */
-#js-app .js-composer{border-top:1px solid var(--p-line2);padding:11px 14px;display:flex;gap:9px;align-items:flex-end}
-#js-app .js-composer textarea{
-  flex:1;min-width:0;min-height:44px;max-height:150px;resize:vertical;font:inherit;font-size:13px;line-height:1.6;
-  color:var(--p-text);background:var(--p-surface2);border:1px solid var(--p-line);border-radius:9px;padding:10px 12px;outline:none;
+#js-app .starter:nth-child(1){animation-delay:40ms}
+#js-app .starter:nth-child(2){animation-delay:80ms}
+#js-app .starter:nth-child(3){animation-delay:120ms}
+@keyframes starter-in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+#js-app .starter:hover{border-color:color-mix(in srgb,var(--brand) 45%, var(--line));color:var(--brand);background:var(--brand-soft)}
+#js-app .starter:active{transform:scale(.99)}
+#js-app .starter svg.ic{font-size:14px;opacity:.6;flex:none}
+
+/* 输入区：也是半透明材质，衬在消息流下沿 */
+#js-app .composer{
+  border-top:1px solid var(--line-soft);padding:12px 14px;display:flex;gap:10px;align-items:flex-end;gap:10px;
+  background:color-mix(in srgb, var(--surface) 82%, transparent);
+  -webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
 }
-#js-app .js-composer textarea:focus{border-color:var(--p-brand)}
-#js-app textarea::placeholder{color:var(--p-text3)}
-#js-app .js-btn{border:1px solid var(--p-line);border-radius:9px;padding:9px 15px;font-size:12.5px;background:var(--p-surface2);color:var(--p-text2)}
-#js-app .js-btn:hover{border-color:var(--p-brand);color:var(--p-brand)}
-#js-app .js-btn.primary{background:var(--p-brand);border-color:var(--p-brand);color:light-dark(#fff,#0c1024);font-weight:500}
-#js-app .js-btn:disabled{opacity:.5;cursor:not-allowed}
-/* 引用 */
-#js-app .js-refs{padding:0}
-#js-app .js-refbody{padding:11px 13px;display:flex;flex-direction:column;gap:9px}
-#js-app .js-ref{border-left:2px solid var(--p-brand);padding-left:9px}
-#js-app .js-ref b{font-size:11.5px;font-weight:500;display:block;line-height:1.5}
-#js-app .js-ref span{font-size:10.5px;color:var(--p-text3);display:block;margin-top:2px}
-#js-app .js-ref p{font-size:11px;color:var(--p-text3);margin-top:4px;line-height:1.6}
-#js-app .js-empty{font-size:11.5px;color:var(--p-text3);padding:4px 0;line-height:1.7}
-#js-app .js-err{font-size:12px;color:var(--p-red);background:var(--p-red-soft);border-radius:8px;padding:9px 12px;line-height:1.6}
-#js-app .js-hint{font-size:11px;color:var(--p-text3);padding:8px 14px;border-top:1px solid var(--p-line2)}
-/* 知识库 / 合规 / 画像 复用旧样式 */
-#js-app .js-search{display:flex;gap:8px;align-items:center;border:1px solid var(--p-line);border-radius:9px;padding:8px 12px;background:var(--p-surface2);font-size:12.5px;color:var(--p-text3);margin-bottom:10px}
-#js-app .js-search input{border:0;background:none;outline:none;font:inherit;color:var(--p-text);flex:1;min-width:0}
-#js-app .js-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
-#js-app .js-chip{border:1px solid var(--p-line);border-radius:999px;padding:4px 11px;font-size:12px;color:var(--p-text2);background:var(--p-surface2)}
-#js-app .js-chip:hover{border-color:var(--p-brand);color:var(--p-brand)}
-#js-app .js-chip[aria-pressed="true"]{background:var(--p-brand);border-color:var(--p-brand);color:light-dark(#fff,#0c1024)}
-#js-app .js-lib{display:flex;flex-direction:column;gap:7px}
-#js-app .js-doc{display:flex;gap:11px;align-items:center;border:1px solid var(--p-line);border-radius:9px;padding:9px 12px;background:var(--p-surface);font-size:12.5px;width:100%}
-#js-app .js-doc:hover{border-color:var(--p-brand)}
-#js-app .js-doc em{font-style:normal;margin-left:auto;font-size:11px;color:var(--p-text3);white-space:nowrap}
-#js-app .js-tag{display:inline-flex;align-items:center;font-size:11px;border-radius:5px;padding:1px 7px;background:var(--p-surface2);color:var(--p-text2);border:1px solid var(--p-line);white-space:nowrap}
-#js-app .js-tag.b{background:var(--p-brand-soft);color:var(--p-brand);border-color:light-dark(#d6defb,#242c52)}
-#js-app .js-ta{width:100%;min-height:140px;font:inherit;font-size:12.5px;line-height:1.7;color:var(--p-text);background:var(--p-surface2);border:1px solid var(--p-line);border-radius:9px;padding:11px 13px;outline:none;resize:vertical}
-#js-app .js-bench{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:baseline;font-size:12px;padding:7px 0;border-bottom:1px solid var(--p-line2)}
-#js-app .js-bench:last-child{border-bottom:0}
-#js-app .js-bench b{font-weight:500;color:var(--p-red);white-space:nowrap}
-#js-app .js-field{display:grid;grid-template-columns:110px minmax(0,1fr);gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--p-line2)}
-#js-app .js-field:last-of-type{border-bottom:0}
-#js-app .js-field label{font-size:11.5px;color:var(--p-text3)}
-#js-app .js-field input{font:inherit;font-size:12.5px;color:var(--p-text);background:var(--p-surface2);border:1px solid var(--p-line);border-radius:7px;padding:6px 10px;width:100%;min-width:0;outline:none}
-#js-app .js-field input:focus{border-color:var(--p-brand)}
-#js-app .js-field input::placeholder{color:var(--p-text3)}
-#js-app .js-scene{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border-radius:7px;font-size:12.5px;color:var(--p-text2)}
-#js-app .js-scene:hover{background:var(--p-surface2)}
-#js-app .js-scene[aria-pressed="true"]{background:var(--p-brand-soft);color:var(--p-brand);font-weight:500}
-#js-app .js-scene span{margin-left:auto;font-size:10.5px;color:var(--p-text3)}
-#js-app .js-cast{display:flex;gap:10px;align-items:flex-start;border-radius:var(--p-r);padding:11px 14px;background:var(--p-brand-soft);border:1px solid light-dark(#d6defb,#242c52);margin-bottom:12px}
-#js-app .js-cast p{font-size:12.5px}
-#js-app .js-bar{height:5px;border-radius:3px;background:var(--p-line);overflow:hidden}
-#js-app .js-bar i{display:block;height:100%;background:var(--p-brand);border-radius:3px}
-#js-app .js-lead{font-size:11.5px;color:var(--p-text2);line-height:1.75}
-#js-app .js-loading{font-size:12px;color:var(--p-text3);padding:12px 0;text-align:center}
-@media (max-width:1080px){
-  #js-app .js-chatwrap{grid-template-columns:1fr}
-  #js-app .js-msgs{max-height:none}
+#js-app .composer textarea{
+  flex:1;min-width:0;min-height:48px;max-height:168px;resize:none;font:inherit;font-size:13.5px;line-height:1.65;
+  color:var(--text);background:var(--surface-2);border:1px solid var(--line);border-radius:11px;padding:12px 13px;outline:none;
+  overflow-y:auto;
+  transition:border-color var(--t-press) var(--ease), box-shadow var(--t-press) var(--ease);
+}
+#js-app .composer textarea:focus{border-color:color-mix(in srgb,var(--brand) 55%, var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 12%, transparent)}
+#js-app textarea::placeholder{color:var(--text-3)}
+#js-app .btn{
+  border:1px solid var(--line);border-radius:10px;padding:10px 15px;font-size:12.5px;background:var(--surface-2);color:var(--text-2);
+  display:inline-flex;align-items:center;gap:7px;
+  transition:border-color var(--t-press) var(--ease), color var(--t-press) var(--ease), background var(--t-press) var(--ease), transform var(--t-press) var(--ease-out);
+}
+#js-app .btn:hover{border-color:color-mix(in srgb,var(--brand) 40%, var(--line));color:var(--brand)}
+#js-app .btn:active{transform:scale(.975)}
+#js-app .btn.primary{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:500}
+#js-app .btn.primary:hover{background:color-mix(in srgb,var(--brand) 88%, #000)}
+#js-app .btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+#js-app .hint{font-size:11px;color:var(--text-3);padding:9px 14px 0;min-height:22px}
+
+/* ── 专家列表 ── */
+#js-app .expertlist{padding:6px;overflow-y:auto;min-height:0}
+#js-app .expert{
+  display:flex;gap:10px;align-items:flex-start;width:100%;padding:10px 11px;border-radius:10px;
+  transition:background var(--t-press) var(--ease);
+}
+#js-app .expert:hover{background:var(--surface-2)}
+#js-app .expert:active{transform:scale(.99)}
+#js-app .expert[aria-pressed="true"]{background:var(--brand-soft)}
+#js-app .expert[aria-pressed="true"] .eavatar{background:var(--brand);color:#fff}
+#js-app .ename{font-size:12.5px;font-weight:600;display:block;letter-spacing:-.005em}
+#js-app .etag{font-size:10.5px;color:var(--text-3);display:block;margin-top:2px;line-height:1.5}
+
+/* ── 引用面板：条目错峰进场（Emil：组入场 30–80ms 错峰，且绝不能挡住交互） ── */
+#js-app .refbody{padding:11px 13px;display:flex;flex-direction:column;gap:11px;overflow-y:auto;min-height:0}
+#js-app .ref{
+  border-left:2px solid color-mix(in srgb,var(--brand) 55%, var(--line));
+  padding-left:10px;animation:ref-in var(--t-enter) var(--ease-out) both;
+}
+#js-app .ref:nth-child(1){animation-delay:0ms}
+#js-app .ref:nth-child(2){animation-delay:35ms}
+#js-app .ref:nth-child(3){animation-delay:70ms}
+#js-app .ref:nth-child(4){animation-delay:105ms}
+#js-app .ref:nth-child(5){animation-delay:140ms}
+#js-app .ref:nth-child(n+6){animation-delay:170ms}
+@keyframes ref-in{from{opacity:0;transform:translateX(-4px)}to{opacity:1;transform:none}}
+#js-app .ref b{font-size:11.5px;font-weight:600;display:block;line-height:1.55;letter-spacing:-.005em}
+#js-app .ref span{font-size:10.5px;color:var(--text-3);display:block;margin-top:2px}
+#js-app .ref p{font-size:11px;color:var(--text-3);margin-top:5px;line-height:1.65}
+
+/* ── 通用件 ── */
+#js-app .empty{font-size:11.5px;color:var(--text-3);padding:6px 0;line-height:1.75}
+#js-app .err{font-size:12px;color:var(--red);background:var(--red-soft);border-radius:9px;padding:10px 13px;line-height:1.65;display:flex;gap:8px}
+#js-app .search{
+  display:flex;gap:9px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:9px 13px;
+  background:var(--surface-2);font-size:13px;color:var(--text-3);margin-bottom:11px;
+  transition:border-color var(--t-press) var(--ease), box-shadow var(--t-press) var(--ease);
+}
+#js-app .search:focus-within{border-color:color-mix(in srgb,var(--brand) 55%, var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 12%, transparent)}
+#js-app .search input{border:0;background:none;outline:none;font:inherit;color:var(--text);flex:1;min-width:0}
+#js-app .chips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:11px}
+#js-app .chip{
+  border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:12px;color:var(--text-2);background:var(--surface-2);
+  transition:border-color var(--t-press) var(--ease), color var(--t-press) var(--ease), background var(--t-press) var(--ease), transform var(--t-press) var(--ease-out);
+}
+#js-app .chip:hover{border-color:color-mix(in srgb,var(--brand) 40%, var(--line));color:var(--brand)}
+#js-app .chip:active{transform:scale(.97)}
+#js-app .chip[aria-pressed="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
+#js-app .lib{display:flex;flex-direction:column;gap:8px}
+#js-app .doc{
+  display:flex;gap:11px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:10px 13px;
+  background:var(--surface);font-size:12.5px;width:100%;
+  transition:border-color var(--t-press) var(--ease), background var(--t-press) var(--ease);
+}
+#js-app .doc:hover{border-color:color-mix(in srgb,var(--brand) 40%, var(--line));background:var(--surface-2)}
+#js-app .doc em{font-style:normal;margin-left:auto;font-size:11px;color:var(--text-3);white-space:nowrap}
+#js-app .tag{
+  display:inline-flex;align-items:center;font-size:11px;border-radius:6px;padding:1px 7px;white-space:nowrap;
+  background:var(--surface-2);color:var(--text-2);border:1px solid var(--line);
+}
+#js-app .tag.b{background:var(--brand-soft);color:var(--brand);border-color:color-mix(in srgb,var(--brand) 24%, transparent)}
+#js-app .ta{
+  width:100%;min-height:150px;font:inherit;font-size:13px;line-height:1.75;color:var(--text);
+  background:var(--surface-2);border:1px solid var(--line);border-radius:11px;padding:12px 14px;outline:none;resize:vertical;
+  transition:border-color var(--t-press) var(--ease), box-shadow var(--t-press) var(--ease);
+}
+#js-app .ta:focus{border-color:color-mix(in srgb,var(--brand) 55%, var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 12%, transparent)}
+#js-app .bench{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:baseline;font-size:12px;padding:8px 0;border-bottom:1px solid var(--line-soft)}
+#js-app .bench:last-child{border-bottom:0}
+#js-app .bench b{font-weight:600;color:var(--red);white-space:nowrap;font-variant-numeric:tabular-nums}
+#js-app .field{display:grid;grid-template-columns:112px minmax(0,1fr);gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line-soft)}
+#js-app .field:last-of-type{border-bottom:0}
+#js-app .field label{font-size:11.5px;color:var(--text-3)}
+#js-app .field input{
+  font:inherit;font-size:12.5px;color:var(--text);background:var(--surface-2);border:1px solid var(--line);
+  border-radius:8px;padding:7px 11px;width:100%;min-width:0;outline:none;
+  transition:border-color var(--t-press) var(--ease), box-shadow var(--t-press) var(--ease);
+}
+#js-app .field input:focus{border-color:color-mix(in srgb,var(--brand) 55%, var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 12%, transparent)}
+#js-app .field input::placeholder{color:var(--text-3)}
+#js-app .scene{
+  display:flex;align-items:center;gap:8px;width:100%;padding:8px 11px;border-radius:9px;font-size:12.5px;color:var(--text-2);
+  transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease);
+}
+#js-app .scene:hover{background:var(--surface-2)}
+#js-app .scene[aria-pressed="true"]{background:var(--brand-soft);color:var(--brand);font-weight:500}
+#js-app .scene span{margin-left:auto;font-size:10.5px;color:var(--text-3)}
+#js-app .cast{
+  display:flex;gap:11px;align-items:flex-start;border-radius:var(--r);padding:12px 15px;margin-bottom:12px;
+  background:var(--brand-soft);border:1px solid color-mix(in srgb,var(--brand) 18%, transparent);
+}
+#js-app .cast p{font-size:12.5px;line-height:1.7}
+#js-app .bar{height:5px;border-radius:3px;background:var(--line);overflow:hidden}
+#js-app .bar i{display:block;height:100%;background:var(--brand);border-radius:3px;transition:width var(--t-panel) var(--ease-out)}
+#js-app .lead{font-size:11.5px;color:var(--text-2);line-height:1.78}
+#js-app .loading{font-size:12px;color:var(--text-3);padding:14px 0;text-align:center;display:flex;align-items:center;justify-content:center;gap:8px}
+#js-app .loading svg.ic{font-size:14px;animation:spin 850ms linear infinite}
+#js-app .scroll{padding:14px;overflow-y:auto;min-height:0;flex:1}
+#js-app .grid2{display:grid;grid-template-columns:206px minmax(0,1fr);gap:12px;align-items:stretch;flex:1;min-height:0}
+
+/* Apple §14：减弱动效不等于没有反馈 —— 换成短交叉淡入，去掉位移与缩放。
+   `prefers-reduced-transparency` 时把半透明材质变实，保证可读性。 */
+@media (prefers-reduced-motion: reduce){
+  #js-app .msg,#js-app .ref,#js-app .starter{animation:none}
+  #js-app .status svg.ic,#js-app .loading svg.ic{animation:none}
+  #js-app .btn:active,#js-app .chip:active,#js-app .iconbtn:active,#js-app .expert:active,#js-app .starter:active,#js-app .navitem:active{transform:none}
+  #js-app .bar i{transition:none}
+}
+@media (prefers-reduced-transparency: reduce){
+  #js-app .topbar,#js-app .composer{background:var(--surface);-webkit-backdrop-filter:none;backdrop-filter:none}
+}
+@media (max-width:1100px){
+  #js-app .chatwrap{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr) auto;overflow-y:auto}
+  #js-app .refbody,#js-app .expertlist{max-height:none}
 }
 @media (max-width:820px){
-  #js-app .js-body{grid-template-columns:1fr}
-  #js-app .js-side{flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--p-line)}
-  #js-app .js-navitem{width:auto}
-  #js-app .js-sidenote{display:none}
+  #js-app .body{grid-template-columns:1fr}
+  #js-app .side{flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--line-soft);overflow:visible}
+  #js-app .sidenote{display:none}
+  #js-app .main{padding:10px}
+  #js-app .grid2{grid-template-columns:1fr}
 }
 </style>
-<div class="js-window">
-  <div class="js-topbar">
-    <span class="js-brand"><span class="js-mark">军师</span>招生军师 · 专家团</span>
-    <span class="js-topright"><span id="js-today"></span></span>
-  </div>
-  <div class="js-body">
-    <nav class="js-side" aria-label="主导航">
-      <button class="js-navitem" type="button" data-screen="chat" aria-current="true"><i data-lucide="messages-square" aria-hidden="true"></i>专家团</button>
-      <button class="js-navitem" type="button" data-screen="library"><i data-lucide="layers" aria-hidden="true"></i>知识库</button>
-      <button class="js-navitem" type="button" data-screen="compliance"><i data-lucide="shield" aria-hidden="true"></i>合规体检</button>
-      <button class="js-navitem" type="button" data-screen="profile"><i data-lucide="settings" aria-hidden="true"></i>机构画像</button>
-      <div class="js-sidenote" id="js-sidenote">专家回答会先检索你自己的资料库，再结合机构画像。</div>
-    </nav>
-    <main class="js-main">
+<div class="topbar">
+  <span class="brand"><span class="mark">军师</span>招生军师 · 专家团</span>
+  <span class="topmeta">
+    <span id="js-today"></span>
+    <button class="iconbtn" type="button" id="js-theme" aria-label="切换深浅色"><svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-moon"></use></svg></button>
+  </span>
+</div>
+<div class="body">
+  <nav class="side" aria-label="主导航">
+    <button class="navitem" type="button" data-screen="chat" aria-current="true"><svg class="ic" width="17" height="17" aria-hidden="true"><use href="#i-chat"></use></svg>专家团</button>
+    <button class="navitem" type="button" data-screen="library"><svg class="ic" width="17" height="17" aria-hidden="true"><use href="#i-library"></use></svg>知识库</button>
+    <button class="navitem" type="button" data-screen="compliance"><svg class="ic" width="17" height="17" aria-hidden="true"><use href="#i-shield"></use></svg>合规体检</button>
+    <button class="navitem" type="button" data-screen="profile"><svg class="ic" width="17" height="17" aria-hidden="true"><use href="#i-sliders"></use></svg>机构画像</button>
+    <div class="sidenote" id="js-sidenote">专家回答会先检索你自己的资料库，再结合机构画像。</div>
+  </nav>
+  <main class="main">
 
-      <section class="js-screen" id="scr-chat" aria-label="专家团">
-        <div class="js-chatwrap">
-          <div class="js-panelx">
-            <div class="js-ptitle">专家<small id="ex-count"></small></div>
-            <div id="js-experts" style="padding:6px"></div>
-          </div>
-          <div class="js-panelx js-conv">
-            <div class="js-convhead">
-              <span class="js-mavatar" id="conv-avatar" aria-hidden="true">谋</span>
-              <div style="min-width:0">
-                <b id="conv-name">营销军师</b>
-                <span id="conv-tag" style="display:block"></span>
-              </div>
-              <button class="js-btn" type="button" id="conv-reset" style="margin-left:auto">新对话</button>
+    <section class="screen" id="scr-chat" aria-label="专家团">
+      <div class="chatwrap">
+        <div class="panel">
+          <div class="ptitle">专家<small id="ex-count"></small></div>
+          <div class="expertlist" id="js-experts"></div>
+        </div>
+        <div class="panel conv">
+          <div class="convhead">
+            <span class="mavatar" id="conv-avatar" aria-hidden="true">谋</span>
+            <div style="min-width:0">
+              <b id="conv-name">营销军师</b>
+              <span id="conv-tag"></span>
             </div>
-            <div class="js-msgs" id="js-msgs" aria-live="polite"></div>
-            <div class="js-composer">
-              <textarea id="js-input" rows="1" placeholder="把你要解决的问题说清楚就行，例如：家长说太贵了，怎么回？（Enter 发送，Shift+Enter 换行）" aria-label="输入你的问题"></textarea>
-              <button class="js-btn primary" type="button" id="js-send">发送</button>
-            </div>
-            <div class="js-hint" id="js-hint"></div>
+            <button class="btn" type="button" id="conv-reset" style="margin-left:auto">
+              <svg class="ic" width="14" height="14" aria-hidden="true"><use href="#i-new-chat"></use></svg>新对话
+            </button>
           </div>
-          <div class="js-panelx">
-            <div class="js-ptitle">引用了你的资料<small id="ref-count"></small></div>
-            <div class="js-refbody" id="js-refs"><p class="js-empty">发出问题后，这里会显示这次回答参考了你资料库里的哪几份文件。</p></div>
+          <div class="msgs" id="js-msgs" aria-live="polite"></div>
+          <div class="composer">
+            <textarea id="js-input" rows="1" placeholder="把问题说清楚就行，例如：家长说太贵了，怎么回？" aria-label="输入你的问题"></textarea>
+            <button class="btn primary" type="button" id="js-send">
+              <svg class="ic" width="14" height="14" aria-hidden="true"><use href="#i-send"></use></svg>发送
+            </button>
+          </div>
+          <div class="hint" id="js-hint"></div>
+        </div>
+        <div class="panel" style="display:grid;grid-template-rows:auto minmax(0,1fr)">
+          <div class="ptitle">引用了你的资料<small id="ref-count"></small></div>
+          <div class="refbody" id="js-refs"><p class="empty">发出问题后，这里会显示这次回答参考了你资料库里的哪几份文件。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" id="scr-library" hidden aria-label="知识库">
+      <div class="panel scroll">
+        <div class="search">
+          <svg class="ic" width="15" height="15" aria-hidden="true"><use href="#i-search"></use></svg>
+          <input type="text" id="js-q" placeholder="搜方案、话术、文案、表格…（可多词，如：中秋 物料）" aria-label="搜索知识库">
+          <span style="font-size:11px" id="js-count"></span>
+        </div>
+        <div class="chips" id="lib-scenes" role="group" aria-label="场景"></div>
+        <div class="lib" id="js-lib"></div>
+      </div>
+    </section>
+
+    <section class="screen" id="scr-compliance" hidden aria-label="合规体检">
+      <div class="panel scroll">
+        <div class="ptitle" style="padding:0 0 11px;border:0"><svg class="ic" width="15" height="15" aria-hidden="true"><use href="#i-shield"></use></svg>贴一段文案，我帮你过一遍</div>
+        <textarea class="ta" id="cs-text" placeholder="把要发朋友圈、发群、印在海报上的文案贴进来。例如：我们是烟台最大的美术教育机构……"></textarea>
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn primary" type="button" id="cs-run"><svg class="ic" width="14" height="14" aria-hidden="true"><use href="#i-check"></use></svg>开始检查</button>
+          <button class="btn" type="button" id="cs-demo"><svg class="ic" width="14" height="14" aria-hidden="true"><use href="#i-bulb"></use></svg>填一段示例</button>
+        </div>
+        <div id="cs-out" style="margin-top:14px"></div>
+      </div>
+    </section>
+
+    <section class="screen" id="scr-profile" hidden aria-label="机构画像">
+      <div class="cast"><p id="pf-cast">这是整个产品的底座：你填一次，专家回答时就会结合你的品类、价格、校区，而不是给通用套话。</p></div>
+      <div class="grid2">
+        <div class="panel">
+          <div class="ptitle">画像分组<small id="pf-percent"></small></div>
+          <div style="padding:10px 12px"><div class="bar"><i id="pf-bar" style="width:0%"></i></div></div>
+          <div id="pf-groups" style="padding:0 6px 8px" role="group" aria-label="画像分组"></div>
+        </div>
+        <div class="panel scroll">
+          <div class="ptitle" id="pf-title" style="padding:0 0 11px;border:0">基本信息</div>
+          <div id="pf-fields"></div>
+          <div style="display:flex;gap:9px;margin-top:14px;flex-wrap:wrap;align-items:center">
+            <button class="btn primary" type="button" id="pf-save">保存</button>
+            <span class="lead" id="pf-msg"></span>
           </div>
         </div>
-      </section>
+      </div>
+    </section>
 
-      <section class="js-screen" id="scr-library" hidden aria-label="知识库">
-        <div class="js-panelx" style="padding:14px">
-          <div class="js-search">
-            <i data-lucide="search" style="width:14px;height:14px" aria-hidden="true"></i>
-            <input type="text" id="js-q" placeholder="搜方案、话术、文案、表格…（可多词，如：中秋 物料）" aria-label="搜索知识库">
-            <span style="font-size:11px" id="js-count"></span>
-          </div>
-          <div class="js-chips" id="lib-scenes" role="group" aria-label="场景"></div>
-          <div class="js-lib" id="js-lib"></div>
-        </div>
-      </section>
-
-      <section class="js-screen" id="scr-compliance" hidden aria-label="合规体检">
-        <div class="js-panelx" style="padding:14px">
-          <div class="js-ptitle" style="padding:0 0 10px;border:0"><i data-lucide="shield" style="width:14px;height:14px" aria-hidden="true"></i>贴一段文案，我帮你过一遍</div>
-          <textarea class="js-ta" id="cs-text" placeholder="把要发朋友圈、发群、印在海报上的文案贴进来。例如：我们是烟台最大的美术教育机构……"></textarea>
-          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-            <button class="js-btn primary" type="button" id="cs-run">开始检查</button>
-            <button class="js-btn" type="button" id="cs-demo">填一段示例</button>
-          </div>
-          <div id="cs-out" style="margin-top:12px"></div>
-        </div>
-      </section>
-
-      <section class="js-screen" id="scr-profile" hidden aria-label="机构画像">
-        <div class="js-cast"><p id="pf-cast">这是整个产品的底座：你填一次，专家回答时就会结合你的品类、价格、校区，而不是给通用套话。</p></div>
-        <div class="js-chatwrap" style="grid-template-columns:196px minmax(0,1fr)">
-          <div class="js-panelx">
-            <div class="js-ptitle">画像分组<small id="pf-percent"></small></div>
-            <div style="padding:9px 11px"><div class="js-bar"><i id="pf-bar" style="width:0%"></i></div></div>
-            <div id="pf-groups" style="padding:0 6px 8px" role="group" aria-label="画像分组"></div>
-          </div>
-          <div class="js-panelx">
-            <div class="js-ptitle" id="pf-title">基本信息</div>
-            <div style="padding:11px 13px">
-              <div id="pf-fields"></div>
-              <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
-                <button class="js-btn primary" type="button" id="pf-save">保存</button>
-                <span class="js-lead" id="pf-msg"></span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-    </main>
-  </div>
+  </main>
 </div>
 </div>
-<button class="jn-toggle" type="button" id="jn-toggle">深/浅色</button>
-<script src="/assets/junshi/lucide-1.17.0.js?v=__STAMP__" defer></script>
 <script src="/assets/junshi/prototype.js?v=__STAMP__" defer></script>
-<script>
-(function () {
-  var b = document.getElementById('jn-toggle');
-  if (!b) return;
-  b.addEventListener('click', function () {
-    var cur = document.documentElement.style.colorScheme;
-    if (!cur) { cur = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
-    document.documentElement.style.colorScheme = cur === 'dark' ? 'light' : 'dark';
-  });
-})();
-</script>
 </body>
 </html>
