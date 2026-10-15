@@ -13,6 +13,10 @@
  * ⚠️ 全部走**异步**数据层（aq/arow/arows）：生产是 MySQL，同步的 q/row 在那边是
  *    `syncUnavailable` 占位（调用即抛），见 packages/database/src/store.js 顶部。
  *
+ * ⚠️⚠️ 画像表 `junshi_profiles`：SQLite 侧由 packages/database/src/schema.js 自动建，
+ *    **生产(RDS/MySQL) 必须手工执行 `deploy/production/migrate/27-junshi-profiles-mysql.sql`**。
+ *    漏了这一步的现象很容易漏诊：页面能打开、下面所有参考数据接口都 200，**只有 PUT /profile 会 500**。
+ *
  * ⚠️ 这个入口按用户口径「暂时先不对外展示」（`/junshi/index.html` 里有 noindex），
  *    所以参考数据接口**没加鉴权**；机构画像接口必须登录，且只能读写自己机构的数据。
  *    以后要正式对外时，先把下面这些 get 接口的 requireAuth 打开再挂导航。
