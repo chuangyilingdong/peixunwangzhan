@@ -1176,8 +1176,10 @@ CREATE TABLE IF NOT EXISTS platform_config_change_logs (
 -- ⚠️ 为什么主键不用 org_id：平台侧账号可能没有机构，那种行 org_id 为 NULL —— 主键放它上面存不进去。
 -- ⚠️ 内容按分组整体存 JSON（画像字段以后大概率还会加），不做逐字段列：它没有需要按列检索的查询。
 -- ⚠️⚠️ 这段只在 **sqlite 驱动**下执行；生产是 RDS(MySQL)，建表必须手工跑
---    `deploy/production/migrate/27-junshi-profiles-mysql.sql` —— 漏了的话页面能开、参考数据接口全 200，
+--    deploy/production/migrate/27-junshi-profiles-mysql.sql —— 漏了的话页面能开、参考数据接口全 200，
 --    只有「保存机构画像」会 500（Table 'aild_admin.junshi_profiles' doesn't exist）。
+--    （注意：本注释在 SCHEMA 模板字符串**内部**，别在这里写反引号 —— 会把字符串截断，
+--      build-production.sh 的 node --check 会拦下，2026-10-15 已踩过一次。）
 CREATE TABLE IF NOT EXISTS junshi_profiles (
   owner_key   TEXT NOT NULL PRIMARY KEY,
   org_id      TEXT,
