@@ -129,23 +129,41 @@ function bigrams(s) {
   return out;
 }
 
+// 节点词表：用来判断「这份资料的标题讲的是哪个节点」。命中查询里的节点 → 加分；
+// 标题讲的是**另一个**节点 → 扣分。纯词面匹配最容易出的错就是把别的节日的方案拉进来
+// （实测：问万圣节，检索把《二月二龙抬头》的活动话术排到了第 1 位，模型还得自己绕开它）。
+const NODE_WORDS = ['元旦', '春节', '元宵', '情人节', '龙抬头', '女神节', '妇女节', '植树节', '愚人节',
+  '劳动节', '母亲节', '护士节', '儿童节', '父亲节', '端午', '七夕', '教师节', '中秋', '国庆',
+  '重阳', '万圣', '感恩节', '圣诞', '双十一', '双十二', '开学', '寒假', '暑假', '毕业', '周年庆', '店庆'];
+
+function nodesOf(text) {
+  return NODE_WORDS.filter((w) => text.includes(w));
+}
+
 /**
  * 从原文分块里捞最相关的几段。
- * 打分：命中的查询二元组个数 + 领域加权（专家领域命中 +2）。
- * ⚠️ 命中数用**去重后的查询二元组**计数（每个 gram 只算一次），
+ * 打分：命中的查询二元组个数 + 领域加权（专家领域命中 +2）+ 节点一致性（±）。
+ * ⚠️ 命中数按**去重后的查询二元组**计（每个 gram 只算一次），
  *    避免一段里反复出现的词把分数拉爆。
  */
 export function retrieveChunks(query, domains, limit = 5) {
   const { chunks } = data();
   const grams = [...new Set(bigrams(query))].slice(0, 60);
   if (!grams.length) return [];
+  const asked = nodesOf(query);
   const scored = [];
   for (const c of chunks) {
     let hit = 0;
     for (const g of grams) if (c.grams.has(g)) hit += 1;
     if (hit < 3) continue;
-    const domainBoost = (c.domain || []).some((d) => domains.includes(d)) ? 2 : 0;
-    scored.push([hit + domainBoost, c]);
+    let score = hit;
+    if ((c.domain || []).some((d) => domains.includes(d))) score += 2;
+    const docNodes = nodesOf(c.title);
+    if (asked.length && docNodes.length) {
+      const overlap = docNodes.some((n) => asked.includes(n));
+      score += overlap ? 3 : -4;              // 同节点加成，别的节点扣分
+    }
+    scored.push([score, c]);
   }
   scored.sort((a, b) => b[0] - a[0]);
   // 同一份文档最多取 2 段，保证来源分散，别整篇都是同一份
@@ -218,10 +236,43 @@ async function profileFor(ctx) {
   } catch { return null; }
 }
 
+/* ───────────── 日期上下文 ───────────── */
+/**
+ * 把「今天几号、星期几、接下来几个周末是哪两天」喂给模型。
+ *
+ * ⚠️ 为什么必须喂（2026-10-15 线上实测踩到）：不喂的话模型会**自己猜星期**，
+ *    实测它把 10/31 说成周五（实际周六）、把「10/25–26 那个周末」当成周六日
+ *    （实际是周日+周一）—— 而这类回答几乎全是排期建议，日期错了整段就废了。
+ *    而且它是推理型模型，你越不给事实它越会"推理"出一个错答案。
+ * 口径说明：平台面向国内机构，日期一律按 Asia/Shanghai 算（服务器时区是 UTC，
+ *    直接用本地时间会差一天）。
+ */
+function dateContext() {
+  const TZ = 'Asia/Shanghai';
+  const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const todayIso = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  // 取该日「北京中午」来算星期：北京 = UTC+8，中午 12:00 即 04:00Z，跨时区不会串日
+  const today = new Date(todayIso + 'T04:00:00Z');
+  const lines = [`今天是 ${todayIso}（${WD[today.getUTCDay()]}）。`];
+  const weekends = [];
+  for (let i = 0; i < 80 && weekends.length < 8; i++) {
+    const d = new Date(today.getTime() + i * 86400000);
+    if (d.getUTCDay() !== 6) continue;                       // 只在周六起算
+    const sun = new Date(d.getTime() + 86400000);
+    const days = Math.round((d.getTime() - today.getTime()) / 86400000);
+    weekends.push(`${iso(d)}（周六）– ${iso(sun)}（周日）${days < 7 ? '（本周末）' : days < 14 ? '（下周末）' : ''}`);
+  }
+  if (weekends.length) lines.push('接下来的周末：' + weekends.join('；'));
+  lines.push('凡是涉及日期排期的建议，一律以上面给的日期和星期为准，不要自己推算星期几。');
+  return lines.join('\n');
+}
+
 /* ───────────── 提示词 ───────────── */
 function buildSystemPrompt({ expert, chunks, structured, profile, compliance }) {
   const parts = [];
   parts.push(`你是「${expert.name}」，${expert.tag}。你服务的是中国教培机构的校长和市场/教务负责人。`);
+  parts.push(`\n【今天的日期】\n${dateContext()}`);
 
   if (profile) {
     parts.push(`\n【这家机构的情况（来自他们自己填的机构画像，回答要结合这些信息，别用"贵机构""XX"这类占位）】\n${profile}`);
@@ -259,10 +310,11 @@ function buildSystemPrompt({ expert, chunks, structured, profile, compliance }) 
   parts.push(`\n【怎么回答】
 1. 说人话，像老同行坐着聊天，别端着、别用"作为AI"这类话。
 2. 给**能直接用**的东西：具体的话术原句、步骤、数字、时间点。不要讲空道理。
-3. 上面资料里有对得上的内容就用它，并说明来自哪份资料。资料里没有的，按教培行业常识答，**并明确说这一段不是来自你的资料库**。
-4. 不要编造资料库里没有的案例、数据、政策条文。
-5. 回答控制在 500 字以内（用户明确要长方案时除外）。用短段落，可以用 1. 2. 3. 列点，**不要用表格**。
-6. 结尾可以反问一个最关键的追问，帮他把问题说清楚，但别一次问一堆。`);
+3. 上面资料里有对得上的内容就用它，并说明来自哪份资料（写清文件标题）。资料里没有的，按教培行业常识答，**并明确说这一段不是来自你的资料库**。
+4. 不要编造资料库里没有的案例、数据、政策条文。**引用原话必须是资料里逐字出现的**，别改写后还说是原话。
+5. 日期一律用【今天的日期】那一段给的事实，别自己推算星期几。
+6. 回答控制在 500 字以内（用户明确要长方案时除外）。用短段落，可以用 1. 2. 3. 列点，**不要用表格**。
+7. **同一个问题只问一次**：如果你在开头就问了对方欠缺的信息，结尾不要再问一遍；结尾要么给下一步动作，要么就一个问题都不问。`);
 
   return parts.join('\n');
 }
@@ -305,11 +357,19 @@ export async function runChat(ctx, { expertId, messages, signal, onStatus, onDel
 
   onStatus?.(isMockProvider(provider.name) ? '当前是本地模拟渠道（没配真实模型）' : `正在用 ${selection.model || provider.model || '模型'} 生成…`);
 
+  // 推理型模型（deepseek-flash）一次回答会吐**几百个** reasoning 增量 —— 实测 485 个。
+  // 每个都往前端发一遍是无意义的：前端拿它只是把状态显示成「正在思考」，状态本身不会再变。
+  // 所以只转第一个，后面的丢掉（一次回答因此少 ~12KB SSE，前端也少 485 次 DOM 重写）。
+  let reasoningSent = false;
   const result = await provider.generateStream({
     messages: [{ role: 'system', content: system }, ...history],
     signal,
     onDelta: (chunk) => onDelta?.(chunk),
-    onReasoning: (chunk) => onReasoning?.(chunk),
+    onReasoning: () => {
+      if (reasoningSent) return;
+      reasoningSent = true;
+      onReasoning?.();
+    },
   });
 
   return {

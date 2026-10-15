@@ -60,6 +60,28 @@
     pfGroup: 'org', pfDraft: {}, profile: null, completion: null, guest: true,
   };
 
+  /* ───────────── 对话本地留存 ─────────────
+     为什么要有：原来对话只活在内存里，**刷新一下整段就没了**（用户实测：「问了几轮」
+     再打开只剩开场白）。发版、刷新、切标签页都会丢。
+     ⚠️ 这是**临时兜底**：按浏览器存，换设备看不到。正式的方案是服务端按机构存会话
+        （表还没建，见交接说明）——那之前先用它，至少不让人白问一轮。 */
+  var STORE_KEY = 'junshi.chat.v1';
+  var STORE_MAX = 40;                       // 每个专家最多留 40 条，别把 localStorage 撑爆
+  function loadStore() {
+    try { var v = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); return v && typeof v === 'object' ? v : {}; } catch (e) { return {}; }
+  }
+  function saveHistory(expertId, messages) {
+    try {
+      var all = loadStore();
+      all[expertId] = messages.slice(-STORE_MAX);
+      localStorage.setItem(STORE_KEY, JSON.stringify(all));
+    } catch (e) { /* 隐私模式/超配额：静默降级成不保存，不影响对话 */ }
+  }
+  function historyOf(expertId) {
+    var list = loadStore()[expertId];
+    return Array.isArray(list) ? list : [];
+  }
+
   /* ───────────── 主题 ───────────── */
   function applyThemeIcon() {
     var mode = document.documentElement.style.colorScheme
@@ -105,23 +127,36 @@
     if (state.streaming) return;
     var same = state.expert && state.expert.id === e.id;
     state.expert = e;
-    state.messages = [];
+    // 恢复这位专家上次的对话（见上面 STORE_KEY 的说明）
+    state.messages = historyOf(e.id);
     renderExperts();
     $('#conv-avatar').textContent = e.avatar;
     $('#conv-name').textContent = e.name;
     $('#conv-tag').textContent = e.tag;
-    $('#js-refs').innerHTML = '<p class="empty">发出问题后，这里会显示这次回答参考了你资料库里的哪几份文件。</p>';
-    $('#ref-count').textContent = '';
     // 切专家＝换了一整套上下文，属于「防止突兀跳变」：面板整体做一次短交叉淡入。
     // 只在真的换了人时播，重复点同一位不重放（避免高频点击下的闪动）。
     var conv = $('.conv');
     if (!same && conv) {
       conv.style.animation = 'none';
-      void conv.offsetHeight;                                  // 强制回流，让动画能重新触发
+      void conv.offsetHeight;
       conv.style.animation = 'bubble-in var(--t-enter) var(--ease-out) both';
+    }
+    renderConversation();
+  }
+
+  /** 有历史就铺历史，没有才显示开场白＋建议问题。 */
+  function renderConversation() {
+    if (state.messages.length) {
+      $('#js-msgs').innerHTML = '';
+      state.messages.forEach(function (m) { appendMsg(m.role, m.content); });
+      $('#js-refs').innerHTML = '<p class="empty">继续追问就行。这一轮引用了什么，会在回答后显示在这里。</p>';
+      $('#ref-count').textContent = '';
+      scrollBottom();
+      return;
     }
     renderHello();
   }
+
   function renderHello() {
     var e = state.expert;
     var s = (e.starters || []).map(function (q, i) {
@@ -170,6 +205,7 @@
 
     appendMsg('user', text);
     state.messages.push({ role: 'user', content: text });
+    saveHistory(state.expert.id, state.messages);
     state.streaming = true;
     $('#js-send').disabled = true;
     input.disabled = true;
@@ -181,7 +217,13 @@
     bubble.parentNode.parentNode.appendChild(statusEl);
     var answer = '';
 
+    // 状态去重：推理型模型一次回答会推几百个 thinking 增量，若每个都重写 innerHTML
+    // 就是几百次 SVG 重建 —— 状态没变就一个字都别再写（2026-10-15 实测 485 次）。
+    var lastStatus = 'init';
     function setStatus(text, spin) {
+      var key = (spin ? '1' : '0') + '|' + text;
+      if (key === lastStatus) return;
+      lastStatus = key;
       statusEl.innerHTML = (spin ? ic('loader', 13) : '') + (text ? '<span>' + esc(text) + '</span>' : '');
       statusEl.className = 'status' + (spin && !text ? ' dots' : '');
     }
@@ -228,7 +270,10 @@
         }
       }
       if (!answer.trim()) bubble.textContent = '（这次没有生成内容，可以再试一次）';
-      else state.messages.push({ role: 'assistant', content: answer });
+      else {
+        state.messages.push({ role: 'assistant', content: answer });
+        saveHistory(state.expert.id, state.messages);
+      }
       if (statusEl.parentNode) statusEl.remove();
     } catch (e) {
       bubble.textContent = '';
@@ -251,12 +296,14 @@
 
   function renderRefs(c) {
     var items = [];
-    (c.chunks || []).forEach(function (x) {
-      items.push('<div class="ref"><b>' + esc(x.title) + '</b><span>' + esc((x.domain || []).join(' / ')) + '</span>' +
+    // ⚠️ 必须编号，且编号要和回答里说的「资料N」对得上：模型的 资料N = 第 N 段检索原文。
+    //    不编号的话用户拿着答案去找「资料5」在面板上是哪一条，根本对不出来（2026-10-15 发现）。
+    (c.chunks || []).forEach(function (x, i) {
+      items.push('<div class="ref"><b>资料' + (i + 1) + '：' + esc(x.title) + '</b><span>' + esc((x.domain || []).join(' / ')) + '</span>' +
         (x.excerpt ? '<p>' + esc(x.excerpt) + '…</p>' : '') + '</div>');
     });
     (c.hooks || []).forEach(function (n) {
-      items.push('<div class="ref"><b>玩法：' + esc(n) + '</b><span>资料库 · 玩法库</span></div>');
+      items.push('<div class="ref"><b>玩法：' + esc(n) + '</b><span>资料库 · 玩法库（回答里说的"玩法N"按这里的顺序）</span></div>');
     });
     (c.objections || []).forEach(function (q) {
       items.push('<div class="ref"><b>' + esc(q) + '</b><span>资料库 · 异议库</span></div>');
@@ -388,7 +435,10 @@
 
   /* ───────────── 各屏首次进入 ───────────── */
   var INIT = {
-    chat: function () { renderExperts(); if (state.expert) renderHello(); },
+    // ⚠️ 这里必须调 renderConversation 而不是 renderHello：启动时 switchExpert 已经把
+    //    本地留存的对话铺好了，紧接着 showScreen → INIT.chat 若无条件 renderHello，
+    //    就会把恢复出来的历史又盖回开场白（2026-10-15 实测踩到，存进去了、刷新却看不到）。
+    chat: function () { renderExperts(); if (state.expert) renderConversation(); },
     library: function () {
       renderLib();
       call('/library/facets').then(function (f) {
@@ -421,6 +471,7 @@
   $('#conv-reset').addEventListener('click', function () {
     if (state.streaming || !state.expert) return;
     state.messages = [];
+    saveHistory(state.expert.id, []);        // 「新对话」要真的清掉留存，否则刷新又回来了
     $('#js-refs').innerHTML = '<p class="empty">发出问题后，这里会显示这次回答参考了你资料库里的哪几份文件。</p>';
     $('#ref-count').textContent = '';
     renderHello();
