@@ -181,8 +181,14 @@
 #js-app .iconbtn:hover{background:var(--surface-3);color:var(--text)}
 #js-app .iconbtn:active{transform:scale(.94)}
 
-/* ── 骨架 ── */
-#js-app .body{display:grid;grid-template-columns:212px minmax(0,1fr);min-height:0}
+/* ── 骨架 ──
+   ⚠️⚠️ 高度链必须**每一层都写成确定值**，不然内部 overflow:auto 不生效、内容一长就把
+   输入框顶出视口，而外层是 overflow:hidden ——「往下拉也没用」。
+   踩过的坑（2026-10-15 用户实测）：原来 `.body` 与 `.chatwrap` 只给了 grid-template-columns，
+   行是**隐式 auto 行**，行高按内容撑开；`.main` 于是没有确定高度，一路传下去 `.msgs` 的
+   overflow-y:auto 就成了摆设。短回复看不出来，真模型的长回答一出现就露馅。
+   → 凡是「外壳行」一律显式写 `grid-template-rows: minmax(0,1fr)`。 */
+#js-app .body{display:grid;grid-template-columns:212px minmax(0,1fr);grid-template-rows:minmax(0,1fr);min-height:0;overflow:hidden}
 #js-app .side{
   background:var(--surface);border-right:1px solid var(--line-soft);
   padding:10px;display:flex;flex-direction:column;gap:2px;min-height:0;overflow-y:auto;
@@ -212,9 +218,10 @@
 }
 #js-app .ptitle small{margin-left:auto;font-size:11px;color:var(--text-3);font-weight:400;letter-spacing:0}
 
-/* ── 对话三栏：填满剩余高度，只有消息区内部滚动（app 手感，不是长网页） */
-#js-app .chatwrap{display:grid;grid-template-columns:206px minmax(0,1fr) 244px;gap:12px;align-items:stretch;flex:1;min-height:0}
-#js-app .conv{display:grid;grid-template-rows:auto minmax(0,1fr) auto auto;min-height:0}
+/* ── 对话三栏：填满剩余高度，只有消息区内部滚动（app 手感，不是长网页）
+   grid-template-rows 同样要显式给，理由见上面「高度链」那段。 */
+#js-app .chatwrap{display:grid;grid-template-columns:206px minmax(0,1fr) 244px;grid-template-rows:minmax(0,1fr);gap:12px;align-items:stretch;flex:1;min-height:0}
+#js-app .conv{display:grid;grid-template-rows:auto minmax(0,1fr) auto auto;min-height:0;overflow:hidden}
 #js-app .convhead{display:flex;gap:10px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--line-soft);flex-wrap:nowrap}
 #js-app .eavatar{
   width:28px;height:28px;border-radius:9px;flex:none;display:grid;place-items:center;
@@ -387,7 +394,7 @@
 #js-app .loading{font-size:12px;color:var(--text-3);padding:14px 0;text-align:center;display:flex;align-items:center;justify-content:center;gap:8px}
 #js-app .loading svg.ic{font-size:14px;animation:spin 850ms linear infinite}
 #js-app .scroll{padding:14px;overflow-y:auto;min-height:0;flex:1}
-#js-app .grid2{display:grid;grid-template-columns:206px minmax(0,1fr);gap:12px;align-items:stretch;flex:1;min-height:0}
+#js-app .grid2{display:grid;grid-template-columns:206px minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:12px;align-items:stretch;flex:1;min-height:0}
 
 /* Apple §14：减弱动效不等于没有反馈 —— 换成短交叉淡入，去掉位移与缩放。
    `prefers-reduced-transparency` 时把半透明材质变实，保证可读性。 */
