@@ -16,8 +16,10 @@
 </style>
 </head>
 <body>
-<!-- 图标 sprite：内联的 18 个 Tabler 图标（MIT），零网络请求、颜色走 currentColor。
-     线上 CSP 是 default-src 'self'，外链图标 CDN 跑不了；整包图标库又有 600KB，而这里只用到 18 个。 -->
+<!-- 图标 sprite：内联的 20 个 Tabler 图标（MIT），零网络请求、颜色走 currentColor。
+     线上 CSP 是 default-src 'self'，外链图标 CDN 跑不了；整包图标库又有 600KB，而这里只用到 20 个。
+     ⚠️ 加/换图标时先核对：prototype.js 里 ic('x') / ic('copy') 这些名字必须在这里有对应 symbol，
+     否则 <use> 指向不存在的 id、按钮上就是一个空白方块（2026-10-15 修过：i-x 一直缺，停止和删除按钮是空的）。 -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
   <symbol id="i-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <path d="M21 14l-3 -3h-7a1 1 0 0 1 -1 -1v-6a1 1 0 0 1 1 -1h9a1 1 0 0 1 1 1v10" />
@@ -110,6 +112,14 @@
     <path d="M7 7h10v10" />
     <path d="M7 17l10 -10" />
   </symbol>
+  <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M18 6l-12 12" />
+    <path d="M6 6l12 12" />
+  </symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7 7m0 2.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z" />
+    <path d="M4.012 7.26a2.005 2.005 0 0 0 -1.012 1.737v10c0 1.1 .9 2 2 2h10c.75 0 1.158 -.385 1.5 -1" />
+  </symbol>
 </defs></svg>
 
 <div id="js-app">
@@ -180,6 +190,8 @@
 }
 #js-app .iconbtn:hover{background:var(--surface-3);color:var(--text)}
 #js-app .iconbtn:active{transform:scale(.94)}
+#js-app .iconbtn.swapping svg.ic{animation:icon-swap 240ms var(--ease-out)}
+@keyframes icon-swap{from{opacity:0;transform:rotate(-45deg) scale(.75)}to{opacity:1;transform:none}}
 
 /* ── 骨架 ──
    ⚠️⚠️ 高度链必须**每一层都写成确定值**，不然内部 overflow:auto 不生效、内容一长就把
@@ -222,6 +234,10 @@
    grid-template-rows 同样要显式给，理由见上面「高度链」那段。 */
 #js-app .chatwrap{display:grid;grid-template-columns:206px minmax(0,1fr) 244px;grid-template-rows:minmax(0,1fr);gap:12px;align-items:stretch;flex:1;min-height:0}
 #js-app .conv{display:grid;grid-template-rows:auto minmax(0,1fr) auto auto;min-height:0;overflow:hidden}
+/* 整面板换内容（切专家 / 回到上次会话）时的一次轻换气：只透明度 + 4px 上浮。
+   大表面不做缩放——Apple：大幅位移的大面积元素要一边走一边淡。 */
+#js-app .conv.swap{animation:panel-in var(--t-enter) var(--ease-out)}
+@keyframes panel-in{from{opacity:.35;transform:translateY(4px)}to{opacity:1;transform:none}}
 #js-app .convhead{display:flex;gap:10px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--line-soft);flex-wrap:nowrap}
 #js-app .eavatar{
   width:28px;height:28px;border-radius:9px;flex:none;display:grid;place-items:center;
@@ -230,8 +246,26 @@
 }
 #js-app .convhead b{font-size:13.5px;font-weight:600;letter-spacing:-.01em;display:block}
 #js-app .convhead span{font-size:11px;color:var(--text-3);display:block;margin-top:1px}
-#js-app .msgs{padding:16px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;min-height:0;overscroll-behavior:contain}
-#js-app .msg{display:flex;gap:10px;align-items:flex-start;animation:bubble-in var(--t-enter) var(--ease-out) both}
+/* ⚠️ grid-area:2/1 要和下面 .jump 一起显式给：只给 .jump 显式占位的话，
+   自动布局会跳过第 2 行、把 .msgs 挤到第 3 行（实测过，消息区矮一半、还错位）。 */
+#js-app .msgs{grid-area:2/1;padding:16px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;min-height:0;overscroll-behavior:contain}
+/* 「回到最新」：和消息区占同一格（grid-area:2/1）浮在底部，消息从它下面滚过。
+   进场 200ms、出场 150ms（Emil：出场要比进场快）；空间一致 —— 内容在下面，就从下面 8px 上来。 */
+#js-app .jump{
+  grid-area:2/1;place-self:end center;margin-bottom:10px;z-index:3;
+  display:inline-flex;align-items:center;font-size:12px;padding:6px 13px;border-radius:999px;
+  border:1px solid var(--line);color:var(--text);
+  background:color-mix(in srgb,var(--surface) 86%, transparent);
+  -webkit-backdrop-filter:blur(14px) saturate(160%);backdrop-filter:blur(14px) saturate(160%);
+  box-shadow:0 6px 18px -8px rgba(0,0,0,.35);
+  opacity:0;pointer-events:none;transform:translateY(8px);
+  transition:opacity 150ms var(--ease-out),transform 150ms var(--ease-out);
+}
+#js-app .jump.show{opacity:1;pointer-events:auto;transform:translateY(0);transition-duration:200ms}
+#js-app .jump:active{transform:translateY(0) scale(.96)}
+#js-app .msg{display:flex;gap:10px;align-items:flex-start}
+/* 进场只给「新出现的那条」加 .enter：整表重排时不重放（重放＝刚读完的一屏无端抖一下；本地实测到过） */
+#js-app .msg.enter{animation:bubble-in var(--t-enter) var(--ease-out) both}
 #js-app .msg.me{flex-direction:row-reverse}
 @keyframes bubble-in{from{opacity:0;transform:translateY(6px) scale(.985)}to{opacity:1;transform:none}}
 #js-app .mavatar{
@@ -248,13 +282,14 @@
   font-size:11.5px;color:var(--text-3);padding:0 0 0 38px;display:flex;align-items:center;gap:6px;
   min-height:18px;animation:bubble-in var(--t-enter) var(--ease-out) both;
 }
-#js-app .status svg.ic{font-size:13px;animation:spin 850ms linear infinite}
+#js-app .status svg.ic{font-size:13px;animation:spin 720ms linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 #js-app .status.dots::after{content:'';animation:jndots 1.3s steps(4,end) infinite}
 @keyframes jndots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
 
 /* 开场：空状态属于「罕见/首次」，是唯一允许稍微多花一点的地方（Emil 的 delight 预算） */
-#js-app .hello{padding:4px 0 0}
+#js-app .hello{padding:4px 0 0;animation:hello-in var(--t-enter) var(--ease-out)}
+@keyframes hello-in{from{opacity:0}to{opacity:1}}
 #js-app .starters{display:flex;flex-direction:column;gap:8px;margin:14px 0 0 38px;max-width:620px}
 #js-app .starter{
   border:1px solid var(--line);border-radius:10px;padding:10px 13px;font-size:13px;color:var(--text-2);
@@ -294,6 +329,12 @@
 #js-app .btn.primary{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:500}
 #js-app .btn.primary:hover{background:color-mix(in srgb,var(--brand) 88%, #000)}
 #js-app .btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+/* 按钮文案切换（发送↔停止、复制→已复制）：内容立刻换，只让新文案从 2px 模糊里淡进来
+   —— Emil：两态交接不干净时，用模糊把缝隙盖住。 */
+#js-app .btnlabel{display:inline-flex;align-items:center;gap:7px}
+#js-app .msgact .btnlabel{gap:5px}
+#js-app .btnlabel.swap{animation:label-in 140ms var(--ease-out)}
+@keyframes label-in{from{opacity:0;filter:blur(2px)}to{opacity:1;filter:blur(0)}}
 #js-app .hint{font-size:11px;color:var(--text-3);padding:9px 14px 0;min-height:22px}
 
 /* ── 专家列表 ── */
@@ -311,7 +352,11 @@
 
 /* ── 会话列表（机构级：服务端存，这里只是入口）── */
 #js-app .convlist{padding:0 6px 8px;overflow-y:auto;min-height:0}
-#js-app .convrow{display:flex;align-items:stretch;gap:2px;border-radius:9px}
+#js-app .convrow{display:flex;align-items:stretch;gap:2px;border-radius:9px;transition:background var(--t-press) var(--ease)}
+/* 列表按 id 就地增删：新会话从上方滑入（它加在列表最前），删除是收走而不是凭空消失 */
+#js-app .convrow.enter{animation:convrow-in var(--t-enter) var(--ease-out) both}
+@keyframes convrow-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+#js-app .convrow.leaving{pointer-events:none;transition:max-height 180ms var(--ease-out),opacity 120ms var(--ease)}
 #js-app .convrow:hover{background:var(--surface-2)}
 #js-app .convrow[aria-current="true"]{background:var(--brand-soft)}
 #js-app .convopen{flex:1;min-width:0;padding:8px 9px;border-radius:9px;display:block}
@@ -323,10 +368,11 @@
 #js-app .convmeta{font-size:10.5px;color:var(--text-3);display:block;margin-top:2px}
 #js-app .convdel{
   flex:none;width:26px;border-radius:8px;display:grid;place-items:center;color:var(--text-3);opacity:0;
-  transition:opacity var(--t-press) var(--ease), color var(--t-press) var(--ease), background var(--t-press) var(--ease);
+  transition:opacity var(--t-press) var(--ease), color var(--t-press) var(--ease), background var(--t-press) var(--ease), transform var(--t-press) var(--ease-out);
 }
 #js-app .convrow:hover .convdel{opacity:1}
 #js-app .convdel:hover{color:var(--red);background:var(--red-soft)}
+#js-app .convdel:active{transform:scale(.92)}
 @media (hover:none){#js-app .convdel{opacity:.6}}
 
 /* ── 助手消息下的操作条（复制 / 重新生成）──
@@ -427,23 +473,36 @@
 #js-app .bar i{display:block;height:100%;background:var(--brand);border-radius:3px;transition:width var(--t-panel) var(--ease-out)}
 #js-app .lead{font-size:11.5px;color:var(--text-2);line-height:1.78}
 #js-app .loading{font-size:12px;color:var(--text-3);padding:14px 0;text-align:center;display:flex;align-items:center;justify-content:center;gap:8px}
-#js-app .loading svg.ic{font-size:14px;animation:spin 850ms linear infinite}
+#js-app .loading svg.ic{font-size:14px;animation:spin 720ms linear infinite}
 #js-app .scroll{padding:14px;overflow-y:auto;min-height:0;flex:1}
 #js-app .grid2{display:grid;grid-template-columns:206px minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:12px;align-items:stretch;flex:1;min-height:0}
+
+/* 主题切换（Apple §14：明暗翻转别做亮度跳变）：切换那一刻才给 html 挂 .theming，
+   只在这 320ms 窗口里让颜色参与过渡，之后立刻摘掉 —— 常驻会把所有 hover 都拖成慢速淡入。 */
+html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
+  transition:background-color 260ms cubic-bezier(.4,0,.2,1),color 260ms cubic-bezier(.4,0,.2,1),border-color 260ms cubic-bezier(.4,0,.2,1)!important;
+}
 
 /* Apple §14：减弱动效不等于没有反馈 —— 换成短交叉淡入，去掉位移与缩放。
    `prefers-reduced-transparency` 时把半透明材质变实，保证可读性。 */
 @media (prefers-reduced-motion: reduce){
-  #js-app .msg,#js-app .ref,#js-app .starter{animation:none}
-  #js-app .status svg.ic,#js-app .loading svg.ic{animation:none}
-  #js-app .btn:active,#js-app .chip:active,#js-app .iconbtn:active,#js-app .expert:active,#js-app .starter:active,#js-app .navitem:active{transform:none}
+  #js-app .msg.enter,#js-app .ref,#js-app .starter,#js-app .hello,#js-app .conv.swap,#js-app .convrow.enter{animation:none}
+  #js-app .status svg.ic,#js-app .loading svg.ic,#js-app .iconbtn.swapping svg.ic{animation:none}
+  #js-app .btnlabel.swap{animation:none}
+  #js-app .btn:active,#js-app .chip:active,#js-app .iconbtn:active,#js-app .expert:active,#js-app .starter:active,#js-app .navitem:active,#js-app .convdel:active{transform:none}
+  #js-app .jump{transform:none!important;transition:opacity 140ms ease}
   #js-app .bar i{transition:none}
+  #js-app .convrow.leaving{transition:none}
+  html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{transition:none!important}
 }
 @media (prefers-reduced-transparency: reduce){
   #js-app .topbar,#js-app .composer{background:var(--surface);-webkit-backdrop-filter:none;backdrop-filter:none}
 }
 @media (max-width:1100px){
-  #js-app .chatwrap{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr) auto;overflow-y:auto}
+  /* 窄屏三块竖排一起滚。⚠️ 对话区必须给**确定高度**：原来它挂在 minmax(0,1fr) 行里，
+     专家列表和引用面板一高，这一行就被挤成 0（实测只剩 32px），手机上进不了对话。 */
+  #js-app .chatwrap{grid-template-columns:1fr;grid-template-rows:auto auto auto;overflow-y:auto}
+  #js-app .chatwrap > .conv{height:min(72dvh,560px)}
   #js-app .refbody,#js-app .expertlist{max-height:none}
 }
 @media (max-width:820px){
@@ -473,7 +532,9 @@
 
     <section class="screen" id="scr-chat" aria-label="专家团">
       <div class="chatwrap">
-        <div class="panel" style="display:grid;grid-template-rows:auto auto minmax(0,1fr)">
+        <!-- ⚠️ 面板里有 4 个子元素（专家标题 / 专家列表 / 会话标题 / 会话列表），行就必须写 4 条。
+             之前只写了 3 条，第 4 条落进隐式 auto 行 → 会话列表被钉在面板底部、不会滚动，中间空一大块。 -->
+        <div class="panel" style="display:grid;grid-template-rows:auto auto auto minmax(0,1fr)">
           <div class="ptitle" style="border-bottom:0;padding-bottom:6px">专家<small id="ex-count"></small></div>
           <div class="expertlist" id="js-experts" style="padding-top:0"></div>
           <div class="ptitle" style="border-bottom:0;border-top:1px solid var(--line-soft);border-radius:0;padding-top:11px">会话<small id="conv-count"></small></div>
@@ -491,6 +552,8 @@
             </button>
           </div>
           <div class="msgs" id="js-msgs" aria-live="polite"></div>
+          <!-- 用户上翻阅读时浮出来的「回到最新」；默认不可见、不可点、不进 Tab 序（由 prototype.js 管） -->
+          <button class="jump" type="button" id="js-jump" aria-hidden="true" tabindex="-1">回到最新</button>
           <div class="composer">
             <textarea id="js-input" rows="1" placeholder="把问题说清楚就行，例如：家长说太贵了，怎么回？" aria-label="输入你的问题"></textarea>
             <button class="btn primary" type="button" id="js-send">

@@ -76,16 +76,32 @@
   };
 
   /* ───────────── 主题 ───────────── */
-  function applyThemeIcon() {
-    var mode = document.documentElement.style.colorScheme
-      || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    $('#js-theme').innerHTML = ic(mode === 'dark' ? 'sun' : 'moon', 16);
+  var THEME_KEY = 'junshi.theme.v1';
+  function savedMode() {
+    try { var v = localStorage.getItem(THEME_KEY); return v === 'light' || v === 'dark' ? v : null; } catch (e) { return null; }
   }
-  $('#js-theme').addEventListener('click', function () {
-    var cur = document.documentElement.style.colorScheme
+  function currentMode() {
+    return document.documentElement.style.colorScheme
       || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    document.documentElement.style.colorScheme = cur === 'dark' ? 'light' : 'dark';
-    applyThemeIcon();
+  }
+  function applyThemeIcon(animate) {
+    var btn = $('#js-theme');
+    btn.innerHTML = ic(currentMode() === 'dark' ? 'sun' : 'moon', 16);
+    if (!animate) return;
+    btn.classList.remove('swapping');
+    void btn.offsetWidth;
+    btn.classList.add('swapping');
+  }
+  var themeTimer = null;
+  $('#js-theme').addEventListener('click', function () {
+    var rootEl = document.documentElement;
+    rootEl.classList.add('theming');                    // 只在这个窗口里让颜色参与过渡（见 index.html 里的说明）
+    var next = currentMode() === 'dark' ? 'light' : 'dark';
+    rootEl.style.colorScheme = next;
+    try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* 隐私模式：静默降级 */ }
+    applyThemeIcon(true);
+    clearTimeout(themeTimer);
+    themeTimer = setTimeout(function () { rootEl.classList.remove('theming'); }, 320);
   });
 
   /* ───────────── 导航 ───────────── */
@@ -102,40 +118,99 @@
   $$('.navitem').forEach(function (b) { b.addEventListener('click', function () { showScreen(b.dataset.screen); }); });
 
   /* ───────────── 专家 + 会话列表 ───────────── */
+  /** 专家列表只建一次 DOM，切换时只改 aria-pressed —— 节点不重建，选中底色才能平滑过渡
+      （之前每次切换整表重建，高亮是硬跳的）。 */
   function renderExperts() {
     var box = $('#js-experts');
     $('#ex-count').textContent = state.experts.length + ' 位';
-    box.innerHTML = '';
-    state.experts.forEach(function (e) {
-      var b = document.createElement('button');
-      b.type = 'button'; b.className = 'expert';
-      b.setAttribute('aria-pressed', String(state.expert && state.expert.id === e.id));
-      b.innerHTML = '<span class="eavatar">' + esc(e.avatar) + '</span>' +
-        '<span style="min-width:0"><span class="ename">' + esc(e.name) + '</span><span class="etag">' + esc(e.tag) + '</span></span>';
-      b.addEventListener('click', function () { switchExpert(e); });
-      box.appendChild(b);
+    if (box.childElementCount !== state.experts.length) {
+      box.innerHTML = '';
+      state.experts.forEach(function (e) {
+        var b = document.createElement('button');
+        b.type = 'button'; b.className = 'expert';
+        b.dataset.id = e.id;
+        b.innerHTML = '<span class="eavatar">' + esc(e.avatar) + '</span>' +
+          '<span style="min-width:0"><span class="ename">' + esc(e.name) + '</span><span class="etag">' + esc(e.tag) + '</span></span>';
+        b.addEventListener('click', function () { switchExpert(e); });
+        box.appendChild(b);
+      });
+    }
+    updateExpertSelection();
+  }
+  function updateExpertSelection() {
+    $$('.expert').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(Boolean(state.expert) && b.dataset.id === state.expert.id));
     });
   }
 
+  function fillConvRow(row, c) {
+    row.querySelector('.convtitle').textContent = c.title || '（未命名）';
+    row.querySelector('.convmeta').textContent = fmtTime(c.updatedAt) + (c.messageCount ? ' · ' + c.messageCount + ' 条' : '');
+    row.setAttribute('aria-current', String(c.id === state.conversationId));
+  }
+  function buildConvRow(c) {
+    var row = document.createElement('div');
+    row.className = 'convrow';
+    row.dataset.id = c.id;
+    row.innerHTML = '<button class="convopen" type="button"><span class="convtitle"></span><span class="convmeta"></span></button>' +
+      '<button class="convdel" type="button" aria-label="删除这个会话">' + ic('x', 13) + '</button>';
+    row.querySelector('.convopen').addEventListener('click', function () { openConversation(c.id); });
+    row.querySelector('.convdel').addEventListener('click', function () { deleteConversation(c.id); });
+    fillConvRow(row, c);
+    return row;
+  }
+  /** 退场：先量高度再收到 0，淡出的同时把位置让出来（Emil：透明度要和高度一起走） */
+  function leaveConvRow(row) {
+    if (row.dataset.leaving) return;
+    row.dataset.leaving = '1';
+    row.style.maxHeight = row.offsetHeight + 'px';
+    row.style.overflow = 'hidden';
+    row.classList.add('leaving');
+    requestAnimationFrame(function () {
+      row.style.maxHeight = '0px';
+      row.style.opacity = '0';
+    });
+    setTimeout(function () { if (row.parentNode) row.parentNode.removeChild(row); }, 220);
+  }
+  /** 会话列表：按 id 就地增删改，不整表重建 —— 高亮能过渡、新会话是滑进来的、删除是收走的。
+      之前的整表重建还会把 hover 状态和滚动位置一起清掉。 */
   function renderConversations() {
     var box = $('#js-convs');
     if (!box) return;
     $('#conv-count').textContent = state.conversations.length ? state.conversations.length + ' 个' : '';
     if (!state.conversations.length) {
-      show(box, '<p class="empty" style="padding:2px 10px">还没有会话，点上面「新对话」或直接提问。</p>');
+      if (!box.querySelector('.empty')) show(box, '<p class="empty" style="padding:2px 10px">还没有会话，点上面「新对话」或直接提问。</p>');
       return;
     }
-    box.innerHTML = '';
-    state.conversations.forEach(function (c) {
-      var row = document.createElement('div');
-      row.className = 'convrow';
-      row.setAttribute('aria-current', String(c.id === state.conversationId));
-      row.innerHTML = '<button class="convopen" type="button"><span class="convtitle">' + esc(c.title || '（未命名）') + '</span>' +
-        '<span class="convmeta">' + esc(fmtTime(c.updatedAt)) + ' · ' + c.messageCount + ' 条</span></button>' +
-        '<button class="convdel" type="button" aria-label="删除这个会话">' + ic('x', 13) + '</button>';
-      row.querySelector('.convopen').addEventListener('click', function () { openConversation(c.id); });
-      row.querySelector('.convdel').addEventListener('click', function () { deleteConversation(c.id); });
-      box.appendChild(row);
+    var empty = box.querySelector('.empty');
+    if (empty && empty.parentNode) empty.parentNode.removeChild(empty);
+
+    var wanted = {};
+    state.conversations.forEach(function (c) { wanted[c.id] = true; });
+
+    var rows = {};
+    var hadRows = false;
+    Array.prototype.slice.call(box.querySelectorAll('.convrow')).forEach(function (row) {
+      hadRows = true;
+      if (row.dataset.leaving) return;
+      if (wanted[row.dataset.id]) rows[row.dataset.id] = row;
+      else leaveConvRow(row);
+    });
+    // 整批换掉（切专家）：不留旧行慢慢收，直接清掉 —— 两批一起动会互相挤位置，反而乱
+    if (hadRows && !Object.keys(rows).length) box.innerHTML = '';
+
+    var cursor = box.firstChild;
+    state.conversations.forEach(function (c, i) {
+      var row = rows[c.id];
+      if (row) fillConvRow(row, c);
+      else {
+        row = buildConvRow(c);
+        row.classList.add('enter');
+        if (!hadRows) row.style.animationDelay = Math.min(i * 36, 180) + 'ms';   // 首次铺开才错峰（Emil：组入场 30–80ms）
+      }
+      while (cursor && (cursor.nodeType !== 1 || cursor.classList.contains('leaving'))) cursor = cursor.nextSibling;
+      if (row === cursor) cursor = cursor.nextSibling;
+      else box.insertBefore(row, cursor);
     });
   }
 
@@ -168,14 +243,23 @@
     var lastId = lastConversationOf(state.expert.id);
     if (lastId && state.conversations.some(function (c) { return c.id === lastId; })) {
       await openConversation(lastId);
-      return;
+    } else {
+      renderHello();
     }
-    renderHello();
+    animatePanelSwap();       // 等内容就位再换气，不在旧内容上先淡一次
+  }
+
+  /** 面板整块换内容时的一次轻换气（见 index.html 里 .conv.swap 的说明） */
+  function animatePanelSwap() {
+    var conv = $('.conv');
+    if (!conv) return;
+    conv.classList.remove('swap');
+    void conv.offsetWidth;
+    conv.classList.add('swap');
   }
 
   function switchExpert(e) {
     if (state.streaming) return;
-    var same = state.expert && state.expert.id === e.id;
     state.expert = e;
     state.conversationId = null;
     state.messages = [];
@@ -183,12 +267,6 @@
     $('#conv-avatar').textContent = e.avatar;
     $('#conv-name').textContent = e.name;
     $('#conv-tag').textContent = e.tag;
-    var conv = $('.conv');
-    if (!same && conv) {
-      conv.style.animation = 'none';
-      void conv.offsetHeight;
-      conv.style.animation = 'bubble-in var(--t-enter) var(--ease-out) both';
-    }
     resumeOrGreet();
   }
 
@@ -227,10 +305,11 @@
   }
 
   /* ───────────── 消息渲染 ───────────── */
+  /** appendMsg 的开关：enter=false 不放进场动画（整表重排时用），scroll=false 不跟随滚动。 */
   function appendMsg(role, content, opts) {
     var o = opts || {};
     var wrap = document.createElement('div');
-    wrap.className = 'msg' + (role === 'user' ? ' me' : '');
+    wrap.className = 'msg' + (role === 'user' ? ' me' : '') + (o.enter === false ? '' : ' enter');
     var who = role === 'user' ? '我' : (state.expert ? state.expert.avatar : '军师');
     wrap.innerHTML = '<span class="mavatar">' + esc(who) + '</span>' +
       '<div class="bubblewrap"><div class="bubble"></div>' +
@@ -238,20 +317,29 @@
     wrap.querySelector('.bubble').textContent = content;
     if (role === 'assistant' && !o.plain) attachActions(wrap, o);
     $('#js-msgs').appendChild(wrap);
-    scrollBottom();
+    if (o.scroll !== false) scrollBottom(true);
     return wrap.querySelector('.bubble');
+  }
+
+  /** 按钮文案切换：内容立刻换（不延迟响应），只让新文案从模糊里淡进来。 */
+  function setLabel(btn, html) {
+    btn.innerHTML = '<span class="btnlabel swap">' + html + '</span>';
   }
 
   /** 助手消息下面的操作条：复制恒有；最后一条额外给「重新生成」。 */
   function attachActions(wrap, o) {
     var bar = wrap.querySelector('.msgactions');
     if (!bar) return;
-    bar.innerHTML = '<button class="msgact" type="button" data-act="copy">' + ic('check', 12) + '复制</button>' +
+    bar.innerHTML = '<button class="msgact" type="button" data-act="copy">' + ic('copy', 12) + '复制</button>' +
       (o.last ? '<button class="msgact" type="button" data-act="regen">' + ic('refresh', 12) + '重新生成</button>' : '');
     bar.querySelector('[data-act="copy"]').addEventListener('click', function () {
       var text = wrap.querySelector('.bubble').textContent;
-      var done = function () { bar.querySelector('[data-act="copy"]').innerHTML = ic('check', 12) + '已复制'; setTimeout(function () {
-        var b = bar.querySelector('[data-act="copy"]'); if (b) b.innerHTML = ic('check', 12) + '复制'; }, 1600); };
+      var done = function () {
+        var btn = bar.querySelector('[data-act="copy"]');
+        if (!btn) return;
+        setLabel(btn, ic('check', 12) + '已复制');
+        setTimeout(function () { var b = bar.querySelector('[data-act="copy"]'); if (b) setLabel(b, ic('copy', 12) + '复制'); }, 1600);
+      };
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, done);
       else {
         var ta = document.createElement('textarea');
@@ -264,14 +352,17 @@
     if (regen) regen.addEventListener('click', function () { regenerate(); });
   }
 
-  function renderMessages() {
+  /** keepPos：流式收尾时的重排要留在原位（用户可能正在往上读），别把人拽到底。
+   *  重排也**不给每条消息放进场动画** —— 是同一批内容，重放动画＝刚读完的一屏无端抖一下。 */
+  function renderMessages(keepPos) {
     var box = $('#js-msgs');
+    var prevTop = box.scrollTop;
     box.innerHTML = '';
     var lastAi = -1;
     state.messages.forEach(function (m, i) { if (m.role === 'assistant' && (m.content || '').trim()) lastAi = i; });
     state.messages.forEach(function (m, i) {
       if (m.role !== 'user' && !(m.content || '').trim()) return;    // 空助手＝被打断的占位
-      appendMsg(m.role, m.content, { last: i === lastAi });
+      appendMsg(m.role, m.content, { last: i === lastAi, enter: false, scroll: false });
     });
     var last = state.messages[state.messages.length - 1];
     if (last && last.role === 'user') {
@@ -280,7 +371,8 @@
       note.innerHTML = ic('alert', 13) + '<span>上一条没答完（可能刷新或关过页面），可以点「重新生成」或再问一次</span>';
       box.appendChild(note);
     }
-    scrollBottom();
+    if (keepPos && !stick) box.scrollTop = prevTop;
+    else scrollBottom(true);
   }
 
   function renderHello() {
@@ -294,6 +386,7 @@
       (s ? '<div class="starters">' + s + '</div>' : '') + '</div>';
     $('#js-refs').innerHTML = '<p class="empty">发出问题后，这里会显示这次回答参考了你资料库里的哪几份文件。</p>';
     $('#ref-count').textContent = '';
+    stick = true; setJumpVisible(false);          // 新开场＝新上下文，跟随状态归位
     root.querySelectorAll('[data-starter]').forEach(function (b) {
       b.addEventListener('click', function () {
         $('#js-input').value = state.expert.starters[Number(b.dataset.starter)];
@@ -302,19 +395,43 @@
     });
   }
 
-  function scrollBottom() {
+  /*  ── 跟随滚动（Apple：别抢用户的位置）──
+   * 贴着底部时才自动跟；离底超过 28px 视为「在读旧内容」，此时流式输出不再拉回，
+   * 改浮一个「回到最新」。之前是每个 delta 无条件 scrollBottom()，实测用户上翻后被按着头拽回底部。 */
+  var stick = true;
+  function nearBottom() {
+    var box = $('#js-msgs');
+    return box.scrollHeight - box.scrollTop - box.clientHeight <= 28;
+  }
+  function scrollBottom(force) {
+    if (!force && !stick) return;
     var box = $('#js-msgs');
     box.scrollTop = box.scrollHeight;
+    stick = true;
   }
+  function setJumpVisible(on) {
+    var j = $('#js-jump');
+    if (!j) return;
+    j.classList.toggle('show', on);
+    j.tabIndex = on ? 0 : -1;
+    j.setAttribute('aria-hidden', on ? 'false' : 'true');
+  }
+  $('#js-msgs').addEventListener('scroll', function () {
+    stick = nearBottom();
+    setJumpVisible(!stick);
+  }, { passive: true });
+  $('#js-jump').addEventListener('click', function () { scrollBottom(true); });
 
   /* ───────────── 对话（SSE）──────────── */
   function setComposerBusy(busy) {
     state.streaming = busy;
     var send = $('#js-send');
-    send.innerHTML = busy ? ic('x', 14) + '停止' : ic('send', 14) + '发送';
+    setLabel(send, busy ? ic('x', 14) + '停止' : ic('send', 14) + '发送');
     send.classList.toggle('primary', !busy);
     send.classList.toggle('stop', busy);
     $('#js-input').disabled = busy;
+    // 流式期间消息区在不停变字，先让读屏器别逐字播报，收尾那次重排再一次性念（aria-busy 的用法）
+    $('#js-msgs').setAttribute('aria-busy', busy ? 'true' : 'false');
   }
 
   async function streamChat(payload, bubble) {
@@ -416,7 +533,7 @@
       }, bubble);
       if (answer.trim()) {
         state.messages.push({ role: 'assistant', content: answer });
-        renderMessages();
+        renderMessages(true);          // 收尾重排留在原位：用户上翻读旧内容时不被拽回底部
       } else {
         // ⚠️ 空回答时**不要**走 renderMessages：它按 state.messages 重建 DOM，此时里面只有用户那条，
         //    会把刚写上去的「这次没有生成内容」提示一起冲掉（与上面 stopped 分支同一个坑）。
@@ -433,7 +550,7 @@
           // ⚠️ 只有「已经生成了一部分」才重排：renderMessages 是按 state.messages 重建 DOM 的，
           //    而一个字都没生成时 state 里只有用户那条 —— 重排会把刚写上去的「（已停止生成）」
           //    提示一起冲掉，用户看到的就是「问了一句，然后什么都没有」（2026-10-15 线上实测到）。
-          renderMessages();
+          renderMessages(true);
         }
         loadConversations();
       } else {
@@ -444,9 +561,7 @@
     } finally {
       setComposerBusy(false);
       try { input.focus({ preventScroll: true }); } catch (err) { input.focus(); }
-      root.scrollTop = 0;
-      var main = $('.main'); if (main) main.scrollTop = 0;
-      scrollBottom();
+      scrollBottom();      // 贴着底才跟；用户上翻过就留在原地（原来那两行清 scrollTop 是老布局的残留，已删）
     }
   }
 
@@ -460,7 +575,7 @@
     var last = state.messages[state.messages.length - 1];
     if (last && last.role === 'assistant') {
       state.messages.pop();                       // 界面上先移除旧回答，服务端也会删掉那条
-      renderMessages();
+      renderMessages(true);
     }
     send({ content: q, regenerate: true });
   }
@@ -648,6 +763,8 @@
   $('#pf-save').addEventListener('click', saveProfile);
 
   /* ───────────── 启动 ───────────── */
+  var bootMode = savedMode();
+  if (bootMode) document.documentElement.style.colorScheme = bootMode;   // 记住上次选的深浅色，刷新不回到系统默认
   applyThemeIcon();
   Promise.all([
     call('/experts').catch(function () { return { experts: [] }; }),
