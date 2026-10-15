@@ -53,6 +53,12 @@ for app in admin org website; do
 done
 mkdir -p "$RELEASE_DIR/apps/server/src" "$RELEASE_DIR/packages/database/src" "$RELEASE_DIR/packages/shared/src"
 cp -a apps/server/src/. "$RELEASE_DIR/apps/server/src/"
+# 招生军师（/junshi/）的只读参考数据：素材库索引/异议库/合规词表（约 1.7MB JSON）。
+# ⚠️ 它在 apps/server/data 而不在 src 下 —— 是**数据不是源码**，但服务端要按相对路径读它
+#    （routes/junshi.js 里 `../../data/junshi`），所以 release 里必须保持同样的相对位置，
+#    少了这一行服务照样起得来、只有那几个接口会 500（ENOENT）。
+mkdir -p "$RELEASE_DIR/apps/server/data"
+cp -a apps/server/data/. "$RELEASE_DIR/apps/server/data/"
 cp -a packages/database/src/. "$RELEASE_DIR/packages/database/src/"
 cp -a packages/shared/src/. "$RELEASE_DIR/packages/shared/src/"
 mkdir -p "$RELEASE_DIR/node_modules/@platform/database/src"

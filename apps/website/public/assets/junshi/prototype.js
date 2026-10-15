@@ -1,421 +1,661 @@
-/* 招生军师 · 内部预览 —— 原型脚本（见同目录 ../../junshi/index.html 顶部注释）*/
-(function(){
-  var root=document.getElementById('js-app');
-  if(!root) return;
-  var $=function(s){return root.querySelector(s)};
-  var $$=function(s){return Array.prototype.slice.call(root.querySelectorAll(s))};
+/* 招生军师 —— 前端逻辑（见 ../../junshi/index.html 顶部注释：脚本必须外链，CSP 是 script-src 'self'）*/
+(function () {
+  var root = document.getElementById('js-app');
+  if (!root) return;
+  var $ = function (s) { return root.querySelector(s); };
+  var $$ = function (s) { return Array.prototype.slice.call(root.querySelectorAll(s)); };
 
-  /* ---------- nav ---------- */
-  function show(name){
-    $$('.js-screen').forEach(function(s){s.hidden=(s.id!=='scr-'+name)});
-    $$('.js-navitem').forEach(function(b){
-      if(b.dataset.screen===name){b.setAttribute('aria-current','true')}else{b.removeAttribute('aria-current')}
+  var API = '/api/junshi';
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function call(path, options) {
+    var opt = options || {};
+    return fetch(API + path, {
+      method: opt.method || 'GET',
+      headers: opt.body ? { 'content-type': 'application/json' } : undefined,
+      body: opt.body ? JSON.stringify(opt.body) : undefined,
+      credentials: 'same-origin',
+    }).then(function (res) {
+      return res.json().catch(function () { return null; }).then(function (payload) {
+        if (!res.ok) {
+          var msg = (payload && (payload.message || (payload.error && payload.error.message))) || ('请求失败（HTTP ' + res.status + '）');
+          var err = new Error(msg);
+          err.status = res.status;
+          throw err;
+        }
+        return payload && payload.data !== undefined ? payload.data : payload;
+      });
     });
-    state.screen=name; save();
-  }
-  $$('.js-navitem').forEach(function(b){b.addEventListener('click',function(){show(b.dataset.screen)})});
-
-  /* ---------- state ---------- */
-  var state={screen:'war',month:10,hook:null,done:[],q:''};
-  try{
-    var sv=window.zcode&&window.zcode.widgetState;
-    if(sv&&typeof sv==='object'){if(sv.screen)state.screen=sv.screen;if(sv.month)state.month=sv.month;if(sv.hook)state.hook=sv.hook;if(sv.q)state.q=sv.q}
-  }catch(e){}
-  function save(){
-    try{
-      if(window.zcode&&window.zcode.setWidgetState){
-        window.zcode.setWidgetState({modelContent:{screen:state.screen,month:state.month,hook:state.hook,q:state.q},privateContent:{done:state.done}}).catch(function(){});
-      }
-    }catch(e){}
   }
 
-  /* ---------- 作战台：全年日历 ---------- */
-  var CAL={
-    1:['寒假班 · 显眼包计划','新年消课 · 寒假集训营','春招续费启动','元旦地推 · 新春纳福','年前的资源储备决定了开年春季招生季的邀约力度。这个月最忌讳的就是『躺平』和『懒』。'],
-    2:['新春开学季 · 虎宝闹元宵','—','常规老生续费','新年红包维护裂变','2 月是开学季招生第 1 个关键时间，最忌讳的就是『慢』和『被动』。'],
-    3:['春季招生嘉年华','植树节公益课','—','转介绍月 · 3·8 女神节','转介绍活动想要做成功的关键：成果可视化。'],
-    4:['常态化地推 · 路演','红旗下的我们','—','愚人节 · 地球日','本月重点依然是资源储备，关键就是『走出去』。'],
-    5:['疯狂5月Fun肆宠粉','劳动节集训营','淡季老会员续课','母亲节 · 异业合作','本月是洽谈渠道合作最好的时候，重点是点对点合作，不建议所谓的异业联盟活动。'],
-    6:['儿童节 · 61暑惠卡','父亲节消课 · 端午','618 年中钜惠','亲子童学 · 成果展示','我们与市场竞争的核心资源最终都是学生的时间，一定要抢占先机。'],
-    7:['暑期抢跑计划','暑期班课消','—','暑期盛典 · 家校表演课','招生和课消的狂欢，这个月要把业绩和课消推向新的水平。'],
-    8:['暑期集训营 · 标杆计划','组织等级考试','—','秋招蓄水 · 意向客户群','需要进一步储备力量赢战 9 月份开学季。'],
-    9:['开学季 · 秋招资料包','中秋亲子赏月','涨价前集中续费','教师节 · 成果展示','9 月份直接决定下半年学员基数和课消水平。'],
-    10:['秋季招生 · 万圣节','国庆消课 · 爱享计划','老生常规续费','转介绍组合拳','开学季 + 转介绍活动，这是一套组合拳。'],
-    11:['双11go狂欢 · 定金拉新','双11 课包换购','续费销售重点月','感恩节引爆寒假招生','十一月份重点做好续费销售工作。'],
-    12:['双12 · 寒假班招募','新年消课 · 精灵圣诞夜','年终钜惠涨价倒计时','双旦加个蛋 · 年终晚会','12 月份是双十一的延续，也是寒假的前期。']
+  function show(target, html) { if (target) target.innerHTML = html; }
+  function loading(target) { show(target, '<p class="js-loading">加载中…</p>'); }
+  function errorBox(target, err) {
+    show(target, '<p class="js-err">' + esc(err && err.message ? err.message : '加载失败') + '</p>');
+  }
+  function debounce(fn, ms) {
+    var t = null;
+    return function () {
+      var args = arguments, self = this;
+      clearTimeout(t);
+      t = setTimeout(function () { fn.apply(self, args); }, ms || 250);
+    };
+  }
+
+  /* ───────────── 全局状态 ───────────── */
+  var state = {
+    screen: 'war',
+    month: null,
+    overview: null,
+    profile: null,
+    completion: null,
+    guest: true,
+    pfGroup: 'org',
+    pfDraft: {},
+    lib: { scene: '', q: '', open: {} },
+    ob: { cat: '', tag: '', q: '' },
+    cp: { kind: '', q: '' },
+    co: { steps: [], done: [] },
+    pl: { node: '', kind: '' },
   };
-  var MONTHS=['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
-  var MSHORT=['寒假班','开学季','转介绍','地推','母亲节','暑招','暑期课消','秋招储备','开学季','本月','双11','双12'];
-  var mBox=$('#js-months'),mDetail=$('#js-mdetail');
-  function renderMonths(){
-    mBox.innerHTML='';
-    MONTHS.forEach(function(m,i){
-      var n=i+1,b=document.createElement('button');
-      b.type='button';b.className='js-month';b.dataset.m=n;
-      b.setAttribute('aria-pressed',String(state.month===n));
-      b.innerHTML='<b>'+m+'</b><u>'+MSHORT[i]+'</u>';
-      b.addEventListener('click',function(){state.month=n;renderMonths();save()});
-      mBox.appendChild(b);
-    });
-    var c=CAL[state.month];
-    mDetail.innerHTML='<div class="js-mline"><b>'+state.month+'月 · 拉新</b><span>'+c[0]+'</span></div>'+
-      '<div class="js-mline"><b>课消</b><span>'+c[1]+'</span></div>'+
-      '<div class="js-mline"><b>续费</b><span>'+c[2]+'</span></div>'+
-      '<div class="js-mline"><b>转介绍</b><span>'+c[3]+'</span></div>'+
-      '<div class="js-mnote">军师提醒：'+c[4]+'</div>';
-  }
-  renderMonths();
 
-  /* ---------- 作战台：待办 ---------- */
-  $$('[data-todo]').forEach(function(t){
-    t.addEventListener('click',function(){
-      var box=t.querySelector('.js-box');
-      box.classList.toggle('on');
+  /* ───────────── 导航 ───────────── */
+  var inited = {};
+  function showScreen(name) {
+    $$('.js-screen').forEach(function (s) { s.hidden = (s.id !== 'scr-' + name); });
+    $$('.js-navitem').forEach(function (b) {
+      if (b.dataset.screen === name) b.setAttribute('aria-current', 'true');
+      else b.removeAttribute('aria-current');
     });
+    state.screen = name;
+    if (!inited[name]) { inited[name] = true; (INIT[name] || function () {})(); }
+  }
+  $$('.js-navitem').forEach(function (b) {
+    b.addEventListener('click', function () { showScreen(b.dataset.screen); });
   });
 
-  /* ---------- 策划室 ---------- */
-  var HOOKS=[
-    {id:'A',name:'萌鬼巡游 · 讨糖地图',pt:'到店领「讨糖地图」，3 个校区集章换礼包',cost:'约 ¥1,200',power:'强（必须结伴才能集齐）',entry:'现场报寒假集训营立减',risk:'人流大，需控场'},
-    {id:'B',name:'亲子妆容 DIY · 打卡集赞',pt:'家长给孩子化万圣妆 → 拍照 → 集赞换礼',cost:'约 ¥2,600',power:'强（UGC 自发传播）',entry:'体验课 → 正课转化',risk:'需摄影 + 素材审核'},
-    {id:'C',name:'1 元鬼马盲盒',pt:'1 元抽盲盒，内藏课时券；老带新双人成行',cost:'约 ¥3,800',power:'最强（双人成行机制）',entry:'盲盒内嵌 200 元课时券',risk:'抽奖合规需确认'}
-  ];
-  var hookBox=$('#js-hooks');
-  function renderHooks(){
-    hookBox.innerHTML='';
-    HOOKS.forEach(function(h){
-      var b=document.createElement('button');
-      b.type='button';b.className='js-hook';
-      b.setAttribute('aria-pressed',String(state.hook===h.id));
-      b.innerHTML='<b>方案 '+h.id+'：'+h.name+'</b><dl>'+
-        '<dt>玩法 </dt><dd>'+h.pt+'</dd><br>'+
-        '<dt>成本 </dt><dd>'+h.cost+'</dd><br>'+
-        '<dt>老带新 </dt><dd>'+h.power+'</dd><br>'+
-        '<dt>转化口 </dt><dd>'+h.entry+'</dd><br>'+
-        '<dt>风险 </dt><dd>'+h.risk+'</dd></dl>';
-      b.addEventListener('click',function(){
-        state.hook=h.id;renderHooks();
-        var w=$('#js-outwrap');w.hidden=false;
-        $('#js-outtitle').textContent='方案 '+h.id+'「'+h.name+'」';
-        save();
-      });
-      hookBox.appendChild(b);
-    });
-    if(state.hook){
-      $('#js-outwrap').hidden=false;
-      var f=HOOKS.filter(function(x){return x.id===state.hook})[0];
-      if(f)$('#js-outtitle').textContent='方案 '+f.id+'「'+f.name+'」';
-    }
-  }
-  renderHooks();
+  /* ───────────── 作战台 ───────────── */
+  var MSHORT = ['寒假班', '开学季', '转介绍', '地推', '母亲节', '暑招', '暑期课消', '秋招储备', '开学季', '10月', '双11', '双12'];
+  var LINES = [['launch', '拉新'], ['consume', '课消'], ['renew', '续费'], ['referral', '转介绍']];
 
-  /* ---------- 话术陪练 ---------- */
-  var CHAIN={
-    '太贵了':[
-      ['共情','理解您，教育支出确实要算一算，谁家的钱都不是大风刮来的。'],
-      ['重塑','算下来一个月才 1000 元——您少去吃两顿大餐、少抽几包烟、少买一件衣服，就出来了。'],
-      ['证据','咱们老师 70% 以上都是 985/211 或研究生学历；这是每个阶段的课评和孩子的成长档案，您可以翻。'],
-      ['降险','您要后期没时间，再找我，我把钱退给您。'],
-      ['稀缺','这个价只限前 10 个名额，报满了就不能报了。']
-    ],
-    '孩子太小了':[
-      ['共情','您这个顾虑特别正常，很多家长一开始都这么想。'],
-      ['重塑','小年龄段其实是最关键的敏感期，学的是规则感和专注力，不是技法。'],
-      ['证据','这是我们同龄班孩子的课评和成长档案，您可以看看三个月的变化。'],
-      ['降险','您先带孩子来上一节，不合适我绝不劝您。'],
-      ['稀缺','这个班型目前只剩 3 个位置。']
-    ],
-    '没时间 / 周末排满了':[
-      ['共情','我理解，现在孩子的周末比大人还忙。'],
-      ['重塑','我们的课周三到周日全天都有，按您的时间挑，而且 19.9 的课包没有时间限制。'],
-      ['证据','这是我们的排课表，您看哪个时段合适。'],
-      ['降险','先来体验一节，时间不合适随时调整。'],
-      ['稀缺','黄金时段（周六上午）只剩 2 个名额了。']
-    ],
-    '要回去和孩子爸爸商量':[
-      ['共情','您尊重孩子爸爸的意见，这点我特别认同。'],
-      ['重塑','但孩子上课这事最怕拖——这周定下来，孩子这周就能开始。'],
-      ['证据','我把课程方案、课时安排、费用明细整理成一份发给您，方便您和爸爸一起看。'],
-      ['降险','今天的活动价我先帮您保留到明天。'],
-      ['稀缺','名额只剩几个，超过就恢复原价了。']
-    ],
-    '已经在别家报了':[
-      ['共情','挺好的，说明您对孩子教育很上心。'],
-      ['重塑','不冲突的——我们上课时间可以错开，教材和教学风格也不一样，正好互补。'],
-      ['证据','有个孩子王××去别的地方学了一段时间没学到东西，现在又回来我们这边。'],
-      ['降险','您可以先来上一节对比一下，孩子自己会选。'],
-      ['稀缺','体验课包这个价这周截止。']
-    ],
-    '我回去看看 / 下次再说':[
-      ['共情','好的，您先忙。'],
-      ['重塑','不过孩子这件事，拖着拖着就是一个学期。'],
-      ['证据','这是我们在读学员家长的评价，您可以看看。'],
-      ['降险','19.9 的课包没有时间限制，您什么时候方便什么时候来。'],
-      ['稀缺','我今天先帮您占个名额——19.9 直接转给我就行。']
-    ]
-  };
-  var chipBox=$('#js-chips'),chainBox=$('#js-chain');
-  var curObj='太贵了';
-  function renderChips(){
-    chipBox.innerHTML='';
-    Object.keys(CHAIN).forEach(function(k){
-      var b=document.createElement('button');
-      b.type='button';b.className='js-chip';b.textContent=k;
-      b.setAttribute('aria-pressed',String(k===curObj));
-      b.addEventListener('click',function(){curObj=k;renderChips()});
-      chipBox.appendChild(b);
-    });
-    var arr=CHAIN[curObj];
-    chainBox.innerHTML=arr.map(function(s,i){
-      return '<div class="js-step"><span class="js-stepno">'+(i+1)+'</span><div><b>'+s[0]+'</b><p>'+s[1]+'</p></div></div>';
+  function renderMonths() {
+    var box = $('#js-months'); if (!box || !state.overview) return;
+    var cal = state.overview.calendar;
+    box.innerHTML = '';
+    for (var m = 1; m <= 12; m++) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'js-month';
+      b.setAttribute('aria-pressed', String(state.month === m));
+      b.innerHTML = '<b>' + m + '月</b><u>' + (m === state.overview.month ? '本月' : esc(MSHORT[m - 1])) + '</u>';
+      b.addEventListener('click', (function (mm) {
+        return function () { state.month = mm; renderMonths(); };
+      })(m));
+      box.appendChild(b);
+    }
+    var c = cal[String(state.month)];
+    if (!c) { $('#js-mdetail').innerHTML = ''; return; }
+    var rows = LINES.map(function (l) {
+      return '<div class="js-mline"><b>' + l[1] + '</b><span>' + esc(c[l[0]] || '—') + '</span></div>';
     }).join('');
+    $('#js-mdetail').innerHTML = rows + '<div class="js-mnote">军师提醒：' + esc(c.note) + '</div>';
   }
-  renderChips();
-  $$('.js-scene').forEach(function(s){
-    s.addEventListener('click',function(){
-      $$('.js-scene').forEach(function(x){x.setAttribute('aria-pressed','false')});
-      s.setAttribute('aria-pressed','true');
-    });
-  });
 
-  /* ---------- 转化教练 ---------- */
-  var STEPS=[
-    ['课前小会','介绍客户信息 → 制定解决方案 → 分配角色 → 准备销售工具','5 min'],
-    ['接待','上前迎接、引座、倒水，第一印象分','5 min'],
-    ['参观校区','边走边讲，把环境变成教学证据','20 min'],
-    ['介绍老师','名师墙 + 学历资历，建立专业信任','5 min'],
-    ['DEMO 课','孩子在课堂，家长在外面感受到热闹','60–90 min'],
-    ['群咨 + 一对一咨询','挖掘问题 · 订制课程 · 传达优惠（报 2 期 95 折 / 报 3 期 92 折 / 转介绍一名新生赠一节课）','30 min 起'],
-    ['课程反馈','老师用专业词汇解析作品，让孩子跟家长说喜欢你；招生专员协助逼单','20 min'],
-    ['报名','先刷卡，再录入系统','15 min'],
-    ['送孩子','送到门口，约定下次','5 min'],
-    ['总结会','当天复盘：哪一步丢了、哪句话有效','15 min 起']
-  ];
-  var checkBox=$('#js-checks');
-  checkBox.innerHTML=STEPS.map(function(s,i){
-    return '<button class="js-check" type="button" data-step="'+i+'"><span class="js-box"><i data-lucide="check" aria-hidden="true"></i></span><span><b>'+s[0]+'</b><p>'+s[1]+'</p></span><span class="js-min">'+s[2]+'</span></button>';
-  }).join('');
-  function renderChecks(){
-    var n=state.done.length;
-    $$('[data-step]').forEach(function(el){
-      var i=+el.dataset.step,on=state.done.indexOf(i)>=0;
-      el.querySelector('.js-box').classList.toggle('on',on);
-      el.querySelector('span:nth-child(2)').className=on?'done':'';
-    });
-    var pct=Math.round(n/STEPS.length*100);
-    $('#js-checkbar').firstElementChild.style.width=pct+'%';
-    $('#js-checktext').textContent='已完成 '+n+' / '+STEPS.length+' 步 · 得分 '+(n*10)+' 分'+(n>=9?'（A 类，可直接进入逼单）':n>=7?'（B 类，注意补漏）':'');
-  }
-  $$('[data-step]').forEach(function(el){
-    el.addEventListener('click',function(){
-      var i=+el.dataset.step,k=state.done.indexOf(i);
-      if(k>=0){state.done.splice(k,1)}else{state.done.push(i)}
-      renderChecks();save();
-    });
-  });
-  renderChecks();
+  function renderWar() {
+    var o = state.overview; if (!o) return;
+    var m = state.month || o.month;
+    var c = o.calendar[String(m)];
+    $('#js-today').textContent = o.today;
+    $('#war-month').textContent = m + ' 月';
 
-  /* ---------- 团队：奖金池 ---------- */
-  var range=$('#js-range');
-  function renderPool(){
-    var v=+range.value,over=Math.max(0,v-110),pool=over*0.1;
-    $('#js-perf').textContent=v;
-    $('#js-pool').textContent=pool.toFixed(1)+' 万';
-    $('#js-p1').textContent=(pool*0.2).toFixed(2)+' 万';
-    $('#js-p2').textContent=(pool*0.1).toFixed(2)+' 万';
-    $('#js-p3').textContent=(pool*0.7).toFixed(2)+' 万';
-  }
-  range.addEventListener('input',renderPool);
-  renderPool();
+    var left = 100 - o.completion.percent;
+    $('#war-cast').innerHTML = '<b>军师播报 · ' + esc(o.today) + '</b><br>' +
+      esc(m) + ' 月的主线是「' + esc(c.launch) + '」。' +
+      (left > 0
+        ? '机构画像还差 <b>' + left + '%</b> 没填（缺：' + esc(o.completion.missing.map(function (k) { return GROUP_LABEL[k] || k; }).join(' / ')) + '）——补完，下面的玩法匹配和文案替换会更准。'
+        : '机构画像已填齐，下面的玩法匹配和文案替换都是按你的机构信息出的。');
 
-  /* ---------- 素材库 ---------- */
-  var DOCS=[
-    {n:'【虎宝闹元宵·好礼迎开学】元宵招生方案（共 7 份资料）',c:'04-节假日',t:'节日方案',k:['元宵','节日']},
-    {n:'中秋亲子赏月活动资料包（8 份资料）',c:'04-节假日',t:'节日方案',k:['中秋','节日']},
-    {n:'【时空穿梭·亲子童学】儿童节招生方案（共 5 份资料）',c:'04-节假日',t:'节日方案',k:['儿童节','节日']},
-    {n:'「时光献礼·表白妈妈」母亲节招生方案（共 8 份资料）',c:'04-节假日',t:'节日方案',k:['母亲节','节日']},
-    {n:'万圣节活动 · 消课活动方案',c:'03-全年活动方案',t:'活动包',k:['万圣节','节日','课消']},
-    {n:'万圣节 Party 会员活动（含布置清单与预算）',c:'03-全年活动方案',t:'活动包',k:['万圣节','节日']},
-    {n:'万圣节活动设计源文件包（海报 / 展架 / 门贴 PSD）',c:'03-全年活动方案',t:'物料',k:['万圣节','物料']},
-    {n:'万圣节朋友圈 + 群消息文案',c:'11-朋友圈文案',t:'文案',k:['万圣节','朋友圈']},
-    {n:'众筹压岁钱 招生法（规则图 + 讲解视频）',c:'12-78套招生法',t:'招生法',k:['春节','裂变','老带新']},
-    {n:'家长定价 招生法（学费多少你来定）',c:'12-78套招生法',t:'招生法',k:['定价','老带新']},
-    {n:'100元6节课 招生法',c:'12-78套招生法',t:'招生法',k:['低价引流','老带新']},
-    {n:'老带新拼团活动方案（3 人成团 · 团长免单）',c:'03-全年活动方案',t:'活动包',k:['老带新','拼团']},
-    {n:'地推宝典 · 17 份话术 + 12 份手册',c:'05-地推招生方案',t:'话术',k:['地推','话术','太贵了']},
-    {n:'地推 5 次拒绝话术（递进式异议处理）',c:'05-地推招生方案',t:'话术',k:['地推','话术','太贵了']},
-    {n:'续费话术 · 异议处理篇（5 大类 + 8 条非常规）',c:'08-续班招生方案',t:'话术',k:['续费','话术','太贵了']},
-    {n:'教育行业快闪转化社群 SOP（7 天五阶段）',c:'07-微信私域',t:'SOP',k:['社群','裂变']},
-    {n:'试听课标准流程（10 步 · 带分钟数与评分）',c:'10-试听课',t:'SOP',k:['试听','转化']},
-    {n:'续班率的核算方法及奖罚（含公式与金额）',c:'08-续班招生方案',t:'制度',k:['续费','考核']},
-    {n:'家长会续班流程 + 主持稿 + 配乐',c:'10-试听课',t:'SOP',k:['家长会','续费']},
-    {n:'双11 朋友圈营销四步曲（预热/见证/现场/逼单）',c:'01-全年招生方案',t:'内容日历',k:['朋友圈','双十一']},
-    {n:'招生朋友圈纯文案（155 条）',c:'11-朋友圈文案',t:'文案',k:['朋友圈']},
-    {n:'秋季招生方案 · 1 元生存挑战赛',c:'02-全年招生方案',t:'活动包',k:['秋季','老带新']},
-    {n:'家长合伙人模式（消费型 / 资源型 / 投资型）',c:'06-家长合伙人',t:'制度',k:['老带新','制度']}
-  ];
-  var CHIPS=['全部','节日方案','招生法','活动包','话术','SOP','内容日历','文案','物料','制度'];
-  var libChips=$('#js-libchips'),libBox=$('#js-lib'),qInput=$('#js-q'),countEl=$('#js-count');
-  var libFilter='全部',libSel=-1;
-  function renderChipsLib(){
-    libChips.innerHTML='';
-    CHIPS.forEach(function(c){
-      var b=document.createElement('button');
-      b.type='button';b.className='js-chip';b.textContent=c;
-      b.setAttribute('aria-pressed',String(c===libFilter));
-      b.addEventListener('click',function(){libFilter=c;renderChipsLib();renderLib()});
-      libChips.appendChild(b);
-    });
+    show($('#war-lines'), LINES.map(function (l) {
+      return '<div class="js-mline"><b>' + l[1] + '</b><span>' + esc(c[l[0]] || '—') + '</span></div>';
+    }).join('') + '<div class="js-mnote">军师提醒：' + esc(c.note) + '</div>');
+
+    $('#war-stats').innerHTML = [
+      ['素材索引', o.stats.library, ' 条'],
+      ['异议库', o.stats.objections, ' 条'],
+      ['钩子玩法', o.stats.hooks, ' 个'],
+      ['合规词', o.stats.complianceWords, ' 个'],
+    ].map(function (x) {
+      return '<div>' + x[0] + '<strong>' + x[1] + '<span>' + x[2] + '</span></strong></div>';
+    }).join('') + '<p class="js-lead" style="flex-basis:100%;margin-top:8px">合规词表数字来自全库 ' +
+      o.stats.scannedDocs + ' 份文档 / ' + Math.round(o.stats.scannedChars / 10000) + ' 万字的真实统计。</p>';
+
+    $('#war-profile').innerHTML =
+      '<div class="js-bar"><i style="width:' + o.completion.percent + '%"></i></div>' +
+      '<p class="js-lead" style="margin-top:7px">已完成 ' + o.completion.percent + '%（' + o.completion.filled + '/' + o.completion.total + ' 项）' +
+      (state.guest ? ' · <b style="font-weight:500">未登录，只能看不能存</b>' : '') + '</p>' +
+      (o.completion.missing.length
+        ? '<p class="js-lead" style="margin-top:4px">待补充：' + esc(o.completion.missing.map(function (k) { return GROUP_LABEL[k] || k; }).join('、')) + '</p>'
+        : '');
+
+    renderMonths();
   }
-  function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;')}
-  function renderLib(){
-    var q=(qInput.value||'').trim();
-    var list=DOCS.filter(function(d){
-      if(libFilter!=='全部'&&d.t!==libFilter)return false;
-      if(!q)return true;
-      return (d.n+d.c+d.t+d.k.join(' ')).indexOf(q)>=0;
-    });
-    countEl.textContent=list.length+' / '+DOCS.length+' 条（全库 8994 个文件）';
-    libBox.innerHTML='';
-    if(!list.length){
-      libBox.innerHTML='<p style="font-size:12px;color:var(--p-text3)">没有匹配。全库里这类内容可能只有图片物料（78 套招生法大多是 mp4 + 海报）。</p>';
-      return;
-    }
-    list.forEach(function(d){
-      var idx=DOCS.indexOf(d);
-      var b=document.createElement('button');
-      b.type='button';b.className='js-doc';
-      b.setAttribute('aria-expanded',String(libSel===idx));
-      if(libSel===idx)b.style.borderColor='var(--p-brand)';
-      var name=esc(d.n);
-      if(q)name=name.split(esc(q)).join('<span class="js-hit">'+esc(q)+'</span>');
-      b.innerHTML='<span class="js-tag">'+d.t+'</span><b>'+name+'</b><em>'+d.c+'</em>';
-      b.addEventListener('click',function(){
-        libSel=(libSel===idx?-1:idx);renderLib();
+
+  /* ───────────── 素材库 ───────────── */
+  function renderLib() {
+    var box = $('#js-lib'); if (!box) return;
+    loading(box);
+    var qs = ['limit=30'];
+    if (state.lib.q) qs.push('q=' + encodeURIComponent(state.lib.q));
+    if (state.lib.scene) qs.push('scene=' + encodeURIComponent(state.lib.scene));
+    call('/library?' + qs.join('&')).then(function (d) {
+      $('#js-count').textContent = d.total + ' 条（全库 ' + (state.overview ? state.overview.stats.library : '') + ' 条索引）';
+      if (!d.items.length) { show(box, '<p class="js-empty">没有匹配。试试更短的关键词，或换个场景筛选。</p>'); return; }
+      box.innerHTML = d.items.map(function (it, i) {
+        var key = it.t + '#' + i;
+        var open = state.lib.open[key];
+        return '<button class="js-doc" type="button" data-lib="' + i + '" style="' + (open ? 'border-color:var(--p-brand)' : '') + '">' +
+          '<span class="js-tag">' + esc(it.kind) + '</span>' +
+          '<b>' + esc(it.t) + '</b>' +
+          '<em>' + esc(it.cat) + ((it.nodes && it.nodes.length) ? ' · ' + esc(it.nodes.join('/')) : '') + '</em></button>' +
+          (open ? '<div style="border:1px solid var(--p-line);border-top:0;border-radius:0 0 9px 9px;padding:10px 12px;margin-top:-7px;background:var(--p-surface2)">' +
+            '<p class="js-lead"><b style="font-weight:500;color:var(--p-text)">路径</b>：' + esc(it.path) + '</p>' +
+            '<p class="js-lead" style="margin-top:6px"><b style="font-weight:500;color:var(--p-text)">场景</b>：' + esc((it.scenes || []).join('、') || '—') + '</p>' +
+            '<p class="js-lead" style="margin-top:6px"><b style="font-weight:500;color:var(--p-text)">原文摘要</b>：' + esc(it.digest) + '</p></div>'
+            : '');
+      }).join('');
+      box.querySelectorAll('[data-lib]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var it = d.items[Number(b.dataset.lib)];
+          var key = it.t + '#' + Number(b.dataset.lib);
+          state.lib.open[key] = !state.lib.open[key];
+          renderLib();
+        });
       });
-      libBox.appendChild(b);
-      if(libSel===idx){
-        var det=document.createElement('div');
-        det.className='js-libdetail';
-        det.innerHTML='<b style="font-weight:500;color:var(--p-text)">这套资料里有：</b>执行案 · 物料清单（含采购链接）· 前期软文 · 各环节话术 · 激励方案 · 报名表 · 签到表 · 设计源文件（PSD）'+
-          '<div class="js-practice" style="border-top:0;padding-top:9px;margin-top:4px">'+
-          '<button class="js-btn primary" type="button"><i data-lucide="sparkles" style="width:12px;height:12px;vertical-align:-2px" aria-hidden="true"></i> 改编为本机构版本</button>'+
-          '<span style="font-size:11.5px;color:var(--p-text3)">将替换 27 处品牌 / 价格 / 地址，并自动处理 4 处极限词</span></div>';
-        libBox.appendChild(det);
-      }
-    });
-    if(window.lucide&&window.lucide.createIcons){window.lucide.createIcons()}
+    }).catch(function (e) { errorBox(box, e); });
   }
-  qInput.value=state.q||'';
-  qInput.addEventListener('input',function(){state.q=qInput.value;renderLib();save()});
-  renderChipsLib();renderLib();
 
-  /* ---------- 机构画像 ---------- */
-  var PG={
-    base:{t:'基本信息',f:[['机构名称','星艺少儿美术'],['简称','星艺美术'],['成立年份','2019'],['城市','本市'],['校区数量','3 个（城东 / 城西 / 城南）']]},
-    product:{t:'产品体系',f:[['课程品类','少儿美术 / 书法 / 素描'],['班型','6 人小班 · 1 对 1'],['课时单价','¥120'],['主力课包','半年 24 节 ¥2,880 · 全年 48 节 ¥5,280'],['优惠底线','不低于 8.5 折']]},
-    teacher:{t:'师资信息',f:[['教师人数','14 人'],['学历构成','本科 11 人 · 硕士 3 人'],['教龄构成','3 年以上 9 人'],['明星教师','孟坤老师 · 8 年教龄 · 带出获奖学员 32 人']]},
-    biz:{t:'经营数据',f:[['在读学员','386 人'],['分校区人数','城东 168 · 城西 142 · 城南 76'],['满班率','82%'],['历史续班率','86%']]},
-    reach:{t:'触达方式',miss:1,f:[['企业微信活码',''],['公众号','星艺少儿美术'],['抖音号',''],['联系电话',''],['校区地址话术','城东（万象汇）城西（银泰城、万达）']]},
-    case:{t:'案例素材',f:[['学员案例','王×× 从零基础到市级比赛三等奖（8 个月）'],['家长好评','“孩子现在自己主动画画了”'],['成果数据','2026 年市级少儿美术大赛获奖 12 人']]},
-    risk:{t:'合规红线',miss:1,f:[['不能说的词',''],['不能承诺的事',''],['预收费规则','']]}
+  /* ───────────── 话术工坊（异议库）───────────── */
+  function renderObjections() {
+    var box = $('#ob-list'); if (!box) return;
+    loading(box);
+    var qs = ['limit=20'];
+    if (state.ob.cat) qs.push('cat=' + encodeURIComponent(state.ob.cat));
+    if (state.ob.tag) qs.push('tag=' + encodeURIComponent(state.ob.tag));
+    if (state.ob.q) qs.push('q=' + encodeURIComponent(state.ob.q));
+    call('/objections?' + qs.join('&')).then(function (d) {
+      $('#ob-count').textContent = d.total + ' 条';
+      if (!d.items.length) { show(box, '<p class="js-empty">没找到。换个说法试试，比如「贵」「时间」「商量」。</p>'); return; }
+      box.innerHTML = d.items.map(function (o, i) {
+        var chain = o.chain ? '<div class="js-steps" style="margin-top:8px">' + o.chain.map(function (s, k) {
+          var parts = s.split('：');
+          return '<div class="js-step"><span class="js-stepno">' + (k + 1) + '</span><div><b>' + esc(parts[0]) + '</b><p>' + esc(parts.slice(1).join('：')) + '</p></div></div>';
+        }).join('') + '<p class="js-lead" style="margin-top:6px;color:var(--p-text3)">↑ 这是军师给的应答骨架，不是你这份资料里的原话。</p></div>' : '';
+        return '<div class="js-sample">' +
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:5px">' +
+          '<span class="js-tag b">' + esc(o.cat) + '</span>' +
+          (o.tags || []).slice(0, 4).map(function (t) { return '<span class="js-tag">' + esc(t) + '</span>'; }).join('') +
+          '<em style="margin-left:auto;font-style:normal;font-size:11px;color:var(--p-text3)">' + esc((o.src || '').slice(0, 26)) + '</em></div>' +
+          '<b style="font-weight:500;color:var(--p-text);font-size:12.5px">' + esc(o.q) + '</b>' +
+          '<p style="margin-top:6px">' + esc(o.a.length > 260 ? o.a.slice(0, 260) + '…' : o.a) + '</p>' +
+          (o.a.length > 260 ? '<button class="js-btn" type="button" data-obj="' + i + '" style="margin-top:8px">展开全文</button>' : '') +
+          chain + '</div>';
+      }).join('');
+      box.querySelectorAll('[data-obj]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var o = d.items[Number(b.dataset.obj)];
+          b.previousElementSibling.textContent = o.a;
+          b.remove();
+        });
+      });
+    }).catch(function (e) { errorBox(box, e); });
+  }
+
+  function renderObFilters() {
+    call('/objections?limit=1').then(function (d) {
+      var catBox = $('#ob-cats');
+      catBox.innerHTML = '';
+      [''].concat(d.cats).forEach(function (c) {
+        var b = document.createElement('button');
+        b.type = 'button'; b.className = 'js-scene';
+        b.setAttribute('aria-pressed', String(state.ob.cat === c));
+        b.innerHTML = (c || '全部品类') + '<span>' + (c ? '' : d.total) + '</span>';
+        b.addEventListener('click', function () { state.ob.cat = c; renderObFilters(); renderObjections(); });
+        catBox.appendChild(b);
+      });
+      var tagBox = $('#ob-tags');
+      tagBox.innerHTML = '';
+      [''].concat(d.tags).forEach(function (t) {
+        var b = document.createElement('button');
+        b.type = 'button'; b.className = 'js-chip';
+        b.setAttribute('aria-pressed', String(state.ob.tag === t));
+        b.textContent = t || '全部标签';
+        b.addEventListener('click', function () { state.ob.tag = t; renderObFilters(); renderObjections(); });
+        tagBox.appendChild(b);
+      });
+    }).catch(function () {});
+  }
+
+  /* ───────────── 内容工厂 ───────────── */
+  function renderCopies() {
+    var box = $('#cp-list'); if (!box) return;
+    loading(box);
+    var qs = ['limit=10'];
+    if (state.cp.kind) qs.push('kind=' + encodeURIComponent(state.cp.kind));
+    if (state.cp.q) qs.push('q=' + encodeURIComponent(state.cp.q));
+    call('/copies?' + qs.join('&')).then(function (d) {
+      $('#cp-count').textContent = '共 ' + d.total + ' 条';
+      if (!d.items.length) { show(box, '<p class="js-empty">没找到，换个关键词。</p>'); return; }
+      var prof = state.profile || {};
+      var orgName = (prof.org && prof.org.name) || '';
+      box.innerHTML = d.items.map(function (c) {
+        var text = c.c;
+        var replaced = false;
+        if (orgName) { text = text.replace(/XX教育|XX机构|XX|xxx/gi, orgName); replaced = true; }
+        return '<div class="js-sample">' +
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">' +
+          '<span class="js-tag w">' + esc(c.kind) + '</span>' +
+          (c.placeholder ? '<span class="js-tag">原含占位符' + (orgName ? '·已替换' : '') + '</span>' : '') +
+          '<em style="margin-left:auto;font-style:normal;font-size:11px;color:var(--p-text3)">' + esc((c.src || '').slice(0, 24)) + '</em></div>' +
+          '<div style="white-space:pre-line;color:var(--p-text)">' + esc(text) + '</div>' +
+          '</div>';
+      }).join('') +
+      (state.guest ? '<p class="js-lead" style="margin-top:8px">登录并填好机构画像后，文案里的 XX 会自动换成你的机构名。</p>'
+        : replacedHint());
+    }).catch(function (e) { errorBox(box, e); });
+    function replacedHint() { return ''; }
+  }
+
+  function renderCopyKinds() {
+    call('/copies?limit=1').then(function (d) {
+      var box = $('#cp-kinds');
+      box.innerHTML = '';
+      [''].concat(d.kinds).forEach(function (k) {
+        var b = document.createElement('button');
+        b.type = 'button'; b.className = 'js-chip';
+        b.setAttribute('aria-pressed', String(state.cp.kind === k));
+        b.textContent = k || '全部';
+        b.addEventListener('click', function () { state.cp.kind = k; renderCopyKinds(); renderCopies(); });
+        box.appendChild(b);
+      });
+    }).catch(function () {});
+  }
+
+  /* ───────────── 转化教练 ───────────── */
+  function renderCoach() {
+    var box = $('#co-checks');
+    call('/playbook').then(function (d) {
+      state.co.steps = d.sops.trial10;
+      box.innerHTML = d.sops.trial10.map(function (s, i) {
+        return '<button class="js-check" type="button" data-step="' + i + '">' +
+          '<span class="js-box"><i data-lucide="check" aria-hidden="true"></i></span>' +
+          '<span><b>' + esc(s.name) + '</b><p>' + esc(s.detail) + '</p></span>' +
+          '<span class="js-min">' + esc(s.min) + '</span></button>';
+      }).join('');
+      box.querySelectorAll('[data-step]').forEach(function (el) {
+        el.addEventListener('click', function () {
+          var i = Number(el.dataset.step);
+          var k = state.co.done.indexOf(i);
+          if (k >= 0) state.co.done.splice(k, 1); else state.co.done.push(i);
+          renderCoachScore();
+        });
+      });
+      $('#co-abcd').innerHTML = d.sops.abcd.map(function (a) {
+        return '<div class="js-abox"><b>' + esc(a.k) + '</b><span>' + esc(a.name) + '</span><p>' + esc(a.rule) + '</p></div>';
+      }).join('');
+      if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
+      renderCoachScore();
+    }).catch(function (e) { errorBox(box, e); });
+  }
+  function renderCoachScore() {
+    var n = state.co.done.length, total = state.co.steps.length || 10;
+    $$('[data-step]').forEach(function (el) {
+      var i = Number(el.dataset.step), on = state.co.done.indexOf(i) >= 0;
+      el.querySelector('.js-box').classList.toggle('on', on);
+      var mid = el.children[1];
+      if (mid) mid.className = on ? 'done' : '';
+    });
+    $('#co-bar').style.width = Math.round(n / total * 100) + '%';
+    $('#co-score').textContent = '已完成 ' + n + ' / ' + total + ' 步 · 得分 ' + (n * 10) + ' 分' +
+      (n >= 9 ? '（A 类，可以进入逼单）' : n >= 7 ? '（B 类，注意补漏）' : '');
+  }
+
+  /* ───────────── 团队作战 ───────────── */
+  function renderTeam() {
+    call('/playbook').then(function (d) {
+      var pool = d.incentives.pool;
+      $('#tm-thlabel').textContent = '并入奖金池（超过 ' + pool.threshold + ' 万后，超出部分的 ' + Math.round(pool.rate * 100) + '%）';
+      var range = $('#tm-range');
+      function calc() {
+        var v = Number(range.value);
+        var p = Math.max(0, v - pool.threshold) * pool.rate;
+        $('#tm-perf').textContent = v;
+        $('#tm-pool').textContent = p.toFixed(1) + ' 万';
+        $('#tm-p1').textContent = (p * pool.champion).toFixed(2) + ' 万（' + Math.round(pool.champion * 100) + '%）';
+        $('#tm-p2').textContent = (p * pool.team).toFixed(2) + ' 万（' + Math.round(pool.team * 100) + '%）';
+        $('#tm-p3').textContent = (p * (1 - pool.champion - pool.team)).toFixed(2) + ' 万';
+      }
+      range.addEventListener('input', calc);
+      calc();
+
+      var inc = d.incentives;
+      function rows(list, keyA, keyB) {
+        return list.map(function (x) {
+          return '<div class="js-bench"><span>' + esc(x[keyA]) + '</span><b>' + esc(x[keyB]) + '</b></div>';
+        }).join('');
+      }
+      $('#tm-inc').innerHTML =
+        '<p class="js-lead"><b style="font-weight:500;color:var(--p-text)">提成阶梯</b></p>' + rows(inc.commission, 'range', 'amount') +
+        '<p class="js-lead" style="margin-top:10px"><b style="font-weight:500;color:var(--p-text)">续班奖罚（按续班率）</b></p>' + rows(inc.renew, 'range', 'amount') +
+        '<p class="js-lead" style="margin-top:10px"><b style="font-weight:500;color:var(--p-text)">转介绍阶梯</b></p>' + rows(inc.referral, 'range', 'amount') +
+        '<div class="js-oath" style="margin-top:12px">“' + esc(inc.oath) + '”<br><span style="color:var(--p-text3);font-size:11px">— 资料库里的目标书誓词原文</span></div>' +
+        '<p class="js-lead" style="margin-top:10px">' + esc(pool.note) + '</p>';
+    }).catch(function (e) { errorBox($('#tm-inc'), e); });
+  }
+
+  /* ───────────── 复盘报告（真算）───────────── */
+  function readReview() {
+    function n(id) { var v = $(id).value; return v === '' ? null : Number(v); }
+    return { lead: n('#rv-lead'), visit: n('#rv-visit'), trial: n('#rv-trial'), deal: n('#rv-deal'), cost: n('#rv-cost'), revenue: n('#rv-revenue') };
+  }
+  function renderReview() {
+    var d = readReview();
+    if (d.lead === null || d.visit === null || d.deal === null || d.lead <= 0) {
+      $('#rv-msg').textContent = '至少填「线索数、到访数、成交数」，线索要大于 0。';
+      $('#rv-out').innerHTML = '<p class="js-empty">数据不够，算不出来。</p>';
+      return null;
+    }
+    function rate(a, b) { return (b && b > 0) ? a / b : null; }
+    function pct(x) { return x === null ? '—' : (x * 100).toFixed(1) + '%'; }
+
+    var bars = [['线索 ' + d.lead, 1, '—'],
+                ['到访 ' + d.visit, rate(d.visit, d.lead) || 0, pct(rate(d.visit, d.lead)) + '（线索→到访）']];
+    if (d.trial !== null) bars.push(['试听 ' + d.trial, rate(d.trial, d.lead) || 0, pct(rate(d.trial, d.visit)) + '（到访→试听）']);
+    bars.push(['成交 ' + d.deal, rate(d.deal, d.lead) || 0, pct(rate(d.deal, d.trial !== null ? d.trial : d.visit)) + '（' + (d.trial !== null ? '试听→成交' : '到访→成交') + '）']);
+
+    var out = ['<div class="js-funnel">' + bars.map(function (b) {
+      return '<div class="js-frow"><b>' + esc(b[0]) + '</b><div class="js-fbar"><i style="width:' + Math.max(3, Math.round(b[1] * 100)) + '%"></i></div><em>' + esc(b[2]) + '</em></div>';
+    }).join('') + '</div>'];
+
+    if (d.cost !== null) {
+      out.push('<div class="js-bench" style="margin-top:12px"><span>线索成本</span><b>¥ ' + (d.cost / d.lead).toFixed(1) + ' / 条</b></div>');
+      if (d.deal > 0) out.push('<div class="js-bench"><span>单客获取成本</span><b>¥ ' + Math.round(d.cost / d.deal) + '</b></div>');
+    }
+    if (d.cost !== null && d.revenue !== null && d.cost > 0) {
+      out.push('<div class="js-bench"><span>投入产出比</span><b>' + (d.revenue / d.cost).toFixed(2) + ' : 1</b></div>');
+      out.push('<div class="js-bench"><span>毛利（未扣人力）</span><b>¥ ' + (d.revenue - d.cost).toLocaleString() + '</b></div>');
+    }
+
+    var pairs = [[rate(d.visit, d.lead), '线索→到访'],
+                 [d.trial !== null ? rate(d.trial, d.visit) : null, '到访→试听'],
+                 [rate(d.deal, d.trial !== null ? d.trial : d.visit), d.trial !== null ? '试听→成交' : '到访→成交']];
+    var worst = null;
+    pairs.forEach(function (p) { if (p[0] !== null && (worst === null || p[0] < worst[0])) worst = p; });
+    if (worst) {
+      var advice = worst[1] === '线索→到访'
+        ? '地推/社群把「到店礼」前置，现场就把时间约死。'
+        : worst[1] === '到访→试听'
+          ? '《体验课地推活动话术》的「2 条短信 + 1 个电话」：短信当天发、D+3 补一条，电话在试听前一天确认到场。'
+          : '《试听课标准流程》里的一对一咨询（30 分钟起）和课程反馈（20 分钟）这两步别省。';
+      out.push('<div class="js-mnote" style="margin-top:12px">最弱的一环是「' + esc(worst[1]) + '」，只有 ' + pct(worst[0]) + '。资料库里对应的打法：' + advice + '</div>');
+    }
+    show($('#rv-out'), out.join(''));
+    return { d: d, rates: { visit: rate(d.visit, d.lead), deal: rate(d.deal, d.trial !== null ? d.trial : d.visit) } };
+  }
+
+  /* ───────────── 合规哨兵 ───────────── */
+  function renderComplianceWords() {
+    call('/compliance/words').then(function (d) {
+      $('#cs-stats').textContent = '全库 ' + d.scanned + ' 份 / ' + Math.round(d.chars / 10000) + ' 万字';
+      $('#cs-words').innerHTML = d.words.map(function (w) {
+        return '<div class="js-bench"><span>' + esc(w.word) + ' <em style="font-style:normal;color:var(--p-text3);font-size:11px">' + esc(w.level) + '</em><br>' +
+          '<em style="font-style:normal;color:var(--p-text3);font-size:11px">' + esc(w.advice) + '</em></span><b style="color:var(--p-red)">' + w.count + ' 次</b></div>';
+      }).join('');
+    }).catch(function (e) { errorBox($('#cs-words'), e); });
+  }
+  function runCompliance() {
+    var content = $('#cs-text').value.trim();
+    var out = $('#cs-out');
+    if (!content) { show(out, '<p class="js-empty">先贴一段文案。</p>'); return; }
+    loading(out);
+    call('/compliance', { method: 'POST', body: { content: content } }).then(function (d) {
+      var head = d.pass
+        ? '<p class="js-lead" style="color:var(--p-green);font-weight:500">没发现问题，可以发。</p>'
+        : '<p class="js-lead" style="color:var(--p-red);font-weight:500">命中 ' + d.total + ' 处，涉及 ' + d.hits.length + ' 个词，建议改完再发。</p>';
+      var hits = d.hits.map(function (h) {
+        return '<div class="js-bench"><span>' + esc(h.word) + ' <em style="font-style:normal;font-size:11px;color:var(--p-red)">' + esc(h.level) + ' × ' + h.hits + '</em><br>' +
+          '<em style="font-style:normal;font-size:11px;color:var(--p-text3)">' + esc(h.advice) + '</em></span></div>';
+      }).join('');
+      var risky = d.risky.length ? '<div class="js-mnote" style="margin-top:10px">还需人工确认：<br>' + d.risky.map(esc).join('<br>') + '</div>' : '';
+      show(out, head + hits + risky);
+    }).catch(function (e) { errorBox(out, e); });
+  }
+
+  /* ───────────── 机构画像 ───────────── */
+  var GROUPS = [
+    ['org', '基本信息', ['name', 'shortName', 'foundedYear', 'city', 'campuses']],
+    ['product', '产品体系', ['categories', 'classTypes', 'unitPrice', 'mainPackage', 'discountFloor']],
+    ['teacher', '师资信息', ['headcount', 'education', 'seniority', 'star']],
+    ['biz', '经营数据', ['students', 'perCampus', 'fullRate', 'renewRate', 'leadCost', 'visitRate', 'dealRate']],
+    ['reach', '触达方式', ['wecomQr', 'officialAccount', 'douyin', 'phone', 'addressScript']],
+    ['cases', '案例素材', ['caseStudy', 'praise', 'achievements']],
+    ['risk', '合规红线', ['forbiddenWords', 'noPromise', 'prepayRule']],
+  ];
+  var FIELD_LABEL = {
+    name: '机构名称', shortName: '简称', foundedYear: '成立年份', city: '城市', campuses: '校区分布',
+    categories: '课程品类', classTypes: '班型', unitPrice: '课时单价', mainPackage: '主力课包', discountFloor: '优惠底线',
+    headcount: '教师人数', education: '学历构成', seniority: '教龄构成', star: '明星教师',
+    students: '在读学员', perCampus: '分校区人数', fullRate: '满班率', renewRate: '历史续班率',
+    leadCost: '线索成本（自动）', visitRate: '到访率（自动）', dealRate: '成交率（自动）',
+    wecomQr: '企业微信活码', officialAccount: '公众号', douyin: '抖音号', phone: '联系电话', addressScript: '地址话术',
+    caseStudy: '学员案例', praise: '家长好评', achievements: '成果数据',
+    forbiddenWords: '不能说的词', noPromise: '不能承诺的事', prepayRule: '预收费规则',
   };
-  var pgCur='base', orgName='星艺少儿美术';
-  var pgBox=$('#js-pgroups'), pgFields=$('#js-pgfields');
-  function renderPgGroups(){
-    pgBox.innerHTML='';
-    Object.keys(PG).forEach(function(k){
-      var g=PG[k],b=document.createElement('button');
-      b.type='button';b.className='js-scene';b.setAttribute('aria-pressed',String(k===pgCur));
-      b.innerHTML=g.t+'<span'+(g.miss?'':' style="color:var(--p-green)"')+'>'+(g.miss?'待补充':'已完成')+'</span>';
-      b.addEventListener('click',function(){pgCur=k;renderPgGroups();renderPgFields()});
-      pgBox.appendChild(b);
-    });
-  }
-  function renderPgFields(){
-    var g=PG[pgCur];
-    $('#js-pgtitle').textContent=g.t+(g.miss?' · 待补充':'');
-    pgFields.innerHTML='';
-    g.f.forEach(function(f,i){
-      var row=document.createElement('div');row.className='js-field';
-      var id='pgf_'+pgCur+'_'+i;
-      var lab=document.createElement('label');lab.setAttribute('for',id);lab.textContent=f[0];
-      var inp=document.createElement('input');inp.id=id;inp.type='text';inp.value=f[1]||'';
-      if(!f[1])inp.placeholder='待补充';
-      if(pgCur==='base'&&i===0){
-        inp.addEventListener('input',function(){orgName=inp.value;renderDiff()});
-      }
-      row.appendChild(lab);row.appendChild(inp);pgFields.appendChild(row);
-    });
-  }
-  function renderDiff(){
-    var n=orgName||'（你的机构名）';
-    $('#js-diffout').innerHTML='家长您好！打扰您一下，我是<span class="js-hl ok">'+esc(n)+'</span>的老师，我们现在有一个 <span class="js-hl ok">19.9</span> 试听课包的活动，一节精品课程，还有小礼品赠送给您……我们在<span class="js-hl ok">城东（万象汇）城西（银泰城、万达）</span>都有校区，目前也是<span class="js-hl ok">规模领先的</span>美术教育机构，老师 <span class="js-hl ok">70% 以上是 985/211 或研究生学历</span>。';
-  }
-  $('#js-difforg').innerHTML='家长您好！打扰您一下，我是<span class="js-hl">蓝色金</span>美术的老师，我们现在有一个 19.9 试听课包的活动，一节精品课程，还有小礼品赠送给您……我们在<span class="js-hl">莱山（福地隆城）芝罘（大成门、西海岸）</span>都有校区，目前也是<span class="js-hl">烟台最大的</span>美术教育机构，老师 70% 以上都是 985、211 或者研究生学历。';
-  renderPgGroups();renderPgFields();renderDiff();
+  var GROUP_LABEL = {};
+  GROUPS.forEach(function (g) { GROUP_LABEL[g[0]] = g[1]; });
 
-  /* ---------- 内容工厂 ---------- */
-  var PAT=[
-    {k:'焦虑递进',c:'你来，我培养你的孩子\n你不来，我培养你孩子未来的竞争对手\n反正我们不能闲着…',src:'11-朋友圈招生文案（19 条）',ok:'合规检查：通过（无极限词）'},
-    {k:'时令论',c:'小学嫌早，初中嫌贵，高中嫌晚，这是认知局限\n春天播种，夏天耕耘，秋天收获\n不误时令方有收获，背道而驰难有成果~',src:'11-朋友圈招生文案（19 条）',ok:'合规检查：通过（无极限词）'},
-    {k:'价格换算',c:'不是报辅导班太贵，而是在您眼里，没给辅导留地位！\n①吃顿饭 300，不贵！就管 6 小时\n②说到报辅导班时，哇，太贵了……但它却保孩子一辈子',src:'11-朋友圈招生文案（19 条）',ok:'合规检查：通过（“太贵了”为家长原话引用，不构成承诺）'},
-    {k:'反鸡娃',c:'废掉一个孩子最好的方式——就是让他按自己喜欢的方式长大\n不想学习就不学了，不想上课就别上了\n结果就成了孩子啥也没学会\n强者谈坚持！弱者谈喜欢！！！',src:'11-朋友圈招生文案（19 条）',ok:'合规检查：1 处待处理 —— 本句含极限词「最好」。建议改成「废掉一个孩子，就是让他按自己喜欢的方式长大」——删掉「最好的」，句子反而更狠。'},
-    {k:'弯道超车',c:'自己在休息的时候，别忘了别人还在奔跑\n别人在弯道超车的时候，你千万不要减速 ⚠',src:'11-朋友圈招生文案（49 条）',ok:'合规检查：通过'},
-    {k:'延迟效应',c:'教育是有延迟性的\n半年后，你会发现当初你交的学费并没有对你的生活造成任何影响！\n三年后，你会发现你所得到的开始影响孩子的人生！',src:'11-朋友圈招生文案（49 条）',ok:'合规检查：1 处提示 —— “你会发现”属主观断言，建议加“很多家长反馈”作限定'},
-    {k:'九字对照',c:'你用 9 个字，拒绝了成绩提升\n①学费高 ②没时间 ③考虑下\n学校用 9 个字，拒绝给你求学机会\n①分不够 ②等回复 ③没办法',src:'11-朋友圈招生文案（56 条）',ok:'合规检查：通过'},
-    {k:'人设自嘲',c:'做教育就像谈恋爱，总联系吧，怕对方烦\n不联系吧，又怕被人横刀夺爱\n一天到晚心里装的都是我的家长\n我太难了',src:'12.招生朋友圈纯文案（155 条）',ok:'合规检查：通过'}
-  ];
-  var patCur=0, chanCur='朋友圈';
-  var cChips=$('#js-cchips'), cCard=$('#js-copycard'), cMeta=$('#js-copymeta'), cCom=$('#js-comcheck');
-  function renderPatChips(){
-    cChips.innerHTML='';
-    PAT.forEach(function(p,i){
-      var b=document.createElement('button');
-      b.type='button';b.className='js-chip';b.textContent=p.k;
-      b.setAttribute('aria-pressed',String(i===patCur));
-      b.addEventListener('click',function(){patCur=i;renderPatChips();renderCopy()});
-      cChips.appendChild(b);
+  function renderProfileGroups() {
+    var box = $('#pf-groups');
+    if (!box) return;
+    box.innerHTML = '';
+    var missing = (state.completion && state.completion.missing) || [];
+    GROUPS.forEach(function (g) {
+      var miss = missing.indexOf(g[0]) >= 0;
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'js-scene';
+      b.setAttribute('aria-pressed', String(state.pfGroup === g[0]));
+      b.innerHTML = g[1] + '<span style="' + (miss ? '' : 'color:var(--p-green)') + '">' + (miss ? '待补充' : '已完成') + '</span>';
+      b.addEventListener('click', function () { state.pfGroup = g[0]; renderProfileGroups(); renderProfileFields(); });
+      box.appendChild(b);
     });
   }
-  function renderCopy(){
-    var p=PAT[patCur], body=p.c, first=p.c.split('\n')[0];
-    var out;
-    if(chanCur==='朋友圈'){out=body+'\n\n#星艺少儿美术 #少儿美术 #孩子学画画';}
-    else if(chanCur==='班级群'){out='【今日分享】\n'+body+'\n\n家长们有什么想法，欢迎在群里聊聊～';}
-    else if(chanCur==='一对一私信'){out='家长您好，看到一句话想分享给您：\n\n'+body+'\n\n（我是星艺少儿美术的孟老师）';}
-    else if(chanCur==='小红书'){out='标题：教培老师的一段大实话\n\n'+body+'\n\n#少儿美术 #育儿 #美术培训 #家长必看';}
-    else {out='【口播脚本 · 约 25 秒】\n[镜头：老师正面特写，背景是教室]\n\n「'+first.replace(/[！!。，、…]/g,'，')+'」\n\n[字幕跟上，配轻快 BGM]\n\n（结尾口播：关注我，每天一条教培真话）';}
-    cCard.textContent=out;
-    cMeta.innerHTML='<span>套路：'+p.k+'</span><span>来源：'+p.src+'</span><span>形态：'+chanCur+'</span>';
-    cCom.textContent=p.ok;
-    cCom.style.color=p.ok.indexOf('通过')>0?'var(--p-text3)':'var(--p-warm)';
+  function renderProfileFields() {
+    var g = GROUPS.filter(function (x) { return x[0] === state.pfGroup; })[0];
+    if (!g) return;
+    $('#pf-title').textContent = g[1];
+    var bag = (state.pfDraft[g[0]] || {});
+    $('#pf-fields').innerHTML = g[2].map(function (f) {
+      return '<div class="js-field"><label for="pf_' + f + '">' + esc(FIELD_LABEL[f] || f) + '</label>' +
+        '<input id="pf_' + f + '" data-pf="' + f + '" type="text" value="' + esc(bag[f] || '') + '" placeholder="待补充"' +
+        (state.guest ? ' disabled' : '') + '></div>';
+    }).join('');
+    $('#pf-msg').textContent = state.guest ? '未登录：可以看，改不了。用机构账号登录后就能保存。' : '';
   }
-  $$('[data-chan]').forEach(function(b){
-    b.addEventListener('click',function(){
-      chanCur=b.dataset.chan;
-      $$('[data-chan]').forEach(function(x){x.setAttribute('aria-pressed',String(x===b))});
-      renderCopy();
-    });
+  function renderProfile() {
+    $('#pf-percent').textContent = '完成度 ' + (state.completion ? state.completion.percent : 0) + '%';
+    $('#pf-bar').style.width = (state.completion ? state.completion.percent : 0) + '%';
+    $('#nav-pf').textContent = (state.completion ? state.completion.percent : 0) + '%';
+    state.pfDraft = {};
+    GROUPS.forEach(function (g) { state.pfDraft[g[0]] = Object.assign({}, (state.profile && state.profile[g[0]]) || {}); });
+    renderProfileGroups();
+    renderProfileFields();
+  }
+
+  /* ───────────── 策划室 ───────────── */
+  function renderPlanner() {
+    call('/playbook').then(function (pb) {
+      var nodeBox = $('#pl-nodes');
+      var nodes = ['', '开学季', '双十一', '国庆', '暑假', '寒假', '母亲节', '儿童节', '端午', '中秋'];
+      nodeBox.innerHTML = '';
+      nodes.forEach(function (n) {
+        var b = document.createElement('button');
+        b.type = 'button'; b.className = 'js-chip';
+        b.setAttribute('aria-pressed', String(state.pl.node === n));
+        b.textContent = n || '不限节点';
+        b.addEventListener('click', function () { state.pl.node = n; renderPlanner(); });
+        nodeBox.appendChild(b);
+      });
+      var kinds = [''];
+      pb.hooks.forEach(function (h) { if (kinds.indexOf(h.kind) < 0) kinds.push(h.kind); });
+      var kindBox = $('#pl-kinds');
+      kindBox.innerHTML = '';
+      kinds.forEach(function (k) {
+        var b = document.createElement('button');
+        b.type = 'button'; b.className = 'js-chip';
+        b.setAttribute('aria-pressed', String(state.pl.kind === k));
+        b.textContent = k || '不限玩法类型';
+        b.addEventListener('click', function () { state.pl.kind = k; renderPlanner(); });
+        kindBox.appendChild(b);
+      });
+
+      var hooks = pb.hooks.filter(function (h) {
+        if (state.pl.kind && h.kind !== state.pl.kind) return false;
+        if (state.pl.node && (h.name + h.rule + h.note).indexOf(state.pl.node) < 0) return false;
+        return true;
+      });
+      $('#pl-count').textContent = '库里 ' + pb.hooks.length + ' 个玩法，筛出 ' + hooks.length + ' 个';
+      show($('#pl-hooks'), hooks.length ? hooks.map(function (h) {
+        return '<div class="js-hook"><b>' + esc(h.name) + ' <span class="js-tag w">' + esc(h.kind) + '</span></b><dl>' +
+          '<dt>价格 </dt><dd>' + esc(h.price) + '</dd><br>' +
+          '<dt>规则 </dt><dd>' + esc(h.rule) + '</dd><br>' +
+          '<dt>注意 </dt><dd>' + esc(h.note) + '</dd><br>' +
+          '<dt>出处 </dt><dd>' + esc(h.src) + '</dd></dl></div>';
+      }).join('') : '<p class="js-empty">这个组合下库里没有现成玩法，换个类型看看。</p>');
+
+      var keyword = state.pl.node || (state.overview ? String(state.overview.month) + '月' : '');
+      var box = $('#pl-mats');
+      loading(box);
+      call('/library?limit=8' + (keyword ? '&q=' + encodeURIComponent(keyword) : '')).then(function (d) {
+        show(box, d.total
+          ? d.items.map(function (it) {
+            return '<div class="js-doc" style="cursor:default"><span class="js-tag">' + esc(it.kind) + '</span><b>' + esc(it.t) + '</b><em>' + esc(it.cat) + '</em></div>';
+          }).join('') + '<p class="js-lead" style="margin-top:6px">共 ' + d.total + ' 条，去「素材库」可以看全文摘要。</p>'
+          : '<p class="js-empty">这个关键词下没有素材。</p>');
+      }).catch(function (e) { errorBox(box, e); });
+    }).catch(function (e) { errorBox($('#pl-hooks'), e); });
+  }
+
+  /* ───────────── 各屏首次进入 ───────────── */
+  var INIT = {
+    war: renderWar,
+    planner: renderPlanner,
+    script: function () { renderObFilters(); renderObjections(); },
+    content: function () {
+      renderCopyKinds(); renderCopies();
+      call('/playbook').then(function (d) {
+        show($('#cf-schedule'), d.sops.daily.map(function (s) {
+          return '<div class="js-slot"><b>' + esc(s.slot) + '</b><span>' + esc(s.detail) + '</span></div>';
+        }).join(''));
+        show($('#cf-week'), d.sops.week.map(function (w) {
+          return '<div class="js-slot"><b>' + esc(w.day) + '</b><span>' + esc(w.detail) + '</span></div>';
+        }).join(''));
+        show($('#cf-flash'), d.sops.flash7.map(function (f) {
+          return '<div class="js-slot"><b>' + esc(f.name) + '</b><span>' + esc(f.detail) + '</span></div>';
+        }).join(''));
+        $('#cf-accept').innerHTML = '验收标准（资料库原文）：' + d.sops.acceptance.map(function (a) {
+          return '<b style="font-weight:500">' + esc(a.metric) + ' ' + esc(a.target) + '</b>';
+        }).join(' · ');
+      }).catch(function (e) { errorBox($('#cf-schedule'), e); });
+    },
+    coach: renderCoach,
+    team: renderTeam,
+    review: function () { $('#rv-out').innerHTML = '<p class="js-empty">左边填数，点「算转化漏斗」。</p>'; },
+    library: function () {
+      renderLib();
+      call('/library/facets').then(function (f) {
+        var box = $('#lib-scenes');
+        box.innerHTML = '';
+        var list = [''].concat(f.scene.slice(0, 12).map(function (x) { return x.k; }));
+        list.forEach(function (s) {
+          var b = document.createElement('button');
+          b.type = 'button'; b.className = 'js-chip';
+          b.setAttribute('aria-pressed', String(state.lib.scene === s));
+          var found = f.scene.filter(function (x) { return x.k === s; })[0];
+          b.textContent = (s || '全部场景') + (found ? '（' + found.n + '）' : '');
+          b.addEventListener('click', function () { state.lib.scene = s; renderLib(); INIT.library(); });
+          box.appendChild(b);
+        });
+      }).catch(function () {});
+    },
+    compliance: renderComplianceWords,
+    profile: renderProfile,
+  };
+
+  /* ───────────── 事件绑定 ───────────── */
+  $('#js-q').addEventListener('input', debounce(function (e) { state.lib.q = e.target.value.trim(); renderLib(); }, 300));
+  $('#ob-q').addEventListener('input', debounce(function (e) { state.ob.q = e.target.value.trim(); renderObjections(); }, 300));
+  $('#cp-q').addEventListener('input', debounce(function (e) { state.cp.q = e.target.value.trim(); renderCopies(); }, 300));
+  $('#cs-run').addEventListener('click', runCompliance);
+  $('#cs-demo').addEventListener('click', function () {
+    $('#cs-text').value = '我们是烟台最大的美术教育机构，老师都是最好的，全网最低价，保证孩子第一节课就爱上画画。活动原价199元现价0元，还抽红包墙大奖。';
+    runCompliance();
   });
-  var SCHEDULE=[
-    ['8:00–10:00','心灵鸡汤 + 朋友圈点赞 10 分钟（5–10 个客户，能评论的尽量评论）'],
-    ['10:00–11:00','产品知识与好评'],
-    ['12:00–13:00','个人生活（朋友圈点赞最少 20 个，走心留言 10 条）'],
-    ['15:00–16:00','互动话题 · 抽奖（福利产品 1 周 1 次，最少 2 周 1 次）'],
-    ['17:00–18:00','工作日常'],
-    ['20:00–22:00','好评 + 与好友私聊互动 5 个']
-  ];
-  $('#js-schedule').innerHTML=SCHEDULE.map(function(s){
-    return '<div class="js-slot"><b>'+s[0]+'</b><span>'+s[1]+'</span></div>';
-  }).join('');
-  var WEEK=[['周一','秒杀活动 · 裂变'],['周二','建立 IP · 输出价值'],['周三','输出价值'],['周四','客户见证'],['周五','互动话题 · 茶话会'],['周六','学习资料分享'],['周日','生活日常']];
-  $('#js-week').innerHTML=WEEK.map(function(w){
-    return '<div class="js-slot"><b>'+w[0]+'</b><span>'+w[1]+'</span></div>';
-  }).join('');
-  renderPatChips();renderCopy();
+  $('#rv-calc').addEventListener('click', function () { renderReview(); });
+  $('#rv-save').addEventListener('click', function () {
+    var r = renderReview();
+    if (!r) return;
+    if (state.guest) { $('#rv-msg').textContent = '未登录，存不了基准值。用机构账号登录后再点。'; return; }
+    state.pfDraft.biz = Object.assign({}, state.pfDraft.biz, {
+      leadCost: '¥' + (r.d.cost !== null ? (r.d.cost / r.d.lead).toFixed(1) : '—') + '/条',
+      visitRate: r.rates.visit !== null ? (r.rates.visit * 100).toFixed(1) + '%' : '',
+      dealRate: r.rates.deal !== null ? (r.rates.deal * 100).toFixed(1) + '%' : '',
+    });
+    saveProfile('已把这场的基准值并入「经营数据」并保存。');
+  });
+  $('#pf-save').addEventListener('click', function () { saveProfile('已保存。'); });
 
-  /* ---------- init ---------- */
-  show(state.screen);
-  if(window.lucide&&window.lucide.createIcons){window.lucide.createIcons()}
+  function collectProfile() {
+    var draft = JSON.parse(JSON.stringify(state.pfDraft));
+    $$('[data-pf]').forEach(function (inp) {
+      var bag = draft[state.pfGroup] || (draft[state.pfGroup] = {});
+      if (inp.value.trim()) bag[inp.dataset.pf] = inp.value.trim();
+      else delete bag[inp.dataset.pf];
+    });
+    return draft;
+  }
+  function saveProfile(okMsg) {
+    if (state.guest) { $('#pf-msg').textContent = '未登录，保存不了。用机构账号登录后再试。'; return; }
+    var draft = collectProfile();
+    state.pfDraft = draft;
+    $('#pf-msg').textContent = '保存中…';
+    call('/profile', { method: 'PUT', body: { profile: draft } }).then(function (d) {
+      state.profile = d.profile;
+      state.completion = d.completion;
+      $('#pf-msg').textContent = okMsg || '已保存。';
+      renderProfile();
+      if (state.overview) { state.overview.completion = d.completion; state.overview.profile = d.profile; renderWar(); }
+    }).catch(function (e) { $('#pf-msg').textContent = '保存失败：' + e.message; });
+  }
+
+  /* ───────────── 启动 ───────────── */
+  call('/overview').then(function (o) {
+    state.overview = o;
+    state.month = o.month;
+    state.profile = o.profile;
+    state.completion = o.completion;
+    state.guest = !(o.profile && o.profile.org && o.profile.org.name);
+    $('#nav-lib').textContent = o.stats.library;
+    $('#js-orgchip').textContent = (o.profile && o.profile.org && o.profile.org.name)
+      ? o.profile.org.name
+      : '未填机构画像 · 参考数据可直接看';
+    $('#js-sidenote').innerHTML = '军师的产出都走两遍：<br>一遍过机构画像，<br>一遍过合规哨兵。';
+    renderWar();
+  }).catch(function (e) {
+    $('#war-cast').innerHTML = '<b>数据没加载出来</b><br>' + esc(e.message);
+  });
+
+  showScreen(state.screen);
+  if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
 })();

@@ -1170,6 +1170,19 @@ CREATE TABLE IF NOT EXISTS platform_config_change_logs (
   reason       TEXT    NOT NULL DEFAULT '',
   created_at   TEXT    NOT NULL
 );
+
+-- 招生军师（/junshi/）的机构画像（2026-10-15）。
+-- owner_key = org:<机构id>（同机构的人共享一份）或 user:<用户id>（平台侧无机构的账号，便于自己试）。
+-- ⚠️ 为什么主键不用 org_id：平台侧账号可能没有机构，那种行 org_id 为 NULL —— 主键放它上面存不进去。
+-- ⚠️ 内容按分组整体存 JSON（画像字段以后大概率还会加），不做逐字段列：它没有需要按列检索的查询。
+CREATE TABLE IF NOT EXISTS junshi_profiles (
+  owner_key   TEXT NOT NULL PRIMARY KEY,
+  org_id      TEXT,
+  content     TEXT NOT NULL DEFAULT '{}',
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
 `;
 
 db.exec(SCHEMA);

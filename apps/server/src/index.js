@@ -19,6 +19,7 @@ import { handleClientInstallerUpload } from './routes/admin/clientInstallerUploa
 // 2026-09-13（P4 删积分）：adminCredits.js / websiteCredits.js 两个路由文件已删除（积分体系下线）。
 import { handleAdminBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 import { handleVibeCoding } from './routes/vibecoding.js';
+import { handleJunshi } from './routes/junshi.js';
 import { domainStateContract } from './services/domainState.js';
 import { maxUploadBytes } from './services/fileUploadSecurity.js';
 import { acquireBodySlot as acquireUploadBodySlot } from './services/uploadBodyGate.js';
@@ -183,6 +184,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     const data = await handlePublicAssets(ctx)
+      ?? await handleJunshi(ctx)
       ?? await handleRuntimeGateway(ctx)
       ?? await handleRuntimeSearchGateway(ctx)
       ?? await handlePublicCommunication(ctx)
