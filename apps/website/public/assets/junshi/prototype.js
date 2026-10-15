@@ -397,8 +397,13 @@
       if (stopped) {
         var partial = bubble.textContent || '';
         bubble.textContent = partial + (partial ? '\n\n（已停止）' : '（已停止生成）');
-        if (partial.trim()) state.messages.push({ role: 'assistant', content: partial });
-        renderMessages();
+        if (partial.trim()) {
+          state.messages.push({ role: 'assistant', content: partial });
+          // ⚠️ 只有「已经生成了一部分」才重排：renderMessages 是按 state.messages 重建 DOM 的，
+          //    而一个字都没生成时 state 里只有用户那条 —— 重排会把刚写上去的「（已停止生成）」
+          //    提示一起冲掉，用户看到的就是「问了一句，然后什么都没有」（2026-10-15 线上实测到）。
+          renderMessages();
+        }
         loadConversations();
       } else {
         bubble.textContent = '';
