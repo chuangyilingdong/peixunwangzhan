@@ -225,14 +225,20 @@ function chatRateLimit(ctx, ownerKey) {
   }
 }
 
-/** 会话历史：取最近 N 条，并**丢掉夹在中间的「问了没答」**（同前端 apiMessages 的判据）。 */
-function usableHistory(messages) {
+/** 会话历史：取最近 N 条，并**丢掉夹在中间的「问了没答」**（别让模型看到两条连续 user）。
+ *  ⚠️ `keepTrailingUser` 必须由调用方按场景给：
+ *    · 正常提问 → false。历史末尾若挂着一条被打断的孤儿问题，要丢掉，否则和新问题连成两条 user。
+ *    · **重新生成 → true**。重生成会先删掉最后一条助手消息，剩下的末尾就是那条用户消息 ——
+ *      它就是这一轮要回答的问题，丢了就变成空历史（2026-10-15 实测：丢了这个标志，
+ *      重生成会静默返回空回答，因为 runChat 收到空 messages 抛「没有可回答的问题」）。 */
+function usableHistory(messages, keepTrailingUser = false) {
   const out = [];
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     if (m.role !== 'user') { out.push(m); continue; }
     const next = messages[i + 1];
-    if (next && next.role === 'assistant') out.push(m);   // 中间没答完的丢掉，别让模型看到两条连续 user
+    const isLast = i === messages.length - 1;
+    if ((isLast && keepTrailingUser) || (next && next.role === 'assistant')) out.push(m);
   }
   return out;
 }
@@ -547,7 +553,7 @@ export async function handleJunshi(ctx) {
         if (stored[i].role === 'user') break;     // 先碰到用户消息＝本来就没答完，不用删
       }
     }
-    const history = usableHistory(stored.map((m) => ({ role: m.role, content: m.content }))).slice(-24);
+    const history = usableHistory(stored.map((m) => ({ role: m.role, content: m.content })), regenerate).slice(-24);
 
     // 先把这一问落库（哪怕后面生成失败，问题也留得住）。重新生成时不重复插。
     if (!regenerate) {
@@ -560,7 +566,11 @@ export async function handleJunshi(ctx) {
 
     sseOpen(ctx, owner.cookie);
     const controller = new AbortController();
-    ctx.req.on('close', () => controller.abort());
+    // ⚠️ 中止判定只能挂 `res` 且必须带 writableEnded 保护：
+    //    `ctx.req.destroyed` **在请求体读完之后本来就是 true**（Node 的流读尽即销毁），
+    //    用它判「客户端走了」会把**所有生成错误都误判成用户中止**，然后发 stopped 而不是 error ——
+    //    表现是「模型报错了，用户却看到『这次没有生成内容』」，错误被静默吞掉（2026-10-15 实测踩到）。
+    ctx.res.on('close', () => { if (!ctx.res.writableEnded) controller.abort(); });
     // 推理型模型（deepseek-flash）会先思考几十秒，期间一个 data 事件都没有 ——
     // 定期写 SSE 注释行（`: ping`）保活，否则 nginx 按 proxy_read_timeout 掐断连接。
     const heartbeat = setInterval(() => {
@@ -607,7 +617,7 @@ export async function handleJunshi(ctx) {
         await recountConversation(conv.id, aAt);
       }
     } catch (error) {
-      const aborted = ctx.req.destroyed || controller.signal.aborted;
+      const aborted = controller.signal.aborted;      // 只看 signal，别碰 ctx.req.destroyed（见上面的说明）
       // 中止时把已经生成的部分存下来 —— 用户按了停止，那些字也是他要的
       if (answer.trim()) {
         try {
