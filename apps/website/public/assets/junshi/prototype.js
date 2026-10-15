@@ -139,6 +139,20 @@
     });
   }
 
+  // 记住「上次在哪个会话」：刷新/重开页面回到原来那段对话，而不是停在开场白。
+  var LASTCONV_KEY = 'junshi.lastconv.v1';
+  function rememberConversation(expertId, conversationId) {
+    try {
+      var all = JSON.parse(localStorage.getItem(LASTCONV_KEY) || '{}');
+      if (!all || typeof all !== 'object') all = {};
+      if (conversationId) all[expertId] = conversationId; else delete all[expertId];
+      localStorage.setItem(LASTCONV_KEY, JSON.stringify(all));
+    } catch (e) { /* 隐私模式：静默降级成不记 */ }
+  }
+  function lastConversationOf(expertId) {
+    try { return (JSON.parse(localStorage.getItem(LASTCONV_KEY) || '{}') || {})[expertId] || null; } catch (e) { return null; }
+  }
+
   async function loadConversations() {
     if (!state.expert) return;
     try {
@@ -146,6 +160,17 @@
       state.conversations = d.conversations || [];
     } catch (e) { state.conversations = []; }
     renderConversations();
+  }
+
+  /** 进入某位专家时：优先回到上次那个会话（且它还在列表里），否则显示开场白。 */
+  async function resumeOrGreet() {
+    await loadConversations();
+    var lastId = lastConversationOf(state.expert.id);
+    if (lastId && state.conversations.some(function (c) { return c.id === lastId; })) {
+      await openConversation(lastId);
+      return;
+    }
+    renderHello();
   }
 
   function switchExpert(e) {
@@ -164,14 +189,14 @@
       void conv.offsetHeight;
       conv.style.animation = 'bubble-in var(--t-enter) var(--ease-out) both';
     }
-    renderHello();
-    loadConversations();
+    resumeOrGreet();
   }
 
   function newConversation() {
     if (state.streaming) return;
     state.conversationId = null;
     state.messages = [];
+    rememberConversation(state.expert.id, null);
     renderHello();
     renderConversations();
   }
@@ -182,6 +207,7 @@
     try {
       var d = await call('/conversations/' + encodeURIComponent(id));
       state.conversationId = d.conversation.id;
+      rememberConversation(state.expert.id, d.conversation.id);
       state.messages = d.messages || [];
       renderMessages();
       renderConversations();
@@ -337,7 +363,7 @@
           var data;
           try { data = JSON.parse(line.slice(6)); } catch (e) { continue; }
           if (event === 'start') {
-            if (data.conversationId) state.conversationId = data.conversationId;
+            if (data.conversationId) { state.conversationId = data.conversationId; rememberConversation(state.expert.id, data.conversationId); }
             if (data.title) state.conversations = [{ id: data.conversationId, expertId: state.expert.id, title: data.title, messageCount: 1, updatedAt: new Date().toISOString() }]
               .concat(state.conversations.filter(function (c) { return c.id !== data.conversationId; }));
             renderConversations();
