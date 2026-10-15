@@ -1188,6 +1188,34 @@ CREATE TABLE IF NOT EXISTS junshi_profiles (
   updated_at  TEXT NOT NULL,
   FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
 );
+
+-- 招生军师（/junshi/）的会话与消息（2026-10-15，机构级）。
+-- 为什么要有：对话原来只活在前端内存/localStorage —— 换设备就看不到、刷新还可能断在中间。
+-- 机构级产品必须服务端存：同一机构的同事能接上下文、历史可查、也才有用量统计的基础。
+-- owner_key 与 junshi_profiles 同一套口径：org:<机构id> / user:<用户id> / anon:<匿名会话id>
+--   （匿名也能存，只是不跨设备 —— 让没登录的人也能刷新不丢）。
+CREATE TABLE IF NOT EXISTS junshi_conversations (
+  id            TEXT NOT NULL PRIMARY KEY,
+  owner_key     TEXT NOT NULL,
+  org_id        TEXT,
+  expert_id     TEXT NOT NULL,
+  title         TEXT NOT NULL DEFAULT '',
+  message_count INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_conv_owner ON junshi_conversations(owner_key, expert_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_junshi_conv_org ON junshi_conversations(org_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS junshi_messages (
+  id              TEXT NOT NULL PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  role            TEXT NOT NULL,
+  content         TEXT NOT NULL,
+  citations       TEXT,
+  created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_msg_conv ON junshi_messages(conversation_id, created_at);
 `;
 
 db.exec(SCHEMA);

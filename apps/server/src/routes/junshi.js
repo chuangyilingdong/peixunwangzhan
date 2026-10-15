@@ -24,7 +24,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { arow, aq, corsHeaders, errors, id, nowIso, requireAuth, requireRole } from '../lib.js';
+import { arow, arows, aq, corsHeaders, errors, id, nowIso, requireAuth, requireRole } from '../lib.js';
 import { EXPERTS, runChat } from '../services/junshiChat.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -145,48 +145,101 @@ function ownerKeyOf(ctx) {
   return orgId ? `org:${orgId}` : `user:${auth.user.id}`;
 }
 
+/* ───────────── 会话归属（含匿名）─────────────
+ * 机构画像必须登录才能写（那是机构资产）；**会话不要求登录** —— 没登录的人也让他
+ * 刷新不丢、能翻历史，登录后再自动并到机构名下。所以这里比 ownerKeyOf 宽一档：
+ *   登录 → org:<机构id> / user:<用户id>（跨设备、同机构共享）
+ *   匿名 → anon:<cookie 里的随机 id>（只在这台浏览器有效）
+ */
+const ANON_COOKIE = 'junshi_anon';
+
+function readCookie(ctx, name) {
+  const part = String(ctx.req?.headers?.cookie || '').split(/;\s*/).find((x) => x.startsWith(name + '='));
+  return part ? decodeURIComponent(part.slice(name.length + 1)) : null;
+}
+
+/** 返回 { key, cookie }；cookie 非空时**调用方必须把它写进响应头**（JSON 走 ctx.setCookie，
+ *  SSE 要在 writeHead 里自己带上 —— 流式响应不经过 index.js 的信封）。 */
+function resolveOwner(ctx) {
+  if (ctx.auth) {
+    const orgId = ctx.auth.user.orgId;
+    return { key: orgId ? `org:${orgId}` : `user:${ctx.auth.user.id}`, cookie: null };
+  }
+  let anon = readCookie(ctx, ANON_COOKIE);
+  let cookie = null;
+  if (!anon || !/^[A-Za-z0-9_-]{8,64}$/.test(anon)) {
+    anon = id('a').replace(/[^A-Za-z0-9_-]/g, '');
+    // 一年有效；与平台其它 cookie 同款属性（生产带 Secure）
+    cookie = `${ANON_COOKIE}=${anon}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`
+      + (process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production' ? '; Secure' : '');
+  }
+  return { key: `anon:${anon}`, cookie };
+}
+
 /* ───────────── 对话相关的辅助 ───────────── */
 
 /**
- * 对话限流（内存计数，进程重启即清）。
+ * 对话限流。
  *
- * 为什么必须有：`/chat` 每次调用都真的花上游 token（DeepSeek 按量计费）。这个入口现在
- * 「暂时不对外展示」但**没有鉴权**，所以它等价于一个公开的、可被刷的付费接口。
- * 上线到公开之前，这里就是那道闸；正式对外时应当改成 requireAuth（一行）。
+ * 用户口径（2026-10-15）：「肯定是可以一直聊的」—— 原来那个「未登录 20 次/小时」
+ * 正常聊几轮就撞墙，而且提示会**打断正在进行的对话**，这不能要。
  *
- * 口径：未登录按 IP 20 次/小时；已登录按用户/机构 60 次/小时。
- * ⚠️ 是为了防刷，不是为了精确计量 —— 多进程部署时每个进程各算一份，那时候要换共享存储。
+ * 改成两条口径：
+ *   · 登录用户（机构）：**不按小时限**，只留一条当日兜底（防脚本跑飞），额度按机构算。
+ *   · 匿名：放宽到 60 次/小时（够正常试；要无止境聊就登录，这也是机构级的自然动线）。
+ * 命中时的文案说明「怎么解除」，而不是一句「请稍后再试」。
+ *
+ * ⚠️ 内存计数，多进程部署时每进程各算一份 —— 那时候要换共享存储。现在单进程够用。
  */
 const CHAT_WINDOW_MS = 60 * 60 * 1000;
+const CHAT_DAY_MS = 24 * 60 * 60 * 1000;
 const chatHits = new Map();
-function chatRateLimit(ctx) {
-  const who = ctx.auth
-    ? `u:${ctx.auth.user.orgId || ctx.auth.user.id}`
-    : `ip:${String(ctx.req?.headers?.['x-forwarded-for'] || ctx.req?.socket?.remoteAddress || 'unknown').split(',')[0].trim()}`;
-  const limit = ctx.auth ? 60 : 20;
+function chatRateLimit(ctx, ownerKey) {
+  const signedIn = Boolean(ctx.auth);
   const now = Date.now();
-  const hits = (chatHits.get(who) || []).filter((t) => now - t < CHAT_WINDOW_MS);
+  const windowMs = signedIn ? CHAT_DAY_MS : CHAT_WINDOW_MS;
+  const limit = signedIn ? 500 : 60;
+  const who = signedIn ? ownerKey : `ip:${String(ctx.req?.headers?.['x-forwarded-for'] || ctx.req?.socket?.remoteAddress || 'unknown').split(',')[0].trim()}`;
+  const hits = (chatHits.get(who) || []).filter((t) => now - t < windowMs);
   if (hits.length >= limit) {
-    const waitMin = Math.ceil((CHAT_WINDOW_MS - (now - hits[0])) / 60000);
-    throw errors.badRequest(`聊得太快了，请 ${waitMin} 分钟后再试`, 'CHAT_RATE_LIMITED');
+    throw errors.badRequest(
+      signedIn
+        ? '今天这个机构已经问满 500 轮了，明天再来（或联系平台调额度）'
+        : '未登录每小时最多问 60 轮，登录后基本不受限（机构账号还能跨设备看历史）',
+      'CHAT_RATE_LIMITED');
   }
   hits.push(now);
   chatHits.set(who, hits);
-  // 顺手清掉过期的 key，别让 Map 无限长（条目数 = 一小时内活跃的人数，量很小）
   if (chatHits.size > 5000) {
-    for (const [k, v] of chatHits) if (!v.some((t) => now - t < CHAT_WINDOW_MS)) chatHits.delete(k);
+    for (const [k, v] of chatHits) if (!v.some((t) => now - t < windowMs)) chatHits.delete(k);
   }
+}
+
+/** 会话历史：取最近 N 条，并**丢掉夹在中间的「问了没答」**（同前端 apiMessages 的判据）。 */
+function usableHistory(messages) {
+  const out = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role !== 'user') { out.push(m); continue; }
+    const next = messages[i + 1];
+    if (next && next.role === 'assistant') out.push(m);   // 中间没答完的丢掉，别让模型看到两条连续 user
+  }
+  return out;
 }
 
 // SSE 头：`x-accel-buffering: no` 是必须的 —— 没有它 nginx 会把整个流缓冲住，
 // 表现是「模型早就答完了，页面一直转圈，最后一次性全出现」。照 routes/vibecoding.js 的写法。
-function sseOpen(ctx) {
-  ctx.res.writeHead(200, corsHeaders(ctx.req, {
+// extraCookie：流式响应不经过 index.js 的 JSON 信封，ctx.setCookie 在这里没人替我们发，
+// 所以新发的匿名 cookie 必须自己塞进 writeHead。
+function sseOpen(ctx, extraCookie) {
+  const headers = corsHeaders(ctx.req, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache, no-transform',
     connection: 'keep-alive',
     'x-accel-buffering': 'no',
-  }));
+  });
+  if (extraCookie) headers['set-cookie'] = extraCookie;
+  ctx.res.writeHead(200, headers);
 }
 function sseSend(ctx, event, payload) {
   if (ctx.res.writableEnded || ctx.res.destroyed) return;
@@ -380,6 +433,56 @@ export async function handleJunshi(ctx) {
     return { profile: { ...EMPTY_PROFILE, ...clean }, updatedAt: now, completion: completeness({ ...EMPTY_PROFILE, ...clean }), guest: false };
   }
 
+  // ── 会话 CRUD（机构级：登录按机构/用户存，匿名按 cookie 存）──
+  // GET /api/junshi/conversations?expertId=  列表（不含消息体）
+  if (rest === '/conversations' && method === 'GET') {
+    const owner = resolveOwner(ctx);
+    if (owner.cookie) ctx.setCookie = owner.cookie;
+    const expertId = text(search.get('expertId'));
+    const rows2 = expertId
+      ? await arows('SELECT id, expert_id, title, message_count, updated_at FROM junshi_conversations WHERE owner_key=? AND expert_id=? ORDER BY updated_at DESC LIMIT 50', [owner.key, expertId])
+      : await arows('SELECT id, expert_id, title, message_count, updated_at FROM junshi_conversations WHERE owner_key=? ORDER BY updated_at DESC LIMIT 50', [owner.key]);
+    return { conversations: rows2.map((r) => ({ id: r.id, expertId: r.expert_id, title: r.title, messageCount: r.message_count, updatedAt: r.updated_at })) };
+  }
+
+  // POST /api/junshi/conversations  新建空会话
+  if (rest === '/conversations' && method === 'POST') {
+    const owner = resolveOwner(ctx);
+    if (owner.cookie) ctx.setCookie = owner.cookie;
+    const expertId = text(ctx.body?.expertId) || 'marketing';
+    if (!EXPERTS.some((e) => e.id === expertId)) throw errors.badRequest('未知的专家', 'VALIDATION_ERROR', { field: 'expertId' });
+    const now = nowIso();
+    const convId = id('jc');
+    await aq('INSERT INTO junshi_conversations (id, owner_key, org_id, expert_id, title, message_count, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)',
+      [convId, owner.key, ctx.auth?.user?.orgId || null, expertId, '', 0, now, now]);
+    return { id: convId, expertId, title: '', messageCount: 0, updatedAt: now };
+  }
+
+  // /api/junshi/conversations/:id  —— GET 取详情（含消息） / DELETE 删除
+  if (rest.startsWith('/conversations/')) {
+    const convId = decodeURIComponent(rest.slice('/conversations/'.length));
+    const owner = resolveOwner(ctx);
+    if (owner.cookie) ctx.setCookie = owner.cookie;
+    const conv = await arow('SELECT * FROM junshi_conversations WHERE id=? AND owner_key=?', [convId, owner.key]);
+    if (!conv) throw errors.notFound('会话不存在', 'NOT_FOUND');
+    if (method === 'GET') {
+      const msgs = await arows('SELECT role, content, citations, created_at FROM junshi_messages WHERE conversation_id=? ORDER BY created_at, id', [convId]);
+      return {
+        conversation: { id: conv.id, expertId: conv.expert_id, title: conv.title, messageCount: conv.message_count, updatedAt: conv.updated_at },
+        messages: msgs.map((m) => {
+          let citations = null;
+          try { citations = m.citations ? JSON.parse(m.citations) : null; } catch { /* 存坏了就当没有 */ }
+          return { role: m.role, content: m.content, citations };
+        }),
+      };
+    }
+    if (method === 'DELETE') {
+      await aq('DELETE FROM junshi_messages WHERE conversation_id=?', [convId]);
+      await aq('DELETE FROM junshi_conversations WHERE id=? AND owner_key=?', [convId, owner.key]);
+      return { ok: true };
+    }
+  }
+
   // ── GET /api/junshi/experts ── 专家花名册（前端左侧列表用；提示词留在服务端不返回）
   if (rest === '/experts' && method === 'GET') {
     return {
@@ -387,22 +490,65 @@ export async function handleJunshi(ctx) {
     };
   }
 
-  // ── POST /api/junshi/chat ── 跟专家对话（SSE 流式）
-  // 事件：status（检索/生成阶段）→ citations（引用了哪些资料）→ delta*（正文增量）
-  //       → thinking（推理型模型的思考，不带正文）→ done / error
+  // ── POST /api/junshi/chat ── 跟专家对话（SSE 流式，服务端落库）
+  // 入参：{ conversationId?, expertId, content } —— 只传这一句，历史由服务端按会话读。
+  // 事件：start（会话 id 与标题）→ status → citations → delta* → thinking → done / error
+  //
+  // ⚠️ 为什么从「前端传整个 messages 数组」改成「只传一句 + conversationId」：
+  //    机构级要的是服务端权威 —— 同机构同事接上下文、换设备能看到、以后才有用量统计。
+  //    前端那份 localStorage 退化成「渲染缓存」，不再是事实来源。
   if (rest === '/chat' && method === 'POST') {
-    chatRateLimit(ctx);
+    const owner = resolveOwner(ctx);
     const expertId = String(ctx.body?.expertId || 'marketing');
-    const messages = Array.isArray(ctx.body?.messages) ? ctx.body.messages : [];
-    const lastUser = [...messages].reverse().find((m) => m?.role === 'user');
-    if (!lastUser || !String(lastUser.content || '').trim()) {
-      throw errors.badRequest('没有可回答的问题', 'VALIDATION_ERROR', { field: 'messages' });
-    }
-    if (String(lastUser.content).length > 4000) {
-      throw errors.badRequest('单条消息最多 4000 字', 'VALIDATION_ERROR', { field: 'messages' });
+    const content = String(ctx.body?.content || '').trim();
+    // 「重新生成」：不插入新的用户消息，而是把会话里**最后一条助手消息删掉**再重跑一遍。
+    // ⚠️ 不能走「把上一句再发一遍」那条路 —— 那样会在历史里留下两条一样的用户消息。
+    const regenerate = ctx.body?.regenerate === true;
+    if (!content) throw errors.badRequest('没有可回答的问题', 'VALIDATION_ERROR', { field: 'content' });
+    if (content.length > 4000) throw errors.badRequest('单条消息最多 4000 字', 'VALIDATION_ERROR', { field: 'content' });
+    chatRateLimit(ctx, owner.key);
+
+    // 取会话：给了 id 就用（并校验归属），没给就现建一个（标题取首句）
+    let conv = null;
+    const convIdIn = String(ctx.body?.conversationId || '').trim();
+    if (convIdIn) {
+      conv = await arow('SELECT * FROM junshi_conversations WHERE id=? AND owner_key=?', [convIdIn, owner.key]);
+      if (!conv) throw errors.notFound('会话不存在', 'NOT_FOUND');
+    } else {
+      const now0 = nowIso();
+      const newId = id('jc');
+      const title = content.slice(0, 30) + (content.length > 30 ? '…' : '');
+      await aq('INSERT INTO junshi_conversations (id, owner_key, org_id, expert_id, title, message_count, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)',
+        [newId, owner.key, ctx.auth?.user?.orgId || null, expertId, title, 0, now0, now0]);
+      conv = { id: newId, expert_id: expertId, title, message_count: 0 };
     }
 
-    sseOpen(ctx);
+    // 历史：取最近 24 条（约 12 轮），夹在中间的「问了没答」丢掉
+    const stored = await arows('SELECT id, role, content FROM junshi_messages WHERE conversation_id=? ORDER BY created_at, id', [conv.id]);
+    if (regenerate) {
+      // 把最后一条助手消息删掉（如果有），它就是要被重写的那条
+      for (let i = stored.length - 1; i >= 0; i--) {
+        if (stored[i].role === 'assistant') {
+          await aq('DELETE FROM junshi_messages WHERE id=?', [stored[i].id]);
+          await aq('UPDATE junshi_conversations SET message_count=MAX(message_count-1,0) WHERE id=?', [conv.id]);
+          stored.splice(i, 1);
+          break;
+        }
+        if (stored[i].role === 'user') break;     // 先碰到用户消息＝本来就没答完，不用删
+      }
+    }
+    const history = usableHistory(stored.map((m) => ({ role: m.role, content: m.content }))).slice(-24);
+
+    // 先把这一问落库（哪怕后面生成失败，问题也留得住）。重新生成时不重复插。
+    if (!regenerate) {
+      const userMsgId = id('jm');
+      const qAt = nowIso();
+      await aq('INSERT INTO junshi_messages (id, conversation_id, role, content, citations, created_at) VALUES (?,?,?,?,?,?)',
+        [userMsgId, conv.id, 'user', content, null, qAt]);
+      await aq('UPDATE junshi_conversations SET message_count=message_count+1, updated_at=? WHERE id=?', [qAt, conv.id]);
+    }
+
+    sseOpen(ctx, owner.cookie);
     const controller = new AbortController();
     ctx.req.on('close', () => controller.abort());
     // 推理型模型（deepseek-flash）会先思考几十秒，期间一个 data 事件都没有 ——
@@ -411,22 +557,43 @@ export async function handleJunshi(ctx) {
       if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.write(': ping\n\n');
     }, 15000);
     heartbeat.unref?.();
+    let answer = '';
+    let cites = null;
     try {
+      sseSend(ctx, 'start', { conversationId: conv.id, expertId, title: conv.title });
       const out = await runChat(ctx, {
-        expertId,
-        messages,
+        expertId: conv.expert_id || expertId,
+        messages: regenerate ? history : [...history, { role: 'user', content }],
         signal: controller.signal,
-        onStatus: (text) => sseSend(ctx, 'status', { text }),
-        onCitations: (c) => sseSend(ctx, 'citations', c),
-        onDelta: (text) => sseSend(ctx, 'delta', { text }),
+        onStatus: (t) => sseSend(ctx, 'status', { text: t }),
+        onCitations: (c) => { cites = c; sseSend(ctx, 'citations', c); },
+        onDelta: (t) => { answer += t || ''; sseSend(ctx, 'delta', { text: t }); },
         onReasoning: () => sseSend(ctx, 'thinking', {}),
       });
-      sseSend(ctx, 'done', { model: out.model, provider: out.provider, citations: out.citations, usage: out.usage });
+      if (out.citations && !cites) cites = out.citations;
+      if (answer.trim()) {
+        const aAt = nowIso();
+        await aq('INSERT INTO junshi_messages (id, conversation_id, role, content, citations, created_at) VALUES (?,?,?,?,?,?)',
+          [id('jm'), conv.id, 'assistant', answer, cites ? JSON.stringify(cites) : null, aAt]);
+        await aq('UPDATE junshi_conversations SET message_count=message_count+1, updated_at=? WHERE id=?', [aAt, conv.id]);
+      }
+      sseSend(ctx, 'done', { conversationId: conv.id, model: out.model, provider: out.provider, citations: cites, usage: out.usage });
     } catch (error) {
       const aborted = ctx.req.destroyed || controller.signal.aborted;
+      // 中止时把已经生成的部分存下来 —— 用户按了停止，那些字也是他要的
+      if (answer.trim()) {
+        try {
+          const aAt = nowIso();
+          await aq('INSERT INTO junshi_messages (id, conversation_id, role, content, citations, created_at) VALUES (?,?,?,?,?,?)',
+            [id('jm'), conv.id, 'assistant', answer, cites ? JSON.stringify(cites) : null, aAt]);
+          await aq('UPDATE junshi_conversations SET message_count=message_count+1, updated_at=? WHERE id=?', [aAt, conv.id]);
+        } catch { /* 落库失败不能让流断在这儿 */ }
+      }
       if (!aborted) {
         console.warn('[junshi chat] 生成失败：', error?.message || error);
         sseSend(ctx, 'error', { message: error?.message || '生成失败，请重试' });
+      } else {
+        sseSend(ctx, 'stopped', { conversationId: conv.id, partial: answer.length });
       }
     } finally {
       clearInterval(heartbeat);

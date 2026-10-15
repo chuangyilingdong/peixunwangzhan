@@ -1,11 +1,12 @@
 /* 招生军师 · 专家团 —— 前端逻辑
  * 见 ../../junshi/index.html 顶部注释：脚本必须外链（CSP script-src 'self'），且要打 ?v= 内容哈希。
  *
- * 对话走 POST + fetch 流式读（不用 EventSource —— 它只支持 GET，塞不下 messages 数组），
+ * 对话走 POST + fetch 流式读（不用 EventSource —— 它只支持 GET，塞不下请求体），
  * 自己解析 SSE 的 `event:` / `data:` 两行格式。
  *
- * 图标：改用内联 SVG sprite（`<use href="#i-xxx">`），不再加载 600KB 的图标库 JS ——
- * 见 index.html 里的 sprite 定义与 gen_icon_sprite.py 的说明。
+ * ⚠️ 2026-10-15 改为**服务端存会话**（机构级）：历史的事实来源是 junshi_conversations /
+ *    junshi_messages 两张表，前端不再把整个 messages 数组发上去，只发「这一句 + conversationId」。
+ *    好处：同机构同事能接上下文、换设备看得到、以后才有用量统计。
  */
 (function () {
   var root = document.getElementById('js-app');
@@ -18,7 +19,7 @@
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
-  /** 内联 sprite 图标。size 走 CSS 的 em，所以外面给 font-size 即可。 */
+  /** 内联 sprite 图标。尺寸走 width/height 属性。 */
   function ic(name, size) {
     var px = size || 14;
     return '<svg class="ic" width="' + px + '" height="' + px + '" aria-hidden="true"><use href="#i-' + name + '"></use></svg>';
@@ -49,60 +50,30 @@
     var t = null;
     return function () { var a = arguments, s = this; clearTimeout(t); t = setTimeout(function () { fn.apply(s, a); }, ms || 260); };
   }
+  function fmtTime(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    var now = new Date();
+    var sameDay = d.toDateString() === now.toDateString();
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return sameDay ? (p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()))
+      : (p(d.getMonth() + 1) + '-' + p(d.getDate()));
+  }
 
   var state = {
     screen: 'chat',
     experts: [],
     expert: null,
-    messages: [],
+    conversations: [],
+    conversationId: null,
+    messages: [],              // [{role, content, citations}]
     streaming: false,
+    abort: null,
+    lastQuestion: '',
     lib: { scene: '', q: '' },
     pfGroup: 'org', pfDraft: {}, profile: null, completion: null, guest: true,
   };
-
-  /* ───────────── 对话本地留存 ─────────────
-     为什么要有：原来对话只活在内存里，**刷新一下整段就没了**（用户实测：「问了几轮」
-     再打开只剩开场白）。发版、刷新、切标签页都会丢。
-     ⚠️ 这是**临时兜底**：按浏览器存，换设备看不到。正式的方案是服务端按机构存会话
-        （表还没建，见交接说明）——那之前先用它，至少不让人白问一轮。 */
-  var STORE_KEY = 'junshi.chat.v1';
-  var STORE_MAX = 40;                       // 每个专家最多留 40 条，别把 localStorage 撑爆
-  function loadStore() {
-    try { var v = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); return v && typeof v === 'object' ? v : {}; } catch (e) { return {}; }
-  }
-  function saveHistory(expertId, messages) {
-    try {
-      var all = loadStore();
-      all[expertId] = messages.slice(-STORE_MAX);
-      localStorage.setItem(STORE_KEY, JSON.stringify(all));
-    } catch (e) { /* 隐私模式/超配额：静默降级成不保存，不影响对话 */ }
-  }
-  function historyOf(expertId) {
-    var list = loadStore()[expertId];
-    return Array.isArray(list) ? list : [];
-  }
-  /**
-   * 发给服务端的历史：**丢掉中间那些「问了没答」的问题**，但保留最后一条（这次要问的）。
-   *
-   * 刷新/关标签打断生成时会留下「用户消息已落盘、助手消息还没有」的孤儿记录；
-   * 直接带上就变成两条连续 user，模型会以为上一个问题还没回答，容易答跑偏。
-   * 界面上仍然显示它（用户看得见自己问过什么），只是不参与这一轮上下文。
-   *
-   * ⚠️ 判据必须是「后面跟着的是不是 assistant」，**不能写成"弹出末尾那条"** ——
-   *    调用这个函数时新问题已经 push 进 state.messages 了，弹末尾等于把刚问的这句删掉
-   *    （2026-10-15 写下第一版时就是这么错的，上生产前自己查出来了）。
-   */
-  function apiMessages() {
-    var list = state.messages.filter(function (m) { return m.role === 'user' || (m.content || '').trim(); });
-    var out = [];
-    for (var i = 0; i < list.length; i++) {
-      var m = list[i];
-      if (m.role !== 'user') { out.push(m); continue; }
-      var next = list[i + 1];
-      if (i === list.length - 1 || (next && next.role === 'assistant')) out.push(m);
-    }
-    return out;
-  }
 
   /* ───────────── 主题 ───────────── */
   function applyThemeIcon() {
@@ -130,7 +101,7 @@
   }
   $$('.navitem').forEach(function (b) { b.addEventListener('click', function () { showScreen(b.dataset.screen); }); });
 
-  /* ───────────── 专家列表 ───────────── */
+  /* ───────────── 专家 + 会话列表 ───────────── */
   function renderExperts() {
     var box = $('#js-experts');
     $('#ex-count').textContent = state.experts.length + ' 位';
@@ -145,48 +116,145 @@
       box.appendChild(b);
     });
   }
+
+  function renderConversations() {
+    var box = $('#js-convs');
+    if (!box) return;
+    $('#conv-count').textContent = state.conversations.length ? state.conversations.length + ' 个' : '';
+    if (!state.conversations.length) {
+      show(box, '<p class="empty" style="padding:2px 10px">还没有会话，点上面「新对话」或直接提问。</p>');
+      return;
+    }
+    box.innerHTML = '';
+    state.conversations.forEach(function (c) {
+      var row = document.createElement('div');
+      row.className = 'convrow';
+      row.setAttribute('aria-current', String(c.id === state.conversationId));
+      row.innerHTML = '<button class="convopen" type="button"><span class="convtitle">' + esc(c.title || '（未命名）') + '</span>' +
+        '<span class="convmeta">' + esc(fmtTime(c.updatedAt)) + ' · ' + c.messageCount + ' 条</span></button>' +
+        '<button class="convdel" type="button" aria-label="删除这个会话">' + ic('x', 13) + '</button>';
+      row.querySelector('.convopen').addEventListener('click', function () { openConversation(c.id); });
+      row.querySelector('.convdel').addEventListener('click', function () { deleteConversation(c.id); });
+      box.appendChild(row);
+    });
+  }
+
+  async function loadConversations() {
+    if (!state.expert) return;
+    try {
+      var d = await call('/conversations?expertId=' + encodeURIComponent(state.expert.id));
+      state.conversations = d.conversations || [];
+    } catch (e) { state.conversations = []; }
+    renderConversations();
+  }
+
   function switchExpert(e) {
     if (state.streaming) return;
     var same = state.expert && state.expert.id === e.id;
     state.expert = e;
-    // 恢复这位专家上次的对话（见上面 STORE_KEY 的说明）
-    state.messages = historyOf(e.id);
+    state.conversationId = null;
+    state.messages = [];
     renderExperts();
     $('#conv-avatar').textContent = e.avatar;
     $('#conv-name').textContent = e.name;
     $('#conv-tag').textContent = e.tag;
-    // 切专家＝换了一整套上下文，属于「防止突兀跳变」：面板整体做一次短交叉淡入。
-    // 只在真的换了人时播，重复点同一位不重放（避免高频点击下的闪动）。
     var conv = $('.conv');
     if (!same && conv) {
       conv.style.animation = 'none';
       void conv.offsetHeight;
       conv.style.animation = 'bubble-in var(--t-enter) var(--ease-out) both';
     }
-    renderConversation();
+    renderHello();
+    loadConversations();
   }
 
-  /** 有历史就铺历史，没有才显示开场白＋建议问题。 */
-  function renderConversation() {
-    if (state.messages.length) {
-      var box = $('#js-msgs');
-      box.innerHTML = '';
-      // 空内容的 assistant 是「流式被打断」留下的占位，不显示
-      var msgs = state.messages.filter(function (m) { return m.role === 'user' || (m.content || '').trim(); });
-      msgs.forEach(function (m) { appendMsg(m.role, m.content); });
-      // 末尾是「问了没答」的那条（刷新/关页面打断）→ 明说一句，别让人以为界面坏了
-      if (msgs.length && msgs[msgs.length - 1].role === 'user') {
-        var note = document.createElement('div');
-        note.className = 'status';
-        note.innerHTML = ic('alert', 13) + '<span>上一条没答完（可能刷新或关过页面），可以再问一次</span>';
-        box.appendChild(note);
-      }
-      $('#js-refs').innerHTML = '<p class="empty">继续追问就行。这一轮引用了什么，会在回答后显示在这里。</p>';
-      $('#ref-count').textContent = '';
-      scrollBottom();
-      return;
-    }
+  function newConversation() {
+    if (state.streaming) return;
+    state.conversationId = null;
+    state.messages = [];
     renderHello();
+    renderConversations();
+  }
+
+  async function openConversation(id) {
+    if (state.streaming || id === state.conversationId) return;
+    loading($('#js-msgs'));
+    try {
+      var d = await call('/conversations/' + encodeURIComponent(id));
+      state.conversationId = d.conversation.id;
+      state.messages = d.messages || [];
+      renderMessages();
+      renderConversations();
+      var last = d.messages[d.messages.length - 1];
+      if (last && last.citations) renderRefs(last.citations);
+      else $('#js-refs').innerHTML = '<p class="empty">这一轮没有引用记录。</p>';
+    } catch (e) { errorBox($('#js-msgs'), e); }
+  }
+
+  async function deleteConversation(id) {
+    if (state.streaming) return;
+    try {
+      await call('/conversations/' + encodeURIComponent(id), { method: 'DELETE' });
+      if (id === state.conversationId) { state.conversationId = null; state.messages = []; renderHello(); }
+      await loadConversations();
+    } catch (e) { $('#js-hint').textContent = '删除失败：' + e.message; }
+  }
+
+  /* ───────────── 消息渲染 ───────────── */
+  function appendMsg(role, content, opts) {
+    var o = opts || {};
+    var wrap = document.createElement('div');
+    wrap.className = 'msg' + (role === 'user' ? ' me' : '');
+    var who = role === 'user' ? '我' : (state.expert ? state.expert.avatar : '军师');
+    wrap.innerHTML = '<span class="mavatar">' + esc(who) + '</span>' +
+      '<div class="bubblewrap"><div class="bubble"></div>' +
+      (role === 'assistant' && !o.plain ? '<div class="msgactions"></div>' : '') + '</div>';
+    wrap.querySelector('.bubble').textContent = content;
+    if (role === 'assistant' && !o.plain) attachActions(wrap, o);
+    $('#js-msgs').appendChild(wrap);
+    scrollBottom();
+    return wrap.querySelector('.bubble');
+  }
+
+  /** 助手消息下面的操作条：复制恒有；最后一条额外给「重新生成」。 */
+  function attachActions(wrap, o) {
+    var bar = wrap.querySelector('.msgactions');
+    if (!bar) return;
+    bar.innerHTML = '<button class="msgact" type="button" data-act="copy">' + ic('check', 12) + '复制</button>' +
+      (o.last ? '<button class="msgact" type="button" data-act="regen">' + ic('refresh', 12) + '重新生成</button>' : '');
+    bar.querySelector('[data-act="copy"]').addEventListener('click', function () {
+      var text = wrap.querySelector('.bubble').textContent;
+      var done = function () { bar.querySelector('[data-act="copy"]').innerHTML = ic('check', 12) + '已复制'; setTimeout(function () {
+        var b = bar.querySelector('[data-act="copy"]'); if (b) b.innerHTML = ic('check', 12) + '复制'; }, 1600); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, done);
+      else {
+        var ta = document.createElement('textarea');
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch (e) { /* 忽略 */ }
+        document.body.removeChild(ta); done();
+      }
+    });
+    var regen = bar.querySelector('[data-act="regen"]');
+    if (regen) regen.addEventListener('click', function () { regenerate(); });
+  }
+
+  function renderMessages() {
+    var box = $('#js-msgs');
+    box.innerHTML = '';
+    var lastAi = -1;
+    state.messages.forEach(function (m, i) { if (m.role === 'assistant' && (m.content || '').trim()) lastAi = i; });
+    state.messages.forEach(function (m, i) {
+      if (m.role !== 'user' && !(m.content || '').trim()) return;    // 空助手＝被打断的占位
+      appendMsg(m.role, m.content, { last: i === lastAi });
+    });
+    var last = state.messages[state.messages.length - 1];
+    if (last && last.role === 'user') {
+      var note = document.createElement('div');
+      note.className = 'status';
+      note.innerHTML = ic('alert', 13) + '<span>上一条没答完（可能刷新或关过页面），可以点「重新生成」或再问一次</span>';
+      box.appendChild(note);
+    }
+    scrollBottom();
   }
 
   function renderHello() {
@@ -198,74 +266,42 @@
       '<div class="hello"><div class="msg"><span class="mavatar">' + esc(e.avatar) + '</span>' +
       '<div class="bubble">' + esc(e.greeting) + '</div></div>' +
       (s ? '<div class="starters">' + s + '</div>' : '') + '</div>';
+    $('#js-refs').innerHTML = '<p class="empty">发出问题后，这里会显示这次回答参考了你资料库里的哪几份文件。</p>';
+    $('#ref-count').textContent = '';
     root.querySelectorAll('[data-starter]').forEach(function (b) {
       b.addEventListener('click', function () {
         $('#js-input').value = state.expert.starters[Number(b.dataset.starter)];
-        send();
+        send({});
       });
     });
   }
 
-  /* ───────────── 消息 ───────────── */
-  function appendMsg(role, content) {
-    var wrap = document.createElement('div');
-    wrap.className = 'msg' + (role === 'user' ? ' me' : '');
-    var who = role === 'user' ? '我' : (state.expert ? state.expert.avatar : '军师');
-    wrap.innerHTML = '<span class="mavatar">' + esc(who) + '</span><div class="bubble"></div>';
-    wrap.querySelector('.bubble').textContent = content;
-    $('#js-msgs').appendChild(wrap);
-    scrollBottom();
-    return wrap.querySelector('.bubble');
-  }
   function scrollBottom() {
     var box = $('#js-msgs');
     box.scrollTop = box.scrollHeight;
   }
 
   /* ───────────── 对话（SSE）──────────── */
-  async function send() {
-    if (state.streaming) return;
-    var input = $('#js-input');
-    var text = input.value.trim();
-    if (!text) return;
-    input.value = '';
-    input.style.height = '';
-    $('#js-hint').textContent = '';
+  function setComposerBusy(busy) {
+    state.streaming = busy;
+    var send = $('#js-send');
+    send.innerHTML = busy ? ic('x', 14) + '停止' : ic('send', 14) + '发送';
+    send.classList.toggle('primary', !busy);
+    send.classList.toggle('stop', busy);
+    $('#js-input').disabled = busy;
+  }
 
-    var hello = $('#js-msgs').querySelector('.hello');
-    if (hello) hello.remove();
-
-    appendMsg('user', text);
-    state.messages.push({ role: 'user', content: text });
-    saveHistory(state.expert.id, state.messages);
-    state.streaming = true;
-    $('#js-send').disabled = true;
-    input.disabled = true;
-
-    var bubble = appendMsg('assistant', '');
-    // 先占位一条空的 assistant，并**边流边存草稿**（每 2 秒）。
-    // 为什么：助手那条原来只在整段结束后才落盘，一旦在流式途中刷新/关标签，
-    // 就只剩一条「问了没答」的用户消息 —— 下次提问时两条连续 user 一起发给模型，
-    // 模型会以为上一个问题还没答（2026-10-15 线上实测到的）。
-    state.messages.push({ role: 'assistant', content: '' });
-    var draftTimer = setInterval(function () {
-      if (!answer) return;
-      state.messages[state.messages.length - 1].content = answer;
-      saveHistory(state.expert.id, state.messages);
-    }, 2000);
-
+  async function streamChat(payload, bubble) {
+    state.abort = new AbortController();
     var statusEl = document.createElement('div');
     statusEl.className = 'status';
     statusEl.innerHTML = ic('loader', 13) + '<span>正在连接…</span>';
     bubble.parentNode.parentNode.appendChild(statusEl);
     var answer = '';
-
-    // 状态去重：推理型模型一次回答会推几百个 thinking 增量，若每个都重写 innerHTML
-    // 就是几百次 SVG 重建 —— 状态没变就一个字都别再写（2026-10-15 实测 485 次）。
     var lastStatus = 'init';
     function setStatus(text, spin) {
       var key = (spin ? '1' : '0') + '|' + text;
-      if (key === lastStatus) return;
+      if (key === lastStatus) return;      // 推理模型会推几百个 thinking，状态没变就别重写 DOM
       lastStatus = key;
       statusEl.innerHTML = (spin ? ic('loader', 13) : '') + (text ? '<span>' + esc(text) + '</span>' : '');
       statusEl.className = 'status' + (spin && !text ? ' dots' : '');
@@ -275,15 +311,15 @@
       var res = await fetch(API + '/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ expertId: state.expert.id, messages: apiMessages() }),
+        body: JSON.stringify(payload),
         credentials: 'same-origin',
+        signal: state.abort.signal,
       });
       if (!res.ok || !res.body) {
-        var payload = null;
-        try { payload = await res.json(); } catch (e) { /* 非 JSON 就算了 */ }
-        throw new Error((payload && (payload.message || (payload.error && payload.error.message))) || ('服务返回 HTTP ' + res.status));
+        var p = null;
+        try { p = await res.json(); } catch (e) { /* 非 JSON */ }
+        throw new Error((p && (p.message || (p.error && p.error.message))) || ('服务返回 HTTP ' + res.status));
       }
-
       var reader = res.body.getReader();
       var decoder = new TextDecoder('utf-8');
       var buffer = '';
@@ -300,62 +336,108 @@
           if (line.indexOf('data: ') !== 0) continue;
           var data;
           try { data = JSON.parse(line.slice(6)); } catch (e) { continue; }
-          if (event === 'status') setStatus(data.text, true);
+          if (event === 'start') {
+            if (data.conversationId) state.conversationId = data.conversationId;
+            if (data.title) state.conversations = [{ id: data.conversationId, expertId: state.expert.id, title: data.title, messageCount: 1, updatedAt: new Date().toISOString() }]
+              .concat(state.conversations.filter(function (c) { return c.id !== data.conversationId; }));
+            renderConversations();
+          } else if (event === 'status') setStatus(data.text, true);
           else if (event === 'citations') renderRefs(data);
           else if (event === 'thinking') setStatus('正在思考', true);
           else if (event === 'delta') {
             answer += data.text || '';
-            bubble.textContent = answer;               // 直接换文本，不逐字做动效 —— 那会干扰阅读
+            bubble.textContent = answer;         // 直接换文本，不逐字做动效 —— 那会干扰阅读
             if (answer) setStatus('', false);
             scrollBottom();
           } else if (event === 'error') throw new Error(data.message || '生成失败');
-          else if (event === 'done') { if (data.citations) renderRefs(data.citations); }
+          else if (event === 'stopped') { /* 已把部分内容留在 answer 里 */ }
         }
       }
-      if (!answer.trim()) {
-        bubble.textContent = '（这次没有生成内容，可以再试一次）';
-        state.messages.pop();                       // 空回答不留占位，否则又变成「问了没答」
-        saveHistory(state.expert.id, state.messages);
-      } else {
-        state.messages[state.messages.length - 1].content = answer;
-        saveHistory(state.expert.id, state.messages);
-      }
-      if (statusEl.parentNode) statusEl.remove();
-    } catch (e) {
-      bubble.textContent = '';
-      // 只留了占位没生成出内容 → 去掉它；已经有半截内容就保留（总比全丢好）
-      if (!answer.trim()) {
-        state.messages.pop();
-        saveHistory(state.expert.id, state.messages);
-      }
-      statusEl.className = 'status';
-      statusEl.innerHTML = '<span style="color:var(--red)">' + esc(e.message || '出错了') + '</span>';
-      setTimeout(function () { if (statusEl.parentNode) statusEl.remove(); }, 8000);
+      if (!answer.trim()) bubble.textContent = '（这次没有生成内容，可以再试一次）';
+      return answer;
     } finally {
-      clearInterval(draftTimer);
-      state.streaming = false;
-      $('#js-send').disabled = false;
-      input.disabled = false;
-      // ⚠️ 必须 preventScroll：浏览器 focus 时会去「把元素滚进视口」，
-      //    而 `overflow:hidden` 的容器**照样能被程序滚动** —— 结果整个三栏被顶上去了
-      //    （2026-10-15 实测：右侧引用面板 top 跑到 -152px，看着像被裁掉了）。
-      try { input.focus({ preventScroll: true }); } catch (e) { input.focus(); }
+      if (statusEl.parentNode) statusEl.remove();
+      state.abort = null;
+    }
+  }
+
+  async function send(opts) {
+    var o = opts || {};
+    if (state.streaming || !state.expert) return;
+    var input = $('#js-input');
+    var text = o.content !== undefined ? o.content : input.value.trim();
+    if (!text) return;
+    if (o.content === undefined) { input.value = ''; input.style.height = ''; }
+    $('#js-hint').textContent = '';
+    state.lastQuestion = text;
+
+    var hello = $('#js-msgs').querySelector('.hello');
+    if (hello) hello.remove();
+    if (!o.regenerate) {
+      appendMsg('user', text, { plain: true });
+      state.messages.push({ role: 'user', content: text });
+    }
+    var bubble = appendMsg('assistant', '', { plain: true });
+    setComposerBusy(true);
+
+    try {
+      var answer = await streamChat({
+        conversationId: state.conversationId,
+        expertId: state.expert.id,
+        content: text,
+        regenerate: Boolean(o.regenerate),
+      }, bubble);
+      if (answer.trim()) {
+        state.messages.push({ role: 'assistant', content: answer });
+      }
+      renderMessages();
+      loadConversations();
+    } catch (e) {
+      var stopped = e && (e.name === 'AbortError' || String(e.message).indexOf('abort') >= 0);
+      if (stopped) {
+        var partial = bubble.textContent || '';
+        bubble.textContent = partial + (partial ? '\n\n（已停止）' : '（已停止生成）');
+        if (partial.trim()) state.messages.push({ role: 'assistant', content: partial });
+        renderMessages();
+        loadConversations();
+      } else {
+        bubble.textContent = '';
+        bubble.parentNode.innerHTML = '<div class="err">' + ic('alert', 14) + '<span>' + esc(e.message || '出错了') + '</span></div>';
+        state.messages.pop();     // 把刚 push 的用户消息撤回去，避免界面上留下一条没答的
+      }
+    } finally {
+      setComposerBusy(false);
+      try { input.focus({ preventScroll: true }); } catch (err) { input.focus(); }
       root.scrollTop = 0;
       var main = $('.main'); if (main) main.scrollTop = 0;
       scrollBottom();
     }
   }
 
+  function regenerate() {
+    if (state.streaming) return;
+    var q = '';
+    for (var i = state.messages.length - 1; i >= 0; i--) {
+      if (state.messages[i].role === 'user') { q = state.messages[i].content; break; }
+    }
+    if (!q) { $('#js-hint').textContent = '没找到可重答的问题。'; return; }
+    var last = state.messages[state.messages.length - 1];
+    if (last && last.role === 'assistant') {
+      state.messages.pop();                       // 界面上先移除旧回答，服务端也会删掉那条
+      renderMessages();
+    }
+    send({ content: q, regenerate: true });
+  }
+
   function renderRefs(c) {
     var items = [];
     // ⚠️ 必须编号，且编号要和回答里说的「资料N」对得上：模型的 资料N = 第 N 段检索原文。
-    //    不编号的话用户拿着答案去找「资料5」在面板上是哪一条，根本对不出来（2026-10-15 发现）。
     (c.chunks || []).forEach(function (x, i) {
       items.push('<div class="ref"><b>资料' + (i + 1) + '：' + esc(x.title) + '</b><span>' + esc((x.domain || []).join(' / ')) + '</span>' +
         (x.excerpt ? '<p>' + esc(x.excerpt) + '…</p>' : '') + '</div>');
     });
     (c.hooks || []).forEach(function (n) {
-      items.push('<div class="ref"><b>玩法：' + esc(n) + '</b><span>资料库 · 玩法库（回答里说的"玩法N"按这里的顺序）</span></div>');
+      items.push('<div class="ref"><b>玩法：' + esc(n) + '</b><span>资料库 · 玩法库</span></div>');
     });
     (c.objections || []).forEach(function (q) {
       items.push('<div class="ref"><b>' + esc(q) + '</b><span>资料库 · 异议库</span></div>');
@@ -365,8 +447,6 @@
     $('#ref-count').textContent = items.length ? items.length + ' 项' : '';
     show($('#js-refs'), items.length ? items.join('') :
       '<p class="empty">这次没有检索到直接相关的资料，回答基于行业常识。可以先在「机构画像」里补全信息，命中率会更高。</p>');
-    // 每次重新渲染都回到顶部：列表一变长，浏览器的滚动锚定会把面板停在中间，
-    // 表现为「第一条被顶出去了」（2026-10-15 实测）。
     var body = $('#js-refs');
     if (body) body.scrollTop = 0;
   }
@@ -487,10 +567,7 @@
 
   /* ───────────── 各屏首次进入 ───────────── */
   var INIT = {
-    // ⚠️ 这里必须调 renderConversation 而不是 renderHello：启动时 switchExpert 已经把
-    //    本地留存的对话铺好了，紧接着 showScreen → INIT.chat 若无条件 renderHello，
-    //    就会把恢复出来的历史又盖回开场白（2026-10-15 实测踩到，存进去了、刷新却看不到）。
-    chat: function () { renderExperts(); if (state.expert) renderConversation(); },
+    chat: function () { renderExperts(); renderConversations(); },
     library: function () {
       renderLib();
       call('/library/facets').then(function (f) {
@@ -511,23 +588,21 @@
   };
 
   /* ───────────── 事件 ───────────── */
-  $('#js-send').addEventListener('click', send);
-  $('#js-input').addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  $('#js-send').addEventListener('click', function () {
+    if (state.streaming) {                    // 忙时这个按钮是「停止」
+      if (state.abort) state.abort.abort();
+      return;
+    }
+    send({});
   });
-  // 输入框随内容长高（最多到 CSS 的 max-height），不写死行数
+  $('#js-input').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send({}); }
+  });
   $('#js-input').addEventListener('input', function (e) {
     e.target.style.height = '';
     e.target.style.height = Math.min(e.target.scrollHeight, 168) + 'px';
   });
-  $('#conv-reset').addEventListener('click', function () {
-    if (state.streaming || !state.expert) return;
-    state.messages = [];
-    saveHistory(state.expert.id, []);        // 「新对话」要真的清掉留存，否则刷新又回来了
-    $('#js-refs').innerHTML = '<p class="empty">发出问题后，这里会显示这次回答参考了你资料库里的哪几份文件。</p>';
-    $('#ref-count').textContent = '';
-    renderHello();
-  });
+  $('#conv-reset').addEventListener('click', newConversation);
   $('#js-q').addEventListener('input', debounce(function (e) { state.lib.q = e.target.value.trim(); renderLib(); }, 300));
   $('#cs-run').addEventListener('click', runCompliance);
   $('#cs-demo').addEventListener('click', function () {

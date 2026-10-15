@@ -309,6 +309,41 @@
 #js-app .ename{font-size:12.5px;font-weight:600;display:block;letter-spacing:-.005em}
 #js-app .etag{font-size:10.5px;color:var(--text-3);display:block;margin-top:2px;line-height:1.5}
 
+/* ── 会话列表（机构级：服务端存，这里只是入口）── */
+#js-app .convlist{padding:0 6px 8px;overflow-y:auto;min-height:0}
+#js-app .convrow{display:flex;align-items:stretch;gap:2px;border-radius:9px}
+#js-app .convrow:hover{background:var(--surface-2)}
+#js-app .convrow[aria-current="true"]{background:var(--brand-soft)}
+#js-app .convopen{flex:1;min-width:0;padding:8px 9px;border-radius:9px;display:block}
+#js-app .convtitle{
+  font-size:12px;display:block;color:var(--text);line-height:1.45;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+#js-app .convrow[aria-current="true"] .convtitle{color:var(--brand);font-weight:500}
+#js-app .convmeta{font-size:10.5px;color:var(--text-3);display:block;margin-top:2px}
+#js-app .convdel{
+  flex:none;width:26px;border-radius:8px;display:grid;place-items:center;color:var(--text-3);opacity:0;
+  transition:opacity var(--t-press) var(--ease), color var(--t-press) var(--ease), background var(--t-press) var(--ease);
+}
+#js-app .convrow:hover .convdel{opacity:1}
+#js-app .convdel:hover{color:var(--red);background:var(--red-soft)}
+@media (hover:none){#js-app .convdel{opacity:.6}}
+
+/* ── 助手消息下的操作条（复制 / 重新生成）──
+   只在悬停或键盘聚焦时出现 —— 常驻会让一屏几十条回答看着很吵。 */
+#js-app .bubblewrap{max-width:min(720px,86%);min-width:0}
+#js-app .bubblewrap .bubble{max-width:100%}
+#js-app .msgactions{display:flex;gap:4px;margin-top:6px;opacity:0;transition:opacity var(--t-press) var(--ease)}
+#js-app .msg:hover .msgactions,#js-app .msg:focus-within .msgactions{opacity:1}
+@media (hover:none){#js-app .msgactions{opacity:1}}
+#js-app .msgact{
+  display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--text-3);
+  padding:4px 8px;border-radius:7px;
+  transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease);
+}
+#js-app .msgact:hover{background:var(--surface-3);color:var(--text)}
+#js-app .btn.stop{border-color:color-mix(in srgb,var(--red) 45%, var(--line));color:var(--red)}
+
 /* ── 引用面板：条目错峰进场（Emil：组入场 30–80ms 错峰，且绝不能挡住交互） ── */
 #js-app .refbody{padding:11px 13px;display:flex;flex-direction:column;gap:11px;overflow-y:auto;min-height:0}
 #js-app .ref{
@@ -438,9 +473,11 @@
 
     <section class="screen" id="scr-chat" aria-label="专家团">
       <div class="chatwrap">
-        <div class="panel">
-          <div class="ptitle">专家<small id="ex-count"></small></div>
-          <div class="expertlist" id="js-experts"></div>
+        <div class="panel" style="display:grid;grid-template-rows:auto auto minmax(0,1fr)">
+          <div class="ptitle" style="border-bottom:0;padding-bottom:6px">专家<small id="ex-count"></small></div>
+          <div class="expertlist" id="js-experts" style="padding-top:0"></div>
+          <div class="ptitle" style="border-bottom:0;border-top:1px solid var(--line-soft);border-radius:0;padding-top:11px">会话<small id="conv-count"></small></div>
+          <div class="convlist" id="js-convs"></div>
         </div>
         <div class="panel conv">
           <div class="convhead">
