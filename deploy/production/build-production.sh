@@ -45,6 +45,10 @@ export VITE_ORG_APP_URL="${VITE_ORG_APP_URL:-https://aicyld.com/org}"
 node_modules/.bin/vite build apps/admin --config apps/admin/vite.config.mjs
 node_modules/.bin/vite build apps/org --config apps/org/vite.config.mjs
 node_modules/.bin/vite build apps/website --config apps/website/vite.config.mjs
+# 招生军师（/junshi/）：给它的两个外链脚本打内容版本号。
+# 必须**在 vite build 之后**跑 —— 它读的是 dist 里的产物算 sha256，改的也是 dist 里的 HTML（不动源码）。
+# 不跑的话页面引用的是字面量 `?v=__STAMP__`，所有版本共用一个 URL → 撞 nginx `/assets/` 的 7 天强缓存。
+node apps/website/scripts/stamp-junshi.mjs
 
 for app in admin org website; do
   test -f "apps/${app}/dist/index.html"

@@ -10,6 +10,11 @@
      `<style>` 保持内联——`style-src 'self' 'unsafe-inline'` 本来就放行内联样式。
      改动这个页面**不要**图省事把脚本塞回 HTML 里。
 
+  ⚠️ 两个 script 上的 `?v=__STAMP__` 是占位符，由 `apps/website/scripts/stamp-junshi.mjs`
+     在构建时换成内容哈希（build-production.sh 里已接上）。**别手工改成固定值**：
+     nginx 的 `/assets/` 是 expires 7d，URL 不变的话浏览器会拿缓存里的旧脚本，
+     现象是「服务器上是新的、页面还是旧行为」，非常难自查（2026-10-15 实测踩过一次）。
+
   ⚠️ 按用户口径「暂时先不对外展示」：noindex + 未挂导航。要正式对外时，
      除了去掉 robots meta，还要在 apps/website/src/main.jsx 里加 SPA 路由并挂进 WEBSITE_NAV。
 -->
@@ -480,8 +485,8 @@
 </div>
 </div>
 <button class="jn-toggle" type="button" id="jn-toggle">深/浅色</button>
-<script src="/assets/junshi/lucide-1.17.0.js" defer></script>
-<script src="/assets/junshi/prototype.js" defer></script>
+<script src="/assets/junshi/lucide-1.17.0.js?v=__STAMP__" defer></script>
+<script src="/assets/junshi/prototype.js?v=__STAMP__" defer></script>
 <script>
 (function () {
   var b = document.getElementById('jn-toggle');
