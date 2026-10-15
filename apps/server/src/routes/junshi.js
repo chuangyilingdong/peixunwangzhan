@@ -571,23 +571,41 @@ export async function handleJunshi(ctx) {
     let cites = null;
     try {
       sseSend(ctx, 'start', { conversationId: conv.id, expertId, title: conv.title });
-      const out = await runChat(ctx, {
-        expertId: conv.expert_id || expertId,
-        messages: regenerate ? history : [...history, { role: 'user', content }],
-        signal: controller.signal,
-        onStatus: (t) => sseSend(ctx, 'status', { text: t }),
-        onCitations: (c) => { cites = c; sseSend(ctx, 'citations', c); },
-        onDelta: (t) => { answer += t || ''; sseSend(ctx, 'delta', { text: t }); },
-        onReasoning: () => sseSend(ctx, 'thinking', {}),
-      });
-      if (out.citations && !cites) cites = out.citations;
+      // 空回答自动重试一次。
+      // ⚠️ 为什么会有空回答：deepseek-flash 是**推理型**模型，思考 token 算在输出预算里；
+      //    而这条 TEXT 渠道的请求模板里没有 max_tokens（内置默认模板只有 model + messages），
+      //    于是思考一大就把正文预算吃光 —— content 为空、finish_reason=length。
+      //    2026-10-15 实测 6 次真回答里空了 2 次（约 30%），这个比率不能上线。
+      //    不去改共享渠道配置（画布的 VibeCoding 也走这条 TEXT 渠道），在自己这层补一次。
+      for (let attempt = 0; ; attempt++) {
+        answer = '';
+        cites = null;
+        const callMessages = regenerate
+          ? (attempt ? [...history, { role: 'user', content: '（上一条没有产出正文，这次请直接给出答案，不要再展开推理。）' }] : history)
+          : [...history, { role: 'user', content }];
+        const out = await runChat(ctx, {
+          expertId: conv.expert_id || expertId,
+          messages: callMessages,
+          signal: controller.signal,
+          onStatus: (t) => sseSend(ctx, 'status', { text: t }),
+          onCitations: (c) => { cites = c; sseSend(ctx, 'citations', c); },
+          onDelta: (t) => { answer += t || ''; sseSend(ctx, 'delta', { text: t }); },
+          onReasoning: () => sseSend(ctx, 'thinking', {}),
+        });
+        if (out.citations && !cites) cites = out.citations;
+        if (answer.trim() || attempt >= 1 || controller.signal.aborted) {
+          sseSend(ctx, 'done', { conversationId: conv.id, model: out.model, provider: out.provider, citations: cites, usage: out.usage });
+          break;
+        }
+        sseSend(ctx, 'status', { text: '这次没生成出正文，重试一次…' });
+        sseSend(ctx, 'reset', {});          // 让前端清空气泡，别把两次的正文接在一起
+      }
       if (answer.trim()) {
         const aAt = nowIso();
         await aq('INSERT INTO junshi_messages (id, conversation_id, role, content, citations, created_at) VALUES (?,?,?,?,?,?)',
           [id('jm'), conv.id, 'assistant', answer, cites ? JSON.stringify(cites) : null, aAt]);
         await recountConversation(conv.id, aAt);
       }
-      sseSend(ctx, 'done', { conversationId: conv.id, model: out.model, provider: out.provider, citations: cites, usage: out.usage });
     } catch (error) {
       const aborted = ctx.req.destroyed || controller.signal.aborted;
       // 中止时把已经生成的部分存下来 —— 用户按了停止，那些字也是他要的

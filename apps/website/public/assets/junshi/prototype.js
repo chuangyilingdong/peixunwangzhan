@@ -350,6 +350,7 @@
             if (answer) setStatus('', false);
             scrollBottom();
           } else if (event === 'error') throw new Error(data.message || '生成失败');
+          else if (event === 'reset') { answer = ''; bubble.textContent = ''; }   // 服务端重试：清空气泡
           else if (event === 'stopped') { /* 已把部分内容留在 answer 里 */ }
         }
       }
