@@ -1,0 +1,322 @@
+/**
+ * 招生军师的「专家团」：角色定义 + 知识库检索 + 一轮对话。
+ *
+ * 产品形态：机构**跟 AI 聊**，AI 参考他们自己的资料库来回答，给属于他们自己的答案。
+ * 所以这里做三件事：
+ *   1. 每个专家绑一个知识域（营销 / 话术 / 文案 / 转化 / 续费 / 合规）；
+ *   2. 用户提问时，先用**关键词检索**从 1178 段原文分块里捞出最相关的几段，
+ *      连同结构化知识（异议库/文案库/玩法库）一起塞进 system prompt；
+ *   3. 把机构画像也塞进去 —— 这是"属于他们自己的答案"的来源。
+ *
+ * ⚠️ 检索为什么不用向量：语料是**随版本分发的只读 JSON**（约 2.6MB / 1178 段），
+ *    中文用二元组（bigram）匹配 + 领域加权已经足够准，而且不需要引入 embedding 服务、
+ *    不需要向量库、不会因为换模型而漂。语料再大一个数量级时应当换成向量（那时候再说）。
+ *
+ * ⚠️ 大模型走的是**平台已有的渠道配置**（platform_settings.ai_provider_policy 的 TEXT 渠道，
+ *    生产目前是 DeepSeek：channel-mtp9razp，模型 deepseek-flash / deepseek-v4-pro），
+ *    密钥由 services/providerSecret.js 解密 —— 不在这里另配一套 key，
+ *    否则后台轮换密钥时这里会静默失效。
+ *    ⚠️ 注意 env 里 `AI_PROVIDER=local-mock` 只是**兜底默认**；配了 modalityChannels.TEXT 时
+ *       走的是渠道，不是 mock（2026-10-15 实测：真实返回 HTTP 200）。
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { arow } from '../lib.js';
+import { getAiProviderPolicy } from '../routes/billingConfig.js';
+import { providerSelectionForModality } from '../routes/aiGeneration.js';
+import { getGenerationProvider, generationProviderInfo } from './generationProvider.js';
+import { isMockProvider } from './providerContract.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = path.resolve(__dirname, '../../data/junshi');
+
+let cache = null;
+/** 懒加载全部参考数据 + 预建检索索引（进程内常驻，别在请求里读盘）。 */
+function data() {
+  if (cache) return cache;
+  const read = (f) => JSON.parse(fs.readFileSync(path.join(DATA_DIR, f), 'utf8'));
+  const library = read('library.json');
+  const knowledge = read('knowledge.json');
+  const compliance = read('compliance.json');
+  const chunks = read('chunks.json');
+  // 预建 bigram 集合：查询时只做集合命中，不做全文 indexOf（1178 段 × 每次全扫太浪费）
+  const indexed = chunks.items.map((c) => {
+    const grams = new Set();
+    const t = c.text + c.title;
+    for (let i = 0; i < t.length - 1; i++) grams.add(t.slice(i, i + 2));
+    return { ...c, grams };
+  });
+  cache = { library, knowledge, compliance, chunks: indexed };
+  return cache;
+}
+
+/* ───────────── 专家角色 ───────────── */
+// 顺序就是界面上的顺序。`domains` 决定检索时优先捞哪个领域的原文分块。
+export const EXPERTS = [
+  {
+    id: 'marketing',
+    name: '营销军师',
+    tag: '活动策划 · 招生方案 · 全年节奏',
+    avatar: '谋',
+    domains: ['营销', '团队'],
+    intro: '管"这个月打什么仗"：全年节奏、活动方案、钩子玩法、预算和分工。',
+    greeting: '我是营销军师。你把要办的活动先说个大概就行——什么时候、什么节点、想拉新还是想课消、大概多少预算。\n\n我会从你这批资料里挑出对得上的玩法给你，再把执行步骤拆开。',
+    starters: ['10 月底想办一场万圣节活动，主要让老学员带新朋友', '寒假班怎么招？我只有 3 个校区、主做少儿美术', '上半年淡季怎么安排？感觉 3-4 月没节奏'],
+  },
+  {
+    id: 'script',
+    name: '话术教练',
+    tag: '地推 · 电话邀约 · 异议处理',
+    avatar: '话',
+    domains: ['话术'],
+    intro: '管"这句话怎么说"：家长一句话问住你了，就来找我。',
+    greeting: '我是话术教练。你把家长的原话直接发给我就行，越原汁原味越好——比如"太贵了""我回去和他爸爸商量一下"。\n\n我会告诉你怎么接、按什么顺序接，还有你手上的资料里别人是怎么答的。',
+    starters: ['家长说"太贵了"，怎么回？', '地推的时候第三次被拒绝了怎么办', '家长说"已经在别家报了"，还能聊吗'],
+  },
+  {
+    id: 'copy',
+    name: '文案写手',
+    tag: '朋友圈 · 社群 · 宣传单',
+    avatar: '文',
+    domains: ['文案'],
+    intro: '管"发出去的那段字"：朋友圈、班级群、私信、海报文案。',
+    greeting: '我是文案写手。告诉我你要发在哪（朋友圈/班级群/私信）、想推什么、给谁看。\n\n我按你这批资料里的套路给你写，也能直接给你几条现成的改。',
+    starters: ['写一条寒假班招生的朋友圈', '这周要发什么内容？帮我排一下', '给我一条劝家长别轻易停课的文案'],
+  },
+  {
+    id: 'convert',
+    name: '转化教练',
+    tag: '试听 · 公开课 · 家长会 · 逼单',
+    avatar: '转',
+    domains: ['转化'],
+    intro: '管"人来了怎么留住"：试听、公开课、家长会、现场成交。',
+    greeting: '我是转化教练。跟我说说你卡在哪一步——是约不来试听，还是试听完了不报名，还是家长会开完没动静。\n\n我会把对应的流程和话术给你，按资料里那套标准动作来。',
+    starters: ['试听课家长来了但就是不报名', '家长会怎么开才能带出续费？', '孩子很喜欢，家长说要考虑，怎么推一把'],
+  },
+  {
+    id: 'renew',
+    name: '续费管家',
+    tag: '续班 · 课消 · 转介绍',
+    avatar: '续',
+    domains: ['续费', '转介绍'],
+    intro: '管"学过的人怎么留下、怎么带人来"：续班、课消、老带新。',
+    greeting: '我是续费管家。老生续不上、课时耗得慢、家长不愿意转介绍——这几件事你挑一件说。\n\n我会给你对应的流程、考核口径和说服思路。',
+    starters: ['这一期续班率只有 60%，怎么提？', '怎么让家长愿意转介绍？', '课时消耗太慢，怎么催课又不伤感情'],
+  },
+  {
+    id: 'compliance',
+    name: '合规顾问',
+    tag: '违禁词 · 预收费 · 有奖销售',
+    avatar: '规',
+    domains: ['合规', '营销'],
+    intro: '管"哪些话不能写、哪些玩法有风险"。',
+    greeting: '我是合规顾问。把你要发的文案、要办的活动的规则贴给我，我帮你过一遍。\n\n我手上有一份从你全部资料里统计出来的违禁词表，还有几类要特别小心的玩法。',
+    starters: ['帮我看看这条文案能不能发', '做"家长合伙人"这种模式有风险吗', '抽奖送课这种活动合规吗'],
+  },
+];
+
+export function expertById(id) {
+  return EXPERTS.find((e) => e.id === id) || EXPERTS[0];
+}
+
+/* ───────────── 检索 ───────────── */
+/** 中文按二元组切（顺带丢掉标点/空白），"家长嫌贵" → 家长/长嫌/嫌贵。 */
+function bigrams(s) {
+  const t = String(s || '').replace(/[\s\p{P}\p{S}]/gu, '');
+  const out = [];
+  for (let i = 0; i < t.length - 1; i++) out.push(t.slice(i, i + 2));
+  return out;
+}
+
+/**
+ * 从原文分块里捞最相关的几段。
+ * 打分：命中的查询二元组个数 + 领域加权（专家领域命中 +2）。
+ * ⚠️ 命中数用**去重后的查询二元组**计数（每个 gram 只算一次），
+ *    避免一段里反复出现的词把分数拉爆。
+ */
+export function retrieveChunks(query, domains, limit = 5) {
+  const { chunks } = data();
+  const grams = [...new Set(bigrams(query))].slice(0, 60);
+  if (!grams.length) return [];
+  const scored = [];
+  for (const c of chunks) {
+    let hit = 0;
+    for (const g of grams) if (c.grams.has(g)) hit += 1;
+    if (hit < 3) continue;
+    const domainBoost = (c.domain || []).some((d) => domains.includes(d)) ? 2 : 0;
+    scored.push([hit + domainBoost, c]);
+  }
+  scored.sort((a, b) => b[0] - a[0]);
+  // 同一份文档最多取 2 段，保证来源分散，别整篇都是同一份
+  const out = [];
+  const perSrc = new Map();
+  for (const [, c] of scored) {
+    const n = perSrc.get(c.src) || 0;
+    if (n >= 2) continue;
+    perSrc.set(c.src, n + 1);
+    out.push(c);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** 结构化知识：按专家的领域把异议/文案/玩法也捞一份，跟原文分块互补。 */
+export function retrieveStructured(query, expertId, limit = 3) {
+  const { knowledge } = data();
+  const grams = [...new Set(bigrams(query))].slice(0, 60);
+  const hitCount = (text) => {
+    let hit = 0;
+    for (const g of grams) if (text.includes(g)) hit += 1;
+    return hit;
+  };
+  const pick = (list, textOf, strip) => list
+    .map((item) => [hitCount(textOf(item)), item])
+    .filter(([n]) => n >= 2)
+    .sort((a, b) => b[0] - a[0])
+    .slice(0, limit)
+    .map(([, item]) => strip(item));
+
+  if (expertId === 'script') {
+    return { objections: pick(knowledge.objections, (o) => o.q + o.a, (o) => ({ q: o.q, a: o.a.slice(0, 500), cat: o.cat, chain: o.chain || null })) };
+  }
+  if (expertId === 'copy') {
+    return { copies: pick(knowledge.copies, (c) => c.c, (c) => ({ c: c.c.slice(0, 400), kind: c.kind })) };
+  }
+  if (expertId === 'marketing' || expertId === 'compliance') {
+    return { hooks: pick(knowledge.hooks, (h) => h.name + h.rule + h.note, (h) => ({ name: h.name, price: h.price, rule: h.rule, note: h.note })) };
+  }
+  return {};
+}
+
+/* ───────────── 机构画像 ───────────── */
+async function profileFor(ctx) {
+  if (!ctx.auth) return null;
+  const ownerKey = ctx.auth.user.orgId ? `org:${ctx.auth.user.orgId}` : `user:${ctx.auth.user.id}`;
+  const row = await arow('SELECT content FROM junshi_profiles WHERE owner_key=?', [ownerKey]).catch(() => null);
+  if (!row) return null;
+  try {
+    const p = JSON.parse(row.content || '{}');
+    const flat = [];
+    const labels = {
+      name: '机构名称', shortName: '简称', city: '城市', campuses: '校区',
+      categories: '课程品类', classTypes: '班型', unitPrice: '课时单价', mainPackage: '主力课包', discountFloor: '优惠底线',
+      headcount: '教师人数', education: '学历构成', seniority: '教龄构成', star: '明星教师',
+      students: '在读学员', perCampus: '分校区人数', fullRate: '满班率', renewRate: '历史续班率',
+      leadCost: '线索成本', visitRate: '到访率', dealRate: '成交率',
+      wecomQr: '企业微信', officialAccount: '公众号', douyin: '抖音', phone: '电话', addressScript: '地址话术',
+      caseStudy: '学员案例', praise: '家长好评', achievements: '成果数据',
+      forbiddenWords: '不能说的词', noPromise: '不能承诺的事', prepayRule: '预收费规则',
+    };
+    for (const bag of Object.values(p)) {
+      if (!bag || typeof bag !== 'object') continue;
+      for (const [k, v] of Object.entries(bag)) {
+        if (v) flat.push(`${labels[k] || k}：${v}`);
+      }
+    }
+    return flat.length ? flat.join('\n') : null;
+  } catch { return null; }
+}
+
+/* ───────────── 提示词 ───────────── */
+function buildSystemPrompt({ expert, chunks, structured, profile, compliance }) {
+  const parts = [];
+  parts.push(`你是「${expert.name}」，${expert.tag}。你服务的是中国教培机构的校长和市场/教务负责人。`);
+
+  if (profile) {
+    parts.push(`\n【这家机构的情况（来自他们自己填的机构画像，回答要结合这些信息，别用"贵机构""XX"这类占位）】\n${profile}`);
+  } else {
+    parts.push('\n【这家机构还没填机构画像】\n所以你不知道它的品类、价格、校区。如果回答需要这些信息，先用一句话问 1-2 个最关键的（品类 + 规模），别一次问一堆。');
+  }
+
+  if (chunks.length) {
+    parts.push('\n【从这家机构自己的资料库里检索到的原文（优先用它们回答，能引用原话就引用）】');
+    chunks.forEach((c, i) => {
+      parts.push(`〔资料${i + 1}〕《${c.title}》\n${c.text}`);
+    });
+  }
+
+  if (structured.objections?.length) {
+    parts.push('\n【资料库里的同类异议与标准答法】');
+    structured.objections.forEach((o, i) => {
+      parts.push(`〔异议${i + 1}〕家长问：${o.q}\n原文答法：${o.a}`);
+      if (o.chain) parts.push(`应答骨架：${o.chain.join(' → ')}`);
+    });
+  }
+  if (structured.copies?.length) {
+    parts.push('\n【资料库里的同类文案（改写它们，不要照抄品牌名）】');
+    structured.copies.forEach((c, i) => parts.push(`〔文案${i + 1}·${c.kind}〕${c.c}`));
+  }
+  if (structured.hooks?.length) {
+    parts.push('\n【资料库里的同类玩法（规则照抄，价格按这家机构的情况调整）】');
+    structured.hooks.forEach((h, i) => parts.push(`〔玩法${i + 1}〕${h.name}（${h.price}）：${h.rule}。注意：${h.note}`));
+  }
+  if (expert.id === 'compliance' && compliance?.words?.length) {
+    parts.push('\n【全库统计出来的高频违禁词（按出现次数排）】');
+    parts.push(compliance.words.slice(0, 14).map((w) => `${w.word}（${w.level}）→ ${w.advice}`).join('\n'));
+  }
+
+  parts.push(`\n【怎么回答】
+1. 说人话，像老同行坐着聊天，别端着、别用"作为AI"这类话。
+2. 给**能直接用**的东西：具体的话术原句、步骤、数字、时间点。不要讲空道理。
+3. 上面资料里有对得上的内容就用它，并说明来自哪份资料。资料里没有的，按教培行业常识答，**并明确说这一段不是来自你的资料库**。
+4. 不要编造资料库里没有的案例、数据、政策条文。
+5. 回答控制在 500 字以内（用户明确要长方案时除外）。用短段落，可以用 1. 2. 3. 列点，**不要用表格**。
+6. 结尾可以反问一个最关键的追问，帮他把问题说清楚，但别一次问一堆。`);
+
+  return parts.join('\n');
+}
+
+/* ───────────── 一轮对话 ───────────── */
+/**
+ * 跑一轮：检索 → 拼提示词 → 流式生成。
+ * 回调（由路由写 SSE）：onStatus / onDelta / onReasoning / onCitations。
+ */
+export async function runChat(ctx, { expertId, messages, signal, onStatus, onDelta, onReasoning, onCitations }) {
+  const { compliance } = data();
+  const expert = expertById(expertId);
+  const history = (Array.isArray(messages) ? messages : [])
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .slice(-12)                                   // 只带最近 12 轮，够用又不至于把上下文撑爆
+    .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
+  const lastUser = [...history].reverse().find((m) => m.role === 'user');
+  if (!lastUser || !lastUser.content.trim()) throw new Error('没有可回答的问题');
+
+  onStatus?.('检索资料库…');
+  const chunks = retrieveChunks(lastUser.content, expert.domains, 5);
+  const structured = retrieveStructured(lastUser.content, expert.id, 3);
+  const profile = await profileFor(ctx);
+
+  const citations = {
+    chunks: chunks.map((c) => ({ title: c.title, domain: c.domain, src: c.src, excerpt: c.text.slice(0, 120) })),
+    hooks: (structured.hooks || []).map((h) => h.name),
+    objections: (structured.objections || []).map((o) => o.q),
+    copies: (structured.copies || []).length,
+    hasProfile: Boolean(profile),
+  };
+  onCitations?.(citations);
+
+  const system = buildSystemPrompt({ expert, chunks, structured, profile, compliance });
+  const policy = await getAiProviderPolicy();
+  const selection = providerSelectionForModality(policy, 'TEXT');
+  const info = generationProviderInfo(selection);
+  const provider = getGenerationProvider(selection);
+  if (typeof provider.generateStream !== 'function') throw new Error('当前 AI 渠道不支持流式对话');
+
+  onStatus?.(isMockProvider(provider.name) ? '当前是本地模拟渠道（没配真实模型）' : `正在用 ${selection.model || provider.model || '模型'} 生成…`);
+
+  const result = await provider.generateStream({
+    messages: [{ role: 'system', content: system }, ...history],
+    signal,
+    onDelta: (chunk) => onDelta?.(chunk),
+    onReasoning: (chunk) => onReasoning?.(chunk),
+  });
+
+  return {
+    model: selection.model || provider.model || '',
+    provider: provider.name,
+    mode: info.mode,
+    citations,
+    usage: result?.usage || null,
+  };
+}

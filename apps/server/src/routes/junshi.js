@@ -24,7 +24,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { arow, aq, errors, id, nowIso, requireAuth, requireRole } from '../lib.js';
+import { arow, aq, corsHeaders, errors, id, nowIso, requireAuth, requireRole } from '../lib.js';
+import { EXPERTS, runChat } from '../services/junshiChat.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../../data/junshi');
@@ -142,6 +143,54 @@ function ownerKeyOf(ctx) {
   const orgId = auth.user.orgId;
   // 机构用户按机构存（同机构的人共享一份画像）；平台侧没有机构的账号按用户存，便于自己试。
   return orgId ? `org:${orgId}` : `user:${auth.user.id}`;
+}
+
+/* ───────────── 对话相关的辅助 ───────────── */
+
+/**
+ * 对话限流（内存计数，进程重启即清）。
+ *
+ * 为什么必须有：`/chat` 每次调用都真的花上游 token（DeepSeek 按量计费）。这个入口现在
+ * 「暂时不对外展示」但**没有鉴权**，所以它等价于一个公开的、可被刷的付费接口。
+ * 上线到公开之前，这里就是那道闸；正式对外时应当改成 requireAuth（一行）。
+ *
+ * 口径：未登录按 IP 20 次/小时；已登录按用户/机构 60 次/小时。
+ * ⚠️ 是为了防刷，不是为了精确计量 —— 多进程部署时每个进程各算一份，那时候要换共享存储。
+ */
+const CHAT_WINDOW_MS = 60 * 60 * 1000;
+const chatHits = new Map();
+function chatRateLimit(ctx) {
+  const who = ctx.auth
+    ? `u:${ctx.auth.user.orgId || ctx.auth.user.id}`
+    : `ip:${String(ctx.req?.headers?.['x-forwarded-for'] || ctx.req?.socket?.remoteAddress || 'unknown').split(',')[0].trim()}`;
+  const limit = ctx.auth ? 60 : 20;
+  const now = Date.now();
+  const hits = (chatHits.get(who) || []).filter((t) => now - t < CHAT_WINDOW_MS);
+  if (hits.length >= limit) {
+    const waitMin = Math.ceil((CHAT_WINDOW_MS - (now - hits[0])) / 60000);
+    throw errors.badRequest(`聊得太快了，请 ${waitMin} 分钟后再试`, 'CHAT_RATE_LIMITED');
+  }
+  hits.push(now);
+  chatHits.set(who, hits);
+  // 顺手清掉过期的 key，别让 Map 无限长（条目数 = 一小时内活跃的人数，量很小）
+  if (chatHits.size > 5000) {
+    for (const [k, v] of chatHits) if (!v.some((t) => now - t < CHAT_WINDOW_MS)) chatHits.delete(k);
+  }
+}
+
+// SSE 头：`x-accel-buffering: no` 是必须的 —— 没有它 nginx 会把整个流缓冲住，
+// 表现是「模型早就答完了，页面一直转圈，最后一次性全出现」。照 routes/vibecoding.js 的写法。
+function sseOpen(ctx) {
+  ctx.res.writeHead(200, corsHeaders(ctx.req, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  }));
+}
+function sseSend(ctx, event, payload) {
+  if (ctx.res.writableEnded || ctx.res.destroyed) return;
+  ctx.res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
 export async function handleJunshi(ctx) {
@@ -329,6 +378,62 @@ export async function handleJunshi(ctx) {
         [ownerKey, auth.user.orgId || null, JSON.stringify(clean), now, now]);
     }
     return { profile: { ...EMPTY_PROFILE, ...clean }, updatedAt: now, completion: completeness({ ...EMPTY_PROFILE, ...clean }), guest: false };
+  }
+
+  // ── GET /api/junshi/experts ── 专家花名册（前端左侧列表用；提示词留在服务端不返回）
+  if (rest === '/experts' && method === 'GET') {
+    return {
+      experts: EXPERTS.map(({ id: eid, name, tag, avatar, intro, greeting, starters }) => ({ id: eid, name, tag, avatar, intro, greeting, starters })),
+    };
+  }
+
+  // ── POST /api/junshi/chat ── 跟专家对话（SSE 流式）
+  // 事件：status（检索/生成阶段）→ citations（引用了哪些资料）→ delta*（正文增量）
+  //       → thinking（推理型模型的思考，不带正文）→ done / error
+  if (rest === '/chat' && method === 'POST') {
+    chatRateLimit(ctx);
+    const expertId = String(ctx.body?.expertId || 'marketing');
+    const messages = Array.isArray(ctx.body?.messages) ? ctx.body.messages : [];
+    const lastUser = [...messages].reverse().find((m) => m?.role === 'user');
+    if (!lastUser || !String(lastUser.content || '').trim()) {
+      throw errors.badRequest('没有可回答的问题', 'VALIDATION_ERROR', { field: 'messages' });
+    }
+    if (String(lastUser.content).length > 4000) {
+      throw errors.badRequest('单条消息最多 4000 字', 'VALIDATION_ERROR', { field: 'messages' });
+    }
+
+    sseOpen(ctx);
+    const controller = new AbortController();
+    ctx.req.on('close', () => controller.abort());
+    // 推理型模型（deepseek-flash）会先思考几十秒，期间一个 data 事件都没有 ——
+    // 定期写 SSE 注释行（`: ping`）保活，否则 nginx 按 proxy_read_timeout 掐断连接。
+    const heartbeat = setInterval(() => {
+      if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.write(': ping\n\n');
+    }, 15000);
+    heartbeat.unref?.();
+    try {
+      const out = await runChat(ctx, {
+        expertId,
+        messages,
+        signal: controller.signal,
+        onStatus: (text) => sseSend(ctx, 'status', { text }),
+        onCitations: (c) => sseSend(ctx, 'citations', c),
+        onDelta: (text) => sseSend(ctx, 'delta', { text }),
+        onReasoning: () => sseSend(ctx, 'thinking', {}),
+      });
+      sseSend(ctx, 'done', { model: out.model, provider: out.provider, citations: out.citations, usage: out.usage });
+    } catch (error) {
+      const aborted = ctx.req.destroyed || controller.signal.aborted;
+      if (!aborted) {
+        console.warn('[junshi chat] 生成失败：', error?.message || error);
+        sseSend(ctx, 'error', { message: error?.message || '生成失败，请重试' });
+      }
+    } finally {
+      clearInterval(heartbeat);
+      if (!ctx.res.writableEnded) ctx.res.end();
+    }
+    // 响应已经自己写完，告诉 index.js 不要再套 JSON 信封（见 dispatch 里的 __streamed 分支）
+    return { __streamed: true };
   }
 
   return null;
