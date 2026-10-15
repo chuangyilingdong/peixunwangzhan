@@ -81,6 +81,28 @@
     var list = loadStore()[expertId];
     return Array.isArray(list) ? list : [];
   }
+  /**
+   * 发给服务端的历史：**丢掉中间那些「问了没答」的问题**，但保留最后一条（这次要问的）。
+   *
+   * 刷新/关标签打断生成时会留下「用户消息已落盘、助手消息还没有」的孤儿记录；
+   * 直接带上就变成两条连续 user，模型会以为上一个问题还没回答，容易答跑偏。
+   * 界面上仍然显示它（用户看得见自己问过什么），只是不参与这一轮上下文。
+   *
+   * ⚠️ 判据必须是「后面跟着的是不是 assistant」，**不能写成"弹出末尾那条"** ——
+   *    调用这个函数时新问题已经 push 进 state.messages 了，弹末尾等于把刚问的这句删掉
+   *    （2026-10-15 写下第一版时就是这么错的，上生产前自己查出来了）。
+   */
+  function apiMessages() {
+    var list = state.messages.filter(function (m) { return m.role === 'user' || (m.content || '').trim(); });
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var m = list[i];
+      if (m.role !== 'user') { out.push(m); continue; }
+      var next = list[i + 1];
+      if (i === list.length - 1 || (next && next.role === 'assistant')) out.push(m);
+    }
+    return out;
+  }
 
   /* ───────────── 主题 ───────────── */
   function applyThemeIcon() {
@@ -147,8 +169,18 @@
   /** 有历史就铺历史，没有才显示开场白＋建议问题。 */
   function renderConversation() {
     if (state.messages.length) {
-      $('#js-msgs').innerHTML = '';
-      state.messages.forEach(function (m) { appendMsg(m.role, m.content); });
+      var box = $('#js-msgs');
+      box.innerHTML = '';
+      // 空内容的 assistant 是「流式被打断」留下的占位，不显示
+      var msgs = state.messages.filter(function (m) { return m.role === 'user' || (m.content || '').trim(); });
+      msgs.forEach(function (m) { appendMsg(m.role, m.content); });
+      // 末尾是「问了没答」的那条（刷新/关页面打断）→ 明说一句，别让人以为界面坏了
+      if (msgs.length && msgs[msgs.length - 1].role === 'user') {
+        var note = document.createElement('div');
+        note.className = 'status';
+        note.innerHTML = ic('alert', 13) + '<span>上一条没答完（可能刷新或关过页面），可以再问一次</span>';
+        box.appendChild(note);
+      }
       $('#js-refs').innerHTML = '<p class="empty">继续追问就行。这一轮引用了什么，会在回答后显示在这里。</p>';
       $('#ref-count').textContent = '';
       scrollBottom();
@@ -211,6 +243,17 @@
     input.disabled = true;
 
     var bubble = appendMsg('assistant', '');
+    // 先占位一条空的 assistant，并**边流边存草稿**（每 2 秒）。
+    // 为什么：助手那条原来只在整段结束后才落盘，一旦在流式途中刷新/关标签，
+    // 就只剩一条「问了没答」的用户消息 —— 下次提问时两条连续 user 一起发给模型，
+    // 模型会以为上一个问题还没答（2026-10-15 线上实测到的）。
+    state.messages.push({ role: 'assistant', content: '' });
+    var draftTimer = setInterval(function () {
+      if (!answer) return;
+      state.messages[state.messages.length - 1].content = answer;
+      saveHistory(state.expert.id, state.messages);
+    }, 2000);
+
     var statusEl = document.createElement('div');
     statusEl.className = 'status';
     statusEl.innerHTML = ic('loader', 13) + '<span>正在连接…</span>';
@@ -232,7 +275,7 @@
       var res = await fetch(API + '/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ expertId: state.expert.id, messages: state.messages }),
+        body: JSON.stringify({ expertId: state.expert.id, messages: apiMessages() }),
         credentials: 'same-origin',
       });
       if (!res.ok || !res.body) {
@@ -269,18 +312,27 @@
           else if (event === 'done') { if (data.citations) renderRefs(data.citations); }
         }
       }
-      if (!answer.trim()) bubble.textContent = '（这次没有生成内容，可以再试一次）';
-      else {
-        state.messages.push({ role: 'assistant', content: answer });
+      if (!answer.trim()) {
+        bubble.textContent = '（这次没有生成内容，可以再试一次）';
+        state.messages.pop();                       // 空回答不留占位，否则又变成「问了没答」
+        saveHistory(state.expert.id, state.messages);
+      } else {
+        state.messages[state.messages.length - 1].content = answer;
         saveHistory(state.expert.id, state.messages);
       }
       if (statusEl.parentNode) statusEl.remove();
     } catch (e) {
       bubble.textContent = '';
+      // 只留了占位没生成出内容 → 去掉它；已经有半截内容就保留（总比全丢好）
+      if (!answer.trim()) {
+        state.messages.pop();
+        saveHistory(state.expert.id, state.messages);
+      }
       statusEl.className = 'status';
       statusEl.innerHTML = '<span style="color:var(--red)">' + esc(e.message || '出错了') + '</span>';
       setTimeout(function () { if (statusEl.parentNode) statusEl.remove(); }, 8000);
     } finally {
+      clearInterval(draftTimer);
       state.streaming = false;
       $('#js-send').disabled = false;
       input.disabled = false;
