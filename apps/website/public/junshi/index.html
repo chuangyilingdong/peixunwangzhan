@@ -578,7 +578,9 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
 <div class="body">
   <nav class="side" aria-label="主导航">
     <button class="navitem" type="button" data-screen="chat" aria-current="true"><svg class="ic" width="17" height="17" aria-hidden="true"><use href="#i-chat"></use></svg>专家团</button>
-    <button class="navitem" type="button" data-screen="library"><svg class="ic" width="17" height="17" aria-hidden="true"><use href="#i-library"></use></svg>知识库</button>
+    <!-- 知识库入口暂时隐藏（2026-10-16 用户口径：文档列表只能看不能点、只是展示用）。
+         屏与 JS 都原样留着，把下面这行放回去即可恢复：
+         <button class="navitem" type="button" data-screen="library"><svg class="ic" width="17" height="17" aria-hidden="true"><use href="#i-library"></use></svg>知识库</button> -->
     <button class="navitem" type="button" data-screen="compliance"><svg class="ic" width="17" height="17" aria-hidden="true"><use href="#i-shield"></use></svg>合规体检</button>
     <button class="navitem" type="button" data-screen="profile"><svg class="ic" width="17" height="17" aria-hidden="true"><use href="#i-sliders"></use></svg>机构画像</button>
     <div class="sidenote" id="js-sidenote">专家回答会先检索你自己的资料库，再结合机构画像。</div>
