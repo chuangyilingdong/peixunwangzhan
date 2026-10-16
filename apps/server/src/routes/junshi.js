@@ -25,7 +25,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { arow, arows, aq, corsHeaders, errors, id, nowIso, requireAuth, requireRole } from '../lib.js';
-import { EXPERTS, runChat } from '../services/junshiChat.js';
+import { EXPERTS, runChat, runRawText } from '../services/junshiChat.js';
+import { audit as auditCompliance, AUDIT_PROMPT, loadPack as loadCompliancePack } from '../services/complianceEngine.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../../data/junshi');
@@ -382,37 +383,69 @@ export async function handleJunshi(ctx) {
     const content = text(ctx.body?.content);
     if (!content) throw errors.badRequest('请提供要检查的文本', 'VALIDATION_ERROR', { field: 'content' });
     if (content.length > 20000) throw errors.badRequest('单次最多检查 20000 字', 'VALIDATION_ERROR', { field: 'content' });
-    const lower = content.toLowerCase();
-    const hits = [];
-    for (const w of compliance.words) {
-      const word = w.word;
-      let from = 0; let n = 0; const positions = [];
-      for (;;) {
-        const at = content.indexOf(word, from);
-        if (at < 0) break;
-        n += 1; positions.push(at); from = at + word.length;
-        if (positions.length >= 50) break;
-      }
-      if (n) hits.push({ ...w, hits: n, positions: positions.slice(0, 10) });
-    }
-    hits.sort((a, b) => b.hits - a.hits);
-    // 极限词之外，再给三条"这类玩法要人工确认"的提示（资料里大量出现的高风险玩法）
+    // 规则引擎移植自开源项目 traffic-compass（MIT © code-wahaha）：L2 词库 + 白名单防误杀 +
+    // 语境窗口（极限词只在营销语境里按原严重度算）+ 资质红线。规则包见 data/junshi/compliance-rules.json。
+    const result = auditCompliance(content);
+    // 词表之外，再给三条"这类玩法要人工确认"的提示（本产品自有，来自资料库里的高风险玩法）
     const risky = [];
     if (/股权|终身班|存课|膨胀金|众筹|消费券/.test(content)) risky.push('涉及长期预收（股权/终身班/存课/膨胀金/众筹/消费券），先核当地预收费监管口径');
     if (/抽奖|砸金蛋|红包墙|彩票|大转盘/.test(content)) risky.push('涉及有奖销售，需确认资质与最高奖金额上限');
     if (/原价\s*\d+\s*[^\d]{0,10}(现价|到手|只要)\s*0/.test(content)) risky.push('价格对比表述（原价 X 现价 0）存在价格欺诈风险');
     return {
       length: content.length,
-      total: hits.reduce((s, h) => s + h.hits, 0),
-      hits,
+      verdict: result.verdict,               // {level: block|fix|ok, text}
+      total: result.scan.hits.length,
+      hits: result.scan.hits,                // [{word, category, severity, count, replace, note}]
+      whitelist: result.scan.whitelist,      // 放行说明（防误杀）
+      redlines: result.scan.redlines,        // 资质红线
       risky,
-      pass: hits.length === 0 && risky.length === 0,
+      rules: { name: result.pack.name, updated: result.pack.updated, source: result.pack.source },
+      pass: result.verdict.level === 'ok' && risky.length === 0,
     };
+  }
+
+  // ── POST /api/junshi/compliance/review ── AI 深度审读（SSE 流式）
+  // 与 /chat 同一套骨架（心跳戳活 + 只认 res 的中止判定），提示词来自 traffic-compass 的
+  // audit_skill.md 改写（去掉 ASR 纠错与抖音流量评分，补教培雷区与"已放行"说明）。
+  if (rest === '/compliance/review' && method === 'POST') {
+    const content = text(ctx.body?.content);
+    if (!content) throw errors.badRequest('请提供要检查的文本', 'VALIDATION_ERROR', { field: 'content' });
+    if (content.length > 8000) throw errors.badRequest('AI 审读单次最多 8000 字', 'VALIDATION_ERROR', { field: 'content' });
+    const quick = auditCompliance(content);
+    sseOpen(ctx, null);
+    const controller = new AbortController();
+    ctx.res.on('close', () => { if (!ctx.res.writableEnded) controller.abort(); });
+    const heartbeat = setInterval(() => {
+      if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.write(': ping\n\n');
+    }, 15000);
+    heartbeat.unref?.();
+    try {
+      const hitNote = quick.scan.hits.length
+        ? '\n\n【词表初筛已命中的项（供参考；语境仍由你判断，初筛可能误杀也可能漏）】\n' +
+          quick.scan.hits.map((h) => `${h.word}（${h.category}，初判 ${h.severity}）`).join('；')
+        : '\n\n【词表初筛没有命中 —— 但仍要读语境，变体写法/隐性承诺别漏】';
+      const out = await runRawText(ctx, {
+        system: AUDIT_PROMPT,
+        user: `【要审的物料】\n${content}${hitNote}`,
+        onStatus: (t) => sseSend(ctx, 'status', { text: t }),
+        onDelta: (t) => sseSend(ctx, 'delta', { text: t }),
+        signal: controller.signal,
+      });
+      sseSend(ctx, 'done', { model: out.model, provider: out.provider, usage: out.usage });
+    } catch (error) {
+      if (controller.signal.aborted) sseSend(ctx, 'stopped', {});
+      else sseSend(ctx, 'error', { message: error?.message || '审读失败，请重试' });
+    } finally {
+      clearInterval(heartbeat);
+      if (!ctx.res.writableEnded) ctx.res.end();
+    }
+    return;
   }
 
   // ── GET /api/junshi/compliance/words ── 词表本身（合规哨兵页展示用）
   if (rest === '/compliance/words' && method === 'GET') {
-    return { words: compliance.words, scanned: compliance.scanned, chars: compliance.chars };
+    const pack = loadCompliancePack();
+    return { pack: { id: pack.id, name: pack.name, updated: pack.updated, source: pack.source }, groups: pack.l2, whitelist: pack.l3_whitelist, redlines: pack.qual_redlines, scanned: compliance.scanned, chars: compliance.chars };
   }
 
   // ── GET /api/junshi/profile ── 机构画像读取（未登录给空模板，不报错）

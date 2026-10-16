@@ -329,6 +329,25 @@ function buildSystemPrompt({ expert, chunks, structured, profile, compliance }) 
 // 32000 ≈ 三万字正文，宽裕到永远轮不到它来截断：上限只兜「模型跑飞」，不做长度限制。
 const JUNSHI_MAX_OUTPUT_TOKENS = 32000;
 
+/**
+ * 跑一段一次性文本生成（合规深度审读用）：与 runChat 走同一条 TEXT 渠道、同一份输出预算，
+ * 但不做资料检索、不带专家人设 —— system/user 由调用方给全。
+ */
+export async function runRawText(ctx, { system, user, onStatus, onDelta, signal }) {
+  const policy = await getAiProviderPolicy();
+  const selection = providerSelectionForModality(policy, 'TEXT');
+  const provider = getGenerationProvider(selection);
+  if (typeof provider.generateStream !== 'function') throw new Error('当前 AI 渠道不支持流式生成');
+  onStatus?.(isMockProvider(provider.name) ? '当前是本地模拟渠道（没配真实模型）' : `正在用 ${selection.model || provider.model || '模型'} 审读…`);
+  const result = await provider.generateStream({
+    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+    signal,
+    options: { maxTokens: JUNSHI_MAX_OUTPUT_TOKENS },
+    onDelta: (chunk) => onDelta?.(chunk),
+  });
+  return { model: selection.model || provider.model || '', provider: provider.name, usage: result?.usage || null };
+}
+
 export async function runChat(ctx, { expertId, messages, signal, onStatus, onDelta, onReasoning, onCitations }) {
   const { compliance } = data();
   const expert = expertById(expertId);

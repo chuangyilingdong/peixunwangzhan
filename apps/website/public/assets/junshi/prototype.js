@@ -745,26 +745,124 @@
     }).catch(function (e) { errorBox(box, e); });
   }
 
-  /* ───────────── 合规体检 ───────────── */
+  /* ───────────── 合规体检 ─────────────
+     两层：① 词表快检（确定性规则引擎，移植自开源项目 traffic-compass 的 engine.py：
+     L2 词库 + 白名单防误杀 + 语境窗口 + 资质红线）② AI 深度审读（读语境 + 最小改动建议）。 */
+  var SEV = { high: { icon: '🔴', color: 'var(--red)' }, mid: { icon: '🟠', color: 'var(--heat)' }, low: { icon: '🟡', color: 'var(--text-3)' } };
   function runCompliance() {
     var content = $('#cs-text').value.trim();
     var out = $('#cs-out');
     if (!content) { show(out, '<p class="empty">先贴一段文案。</p>'); return; }
     loading(out);
+    show($('#cs-ai-out'), '');
     call('/compliance', { method: 'POST', body: { content: content } }).then(function (d) {
-      var head = d.pass
-        ? '<p class="lead" style="color:var(--green);font-weight:600">没发现问题，可以发。</p>'
-        : '<p class="lead" style="color:var(--red);font-weight:600">命中 ' + d.total + ' 处，涉及 ' + d.hits.length + ' 个词，建议改完再发。</p>';
-      var hits = d.hits.map(function (h) {
-        return '<div class="bench"><span>' + esc(h.word) +
-          ' <em style="font-style:normal;font-size:11px;color:var(--red)">' + esc(h.level) + ' × ' + h.hits + '</em><br>' +
-          '<em style="font-style:normal;font-size:11px;color:var(--text-3)">' + esc(h.advice) + '</em></span></div>';
+      var color = d.verdict.level === 'block' ? 'var(--red)' : d.verdict.level === 'fix' ? 'var(--heat)' : 'var(--green)';
+      var head = '<p class="lead" style="color:' + color + ';font-weight:600">' + esc(d.verdict.text) +
+        '<em style="font-style:normal;font-weight:400;color:var(--text-3)">（词表命中 ' + d.total + ' 处）</em></p>';
+      var redlines = (d.redlines || []).map(function (r) {
+        return '<div class="bench"><span>⛔ <b style="font-weight:600">' + esc(r.field) + '红线</b>：命中「' + esc(r.trigger) + '」<br>' +
+          '<em style="font-style:normal;font-size:12px;color:var(--text-3)">' + esc(r.note) + '</em></span></div>';
       }).join('');
-      var risky = d.risky.length
-        ? '<p class="err" style="margin-top:12px;background:var(--warm-soft);color:var(--warm)">' + ic('alert', 14) +
+      var hits = (d.hits || []).map(function (h) {
+        var s = SEV[h.severity] || SEV.mid;
+        return '<div class="bench"><span>' + s.icon + ' <b style="font-weight:600;color:' + s.color + '">' + esc(h.word) + '</b>' +
+          (h.count > 1 ? '<em style="font-style:normal;font-size:12px;color:var(--text-3)">×' + h.count + '</em>' : '') +
+          ' <em style="font-style:normal;font-size:12px;color:var(--text-3)">' + esc(h.category) + '</em><br>' +
+          '<em style="font-style:normal;font-size:12px;color:var(--text-3)">改成：' + esc(h.replace) + (h.note ? '｜' + esc(h.note) : '') + '</em></span></div>';
+      }).join('');
+      var wl = (d.whitelist || []).length
+        ? '<p class="lead" style="margin-top:10px;color:var(--text-3)">已放行（防误杀）：' + d.whitelist.map(esc).join('；') + '</p>' : '';
+      var risky = (d.risky || []).length
+        ? '<p class="err" style="margin-top:12px;background:var(--heat-bg);color:var(--heat)">' + ic('alert', 14) +
           '<span>还需人工确认：<br>' + d.risky.map(esc).join('<br>') + '</span></p>' : '';
-      show(out, head + hits + risky);
+      show(out, head + redlines + hits + wl + risky);
+      if ($('#cs-rules') && d.rules) {
+        $('#cs-rules').textContent = '规则：' + d.rules.name + ' · 移植自开源项目 traffic-compass（MIT），' + d.rules.updated + ' 更新';
+      }
+      runAiReview(content);        // 词表跑完自动接 AI 深度审读
     }).catch(function (e) { errorBox(out, e); });
+  }
+
+  /** AI 深度审读：SSE 流式收 JSON，收完解析成结构化结果（解析失败就按 Markdown 渲染原文） */
+  function runAiReview(content) {
+    var box = $('#cs-ai-out');
+    if (!box) return;
+    var answer = '';
+    var statusText = 'AI 正在读语境…';
+    function paint() {
+      var html = '<div class="ptitle" style="padding:0 0 6px;border:0">AI 深度审读<small>' + esc(statusText || (answer ? '已收到 ' + answer.length + ' 字' : '')) + '</small></div>';
+      if (answer) html += '<div class="bubble" style="max-width:100%;background:var(--fill-2)" data-ai-raw></div>';
+      box.innerHTML = html;
+      if (answer) box.querySelector('[data-ai-raw]').textContent = answer;
+    }
+    paint();
+    var headers = { 'content-type': 'application/json' };
+    var token = authToken();
+    if (token) headers.authorization = 'Bearer ' + token;
+    fetch(API + '/compliance/review', { method: 'POST', headers: headers, body: JSON.stringify({ content: content }), credentials: 'same-origin' })
+      .then(function (res) {
+        if (res.status === 401 && token) sessionLost();
+        if (!res.ok || !res.body) throw new Error('审读失败（HTTP ' + res.status + '）');
+        var reader = res.body.getReader();
+        var decoder = new TextDecoder('utf-8');
+        var buffer = ''; var event = '';
+        function pump() {
+          return reader.read().then(function (chunk) {
+            if (chunk.done) return;
+            buffer += decoder.decode(chunk.value, { stream: true });
+            var lines = buffer.split('\n');
+            buffer = lines.pop();
+            lines.forEach(function (line) {
+              if (line.indexOf('event: ') === 0) { event = line.slice(7).trim(); return; }
+              if (line.indexOf('data: ') !== 0) return;
+              var data; try { data = JSON.parse(line.slice(6)); } catch (e) { return; }
+              if (event === 'status') { statusText = data.text || ''; paint(); }
+              else if (event === 'delta') { answer += data.text || ''; statusText = ''; paint(); }
+              else if (event === 'error') throw new Error(data.message || '审读失败');
+            });
+            return pump();
+          });
+        }
+        return pump();
+      })
+      .then(function () { renderAiReport(box, answer); })
+      .catch(function (e) {
+        box.innerHTML = '<div class="ptitle" style="padding:0 0 6px;border:0">AI 深度审读</div>' +
+          '<div class="err">' + ic('alert', 14) + '<span>' + esc(e.message || 'AI 审读失败，可以再点一次「开始检查」') + '</span></div>';
+      });
+  }
+
+  /** 把 AI 的 JSON 报告渲染成结构化结果；不是 JSON 就按 Markdown 原文渲染 */
+  function renderAiReport(box, raw) {
+    var text = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
+    var report = null;
+    try { report = JSON.parse(text); } catch (e) { /* 降级 */ }
+    var head = '<div class="ptitle" style="padding:0 0 8px;border:0">AI 深度审读<small>读语境 · 最小改动建议</small></div>';
+    if (!report || typeof report !== 'object') {
+      box.innerHTML = head + '<div class="bubble" style="max-width:100%;background:var(--fill-2)">' + mdHtml(text || '（没有拿到审读结果）') + '</div>';
+      return;
+    }
+    var parts = [head];
+    var vs = report.violations || [];
+    if (vs.length) {
+      parts.push(vs.map(function (v) {
+        var s = SEV[v.severity] || SEV.mid;
+        return '<div class="bench"><span>' + s.icon + ' <b style="font-weight:600;color:' + s.color + '">' + esc(v.text || '') + '</b>' +
+          '<em style="font-style:normal;font-size:12px;color:var(--text-3)"> ' + esc(v.category || '') + '</em><br>' +
+          '<em style="font-style:normal;font-size:12px;color:var(--text-3)">为什么：' + esc(v.reason || '') + '</em><br>' +
+          '<em style="font-style:normal;font-size:12px;color:var(--text-2)">改成：' + esc(v.suggest || '') + '</em></span></div>';
+      }).join(''));
+    } else {
+      parts.push('<p class="lead" style="color:var(--green);font-weight:600">AI 读完语境没找到违规点。</p>');
+    }
+    if ((report.whitelist_notes || []).length) parts.push('<p class="lead" style="margin-top:10px;color:var(--text-3)">已放行：' + report.whitelist_notes.map(esc).join('；') + '</p>');
+    if ((report.highlights || []).length) parts.push('<p class="lead" style="margin-top:8px;color:var(--text-2)">写得好的地方：' + report.highlights.map(esc).join('；') + '</p>');
+    if ((report.improvements || []).length) {
+      parts.push('<div class="ptitle" style="padding:12px 0 6px;border:0">建议（保留你的口语腔）</div>' +
+        report.improvements.map(function (t) { return '<p class="lead" style="margin-bottom:6px">· ' + esc(t) + '</p>'; }).join(''));
+    }
+    if (report.summary) parts.push('<p class="lead" style="margin-top:10px;color:var(--text-3)">' + esc(report.summary) + '</p>');
+    box.innerHTML = parts.join('');
   }
 
   /* ───────────── 机构画像 ───────────── */

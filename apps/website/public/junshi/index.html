@@ -675,13 +675,15 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
 
     <section class="screen" id="scr-compliance" hidden aria-label="合规体检">
       <div class="panel scroll">
-        <div class="ptitle" style="padding:0 0 11px;border:0"><svg class="ic" width="15" height="15" aria-hidden="true"><use href="#i-shield"></use></svg>贴一段文案，我帮你过一遍</div>
+        <div class="ptitle" style="padding:0 0 11px;border:0"><svg class="ic" width="15" height="15" aria-hidden="true"><use href="#i-shield"></use></svg>贴一段文案：先过词表，再让 AI 读语境<small id="cs-rules"></small></div>
         <textarea class="ta" id="cs-text" placeholder="把要发朋友圈、发群、印在海报上的文案贴进来。例如：我们是烟台最大的美术教育机构……"></textarea>
         <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
           <button class="btn primary" type="button" id="cs-run"><svg class="ic" width="14" height="14" aria-hidden="true"><use href="#i-check"></use></svg>开始检查</button>
           <button class="btn" type="button" id="cs-demo"><svg class="ic" width="14" height="14" aria-hidden="true"><use href="#i-bulb"></use></svg>填一段示例</button>
         </div>
         <div id="cs-out" style="margin-top:14px"></div>
+        <!-- AI 深度审读结果（SSE 流式）：与词表快检分开显示，读语境、给最小改动建议 -->
+        <div id="cs-ai-out" style="margin-top:18px"></div>
       </div>
     </section>
 
