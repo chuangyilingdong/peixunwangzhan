@@ -351,6 +351,13 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy', options 
       // ⚠️ 只转发这一样，别把客户端的任意 body 透传到上游（渠道模板才是请求体的唯一出处）。
       if (options.streamOptions && typeof options.streamOptions === 'object') rendered.stream_options = options.streamOptions;
     }
+    // 输出预算：推理模型（deepseek-flash 这类）先思考再写正文，思考 token 和正文**共用同一个**
+    // 输出预算；渠道模板里没写 max_tokens 时，上游会套用它自己的小默认值 —— 思考一大就把正文
+    // 挤成空回答（junshi 实测 6 次空 2 次：`finish_reason=length` 且 content 为空）。
+    // 调用方可以显式给一个宽裕的上限；模板里已经写了 max_tokens 的以模板为准（模板仍是唯一出处）。
+    if (Number.isFinite(options.maxTokens) && options.maxTokens > 0 && rendered.max_tokens === undefined) {
+      rendered.max_tokens = Math.floor(options.maxTokens);
+    }
     // 工具调用（2026-09-16 打通）：渠道模板的合法占位符里**没有** tools，不能靠模板渲染，
     // 只能在渲染**之后**挂上去。不挂的后果不是「少个功能」，而是模型把工具调用写进正文
     // （DSML 标记），学生看到的是「AI 说一句就停」。

@@ -324,6 +324,11 @@ function buildSystemPrompt({ expert, chunks, structured, profile, compliance }) 
  * 跑一轮：检索 → 拼提示词 → 流式生成。
  * 回调（由路由写 SSE）：onStatus / onDelta / onReasoning / onCitations。
  */
+// 输出预算上限：推理模型先思考再写正文，思考 token 和正文**共用**这个预算，而这条 TEXT 渠道的
+// 模板没写 max_tokens —— 上游的默认值会被思考吃光、正文落空（2026-10-15 实测 6 次空 2 次）。
+// 32000 ≈ 三万字正文，宽裕到永远轮不到它来截断：上限只兜「模型跑飞」，不做长度限制。
+const JUNSHI_MAX_OUTPUT_TOKENS = 32000;
+
 export async function runChat(ctx, { expertId, messages, signal, onStatus, onDelta, onReasoning, onCitations }) {
   const { compliance } = data();
   const expert = expertById(expertId);
@@ -364,6 +369,7 @@ export async function runChat(ctx, { expertId, messages, signal, onStatus, onDel
   const result = await provider.generateStream({
     messages: [{ role: 'system', content: system }, ...history],
     signal,
+    options: { maxTokens: JUNSHI_MAX_OUTPUT_TOKENS },   // 见上方常量说明：保证正文永远写得完
     onDelta: (chunk) => onDelta?.(chunk),
     onReasoning: () => {
       if (reasoningSent) return;
