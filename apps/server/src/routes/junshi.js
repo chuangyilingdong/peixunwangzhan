@@ -287,6 +287,11 @@ export async function handleJunshi(ctx) {
       profile,
       profileUpdatedAt: updatedAt,
       completion: completeness(profile),
+      // 登录状态的**权威口径**给到前端：客户端原来拿「画像里有没有机构名」猜登录，
+      // 于是「刚登录、画像还是空的」用户被判成未登录、输入框全禁用 —— 一条死路（2026-10-16 修）。
+      signedIn: Boolean(ctx.auth?.user?.id),
+      orgName: ctx.auth?.org?.name || null,
+      userName: ctx.auth?.user?.displayName || ctx.auth?.user?.login || null,
       stats: {
         library: library.count,
         objections: knowledge.objections.length,

@@ -49,13 +49,39 @@
     var px = size || 14;
     return '<svg class="ic" width="' + px + '" height="' + px + '" aria-hidden="true"><use href="#i-' + name + '"></use></svg>';
   }
+  /* 平台登录态：三个端共用同一个 localStorage 前缀（见 packages/shared/src/auth.js），
+     同源页面互相能读到。军师靠它把会话与画像挂到机构名下。
+     ⚠️ 为什么不靠 cookie：机构端 cookie 的 Path 是 `/api/org`，浏览器**根本不会**把它发给
+     `/api/junshi/*`（服务端 readToken 虽然兼容跨端，但请求里压根没这个 cookie）。
+     服务端接受 `Authorization: Bearer`，这条通道与路径无关、最稳。 */
+  var AUTH_KEYS = ['ai-kids-platform.session.v1.org', 'ai-kids-platform.session.v1.student', 'ai-kids-platform.session.v1.admin'];
+  function authToken() {
+    for (var i = 0; i < AUTH_KEYS.length; i++) {
+      try {
+        var s = JSON.parse(localStorage.getItem(AUTH_KEYS[i]) || 'null');
+        if (s && s.token && (!s.expiresAt || new Date(s.expiresAt).getTime() > Date.now() + 60000)) return s.token;
+      } catch (e) { /* 隐私模式：静默跳过 */ }
+    }
+    return null;
+  }
   function call(path, options) {
     var opt = options || {};
-    return fetch(API + path, {
-      method: opt.method || 'GET',
-      headers: opt.body ? { 'content-type': 'application/json' } : undefined,
-      body: opt.body ? JSON.stringify(opt.body) : undefined,
-      credentials: 'same-origin',
+    var token = authToken();
+    function request(withToken) {
+      var headers = {};
+      if (opt.body) headers['content-type'] = 'application/json';
+      if (withToken && token) headers.authorization = 'Bearer ' + token;
+      return fetch(API + path, {
+        method: opt.method || 'GET',
+        headers: Object.keys(headers).length ? headers : undefined,
+        body: opt.body ? JSON.stringify(opt.body) : undefined,
+        credentials: 'same-origin',
+      });
+    }
+    return request(true).then(function (res) {
+      // 带了 token 却被拒（过期 / 被停用 / 已在别处登录）：退回匿名再试一次，别让整页打不开
+      if (res.status === 401 && token) return request(false);
+      return res;
     }).then(function (res) {
       return res.json().catch(function () { return null; }).then(function (payload) {
         if (!res.ok) {
@@ -97,7 +123,7 @@
     abort: null,
     lastQuestion: '',
     lib: { scene: '', q: '' },
-    pfGroup: 'org', pfDraft: {}, profile: null, completion: null, guest: true,
+    pfGroup: 'org', pfDraft: {}, profile: null, completion: null, signedIn: false, orgLabel: '',
   };
 
   /* ───────────── 主题 ───────────── */
@@ -479,13 +505,20 @@
     }
 
     try {
-      var res = await fetch(API + '/chat', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-        credentials: 'same-origin',
-        signal: state.abort.signal,
-      });
+      var token = authToken();
+      var chatFetch = function (withToken) {
+        var headers = { 'content-type': 'application/json' };
+        if (withToken && token) headers.authorization = 'Bearer ' + token;
+        return fetch(API + '/chat', {
+          method: 'POST',
+          headers: headers,
+          body: JSON.stringify(payload),
+          credentials: 'same-origin',
+          signal: state.abort.signal,
+        });
+      };
+      var res = await chatFetch(Boolean(token));
+      if (res.status === 401 && token) res = await chatFetch(false);   // token 被拒就退回匿名
       if (!res.ok || !res.body) {
         var p = null;
         try { p = await res.json(); } catch (e) { /* 非 JSON */ }
@@ -711,14 +744,18 @@
     $('#pf-fields').innerHTML = g[2].map(function (f) {
       return '<div class="field"><label for="pf_' + f + '">' + esc(FIELD_LABEL[f] || f) + '</label>' +
         '<input id="pf_' + f + '" data-pf="' + f + '" type="text" value="' + esc(bag[f] || '') + '" placeholder="待补充"' +
-        (state.guest ? ' disabled' : '') + '></div>';
+        (state.signedIn ? '' : ' disabled') + '></div>';
     }).join('');
-    $('#pf-msg').textContent = state.guest ? '未登录：可以看，改不了。用机构账号登录后就能保存，专家也会用上。' : '';
+    $('#pf-msg').textContent = state.signedIn ? ('已登录' + (state.orgLabel ? '：' + state.orgLabel : '') + '，改完点「保存」。') : '';
   }
   function renderProfile() {
     var pct = state.completion ? state.completion.percent : 0;
     $('#pf-percent').textContent = '完成度 ' + pct + '%';
     $('#pf-bar').style.width = pct + '%';
+    var loginBox = $('#pf-login');
+    if (loginBox) loginBox.hidden = state.signedIn;      // 未登录才显示「登录机构账号」入口
+    var saveBtn = $('#pf-save');
+    if (saveBtn) saveBtn.disabled = !state.signedIn;     // 未登录时「保存」就是禁用态，别让人白点
     state.pfDraft = {};
     GROUPS.forEach(function (g) { state.pfDraft[g[0]] = Object.assign({}, (state.profile && state.profile[g[0]]) || {}); });
     renderPfGroups();
@@ -734,7 +771,7 @@
     return draft;
   }
   function saveProfile() {
-    if (state.guest) { $('#pf-msg').textContent = '未登录，保存不了。用机构账号登录后再试。'; return; }
+    if (!state.signedIn) { $('#pf-msg').textContent = '还没登录：先点上面的「登录机构账号」，登录后回到本页即可保存。'; return; }
     var draft = collectProfile();
     state.pfDraft = draft;
     $('#pf-msg').textContent = '保存中…';
@@ -810,7 +847,10 @@
     if (ov) {
       state.profile = ov.profile;
       state.completion = ov.completion;
-      state.guest = !(ov.profile && ov.profile.org && ov.profile.org.name);
+      // 登录态以服务端为准（signedIn）：原来拿「画像里有没有机构名」猜，会把「刚登录、
+      // 画像还空着」的用户判成未登录、输入框全部禁用 —— 那是条死路（2026-10-16 修）。
+      state.signedIn = Boolean(ov.signedIn);
+      state.orgLabel = ov.orgName || ov.userName || '';
       $('#js-today').textContent = ov.today;
       $('#js-sidenote').innerHTML = '专家回答会先检索你自己的资料库，再结合机构画像。<br>' +
         '本月主线：' + esc((ov.calendar[String(ov.month)] || {}).launch || '');

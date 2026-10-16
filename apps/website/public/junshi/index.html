@@ -369,6 +369,7 @@
 #js-app .btn.primary{background:var(--accent);color:#fff}
 #js-app .btn.primary:hover{background:color-mix(in srgb,var(--accent) 90%, #000)}
 #js-app .btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+#js-app a.btn{text-decoration:none}   /* 胶囊按钮也可能是 <a>（如「登录机构账号」） */
 /* 按钮文案切换（发送↔停止、复制→已复制）：内容立刻换，只让新文案从 2px 模糊里淡进来
    —— Emil：两态交接不干净时，用模糊把缝隙盖住。 */
 #js-app .btnlabel{display:inline-flex;align-items:center;gap:7px}
@@ -508,7 +509,7 @@
 #js-app .scene span{margin-left:auto;font-size:11.5px;color:var(--text-3)}
 #js-app .cast{
   display:flex;gap:11px;align-items:flex-start;border-radius:var(--r-card);padding:14px 16px;margin-bottom:14px;
-  background:var(--fill-2);color:var(--text-2);
+  background:var(--fill-2);color:var(--text-2);flex-wrap:wrap;
 }
 #js-app .cast p{font-size:13.5px;line-height:1.7}
 #js-app .bar{height:5px;border-radius:var(--r-pill);background:var(--track);overflow:hidden}
@@ -650,7 +651,15 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
     </section>
 
     <section class="screen" id="scr-profile" hidden aria-label="机构画像">
-      <div class="cast"><p id="pf-cast">这是整个产品的底座：你填一次，专家回答时就会结合你的品类、价格、校区，而不是给通用套话。</p></div>
+      <div class="cast">
+        <p id="pf-cast">这是整个产品的底座：你填一次，专家回答时就会结合你的品类、价格、校区，而不是给通用套话。</p>
+        <!-- 未登录时的入口：这块原来只写「登录后才能保存」却不给登录的地方 = 死路（2026-10-16 补）。
+             登录页是机构端 /org/（LoginPanel, clientType=org）；登录后回到本页即可填写。 -->
+        <p id="pf-login" hidden style="margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <a class="btn primary" href="/org/">登录机构账号</a>
+          <span style="color:var(--text-3)">登录后回到本页即可填写、保存</span>
+        </p>
+      </div>
       <div class="grid2">
         <div class="panel">
           <div class="ptitle">画像分组<small id="pf-percent"></small></div>
