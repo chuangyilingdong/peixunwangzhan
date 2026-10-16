@@ -19,7 +19,9 @@ import { fileURLToPath } from 'node:url';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const htmlPath = path.join(appRoot, 'dist', 'junshi', 'index.html');
-const scripts = ['prototype.js'];
+// 需要打版本号的外链资源（都在 dist/assets/junshi/ 下）：脚本 + 字体声明。
+// 字体 CSS 不常改，但同样躺在 /assets/ 的 7 天强缓存里，走同一套内容哈希最省心。
+const assets = ['prototype.js', 'fonts.css'];
 
 let html = await readFile(htmlPath, 'utf8');
 if (!html.includes('__STAMP__')) {
@@ -28,7 +30,7 @@ if (!html.includes('__STAMP__')) {
 }
 
 const stamps = [];
-for (const file of scripts) {
+for (const file of assets) {
   const buf = await readFile(path.join(appRoot, 'dist', 'assets', 'junshi', file));
   const hash = createHash('sha256').update(buf).digest('hex').slice(0, 10);
   const from = `/assets/junshi/${file}?v=__STAMP__`;

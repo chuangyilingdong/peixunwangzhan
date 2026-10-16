@@ -7,12 +7,15 @@
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="color-scheme" content="light dark">
 <title>招生军师 · 专家团 · 灵动ai学院</title>
+<!-- 字体与主站一致：Geist（拉丁）+ Noto Sans SC（中文）。字体文件自托管在 /fonts/，同源、CSP 放行。
+     放外链不放内联：104 个 @font-face 约 96KB，外链可缓存，也交给打哈希脚本管版本。 -->
+<link rel="stylesheet" href="/assets/junshi/fonts.css?v=__STAMP__">
 <style>
   /* 铺满全屏：app 自己占满视口，页面不再有外边距与圆角窗口（2026-10-15 用户口径「界面太小了，要铺满全屏」）。
      高度用 100dvh：移动端地址栏收放时不会跳。 */
   html{height:100%}
-  body{margin:0;height:100%;overflow:hidden;background:#f0f2f7;font-family:"PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,-apple-system,"Segoe UI",sans-serif}
-  @media (prefers-color-scheme:dark){body{background:#0b0e12}}
+  body{margin:0;height:100%;overflow:hidden;background:#f5f5f7;font-family:'Geist','Noto Sans SC',ui-sans-serif,-apple-system,'Segoe UI Variable Text','Segoe UI',system-ui,'PingFang SC','Microsoft YaHei',sans-serif}
+  @media (prefers-color-scheme:dark){body{background:#000}}
 </style>
 </head>
 <body>
@@ -186,7 +189,7 @@
   height:100dvh; overflow:hidden;
   color:var(--text); line-height:1.6;
   background:var(--bg);
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  font-family:'Geist','Noto Sans SC',ui-sans-serif,-apple-system,'Segoe UI Variable Text','Segoe UI',system-ui,'PingFang SC','Microsoft YaHei',sans-serif;
   -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
   font-optical-sizing:auto;
 }
@@ -205,11 +208,6 @@
   position:relative;z-index:5;
 }
 #js-app .brand{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:650;letter-spacing:-.01em;white-space:nowrap}
-#js-app .mark{
-  width:24px;height:24px;border-radius:var(--r-chip);display:grid;place-items:center;flex:none;
-  background:linear-gradient(135deg,#0071e3,#5e5ce6);
-  color:#fff;font-size:11px;font-weight:600;
-}
 #js-app .topmeta{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text-3);white-space:nowrap;font-variant-numeric:tabular-nums}
 #js-app .iconbtn{
   width:32px;height:32px;border-radius:var(--r-pill);display:grid;place-items:center;font-size:16px;color:var(--text-2);
@@ -267,11 +265,6 @@
 #js-app .conv.swap{animation:panel-in var(--t-panel) var(--ease-spring)}
 @keyframes panel-in{from{opacity:.35;transform:translateY(4px)}to{opacity:1;transform:none}}
 #js-app .convhead{display:flex;gap:11px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--hairline);flex-wrap:nowrap}
-#js-app .eavatar{
-  width:30px;height:30px;border-radius:var(--r-pill);flex:none;display:grid;place-items:center;
-  background:var(--accent-soft);color:var(--accent);font-size:12.5px;font-weight:600;
-  transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease);
-}
 #js-app .convhead b{font-size:15px;font-weight:600;letter-spacing:-.01em;display:block}
 #js-app .convhead span{font-size:12px;color:var(--text-3);display:block;margin-top:2px;max-width:46ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* ⚠️ 同一格里的元素（msgs / jump / composer）必须**都**显式写 grid-area:2/1：
@@ -297,12 +290,6 @@
 #js-app .msg.enter{animation:bubble-in var(--t-enter) var(--ease-spring) both}
 #js-app .msg.me{flex-direction:row-reverse;gap:0}
 @keyframes bubble-in{from{opacity:0;transform:translateY(7px) scale(.98)}to{opacity:1;transform:none}}
-#js-app .mavatar{
-  width:26px;height:26px;border-radius:var(--r-pill);flex:none;display:grid;place-items:center;font-size:11.5px;font-weight:600;
-  background:var(--accent-soft);color:var(--accent);margin-bottom:3px;
-}
-/* 自己发的消息不带头像：一对一对话里自己的头像只是噪音（iMessage 就没有） */
-#js-app .msg.me .mavatar{display:none}
 #js-app .bubble{
   background:var(--fill);border-radius:var(--r-card);padding:12px 16px;font-size:15px;line-height:1.85;
   max-width:min(720px,86%);white-space:pre-wrap;word-break:break-word;
@@ -324,7 +311,7 @@
 #js-app .bubble b{font-weight:600}
 #js-app .bubble .stopped{display:block;margin-top:7px;font-size:12px;color:var(--text-3)}
 #js-app .status{
-  font-size:12.5px;color:var(--text-3);padding:0 0 0 36px;display:flex;align-items:center;gap:6px;
+  font-size:12.5px;color:var(--text-3);display:flex;align-items:center;gap:6px;
   min-height:18px;animation:bubble-in var(--t-enter) var(--ease-spring) both;
 }
 #js-app .status svg.ic{font-size:13px;animation:spin 720ms linear infinite}
@@ -335,7 +322,7 @@
 /* 开场：空状态属于「罕见/首次」，是唯一允许稍微多花一点的地方。
    注：按规范不再给异步内容加「整块淡入」的进场关键帧（重排时容易被卡在 0）。 */
 #js-app .hello{padding:4px 0 0}
-#js-app .starters{display:flex;flex-direction:column;gap:8px;margin:16px 0 0 36px;max-width:620px}
+#js-app .starters{display:flex;flex-direction:column;gap:8px;margin:16px 0 0;max-width:620px}
 #js-app .starter{
   border:0;border-radius:var(--r-thumb);padding:11px 14px;font-size:13.5px;color:var(--text-2);
   background:var(--fill-2);width:100%;display:flex;align-items:center;gap:9px;
@@ -401,7 +388,6 @@
 #js-app .expert:active{transform:scale(.99)}
 #js-app .expert[aria-pressed="true"]{background:var(--accent-soft)}
 #js-app .expert[aria-pressed="true"] .ename{color:var(--accent)}
-#js-app .expert[aria-pressed="true"] .eavatar{background:var(--accent);color:#fff}
 #js-app .ename{font-size:14px;font-weight:600;display:block;letter-spacing:-.01em}
 #js-app .etag{font-size:12px;color:var(--text-3);display:block;margin-top:2px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
@@ -583,7 +569,7 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
 }
 </style>
 <div class="topbar">
-  <span class="brand"><span class="mark">军师</span>招生军师 · 专家团</span>
+  <span class="brand">招生军师 · 专家团</span>
   <span class="topmeta">
     <span id="js-today"></span>
     <button class="iconbtn" type="button" id="js-theme" aria-label="切换深浅色"><svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-moon"></use></svg></button>
@@ -611,7 +597,6 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
         </div>
         <div class="panel conv">
           <div class="convhead">
-            <span class="mavatar" id="conv-avatar" aria-hidden="true">谋</span>
             <div style="min-width:0">
               <b id="conv-name">营销军师</b>
               <span id="conv-tag"></span>

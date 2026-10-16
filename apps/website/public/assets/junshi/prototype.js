@@ -154,8 +154,7 @@
         var b = document.createElement('button');
         b.type = 'button'; b.className = 'expert';
         b.dataset.id = e.id;
-        b.innerHTML = '<span class="eavatar">' + esc(e.avatar) + '</span>' +
-          '<span style="min-width:0"><span class="ename">' + esc(e.name) + '</span><span class="etag" title="' + esc(e.tag) + '">' + esc(e.tag) + '</span></span>';
+        b.innerHTML = '<span style="min-width:0"><span class="ename">' + esc(e.name) + '</span><span class="etag" title="' + esc(e.tag) + '">' + esc(e.tag) + '</span></span>';
         b.addEventListener('click', function () { switchExpert(e); });
         box.appendChild(b);
       });
@@ -289,7 +288,6 @@
     state.conversationId = null;
     state.messages = [];
     renderExperts();
-    $('#conv-avatar').textContent = e.avatar;
     $('#conv-name').textContent = e.name;
     $('#conv-tag').textContent = e.tag;
     resumeOrGreet();
@@ -335,9 +333,7 @@
     var o = opts || {};
     var wrap = document.createElement('div');
     wrap.className = 'msg' + (role === 'user' ? ' me' : '') + (o.enter === false ? '' : ' enter');
-    var who = role === 'user' ? '我' : (state.expert ? state.expert.avatar : '军师');
-    wrap.innerHTML = '<span class="mavatar">' + esc(who) + '</span>' +
-      '<div class="bubblewrap"><div class="bubble"></div>' +
+    wrap.innerHTML = '<div class="bubblewrap"><div class="bubble"></div>' +
       (role === 'assistant' && !o.plain ? '<div class="msgactions"></div>' : '') + '</div>';
     var bubbleEl = wrap.querySelector('.bubble');
     // 助手的回答按轻量 Markdown 渲染（模型写的是 Markdown，之前原样输出＝满屏裸露的 ** 星号）；
@@ -411,8 +407,7 @@
       return '<button class="starter" type="button" data-starter="' + i + '">' + ic('sparkle', 13) + '<span>' + esc(q) + '</span></button>';
     }).join('');
     $('#js-msgs').innerHTML =
-      '<div class="hello"><div class="msg"><span class="mavatar">' + esc(e.avatar) + '</span>' +
-      '<div class="bubble">' + esc(e.greeting) + '</div></div>' +
+      '<div class="hello"><div class="msg"><div class="bubble">' + esc(e.greeting) + '</div></div>' +
       (s ? '<div class="starters">' + s + '</div>' : '') + '</div>';
     $('#js-refs').innerHTML = '<p class="empty">发出问题后，这里会显示这次回答参考了你资料库里的哪几份文件。</p>';
     $('#ref-count').textContent = '';
