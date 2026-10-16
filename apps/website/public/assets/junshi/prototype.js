@@ -449,6 +449,9 @@
   $('#js-msgs').addEventListener('scroll', function () {
     stick = nearBottom();
     setJumpVisible(!stick);
+    // 输入条上沿的发丝线：只有内容真的滚到它下面才出现（规范里的「滚动边缘」，不是一道常驻横线）
+    var c = $('.composer');
+    if (c) c.classList.toggle('scrolled', $('#js-msgs').scrollTop > 8);
   }, { passive: true });
   $('#js-jump').addEventListener('click', function () { scrollBottom(true); });
 
@@ -456,7 +459,7 @@
   function setComposerBusy(busy) {
     state.streaming = busy;
     var send = $('#js-send');
-    setLabel(send, busy ? ic('x', 14) + '停止' : ic('send', 14) + '发送');
+    setLabel(send, busy ? ic('x', 14) + '停止' : ic('arrow-up', 15) + '发送');   // 上箭头＝iOS 消息的发法
     send.classList.toggle('primary', !busy);
     send.classList.toggle('stop', busy);
     $('#js-input').disabled = busy;
@@ -794,8 +797,9 @@
   $('#pf-save').addEventListener('click', saveProfile);
 
   /* ───────────── 启动 ───────────── */
-  var bootMode = savedMode();
-  if (bootMode) document.documentElement.style.colorScheme = bootMode;   // 记住上次选的深浅色，刷新不回到系统默认
+  // 默认给浅色：这套苹果体系（浅灰白底 + 白面板）的主场是浅色；用户切过深色就记住他的选择。
+  var bootMode = savedMode() || 'light';
+  document.documentElement.style.colorScheme = bootMode;
   applyThemeIcon();
   Promise.all([
     call('/experts').catch(function () { return { experts: [] }; }),

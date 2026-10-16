@@ -120,48 +120,75 @@
     <path d="M7 7m0 2.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z" />
     <path d="M4.012 7.26a2.005 2.005 0 0 0 -1.012 1.737v10c0 1.1 .9 2 2 2h10c.75 0 1.158 -.385 1.5 -1" />
   </symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 5l0 14" />
+    <path d="M18 11l-6 -6l-6 6" />
+  </symbol>
 </defs></svg>
 
 <div id="js-app">
 <style>
 #js-app{
-  /* ── 颜色 ─────────────────────────────────────────────
-     用 light-dark() 一套声明吃两种主题（Apple §12：大面用重材质、交互元素用轻材质）。 */
-  --bg: light-dark(#f0f2f7,#0b0e12);
-  --surface: light-dark(#ffffff,#171b21);
-  --surface-2: light-dark(#f5f7fa,#1c2128);
-  --surface-3: light-dark(#eceff5,#222831);
-  --line: light-dark(#e3e7ee,#272e37);
-  --line-soft: light-dark(#edf0f5,#20262e);
-  --text: light-dark(#0e131b,#e8edf4);
-  --text-2: light-dark(#5a6575,#95a1b2);
-  --text-3: light-dark(#8b96a5,#68727f);
-  --brand: light-dark(#2c47d4,#8296ff);
-  --brand-soft: light-dark(#eaeeff,#1a2140);
-  --warm: light-dark(#b0620f,#e9a457);
-  --warm-soft: light-dark(#fdf2e4,#2a2015);
-  --green: light-dark(#12734a,#4ecb8f);
-  --red: light-dark(#b43426,#ff8f7e);
-  --red-soft: light-dark(#fdeae7,#2b1917);
+  /* ── 颜色 · 苹果体系（apple-liquid-glass 规范）─────────────────────────
+     浅色＝规范原文：地面 #f5f5f7（冷灰白）· 面板纯白 · 发丝线 rgba(0,0,0,.07) · 单强调色 #0071e3。
+     深色＝按苹果自家深色材质镜像（#000 地面 / #1d1d1f 面板 / 白 12% 发丝线 / #0a84ff 强调）。
+     正文世界是黑白灰，颜色只做强调：accent 蓝 · heat 橙 · live 绿 · red 错误。
+     下面保留 --brand/--line/--surface-2 这些旧名字做别名 —— prototype.js 的内联样式还在引用。 */
+  --bg: light-dark(#f5f5f7,#000000);
+  --surface: light-dark(#ffffff,#1d1d1f);
+  --hover: light-dark(#fbfbfd,#26262a);
+  --fill: light-dark(#e8e8ed,#2c2c2e);        /* 填充控件：气泡 / 输入框 / 次级按钮 */
+  --fill-2: light-dark(#f2f2f7,#232326);      /* 轻一档填充 */
+  --track: light-dark(#e8e8ed,#2c2c2e);       /* 进度轨道 */
+  --text: light-dark(#1d1d1f,#f5f5f7);
+  --text-2: light-dark(#6e6e73,#a1a1a6);
+  --text-3: light-dark(#86868b,#86868b);
+  --text-4: light-dark(#aeaeb2,#6e6e73);
+  --faint: light-dark(#d2d2d7,#3a3a3c);
+  --hairline: light-dark(rgba(0,0,0,.07),rgba(255,255,255,.12));
+  --glass: light-dark(rgba(245,245,247,.72),rgba(29,29,31,.72));   /* 只给「内容从下面滚过」的层 */
+  --accent: light-dark(#0071e3,#0a84ff);
+  --accent-soft: light-dark(rgba(0,113,227,.09),rgba(10,132,255,.18));
+  --accent-link: light-dark(#0066cc,#409cff);
+  --heat: light-dark(#ff6b00,#ff9f0a);
+  --heat-bg: light-dark(rgba(255,107,0,.1),rgba(255,159,10,.16));
+  --live: light-dark(#30d158,#30d158);
+  --red: light-dark(#d70015,#ff453a);
+  --red-bg: light-dark(rgba(215,0,21,.08),rgba(255,69,58,.16));
+  --green: light-dark(#1d8a4e,#30d158);
+  --brand: var(--accent); --brand-soft: var(--accent-soft);
+  --warm: var(--heat); --warm-soft: var(--heat-bg);
+  --red-soft: var(--red-bg);
+  --line: var(--hairline); --line-soft: var(--hairline);
+  --surface-2: var(--fill); --surface-3: var(--fill-2);
+
+  /* ── 圆角与阴影（规范分层：不自创中间值；阴影永远两层，不用单层硬投影）── */
+  --r-pill:999px; --r-chip:6px; --r-thumb:12px; --r-sheet:16px; --r-card:18px; --r-panel:22px; --r-hero:26px;
+  --r: var(--r-card);
+  --sh-card: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.05);
+  --sh-panel: 0 1px 3px rgba(0,0,0,.05), 0 14px 40px rgba(0,0,0,.05);
+  --sh-lift: 0 12px 32px rgba(0,0,0,.10);
+  --sh-overlay: 0 2px 8px rgba(0,0,0,.10), 0 30px 80px rgba(0,0,0,.24);
 
   /* ── 动效 token ───────────────────────────────────────
-     Emil：内置 CSS 缓动太弱，要用更强的自定义曲线；UI 动画一律 <300ms。
-     进场上用 ease-out（起步快＝跟手），屏内位移用 ease-in-out，hover/颜色用 ease，
-     持续运动（转圈）用 linear。**不用 ease-in**。 */
+     规范给的两条曲线（CSS-first 的临界阻尼弹簧近似）＋更强的 ease-out 备用：
+     进场用 spring，小位移/hover 用 out-quart，持续运动（转圈）用 linear。不用 ease-in。 */
+  --ease-spring: cubic-bezier(.32,.72,0,1);
+  --ease-out-quart: cubic-bezier(.25,1,.5,1);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
-  --t-press: 140ms;    /* 按压反馈 100–160ms */
-  --t-enter: 220ms;    /* 小面板进场 125–200ms 档，略放宽 */
-  --t-panel: 260ms;    /* 面板切换 200–500ms 档 */
+  --t-press: 140ms;
+  --t-enter: 220ms;
+  --t-panel: 260ms;
 
-  --r: 12px;
   display:grid; grid-template-rows:auto minmax(0,1fr);
   height:100dvh; overflow:hidden;
   color:var(--text); line-height:1.6;
   background:var(--bg);
-  font-family:"PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,-apple-system,"Segoe UI",sans-serif;
-  -webkit-font-smoothing:antialiased;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+  font-optical-sizing:auto;
 }
 #js-app *,#js-app *::before,#js-app *::after{box-sizing:border-box}
 #js-app [hidden]{display:none!important}
@@ -169,28 +196,28 @@
 #js-app button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
 #js-app svg.ic{width:1em;height:1em;flex:none;display:block}
 
-/* ── 顶栏（Apple §12：半透明材质 + 内容从下面滚过；不占一条不透光的横带） */
+/* ── 顶栏：一条实心横带 + 发丝线。
+   规范的口径：玻璃只给「有内容从下面滚过」的层 —— 顶栏这里什么都不从它下面过，所以是实心白面。 */
 #js-app .topbar{
-  display:flex;align-items:center;gap:12px;padding:0 18px;height:52px;flex-wrap:nowrap;
-  background:color-mix(in srgb, var(--surface) 78%, transparent);
-  -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);
-  border-bottom:1px solid var(--line-soft);
+  display:flex;align-items:center;gap:12px;padding:0 18px;height:54px;flex-wrap:nowrap;
+  background:var(--surface);
+  border-bottom:1px solid var(--hairline);
   position:relative;z-index:5;
 }
-#js-app .brand{display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600;letter-spacing:-.01em;white-space:nowrap}
+#js-app .brand{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:650;letter-spacing:-.01em;white-space:nowrap}
 #js-app .mark{
-  width:24px;height:24px;border-radius:7px;display:grid;place-items:center;flex:none;
-  background:linear-gradient(150deg,var(--brand),color-mix(in srgb,var(--brand) 60%, #7b5cff));
+  width:24px;height:24px;border-radius:var(--r-chip);display:grid;place-items:center;flex:none;
+  background:linear-gradient(135deg,#0071e3,#5e5ce6);
   color:#fff;font-size:11px;font-weight:600;
 }
-#js-app .topmeta{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-3);white-space:nowrap}
+#js-app .topmeta{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text-3);white-space:nowrap;font-variant-numeric:tabular-nums}
 #js-app .iconbtn{
-  width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:16px;color:var(--text-2);
+  width:32px;height:32px;border-radius:var(--r-pill);display:grid;place-items:center;font-size:16px;color:var(--text-2);
   transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease);
 }
-#js-app .iconbtn:hover{background:var(--surface-3);color:var(--text)}
+#js-app .iconbtn:hover{background:var(--fill);color:var(--text)}
 #js-app .iconbtn:active{transform:scale(.94)}
-#js-app .iconbtn.swapping svg.ic{animation:icon-swap 240ms var(--ease-out)}
+#js-app .iconbtn.swapping svg.ic{animation:icon-swap 240ms var(--ease-spring)}
 @keyframes icon-swap{from{opacity:0;transform:rotate(-45deg) scale(.75)}to{opacity:1;transform:none}}
 
 /* ── 骨架 ──
@@ -200,83 +227,89 @@
    行是**隐式 auto 行**，行高按内容撑开；`.main` 于是没有确定高度，一路传下去 `.msgs` 的
    overflow-y:auto 就成了摆设。短回复看不出来，真模型的长回答一出现就露馅。
    → 凡是「外壳行」一律显式写 `grid-template-rows: minmax(0,1fr)`。 */
-#js-app .body{display:grid;grid-template-columns:212px minmax(0,1fr);grid-template-rows:minmax(0,1fr);min-height:0;overflow:hidden}
+#js-app .body{display:grid;grid-template-columns:216px minmax(0,1fr);grid-template-rows:minmax(0,1fr);min-height:0;overflow:hidden}
 #js-app .side{
-  background:var(--surface);border-right:1px solid var(--line-soft);
-  padding:10px;display:flex;flex-direction:column;gap:2px;min-height:0;overflow-y:auto;
+  background:var(--surface);border-right:1px solid var(--hairline);
+  padding:8px 10px;display:flex;flex-direction:column;gap:2px;min-height:0;overflow-y:auto;
 }
 #js-app .navitem{
-  display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:9px;font-size:13px;
+  display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:var(--r-thumb);font-size:13.5px;
   color:var(--text-2);width:100%;
   transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease);
 }
-#js-app .navitem svg.ic{font-size:17px;opacity:.85}
-#js-app .navitem:hover{background:var(--surface-2);color:var(--text)}
+#js-app .navitem svg.ic{font-size:17px;opacity:.75}
+#js-app .navitem:hover{background:var(--hover);color:var(--text)}
 #js-app .navitem:active{transform:scale(.985)}
-#js-app .navitem[aria-current="true"]{background:var(--brand-soft);color:var(--brand);font-weight:500}
+#js-app .navitem[aria-current="true"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
 #js-app .navitem[aria-current="true"] svg.ic{opacity:1}
 #js-app .sidenote{
-  margin:auto 6px 2px;font-size:11px;color:var(--text-3);border-top:1px solid var(--line-soft);
+  margin:auto 6px 2px;font-size:11.5px;color:var(--text-3);border-top:1px solid var(--hairline);
   padding-top:12px;line-height:1.7;
 }
-#js-app .main{padding:14px;min-width:0;min-height:0;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+#js-app .main{padding:18px;min-width:0;min-height:0;display:flex;flex-direction:column;gap:14px;overflow:hidden}
 #js-app .screen{flex:1;min-height:0;display:flex;flex-direction:column}
 
-/* ── 面板 ── */
-#js-app .panel{background:var(--surface);border:1px solid var(--line-soft);border-radius:var(--r);min-width:0}
+/* ── 面板：白面 + 22 圆角 + 两层阴影（规范：靠阴影分区，不靠硬边框）── */
+#js-app .panel{background:var(--surface);border-radius:var(--r-panel);box-shadow:var(--sh-panel);min-width:0;overflow:hidden}
 #js-app .ptitle{
-  display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;letter-spacing:-.005em;
-  padding:12px 14px;border-bottom:1px solid var(--line-soft);
+  display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;letter-spacing:-.01em;
+  padding:16px 16px 8px;
 }
-#js-app .ptitle small{margin-left:auto;font-size:11px;color:var(--text-3);font-weight:400;letter-spacing:0}
+#js-app .ptitle small{margin-left:auto;font-size:11.5px;color:var(--text-3);font-weight:400;letter-spacing:0;font-variant-numeric:tabular-nums}
 
 /* ── 对话三栏：填满剩余高度，只有消息区内部滚动（app 手感，不是长网页）
-   grid-template-rows 同样要显式给，理由见上面「高度链」那段。 */
-#js-app .chatwrap{display:grid;grid-template-columns:206px minmax(0,1fr) 244px;grid-template-rows:minmax(0,1fr);gap:12px;align-items:stretch;flex:1;min-height:0}
-#js-app .conv{display:grid;grid-template-rows:auto minmax(0,1fr) auto auto;min-height:0;overflow:hidden}
+   grid-template-rows 同样要显式给，理由见上面「高度链」那段。
+   行数从 4 变 3：输入条改成**浮在消息之上的玻璃层**（内容从它下面滚过 —— 这才是玻璃该出现的地方）。 */
+#js-app .chatwrap{display:grid;grid-template-columns:212px minmax(0,1fr) 248px;grid-template-rows:minmax(0,1fr);gap:14px;align-items:stretch;flex:1;min-height:0}
+#js-app .conv{display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-height:0;overflow:hidden}
 /* 整面板换内容（切专家 / 回到上次会话）时的一次轻换气：只透明度 + 4px 上浮。
-   大表面不做缩放——Apple：大幅位移的大面积元素要一边走一边淡。 */
-#js-app .conv.swap{animation:panel-in var(--t-enter) var(--ease-out)}
+   大表面不做缩放——大幅位移的大面积元素要一边走一边淡。 */
+#js-app .conv.swap{animation:panel-in var(--t-panel) var(--ease-spring)}
 @keyframes panel-in{from{opacity:.35;transform:translateY(4px)}to{opacity:1;transform:none}}
-#js-app .convhead{display:flex;gap:10px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--line-soft);flex-wrap:nowrap}
+#js-app .convhead{display:flex;gap:11px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--hairline);flex-wrap:nowrap}
 #js-app .eavatar{
-  width:28px;height:28px;border-radius:9px;flex:none;display:grid;place-items:center;
-  background:var(--surface-2);color:var(--text-2);font-size:12px;font-weight:600;
+  width:30px;height:30px;border-radius:var(--r-pill);flex:none;display:grid;place-items:center;
+  background:var(--accent-soft);color:var(--accent);font-size:12.5px;font-weight:600;
   transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease);
 }
-#js-app .convhead b{font-size:13.5px;font-weight:600;letter-spacing:-.01em;display:block}
-#js-app .convhead span{font-size:11px;color:var(--text-3);display:block;margin-top:1px}
-/* ⚠️ grid-area:2/1 要和下面 .jump 一起显式给：只给 .jump 显式占位的话，
-   自动布局会跳过第 2 行、把 .msgs 挤到第 3 行（实测过，消息区矮一半、还错位）。 */
-#js-app .msgs{grid-area:2/1;padding:16px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;min-height:0;overscroll-behavior:contain}
-/* 「回到最新」：和消息区占同一格（grid-area:2/1）浮在底部，消息从它下面滚过。
-   进场 200ms、出场 150ms（Emil：出场要比进场快）；空间一致 —— 内容在下面，就从下面 8px 上来。 */
+#js-app .convhead b{font-size:15px;font-weight:600;letter-spacing:-.01em;display:block}
+#js-app .convhead span{font-size:12px;color:var(--text-3);display:block;margin-top:2px;max-width:46ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ⚠️ 同一格里的元素（msgs / jump / composer）必须**都**显式写 grid-area:2/1：
+   只给其中一个显式占位，自动布局会跳过第 2 行、把其余挤到别的行（实测踩过）。 */
+#js-app .msgs{grid-area:2/1;padding:18px 18px 118px;display:flex;flex-direction:column;gap:16px;overflow-y:auto;min-height:0;overscroll-behavior:contain}
+/* 「回到最新」：悬在输入条上方，玻璃 —— 它真的压在消息上。
+   进场 280ms spring、出场 150ms（出场要比进场快）；内容在下面，就从下面 8px 上来。 */
 #js-app .jump{
-  grid-area:2/1;place-self:end center;margin-bottom:10px;z-index:3;
-  display:inline-flex;align-items:center;font-size:12px;padding:6px 13px;border-radius:999px;
-  border:1px solid var(--line);color:var(--text);
-  background:color-mix(in srgb,var(--surface) 86%, transparent);
-  -webkit-backdrop-filter:blur(14px) saturate(160%);backdrop-filter:blur(14px) saturate(160%);
-  box-shadow:0 6px 18px -8px rgba(0,0,0,.35);
+  grid-area:2/1;place-self:end center;margin-bottom:88px;z-index:4;
+  display:inline-flex;align-items:center;font-size:12.5px;padding:7px 14px;border-radius:var(--r-pill);
+  color:var(--text);
+  background:var(--glass);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);
+  box-shadow:var(--sh-card);
   opacity:0;pointer-events:none;transform:translateY(8px);
-  transition:opacity 150ms var(--ease-out),transform 150ms var(--ease-out);
+  transition:opacity 150ms var(--ease-out-quart),transform 150ms var(--ease-out-quart);
 }
-#js-app .jump.show{opacity:1;pointer-events:auto;transform:translateY(0);transition-duration:200ms}
+#js-app .jump.show{opacity:1;pointer-events:auto;transform:translateY(0);transition-duration:280ms;transition-timing-function:var(--ease-spring)}
 #js-app .jump:active{transform:translateY(0) scale(.96)}
-#js-app .msg{display:flex;gap:10px;align-items:flex-start}
-/* 进场只给「新出现的那条」加 .enter：整表重排时不重放（重放＝刚读完的一屏无端抖一下；本地实测到过） */
-#js-app .msg.enter{animation:bubble-in var(--t-enter) var(--ease-out) both}
-#js-app .msg.me{flex-direction:row-reverse}
-@keyframes bubble-in{from{opacity:0;transform:translateY(6px) scale(.985)}to{opacity:1;transform:none}}
+#js-app .msg{display:flex;gap:10px;align-items:flex-end}
+/* 进场只给「新出现的那条」加 .enter：整表重排时不重放（重放＝刚读完的一屏无端抖一下；本地实测到过）。
+   曲线用规范里的 spring 近似 —— 这就是「像苹果那样弹一下」的那一下。 */
+#js-app .msg.enter{animation:bubble-in var(--t-enter) var(--ease-spring) both}
+#js-app .msg.me{flex-direction:row-reverse;gap:0}
+@keyframes bubble-in{from{opacity:0;transform:translateY(7px) scale(.98)}to{opacity:1;transform:none}}
 #js-app .mavatar{
-  width:28px;height:28px;border-radius:9px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:600;
-  background:var(--brand);color:#fff;
+  width:26px;height:26px;border-radius:var(--r-pill);flex:none;display:grid;place-items:center;font-size:11.5px;font-weight:600;
+  background:var(--accent-soft);color:var(--accent);margin-bottom:3px;
 }
-#js-app .msg.me .mavatar{background:var(--surface-3);color:var(--text-2)}
+/* 自己发的消息不带头像：一对一对话里自己的头像只是噪音（iMessage 就没有） */
+#js-app .msg.me .mavatar{display:none}
 #js-app .bubble{
-  background:var(--surface-2);border-radius:14px;padding:12px 16px;font-size:14px;line-height:1.8;
+  background:var(--fill);border-radius:var(--r-card);padding:12px 16px;font-size:15px;line-height:1.85;
   max-width:min(720px,86%);white-space:pre-wrap;word-break:break-word;
 }
+/* 气泡贴头像那一角收小 —— iMessage 的尾巴语义（一侧是「发送者」） */
+#js-app .msg:not(.me) .bubble{border-bottom-left-radius:var(--r-chip)}
+#js-app .msg.me .bubble{background:var(--accent);color:#fff;border-bottom-right-radius:var(--r-chip)}
 /* 回答的轻量排版（mdHtml 的产物）：段距 / 小标题 / 列点。
    模型输出的是 Markdown（实测每篇 6-7 处 **加粗** 和 1. 列点），之前当纯文本渲染＝满屏星号。 */
 #js-app .bubble p{margin:0 0 9px}
@@ -290,58 +323,65 @@
 #js-app .bubble li::marker{color:var(--text-3)}
 #js-app .bubble b{font-weight:600}
 #js-app .bubble .stopped{display:block;margin-top:7px;font-size:12px;color:var(--text-3)}
-#js-app .msg.me .bubble{background:var(--brand);color:#fff}
 #js-app .status{
-  font-size:11.5px;color:var(--text-3);padding:0 0 0 38px;display:flex;align-items:center;gap:6px;
-  min-height:18px;animation:bubble-in var(--t-enter) var(--ease-out) both;
+  font-size:12.5px;color:var(--text-3);padding:0 0 0 36px;display:flex;align-items:center;gap:6px;
+  min-height:18px;animation:bubble-in var(--t-enter) var(--ease-spring) both;
 }
 #js-app .status svg.ic{font-size:13px;animation:spin 720ms linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 #js-app .status.dots::after{content:'';animation:jndots 1.3s steps(4,end) infinite}
 @keyframes jndots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
 
-/* 开场：空状态属于「罕见/首次」，是唯一允许稍微多花一点的地方（Emil 的 delight 预算） */
-#js-app .hello{padding:4px 0 0;animation:hello-in var(--t-enter) var(--ease-out)}
-@keyframes hello-in{from{opacity:0}to{opacity:1}}
-#js-app .starters{display:flex;flex-direction:column;gap:8px;margin:14px 0 0 38px;max-width:620px}
+/* 开场：空状态属于「罕见/首次」，是唯一允许稍微多花一点的地方。
+   注：按规范不再给异步内容加「整块淡入」的进场关键帧（重排时容易被卡在 0）。 */
+#js-app .hello{padding:4px 0 0}
+#js-app .starters{display:flex;flex-direction:column;gap:8px;margin:16px 0 0 36px;max-width:620px}
 #js-app .starter{
-  border:1px solid var(--line);border-radius:10px;padding:10px 13px;font-size:13px;color:var(--text-2);
-  background:var(--surface);width:100%;display:flex;align-items:center;gap:9px;
-  animation:starter-in var(--t-enter) var(--ease-out) both;
-  transition:border-color var(--t-press) var(--ease), color var(--t-press) var(--ease), transform var(--t-press) var(--ease-out), background var(--t-press) var(--ease);
+  border:0;border-radius:var(--r-thumb);padding:11px 14px;font-size:13.5px;color:var(--text-2);
+  background:var(--fill-2);width:100%;display:flex;align-items:center;gap:9px;
+  animation:starter-in var(--t-enter) var(--ease-spring) both;
+  transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease), transform var(--t-press) var(--ease-out);
 }
 #js-app .starter:nth-child(1){animation-delay:40ms}
 #js-app .starter:nth-child(2){animation-delay:80ms}
 #js-app .starter:nth-child(3){animation-delay:120ms}
 @keyframes starter-in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
-#js-app .starter:hover{border-color:color-mix(in srgb,var(--brand) 45%, var(--line));color:var(--brand);background:var(--brand-soft)}
+#js-app .starter:hover{background:var(--fill);color:var(--accent)}
 #js-app .starter:active{transform:scale(.99)}
 #js-app .starter svg.ic{font-size:14px;opacity:.6;flex:none}
 
-/* 输入区：也是半透明材质，衬在消息流下沿 */
+/* 输入条：**浮在**消息流之上的玻璃层（内容真的从它下面滚过 —— 玻璃该用的地方就是这里）。
+   上沿的发丝线按「滚动边缘」的规矩来：只有内容真滚到它下面才出现（JS 挂 .scrolled），
+   在顶部时它是一条与地面齐平的干净边，没有一道常驻的横线。 */
 #js-app .composer{
-  border-top:1px solid var(--line-soft);padding:12px 14px;display:flex;gap:10px;align-items:flex-end;gap:10px;
-  background:color-mix(in srgb, var(--surface) 82%, transparent);
-  -webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
+  grid-area:2/1;place-self:end stretch;z-index:5;
+  padding:10px 16px 12px;display:flex;gap:10px;align-items:flex-end;
+  background:var(--glass);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);
+  border-top:1px solid transparent;
+  transition:border-color .3s var(--ease-out-quart), box-shadow .3s var(--ease-out-quart);
 }
+#js-app .composer.scrolled{border-top-color:var(--hairline);box-shadow:0 -1px 12px rgba(0,0,0,.03)}
 #js-app .composer textarea{
-  flex:1;min-width:0;min-height:48px;max-height:168px;resize:none;font:inherit;font-size:13.5px;line-height:1.65;
-  color:var(--text);background:var(--surface-2);border:1px solid var(--line);border-radius:11px;padding:12px 13px;outline:none;
+  flex:1;min-width:0;min-height:44px;max-height:168px;resize:none;font:inherit;font-size:14.5px;line-height:1.7;
+  color:var(--text);background:var(--fill);border:0;border-radius:var(--r-card);padding:11px 15px;outline:none;
   overflow-y:auto;
-  transition:border-color var(--t-press) var(--ease), box-shadow var(--t-press) var(--ease);
+  transition:box-shadow var(--t-press) var(--ease);
 }
-#js-app .composer textarea:focus{border-color:color-mix(in srgb,var(--brand) 55%, var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 12%, transparent)}
-#js-app textarea::placeholder{color:var(--text-3)}
+#js-app .composer textarea:focus{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%, transparent)}
+#js-app textarea::placeholder{color:var(--text-4)}
+/* 按钮：苹果口径的胶囊 —— 次级是灰填充，主操作是强调色填充。 */
 #js-app .btn{
-  border:1px solid var(--line);border-radius:10px;padding:10px 15px;font-size:12.5px;background:var(--surface-2);color:var(--text-2);
+  border:0;border-radius:var(--r-pill);padding:9px 16px;min-height:38px;font-size:13.5px;font-weight:550;
+  background:var(--fill);color:var(--text);
   display:inline-flex;align-items:center;gap:7px;
-  transition:border-color var(--t-press) var(--ease), color var(--t-press) var(--ease), background var(--t-press) var(--ease), transform var(--t-press) var(--ease-out);
+  transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease), transform var(--t-press) var(--ease-out);
 }
-#js-app .btn:hover{border-color:color-mix(in srgb,var(--brand) 40%, var(--line));color:var(--brand)}
+#js-app .btn:hover{background:color-mix(in srgb,var(--fill) 90%, var(--text) 6%)}
 #js-app .btn:active{transform:scale(.975)}
-#js-app .btn.primary{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:500}
-#js-app .btn.primary:hover{background:color-mix(in srgb,var(--brand) 88%, #000)}
-#js-app .btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+#js-app .btn.primary{background:var(--accent);color:#fff}
+#js-app .btn.primary:hover{background:color-mix(in srgb,var(--accent) 90%, #000)}
+#js-app .btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
 /* 按钮文案切换（发送↔停止、复制→已复制）：内容立刻换，只让新文案从 2px 模糊里淡进来
    —— Emil：两态交接不干净时，用模糊把缝隙盖住。 */
 #js-app .btnlabel{display:inline-flex;align-items:center;gap:7px}
@@ -350,41 +390,44 @@
 @keyframes label-in{from{opacity:0;filter:blur(2px)}to{opacity:1;filter:blur(0)}}
 #js-app .hint{font-size:11px;color:var(--text-3);padding:9px 14px 0;min-height:22px}
 
-/* ── 专家列表 ── */
-#js-app .expertlist{padding:6px;overflow-y:auto;min-height:0}
+/* ── 专家列表：统一面板 + 发丝线分隔（规范里「反碎片化」的核心做法：不是一堆各自带边框的小卡）── */
+#js-app .expertlist{padding:4px 10px 10px;overflow-y:auto;min-height:0}
 #js-app .expert{
-  display:flex;gap:10px;align-items:flex-start;width:100%;padding:10px 11px;border-radius:10px;
+  display:flex;gap:11px;align-items:center;width:100%;padding:11px 6px;
   transition:background var(--t-press) var(--ease);
 }
-#js-app .expert:hover{background:var(--surface-2)}
+#js-app .expert + .expert{border-top:1px solid var(--hairline)}
+#js-app .expert:hover{background:var(--hover)}
 #js-app .expert:active{transform:scale(.99)}
-#js-app .expert[aria-pressed="true"]{background:var(--brand-soft)}
-#js-app .expert[aria-pressed="true"] .eavatar{background:var(--brand);color:#fff}
-#js-app .ename{font-size:12.5px;font-weight:600;display:block;letter-spacing:-.005em}
-#js-app .etag{font-size:10.5px;color:var(--text-3);display:block;margin-top:2px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#js-app .expert[aria-pressed="true"]{background:var(--accent-soft)}
+#js-app .expert[aria-pressed="true"] .ename{color:var(--accent)}
+#js-app .expert[aria-pressed="true"] .eavatar{background:var(--accent);color:#fff}
+#js-app .ename{font-size:14px;font-weight:600;display:block;letter-spacing:-.01em}
+#js-app .etag{font-size:12px;color:var(--text-3);display:block;margin-top:2px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* ── 会话列表（机构级：服务端存，这里只是入口）── */
-#js-app .convlist{padding:0 6px 8px;overflow-y:auto;min-height:0}
-#js-app .convrow{display:flex;align-items:stretch;gap:2px;border-radius:9px;transition:background var(--t-press) var(--ease)}
+#js-app .convlist{padding:4px 10px 10px;overflow-y:auto;min-height:0}
+#js-app .convrow{display:flex;align-items:stretch;gap:2px;transition:background var(--t-press) var(--ease)}
+#js-app .convrow + .convrow{border-top:1px solid var(--hairline)}
 /* 列表按 id 就地增删：新会话从上方滑入（它加在列表最前），删除是收走而不是凭空消失 */
-#js-app .convrow.enter{animation:convrow-in var(--t-enter) var(--ease-out) both}
+#js-app .convrow.enter{animation:convrow-in var(--t-enter) var(--ease-spring) both}
 @keyframes convrow-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 #js-app .convrow.leaving{pointer-events:none;transition:max-height 180ms var(--ease-out),opacity 120ms var(--ease)}
-#js-app .convrow:hover{background:var(--surface-2)}
-#js-app .convrow[aria-current="true"]{background:var(--brand-soft)}
-#js-app .convopen{flex:1;min-width:0;padding:8px 9px;border-radius:9px;display:block}
+#js-app .convrow:hover{background:var(--hover)}
+#js-app .convrow[aria-current="true"]{background:var(--accent-soft)}
+#js-app .convopen{flex:1;min-width:0;padding:10px 6px;display:block}
 #js-app .convtitle{
-  font-size:12px;display:block;color:var(--text);line-height:1.45;
+  font-size:13.5px;display:block;color:var(--text);line-height:1.45;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
-#js-app .convrow[aria-current="true"] .convtitle{color:var(--brand);font-weight:500}
-#js-app .convmeta{font-size:10.5px;color:var(--text-3);display:block;margin-top:2px}
+#js-app .convrow[aria-current="true"] .convtitle{color:var(--accent);font-weight:600}
+#js-app .convmeta{font-size:11.5px;color:var(--text-3);display:block;margin-top:2px;font-variant-numeric:tabular-nums}
 #js-app .convdel{
-  flex:none;width:26px;border-radius:8px;display:grid;place-items:center;color:var(--text-3);opacity:0;
+  flex:none;width:28px;border-radius:var(--r-thumb);display:grid;place-items:center;color:var(--text-3);opacity:0;
   transition:opacity var(--t-press) var(--ease), color var(--t-press) var(--ease), background var(--t-press) var(--ease), transform var(--t-press) var(--ease-out);
 }
 #js-app .convrow:hover .convdel{opacity:1}
-#js-app .convdel:hover{color:var(--red);background:var(--red-soft)}
+#js-app .convdel:hover{color:var(--red);background:var(--red-bg)}
 #js-app .convdel:active{transform:scale(.92)}
 @media (hover:none){#js-app .convdel{opacity:.6}}
 
@@ -392,114 +435,114 @@
    只在悬停或键盘聚焦时出现 —— 常驻会让一屏几十条回答看着很吵。 */
 #js-app .bubblewrap{max-width:min(720px,86%);min-width:0}
 #js-app .bubblewrap .bubble{max-width:100%}
-#js-app .msgactions{display:flex;gap:4px;margin-top:6px;opacity:0;transition:opacity var(--t-press) var(--ease)}
+#js-app .msgactions{display:flex;gap:2px;margin-top:4px;opacity:0;transition:opacity var(--t-press) var(--ease)}
 #js-app .msg:hover .msgactions,#js-app .msg:focus-within .msgactions{opacity:1}
 @media (hover:none){#js-app .msgactions{opacity:1}}
 #js-app .msgact{
-  display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--text-3);
-  padding:4px 8px;border-radius:7px;
+  display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--text-3);
+  padding:5px 10px;border-radius:var(--r-pill);
   transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease);
 }
-#js-app .msgact:hover{background:var(--surface-3);color:var(--text)}
-#js-app .btn.stop{border-color:color-mix(in srgb,var(--red) 45%, var(--line));color:var(--red)}
+#js-app .msgact:hover{background:var(--fill);color:var(--text)}
+#js-app .btn.stop{background:var(--fill);color:var(--red)}
 
-/* ── 引用面板：条目错峰进场（Emil：组入场 30–80ms 错峰，且绝不能挡住交互） ── */
-#js-app .refbody{padding:11px 13px;display:flex;flex-direction:column;gap:11px;overflow-y:auto;min-height:0}
-#js-app .ref{
-  border-left:2px solid color-mix(in srgb,var(--brand) 55%, var(--line));
-  padding-left:10px;animation:ref-in var(--t-enter) var(--ease-out) both;
-}
+/* ── 引用面板：发丝线分组的清单。
+   规范明确禁止「彩色 left-bar」——那是最典型的碎片化卡片味，改成分组清单的写法。 */
+#js-app .refbody{padding:4px 16px 14px;display:flex;flex-direction:column;overflow-y:auto;min-height:0}
+#js-app .ref{padding:12px 0;animation:ref-in var(--t-enter) var(--ease-spring) both}
+#js-app .ref + .ref{border-top:1px solid var(--hairline)}
 #js-app .ref:nth-child(1){animation-delay:0ms}
 #js-app .ref:nth-child(2){animation-delay:35ms}
 #js-app .ref:nth-child(3){animation-delay:70ms}
 #js-app .ref:nth-child(4){animation-delay:105ms}
 #js-app .ref:nth-child(5){animation-delay:140ms}
 #js-app .ref:nth-child(n+6){animation-delay:170ms}
-@keyframes ref-in{from{opacity:0;transform:translateX(-4px)}to{opacity:1;transform:none}}
-#js-app .ref b{font-size:11.5px;font-weight:600;display:block;line-height:1.55;letter-spacing:-.005em}
-#js-app .ref span{font-size:10.5px;color:var(--text-3);display:block;margin-top:2px}
-#js-app .ref p{font-size:11px;color:var(--text-3);margin-top:5px;line-height:1.65}
+@keyframes ref-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+#js-app .ref b{font-size:13px;font-weight:600;display:block;line-height:1.5;letter-spacing:-.01em}
+#js-app .ref span{font-size:11.5px;color:var(--text-3);display:block;margin-top:3px}
+#js-app .ref p{font-size:12px;color:var(--text-3);margin-top:6px;line-height:1.7}
 
 /* ── 通用件 ── */
-#js-app .empty{font-size:11.5px;color:var(--text-3);padding:6px 0;line-height:1.75}
-#js-app .err{font-size:12px;color:var(--red);background:var(--red-soft);border-radius:9px;padding:10px 13px;line-height:1.65;display:flex;gap:8px}
+#js-app .empty{font-size:12.5px;color:var(--text-3);padding:6px 0;line-height:1.75}
+#js-app .err{font-size:12.5px;color:var(--red);background:var(--red-bg);border-radius:var(--r-thumb);padding:11px 14px;line-height:1.7;display:flex;gap:8px;align-items:flex-start}
 #js-app .search{
-  display:flex;gap:9px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:9px 13px;
-  background:var(--surface-2);font-size:13px;color:var(--text-3);margin-bottom:11px;
-  transition:border-color var(--t-press) var(--ease), box-shadow var(--t-press) var(--ease);
+  display:flex;gap:9px;align-items:center;border:0;border-radius:var(--r-pill);padding:10px 15px;
+  background:var(--fill);font-size:13.5px;color:var(--text-3);margin-bottom:14px;
+  transition:box-shadow var(--t-press) var(--ease);
 }
-#js-app .search:focus-within{border-color:color-mix(in srgb,var(--brand) 55%, var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 12%, transparent)}
+#js-app .search:focus-within{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%, transparent)}
 #js-app .search input{border:0;background:none;outline:none;font:inherit;color:var(--text);flex:1;min-width:0}
-#js-app .chips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:11px}
+#js-app .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
 #js-app .chip{
-  border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:12px;color:var(--text-2);background:var(--surface-2);
-  transition:border-color var(--t-press) var(--ease), color var(--t-press) var(--ease), background var(--t-press) var(--ease), transform var(--t-press) var(--ease-out);
+  border:0;border-radius:var(--r-pill);padding:7px 14px;font-size:12.5px;color:var(--text-2);background:var(--fill);
+  transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease), transform var(--t-press) var(--ease-out);
 }
-#js-app .chip:hover{border-color:color-mix(in srgb,var(--brand) 40%, var(--line));color:var(--brand)}
+#js-app .chip:hover{background:var(--fill-2);color:var(--text)}
 #js-app .chip:active{transform:scale(.97)}
-#js-app .chip[aria-pressed="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
-#js-app .lib{display:flex;flex-direction:column;gap:8px}
+#js-app .chip[aria-pressed="true"]{background:var(--accent);color:#fff}
+#js-app .lib{display:flex;flex-direction:column}
 #js-app .doc{
-  display:flex;gap:11px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:10px 13px;
-  background:var(--surface);font-size:12.5px;width:100%;
-  transition:border-color var(--t-press) var(--ease), background var(--t-press) var(--ease);
+  display:flex;gap:11px;align-items:center;border:0;border-radius:var(--r-thumb);padding:12px 10px;
+  background:transparent;font-size:13.5px;width:100%;
+  transition:background var(--t-press) var(--ease);
 }
-#js-app .doc:hover{border-color:color-mix(in srgb,var(--brand) 40%, var(--line));background:var(--surface-2)}
-#js-app .doc em{font-style:normal;margin-left:auto;font-size:11px;color:var(--text-3);white-space:nowrap}
+#js-app .doc + .doc{border-top:1px solid var(--hairline);border-radius:0}
+#js-app .doc:hover{background:var(--hover)}
+#js-app .doc em{font-style:normal;margin-left:auto;font-size:12px;color:var(--text-3);white-space:nowrap}
 #js-app .tag{
-  display:inline-flex;align-items:center;font-size:11px;border-radius:6px;padding:1px 7px;white-space:nowrap;
-  background:var(--surface-2);color:var(--text-2);border:1px solid var(--line);
+  display:inline-flex;align-items:center;font-size:11.5px;border-radius:var(--r-pill);padding:3px 10px;white-space:nowrap;
+  background:var(--fill);color:var(--text-2);border:0;
 }
-#js-app .tag.b{background:var(--brand-soft);color:var(--brand);border-color:color-mix(in srgb,var(--brand) 24%, transparent)}
+#js-app .tag.b{background:var(--accent-soft);color:var(--accent-link);font-weight:550}
 #js-app .ta{
-  width:100%;min-height:150px;font:inherit;font-size:13px;line-height:1.75;color:var(--text);
-  background:var(--surface-2);border:1px solid var(--line);border-radius:11px;padding:12px 14px;outline:none;resize:vertical;
-  transition:border-color var(--t-press) var(--ease), box-shadow var(--t-press) var(--ease);
+  width:100%;min-height:150px;font:inherit;font-size:13.5px;line-height:1.75;color:var(--text);
+  background:var(--fill);border:0;border-radius:var(--r-card);padding:13px 15px;outline:none;resize:vertical;
+  transition:box-shadow var(--t-press) var(--ease);
 }
-#js-app .ta:focus{border-color:color-mix(in srgb,var(--brand) 55%, var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 12%, transparent)}
-#js-app .bench{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:baseline;font-size:12px;padding:8px 0;border-bottom:1px solid var(--line-soft)}
+#js-app .ta:focus{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%, transparent)}
+#js-app .bench{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:baseline;font-size:13px;padding:10px 0;border-bottom:1px solid var(--hairline)}
 #js-app .bench:last-child{border-bottom:0}
 #js-app .bench b{font-weight:600;color:var(--red);white-space:nowrap;font-variant-numeric:tabular-nums}
-#js-app .field{display:grid;grid-template-columns:112px minmax(0,1fr);gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line-soft)}
+#js-app .field{display:grid;grid-template-columns:112px minmax(0,1fr);gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--hairline)}
 #js-app .field:last-of-type{border-bottom:0}
-#js-app .field label{font-size:11.5px;color:var(--text-3)}
+#js-app .field label{font-size:12.5px;color:var(--text-3)}
 #js-app .field input{
-  font:inherit;font-size:12.5px;color:var(--text);background:var(--surface-2);border:1px solid var(--line);
-  border-radius:8px;padding:7px 11px;width:100%;min-width:0;outline:none;
-  transition:border-color var(--t-press) var(--ease), box-shadow var(--t-press) var(--ease);
+  font:inherit;font-size:13.5px;color:var(--text);background:var(--fill);border:0;
+  border-radius:var(--r-thumb);padding:8px 12px;width:100%;min-width:0;outline:none;
+  transition:box-shadow var(--t-press) var(--ease);
 }
-#js-app .field input:focus{border-color:color-mix(in srgb,var(--brand) 55%, var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 12%, transparent)}
-#js-app .field input::placeholder{color:var(--text-3)}
+#js-app .field input:focus{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%, transparent)}
+#js-app .field input::placeholder{color:var(--text-4)}
 #js-app .scene{
-  display:flex;align-items:center;gap:8px;width:100%;padding:8px 11px;border-radius:9px;font-size:12.5px;color:var(--text-2);
+  display:flex;align-items:center;gap:8px;width:100%;padding:9px 11px;border-radius:var(--r-thumb);font-size:13px;color:var(--text-2);
   transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease);
 }
-#js-app .scene:hover{background:var(--surface-2)}
-#js-app .scene[aria-pressed="true"]{background:var(--brand-soft);color:var(--brand);font-weight:500}
-#js-app .scene span{margin-left:auto;font-size:10.5px;color:var(--text-3)}
+#js-app .scene:hover{background:var(--hover)}
+#js-app .scene[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);font-weight:550}
+#js-app .scene span{margin-left:auto;font-size:11.5px;color:var(--text-3)}
 #js-app .cast{
-  display:flex;gap:11px;align-items:flex-start;border-radius:var(--r);padding:12px 15px;margin-bottom:12px;
-  background:var(--brand-soft);border:1px solid color-mix(in srgb,var(--brand) 18%, transparent);
+  display:flex;gap:11px;align-items:flex-start;border-radius:var(--r-card);padding:14px 16px;margin-bottom:14px;
+  background:var(--fill-2);color:var(--text-2);
 }
-#js-app .cast p{font-size:12.5px;line-height:1.7}
-#js-app .bar{height:5px;border-radius:3px;background:var(--line);overflow:hidden}
-#js-app .bar i{display:block;height:100%;background:var(--brand);border-radius:3px;transition:width var(--t-panel) var(--ease-out)}
-#js-app .lead{font-size:11.5px;color:var(--text-2);line-height:1.78}
-#js-app .loading{font-size:12px;color:var(--text-3);padding:14px 0;text-align:center;display:flex;align-items:center;justify-content:center;gap:8px}
+#js-app .cast p{font-size:13.5px;line-height:1.7}
+#js-app .bar{height:5px;border-radius:var(--r-pill);background:var(--track);overflow:hidden}
+#js-app .bar i{display:block;height:100%;background:var(--accent);border-radius:var(--r-pill);transition:width var(--t-panel) var(--ease-out-quart)}
+#js-app .lead{font-size:13px;color:var(--text-2);line-height:1.75}
+#js-app .loading{font-size:13px;color:var(--text-3);padding:14px 0;text-align:center;display:flex;align-items:center;justify-content:center;gap:8px}
 #js-app .loading svg.ic{font-size:14px;animation:spin 720ms linear infinite}
-#js-app .scroll{padding:14px;overflow-y:auto;min-height:0;flex:1}
-#js-app .grid2{display:grid;grid-template-columns:206px minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:12px;align-items:stretch;flex:1;min-height:0}
+#js-app .scroll{padding:18px;overflow-y:auto;min-height:0;flex:1}
+#js-app .grid2{display:grid;grid-template-columns:212px minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:14px;align-items:stretch;flex:1;min-height:0}
 
-/* 主题切换（Apple §14：明暗翻转别做亮度跳变）：切换那一刻才给 html 挂 .theming，
-   只在这 320ms 窗口里让颜色参与过渡，之后立刻摘掉 —— 常驻会把所有 hover 都拖成慢速淡入。 */
+/* 主题切换：明暗翻转别做亮度跳变 —— 切换那一刻才给 html 挂 .theming，
+   只在这 320ms 窗口里让颜色参与过渡，之后立刻摘掉（常驻会把所有 hover 都拖成慢速淡入）。 */
 html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
   transition:background-color 260ms cubic-bezier(.4,0,.2,1),color 260ms cubic-bezier(.4,0,.2,1),border-color 260ms cubic-bezier(.4,0,.2,1)!important;
 }
 
-/* Apple §14：减弱动效不等于没有反馈 —— 换成短交叉淡入，去掉位移与缩放。
-   `prefers-reduced-transparency` 时把半透明材质变实，保证可读性。 */
+/* 规范要求的三个无障碍信号都要接住：reduced-motion 减弱（不等于没有反馈）；
+   reduced-transparency 把玻璃变实；contrast 拉出明确边界。 */
 @media (prefers-reduced-motion: reduce){
-  #js-app .msg.enter,#js-app .ref,#js-app .starter,#js-app .hello,#js-app .conv.swap,#js-app .convrow.enter{animation:none}
+  #js-app .msg.enter,#js-app .ref,#js-app .starter,#js-app .conv.swap,#js-app .convrow.enter{animation:none}
   #js-app .status svg.ic,#js-app .loading svg.ic,#js-app .iconbtn.swapping svg.ic{animation:none}
   #js-app .btnlabel.swap{animation:none}
   #js-app .btn:active,#js-app .chip:active,#js-app .iconbtn:active,#js-app .expert:active,#js-app .starter:active,#js-app .navitem:active,#js-app .convdel:active{transform:none}
@@ -509,7 +552,19 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
   html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{transition:none!important}
 }
 @media (prefers-reduced-transparency: reduce){
-  #js-app .topbar,#js-app .composer{background:var(--surface);-webkit-backdrop-filter:none;backdrop-filter:none}
+  #js-app .composer,#js-app .jump{background:var(--surface);-webkit-backdrop-filter:none;backdrop-filter:none}
+}
+@media (prefers-contrast: more){
+  #js-app .composer,#js-app .jump{background:var(--surface);-webkit-backdrop-filter:none;backdrop-filter:none}
+  #js-app .panel{box-shadow:none;border:1px solid color-mix(in srgb,var(--text) 35%, transparent)}
+}
+/* 规范：触控目标 ≥44px（视觉可以小，热区要够）。只有粗指针设备才需要放大。 */
+@media (pointer:coarse){
+  #js-app .btn{min-height:44px;padding:11px 18px}
+  #js-app .navitem{padding:12px 11px}
+  #js-app .iconbtn{width:40px;height:40px}
+  #js-app .convdel{width:36px}
+  #js-app .convopen{padding:12px 6px}
 }
 @media (max-width:1100px){
   /* 窄屏三块竖排一起滚。⚠️ 对话区必须给**确定高度**：原来它挂在 minmax(0,1fr) 行里，
@@ -520,9 +575,10 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
 }
 @media (max-width:820px){
   #js-app .body{grid-template-columns:1fr}
-  #js-app .side{flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--line-soft);overflow:visible}
+  #js-app .side{flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--hairline);overflow:visible}
   #js-app .sidenote{display:none}
-  #js-app .main{padding:10px}
+  #js-app .main{padding:14px}
+  #js-app .msgs{padding:14px 14px 112px}
   #js-app .grid2{grid-template-columns:1fr}
 }
 </style>
@@ -570,7 +626,7 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
           <div class="composer">
             <textarea id="js-input" rows="1" placeholder="把问题说清楚就行，例如：家长说太贵了，怎么回？" aria-label="输入你的问题"></textarea>
             <button class="btn primary" type="button" id="js-send">
-              <svg class="ic" width="14" height="14" aria-hidden="true"><use href="#i-send"></use></svg>发送
+              <svg class="ic" width="15" height="15" aria-hidden="true"><use href="#i-arrow-up"></use></svg>发送
             </button>
           </div>
           <div class="hint" id="js-hint"></div>
