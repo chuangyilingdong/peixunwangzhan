@@ -274,9 +274,22 @@
 }
 #js-app .msg.me .mavatar{background:var(--surface-3);color:var(--text-2)}
 #js-app .bubble{
-  background:var(--surface-2);border-radius:14px;padding:11px 14px;font-size:13.5px;line-height:1.78;
+  background:var(--surface-2);border-radius:14px;padding:12px 16px;font-size:14px;line-height:1.8;
   max-width:min(720px,86%);white-space:pre-wrap;word-break:break-word;
 }
+/* 回答的轻量排版（mdHtml 的产物）：段距 / 小标题 / 列点。
+   模型输出的是 Markdown（实测每篇 6-7 处 **加粗** 和 1. 列点），之前当纯文本渲染＝满屏星号。 */
+#js-app .bubble p{margin:0 0 9px}
+#js-app .bubble p:last-child{margin-bottom:0}
+#js-app .bubble .md-h{font-weight:600;margin:13px 0 7px;letter-spacing:-.005em}
+#js-app .bubble p.md-h:first-child{margin-top:0}
+#js-app .bubble ol,#js-app .bubble ul{margin:0 0 9px;padding-left:1.4em}
+#js-app .bubble ol:last-child,#js-app .bubble ul:last-child{margin-bottom:0}
+#js-app .bubble li{margin:0 0 7px}
+#js-app .bubble li:last-child{margin-bottom:0}
+#js-app .bubble li::marker{color:var(--text-3)}
+#js-app .bubble b{font-weight:600}
+#js-app .bubble .stopped{display:block;margin-top:7px;font-size:12px;color:var(--text-3)}
 #js-app .msg.me .bubble{background:var(--brand);color:#fff}
 #js-app .status{
   font-size:11.5px;color:var(--text-3);padding:0 0 0 38px;display:flex;align-items:center;gap:6px;
@@ -348,7 +361,7 @@
 #js-app .expert[aria-pressed="true"]{background:var(--brand-soft)}
 #js-app .expert[aria-pressed="true"] .eavatar{background:var(--brand);color:#fff}
 #js-app .ename{font-size:12.5px;font-weight:600;display:block;letter-spacing:-.005em}
-#js-app .etag{font-size:10.5px;color:var(--text-3);display:block;margin-top:2px;line-height:1.5}
+#js-app .etag{font-size:10.5px;color:var(--text-3);display:block;margin-top:2px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* ── 会话列表（机构级：服务端存，这里只是入口）── */
 #js-app .convlist{padding:0 6px 8px;overflow-y:auto;min-height:0}

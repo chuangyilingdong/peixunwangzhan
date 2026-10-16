@@ -19,6 +19,31 @@
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
+  /** 轻量 Markdown → HTML：先整体转义，再只认「模型真的会写」的几种结构。
+   *  支持 **加粗**、「整行只有加粗」当小标题、1. 2. 有序列表、- · 无序列表、# 标题、空行分段。
+   *  实测真实回答里就是这几种（7 行加粗 + 6 行列点），多余的花样不认、原始 HTML 永远不放行。 */
+  function mdHtml(src) {
+    var out = [];
+    var list = null;
+    var closeList = function () { if (list) { out.push('</' + list + '>'); list = null; } };
+    var inline = function (s) { return s.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>'); };
+    String(src == null ? '' : src).split('\n').forEach(function (line) {
+      var t = esc(line).trim();
+      if (!t) { closeList(); return; }
+      var h = t.match(/^#{1,4}\s*(\S.*)$/);
+      if (h) { closeList(); out.push('<p class="md-h">' + inline(h[1]) + '</p>'); return; }
+      var only = t.match(/^\*\*([^*]+)\*\*[：:]?$/);
+      if (only) { closeList(); out.push('<p class="md-h">' + only[1] + '</p>'); return; }
+      var ol = t.match(/^(\d{1,2})[.、)]\s+(\S.*)$/);
+      if (ol) { if (list !== 'ol') { closeList(); out.push('<ol>'); list = 'ol'; } out.push('<li>' + inline(ol[2]) + '</li>'); return; }
+      var ul = t.match(/^[-—•·]\s+(\S.*)$/);
+      if (ul) { if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; } out.push('<li>' + inline(ul[1]) + '</li>'); return; }
+      closeList();
+      out.push('<p>' + inline(t) + '</p>');
+    });
+    closeList();
+    return out.join('');
+  }
   /** 内联 sprite 图标。尺寸走 width/height 属性。 */
   function ic(name, size) {
     var px = size || 14;
@@ -130,7 +155,7 @@
         b.type = 'button'; b.className = 'expert';
         b.dataset.id = e.id;
         b.innerHTML = '<span class="eavatar">' + esc(e.avatar) + '</span>' +
-          '<span style="min-width:0"><span class="ename">' + esc(e.name) + '</span><span class="etag">' + esc(e.tag) + '</span></span>';
+          '<span style="min-width:0"><span class="ename">' + esc(e.name) + '</span><span class="etag" title="' + esc(e.tag) + '">' + esc(e.tag) + '</span></span>';
         b.addEventListener('click', function () { switchExpert(e); });
         box.appendChild(b);
       });
@@ -314,11 +339,16 @@
     wrap.innerHTML = '<span class="mavatar">' + esc(who) + '</span>' +
       '<div class="bubblewrap"><div class="bubble"></div>' +
       (role === 'assistant' && !o.plain ? '<div class="msgactions"></div>' : '') + '</div>';
-    wrap.querySelector('.bubble').textContent = content;
+    var bubbleEl = wrap.querySelector('.bubble');
+    // 助手的回答按轻量 Markdown 渲染（模型写的是 Markdown，之前原样输出＝满屏裸露的 ** 星号）；
+    // 流式中的占位（plain）与用户消息保持纯文本。
+    if (role === 'assistant' && !o.plain) bubbleEl.innerHTML = mdHtml(content);
+    else bubbleEl.textContent = content;
+    if (o.stopped) bubbleEl.insertAdjacentHTML('beforeend', '<span class="stopped">（已停止）</span>');
     if (role === 'assistant' && !o.plain) attachActions(wrap, o);
     $('#js-msgs').appendChild(wrap);
     if (o.scroll !== false) scrollBottom(true);
-    return wrap.querySelector('.bubble');
+    return bubbleEl;
   }
 
   /** 按钮文案切换：内容立刻换（不延迟响应），只让新文案从模糊里淡进来。 */
@@ -362,7 +392,7 @@
     state.messages.forEach(function (m, i) { if (m.role === 'assistant' && (m.content || '').trim()) lastAi = i; });
     state.messages.forEach(function (m, i) {
       if (m.role !== 'user' && !(m.content || '').trim()) return;    // 空助手＝被打断的占位
-      appendMsg(m.role, m.content, { last: i === lastAi, enter: false, scroll: false });
+      appendMsg(m.role, m.content, { last: i === lastAi, enter: false, scroll: false, stopped: m.stopped });
     });
     var last = state.messages[state.messages.length - 1];
     if (last && last.role === 'user') {
@@ -544,13 +574,14 @@
       var stopped = e && (e.name === 'AbortError' || String(e.message).indexOf('abort') >= 0);
       if (stopped) {
         var partial = bubble.textContent || '';
-        bubble.textContent = partial + (partial ? '\n\n（已停止）' : '（已停止生成）');
         if (partial.trim()) {
-          state.messages.push({ role: 'assistant', content: partial });
-          // ⚠️ 只有「已经生成了一部分」才重排：renderMessages 是按 state.messages 重建 DOM 的，
-          //    而一个字都没生成时 state 里只有用户那条 —— 重排会把刚写上去的「（已停止生成）」
-          //    提示一起冲掉，用户看到的就是「问了一句，然后什么都没有」（2026-10-15 线上实测到）。
+          // 「已停止」的标记跟着内容一起进 state —— 之前是先把标记写进 DOM 再重排，
+          // 重排按 state 重建，那句标记会被冲掉（用户看到一段没有交代的截断）。
+          state.messages.push({ role: 'assistant', content: partial, stopped: true });
           renderMessages(true);
+        } else {
+          // 一个字都没生成：**不要**重排（重排会把刚写上去的提示一起冲掉，线上实测到过）
+          bubble.textContent = '（已停止生成）';
         }
         loadConversations();
       } else {
