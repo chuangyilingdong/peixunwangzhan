@@ -884,6 +884,15 @@
     e.target.style.height = Math.min(e.target.scrollHeight, 168) + 'px';
   });
   $('#conv-reset').addEventListener('click', newConversation);
+  $('#js-logout').addEventListener('click', function () {
+    var btn = this;
+    btn.disabled = true;
+    var token = authToken();
+    // 服务端登出（作废这个会话）→ 本地清会话 → 回登录门；服务端失败也要能本地退出
+    fetch('/api/auth/logout', { method: 'POST', headers: token ? { authorization: 'Bearer ' + token } : undefined, credentials: 'same-origin' })
+      .catch(function () { })
+      .then(function () { clearSession(); location.reload(); });
+  });
   $('#js-q').addEventListener('input', debounce(function (e) { state.lib.q = e.target.value.trim(); renderLib(); }, 300));
   $('#cs-run').addEventListener('click', runCompliance);
   $('#cs-demo').addEventListener('click', function () {
@@ -918,6 +927,10 @@
       // 画像还空着」的用户判成未登录、输入框全部禁用 —— 那是条死路（2026-10-16 修）。
       state.signedIn = Boolean(ov.signedIn);
       state.orgLabel = ov.orgName || ov.userName || '';
+      // 顶栏把登录身份亮出来（登录态可见，才能分清「已登录」和「没提示登录」）
+      $('#js-who').textContent = state.orgLabel;
+      $('#js-who').hidden = !state.signedIn;
+      $('#js-logout').hidden = !state.signedIn;
       $('#js-today').textContent = ov.today;
       $('#js-sidenote').innerHTML = '专家回答会先检索你自己的资料库，再结合机构画像。<br>' +
         '本月主线：' + esc((ov.calendar[String(ov.month)] || {}).launch || '');

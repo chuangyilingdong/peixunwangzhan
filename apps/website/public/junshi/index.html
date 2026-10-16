@@ -19,8 +19,8 @@
 </style>
 </head>
 <body>
-<!-- 图标 sprite：内联的 20 个 Tabler 图标（MIT），零网络请求、颜色走 currentColor。
-     线上 CSP 是 default-src 'self'，外链图标 CDN 跑不了；整包图标库又有 600KB，而这里只用到 20 个。
+<!-- 图标 sprite：内联的 22 个 Tabler 图标（MIT），零网络请求、颜色走 currentColor。
+     线上 CSP 是 default-src 'self'，外链图标 CDN 跑不了；整包图标库又有 600KB，而这里只用到 22 个。
      ⚠️ 加/换图标时先核对：prototype.js 里 ic('x') / ic('copy') 这些名字必须在这里有对应 symbol，
      否则 <use> 指向不存在的 id、按钮上就是一个空白方块（2026-10-15 修过：i-x 一直缺，停止和删除按钮是空的）。 -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
@@ -127,6 +127,11 @@
     <path d="M12 5l0 14" />
     <path d="M18 11l-6 -6l-6 6" />
   </symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14 8v-2a2 2 0 0 0 -2 -2h-7a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2 -2v-2" />
+    <path d="M9 12h12l-3 -3" />
+    <path d="M18 15l3 -3" />
+  </symbol>
 </defs></svg>
 
 <div id="js-app">
@@ -209,6 +214,10 @@
 }
 #js-app .brand{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:650;letter-spacing:-.01em;white-space:nowrap}
 #js-app .topmeta{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text-3);white-space:nowrap;font-variant-numeric:tabular-nums}
+#js-app .who{
+  padding:4px 11px;border-radius:var(--r-pill);background:var(--fill);color:var(--text-2);font-size:12.5px;
+  max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
 #js-app .iconbtn{
   width:32px;height:32px;border-radius:var(--r-pill);display:grid;place-items:center;font-size:16px;color:var(--text-2);
   transition:background var(--t-press) var(--ease), color var(--t-press) var(--ease);
@@ -596,6 +605,9 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
   <span class="brand">招生军师 · 专家团</span>
   <span class="topmeta">
     <span id="js-today"></span>
+    <!-- 登录身份 + 退出：登录态得看得见，否则「没提示登录」和「已登录」在界面上分不出来 -->
+    <span class="who" id="js-who" hidden></span>
+    <button class="iconbtn" type="button" id="js-logout" aria-label="退出登录" hidden><svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-logout"></use></svg></button>
     <button class="iconbtn" type="button" id="js-theme" aria-label="切换深浅色"><svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-moon"></use></svg></button>
   </span>
 </div>
