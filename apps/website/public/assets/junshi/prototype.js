@@ -55,15 +55,78 @@
      `/api/junshi/*`（服务端 readToken 虽然兼容跨端，但请求里压根没这个 cookie）。
      服务端接受 `Authorization: Bearer`，这条通道与路径无关、最稳。 */
   var AUTH_KEYS = ['ai-kids-platform.session.v1.org', 'ai-kids-platform.session.v1.student', 'ai-kids-platform.session.v1.admin'];
-  function authToken() {
+  function authSession() {
     for (var i = 0; i < AUTH_KEYS.length; i++) {
       try {
         var s = JSON.parse(localStorage.getItem(AUTH_KEYS[i]) || 'null');
-        if (s && s.token && (!s.expiresAt || new Date(s.expiresAt).getTime() > Date.now() + 60000)) return s.token;
+        if (s && s.token && (!s.expiresAt || new Date(s.expiresAt).getTime() > Date.now() + 60000)) return s;
       } catch (e) { /* 隐私模式：静默跳过 */ }
     }
     return null;
   }
+  function authToken() { var s = authSession(); return s ? s.token : null; }
+  function saveSession(s) {
+    // 与机构端同一个 key（clientType=org）：在军师登录 = 在机构端也登录，一套账号一处生效。
+    try { localStorage.setItem(AUTH_KEYS[0], JSON.stringify({ token: s.token, expiresAt: s.expiresAt, user: s.user, organization: s.organization || null })); } catch (e) {}
+  }
+  function clearSession() {
+    for (var i = 0; i < AUTH_KEYS.length; i++) { try { localStorage.removeItem(AUTH_KEYS[i]); } catch (e) {} }
+  }
+  /* ── 登录门 ──
+     口径（2026-10-16 用户）：先登录才能进入，而不是进去之后再补登录。所以没会话时
+     停在门口、一个业务接口都不请求；会话在途中失效（过期/停用/别处登出）也一样回门口，
+     不悄悄降级成匿名 —— 那样门槛等于没有。 */
+  function showGate(message) {
+    var gate = $('#js-gate');
+    if (!gate) return;
+    root.classList.add('gated');
+    gate.hidden = false;
+    $('#js-gate-err').textContent = message || '';
+    var li = $('#js-gate-login');
+    if (li && !li.value) { try { li.focus({ preventScroll: true }); } catch (e) { li.focus(); } }
+  }
+  function sessionLost() {
+    clearSession();
+    showGate('登录状态已过期，请重新登录。');
+    throw new Error('登录状态已过期，请重新登录。');
+  }
+  (function bindGate() {
+    var form = $('#js-gate-form');
+    if (!form) return;
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var btn = $('#js-gate-go');
+      var login = $('#js-gate-login').value.trim();
+      var password = $('#js-gate-pass').value;
+      var code = $('#js-gate-code').value.trim();
+      if (!login || !password) { $('#js-gate-err').textContent = '请填写账号和密码。'; return; }
+      btn.disabled = true; btn.textContent = '登录中…';
+      $('#js-gate-err').textContent = '';
+      fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(code ? { login: login, password: password, clientType: 'org', mfaCode: code } : { login: login, password: password, clientType: 'org' }),
+        credentials: 'same-origin',
+      }).then(function (res) {
+        return res.json().catch(function () { return null; }).then(function (p) { return { res: res, p: p }; });
+      }).then(function (out) {
+        var payload = out.p && out.p.data !== undefined ? out.p.data : out.p;
+        if (!out.res.ok || !payload || !payload.token) {
+          var code2 = (out.p && ((out.p.error && out.p.error.code) || out.p.code)) || '';
+          if (code2 === 'MFA_REQUIRED') {
+            $('#js-gate-mfa').hidden = false;
+            throw new Error('该账号开了二次验证，请填写动态验证码或恢复码。');
+          }
+          throw new Error((out.p && ((out.p.error && out.p.error.message) || out.p.message)) || ('登录失败（HTTP ' + out.res.status + '）'));
+        }
+        saveSession(payload);
+        location.reload();          // 会话已落地：重进就是登录态，数据全按机构取
+      }).catch(function (err) {
+        $('#js-gate-err').textContent = err.message || '登录失败，请重试。';
+        btn.disabled = false; btn.textContent = '进入专家团';
+      });
+    });
+  })();
   function call(path, options) {
     var opt = options || {};
     var token = authToken();
@@ -79,8 +142,9 @@
       });
     }
     return request(true).then(function (res) {
-      // 带了 token 却被拒（过期 / 被停用 / 已在别处登录）：退回匿名再试一次，别让整页打不开
-      if (res.status === 401 && token) return request(false);
+      // 带了 token 却被拒（过期 / 被停用 / 已在别处登录）：本地会话作废、回登录门。
+      // 这个页面的口径是「先登录才能进」—— 悄悄降级成匿名会让门槛形同虚设。
+      if (res.status === 401 && token) return sessionLost();
       return res;
     }).then(function (res) {
       return res.json().catch(function () { return null; }).then(function (payload) {
@@ -518,7 +582,7 @@
         });
       };
       var res = await chatFetch(Boolean(token));
-      if (res.status === 401 && token) res = await chatFetch(false);   // token 被拒就退回匿名
+      if (res.status === 401 && token) sessionLost();   // 会话失效：回登录门（不再悄悄降级匿名）
       if (!res.ok || !res.body) {
         var p = null;
         try { p = await res.json(); } catch (e) { /* 非 JSON */ }
@@ -833,7 +897,10 @@
   var bootMode = savedMode() || 'light';
   document.documentElement.style.colorScheme = bootMode;
   applyThemeIcon();
-  Promise.all([
+
+  // 先登录才能进入（2026-10-16 用户口径）：没有会话就停在登录门，**业务接口一个都不请求**。
+  if (!authSession()) showGate('');
+  else Promise.all([
     call('/experts').catch(function () { return { experts: [] }; }),
     call('/overview').catch(function () { return null; }),
   ]).then(function (out) {

@@ -449,6 +449,29 @@
 #js-app .ref span{font-size:11.5px;color:var(--text-3);display:block;margin-top:3px}
 #js-app .ref p{font-size:12px;color:var(--text-3);margin-top:6px;line-height:1.7}
 
+/* ── 登录门 ─────────────────────────────────────────────
+   盖住整个视口的一面：地球地面 + 白卡 + 两层阴影，令牌与全站一致。
+   登录前主界面是 display:none（不是被盖住而已）—— 别让人从 DOM 里看出东西来。 */
+#js-app.gated .topbar,#js-app.gated .body{display:none}
+#js-app .gate{position:fixed;inset:0;z-index:50;display:grid;place-items:center;background:var(--bg);padding:24px}
+#js-app .gatecard{
+  width:min(384px,100%);background:var(--surface);border-radius:var(--r-panel);box-shadow:var(--sh-panel);
+  padding:32px 30px 24px;display:flex;flex-direction:column;gap:14px;
+}
+#js-app .gatetitle{margin:0;font-size:26px;font-weight:700;letter-spacing:-.03em;line-height:1.15}
+#js-app .gatesub{margin:-6px 0 4px;font-size:13.5px;color:var(--text-2);line-height:1.65}
+#js-app .gatefield{display:flex;flex-direction:column;gap:6px}
+#js-app .gatefield span{font-size:12.5px;color:var(--text-3)}
+#js-app .gatefield input{
+  font:inherit;font-size:14.5px;color:var(--text);background:var(--fill);border:0;border-radius:var(--r-thumb);
+  padding:11px 14px;outline:none;transition:box-shadow var(--t-press) var(--ease);width:100%;
+}
+#js-app .gatefield input:focus{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%, transparent)}
+#js-app .gatefield input::placeholder{color:var(--text-4)}
+#js-app .gateerr{margin:0;font-size:12.5px;color:var(--red);min-height:18px;line-height:1.5}
+#js-app .gatebtn{justify-content:center;min-height:44px;font-size:15px;margin-top:2px}
+#js-app .gatefoot{margin:2px 0 0;font-size:12px;color:var(--text-3);line-height:1.6}
+
 /* ── 通用件 ── */
 #js-app .empty{font-size:12.5px;color:var(--text-3);padding:6px 0;line-height:1.75}
 #js-app .err{font-size:12.5px;color:var(--red);background:var(--red-bg);border-radius:var(--r-thumb);padding:11px 14px;line-height:1.7;display:flex;gap:8px;align-items:flex-start}
@@ -678,6 +701,21 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
     </section>
 
   </main>
+</div>
+<!-- 登录门（2026-10-16 用户口径「先登录才能进入」）：没会话就不进主界面、不请求任何接口。
+     表单直接打平台登录接口（clientType=org，与机构端同一套账号），成功后把会话写进
+     localStorage 再重进；开了二次验证的账号会自动多出验证码一栏。 -->
+<div class="gate" id="js-gate" hidden>
+  <form class="gatecard" id="js-gate-form">
+    <h1 class="gatetitle">招生军师</h1>
+    <p class="gatesub">用机构账号登录后进入专家团。提问、画像、会话都按你的机构来。</p>
+    <label class="gatefield"><span>账号</span><input id="js-gate-login" name="login" autocomplete="username" placeholder="登录账号"></label>
+    <label class="gatefield"><span>密码</span><input id="js-gate-pass" name="password" type="password" autocomplete="current-password" placeholder="登录密码"></label>
+    <label class="gatefield" id="js-gate-mfa" hidden><span>验证码</span><input id="js-gate-code" name="mfaCode" inputmode="numeric" placeholder="动态验证码或恢复码"></label>
+    <p class="gateerr" id="js-gate-err" role="alert"></p>
+    <button class="btn primary gatebtn" type="submit" id="js-gate-go">进入专家团</button>
+    <p class="gatefoot">账号由平台统一开通；忘记密码请联系平台管理员重置。</p>
+  </form>
 </div>
 </div>
 <script src="/assets/junshi/prototype.js?v=__STAMP__" defer></script>
