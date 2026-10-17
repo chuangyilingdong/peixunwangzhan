@@ -47,7 +47,24 @@ function data() {
     for (let i = 0; i < t.length - 1; i++) grams.add(t.slice(i, i + 2));
     return { ...c, grams };
   });
-  cache = { library, knowledge, compliance, chunks: indexed };
+  // 文档频率（IDF 用）：每个二元组在多少条里出现过。越稀有 → 越能代表问题的主题。
+  // 没有它，「招生/文案/朋友圈」这类泛词会把真正的关键词（比如「寒假」）压下去（实测踩到）。
+  const docFreq = (texts) => {
+    const m = new Map();
+    for (const t of texts) for (const g of new Set(bigrams(t))) m.set(g, (m.get(g) || 0) + 1);
+    return m;
+  };
+  const chunkDf = new Map();
+  for (const c of indexed) for (const g of c.grams) chunkDf.set(g, (chunkDf.get(g) || 0) + 1);
+  cache = {
+    library, knowledge, compliance, chunks: indexed,
+    dfs: {
+      chunks: { df: chunkDf, total: indexed.length },
+      objections: { df: docFreq(knowledge.objections.map((o) => o.q + o.a)), total: knowledge.objections.length },
+      copies: { df: docFreq(knowledge.copies.map((c) => c.c)), total: knowledge.copies.length },
+      hooks: { df: docFreq(knowledge.hooks.map((h) => h.name + h.rule + h.note)), total: knowledge.hooks.length },
+    },
+  };
   return cache;
 }
 
@@ -129,6 +146,28 @@ function bigrams(s) {
   return out;
 }
 
+/** IDF 权重：越稀有的二元组越值钱。没有它，「招生/文案/朋友圈」这类泛词会压过问题真正的
+ *  主题词（实测：问「寒假班文案」，32 条含「寒假」的文案被泛词挤到第 7 名，进不了 top-3）。 */
+function idfWeight(stat, gram) {
+  return Math.log(1 + stat.total / (1 + (stat.df.get(gram) || 0)));
+}
+
+/** 检索前剥掉「请求句」里的指令词。这些词本身也是二元组，会把真正的主题词挤下去——
+ *  实测：「写一条寒假班招生的朋友圈文案，30字以内」不剥时，寒假班的文案排第 12；
+ *  剥掉「写一条/文案/朋友圈/字以内」后，寒假班排第 2，模型就不会误判「库里没有寒假班」。
+ *  full=true 用于结构化检索（文案/朋友圈/话术在整个文案库里是泛词，全部剥掉）；
+ *  full=false 用于原文分块（保留「文案/朋友圈」这类可能承载内容语义的词）。 */
+const REQUEST_STOP_FULL = ['写一条', '写两条', '帮我写', '帮我', '给我', '写', '一条', '几条', '一篇',
+  '文案', '朋友圈', '话术', '软文', '字以内', '以内', '左右', '怎么', '如何', '请问', '一下', '麻烦', '请'];
+const REQUEST_STOP_LIGHT = ['写一条', '写两条', '帮我写', '帮我', '给我', '写', '一条', '几条', '一篇',
+  '字以内', '以内', '左右', '怎么', '如何', '请问', '一下', '麻烦', '请'];
+function stripRequest(s, full) {
+  const src = String(s || '');
+  let t = src;
+  for (const w of (full ? REQUEST_STOP_FULL : REQUEST_STOP_LIGHT)) t = t.split(w).join('');
+  return t.trim() || src;
+}
+
 // 节点词表：用来判断「这份资料的标题讲的是哪个节点」。命中查询里的节点 → 加分；
 // 标题讲的是**另一个**节点 → 扣分。纯词面匹配最容易出的错就是把别的节日的方案拉进来
 // （实测：问万圣节，检索把《二月二龙抬头》的活动话术排到了第 1 位，模型还得自己绕开它）。
@@ -147,16 +186,17 @@ function nodesOf(text) {
  *    避免一段里反复出现的词把分数拉爆。
  */
 export function retrieveChunks(query, domains, limit = 5) {
-  const { chunks } = data();
-  const grams = [...new Set(bigrams(query))].slice(0, 60);
+  const { chunks, dfs } = data();
+  const q = stripRequest(query, false);        // 剥掉「写一条/字以内」这类请求词，保留内容词
+  const grams = [...new Set(bigrams(q))].slice(0, 60);
   if (!grams.length) return [];
-  const asked = nodesOf(query);
+  const asked = nodesOf(q);
   const scored = [];
   for (const c of chunks) {
-    let hit = 0;
-    for (const g of grams) if (c.grams.has(g)) hit += 1;
+    let hit = 0; let weight = 0;
+    for (const g of grams) if (c.grams.has(g)) { hit += 1; weight += idfWeight(dfs.chunks, g); }
     if (hit < 3) continue;
-    let score = hit;
+    let score = weight;                        // IDF 加权分：稀有词权重更高
     if ((c.domain || []).some((d) => domains.includes(d))) score += 2;
     const docNodes = nodesOf(c.title);
     if (asked.length && docNodes.length) {
@@ -181,28 +221,29 @@ export function retrieveChunks(query, domains, limit = 5) {
 
 /** 结构化知识：按专家的领域把异议/文案/玩法也捞一份，跟原文分块互补。 */
 export function retrieveStructured(query, expertId, limit = 3) {
-  const { knowledge } = data();
-  const grams = [...new Set(bigrams(query))].slice(0, 60);
-  const hitCount = (text) => {
-    let hit = 0;
-    for (const g of grams) if (text.includes(g)) hit += 1;
-    return hit;
+  const { knowledge, dfs } = data();
+  const q = stripRequest(query, true);         // 剥掉指令词与「文案/朋友圈」这类泛词，只留主题
+  const grams = [...new Set(bigrams(q))].slice(0, 60);
+  const scoreOf = (text, stat) => {
+    let raw = 0; let weight = 0;
+    for (const g of grams) if (text.includes(g)) { raw += 1; weight += idfWeight(stat, g); }
+    return { raw, weight };
   };
-  const pick = (list, textOf, strip) => list
-    .map((item) => [hitCount(textOf(item)), item])
-    .filter(([n]) => n >= 2)
-    .sort((a, b) => b[0] - a[0])
+  const pick = (list, textOf, strip, stat) => list
+    .map((item) => { const s = scoreOf(textOf(item), stat); return { raw: s.raw, weight: s.weight, item }; })
+    .filter((x) => x.raw >= 2)
+    .sort((a, b) => b.weight - a.weight)       // IDF 加权排序（原先按原始命中数，泛词会压过主题词）
     .slice(0, limit)
-    .map(([, item]) => strip(item));
+    .map((x) => strip(x.item));
 
   if (expertId === 'script') {
-    return { objections: pick(knowledge.objections, (o) => o.q + o.a, (o) => ({ q: o.q, a: o.a.slice(0, 500), cat: o.cat, chain: o.chain || null })) };
+    return { objections: pick(knowledge.objections, (o) => o.q + o.a, (o) => ({ q: o.q, a: o.a.slice(0, 500), cat: o.cat, chain: o.chain || null }), dfs.objections) };
   }
   if (expertId === 'copy') {
-    return { copies: pick(knowledge.copies, (c) => c.c, (c) => ({ c: c.c.slice(0, 400), kind: c.kind })) };
+    return { copies: pick(knowledge.copies, (c) => c.c, (c) => ({ c: c.c.slice(0, 400), kind: c.kind }), dfs.copies) };
   }
   if (expertId === 'marketing' || expertId === 'compliance') {
-    return { hooks: pick(knowledge.hooks, (h) => h.name + h.rule + h.note, (h) => ({ name: h.name, price: h.price, rule: h.rule, note: h.note })) };
+    return { hooks: pick(knowledge.hooks, (h) => h.name + h.rule + h.note, (h) => ({ name: h.name, price: h.price, rule: h.rule, note: h.note }), dfs.hooks) };
   }
   return {};
 }
