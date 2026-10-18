@@ -174,6 +174,9 @@ try {
   check('① 失败也是 Anthropic 形状（客户端读的是 error.message，不是我们的信封）',
     noKey.payload?.type === 'error' && typeof noKey.payload?.error?.message === 'string' && noKey.payload?.success === undefined,
     noKey.text.slice(0, 160));
+  // ⭐ 2026-10-18（客户端契约）：错误体里要有**稳定机器码**，客户端靠它分流重试（刷新密钥再试 / 提示用户）。
+  check('① 过期密钥的错误体带 code=RUNTIME_KEY_EXPIRED（客户端不用靠中文文案匹配）',
+    expiredCall.payload?.error?.code === 'RUNTIME_KEY_EXPIRED', expiredCall.text.slice(0, 180));
   {
     // 插件两个头都发；只给 x-api-key（没有 authorization）也必须认
     const apiKeyOnly = await search(pluginBody(), '', { 'x-api-key': key });
@@ -185,6 +188,14 @@ try {
   const ok = await search(pluginBody({ system: '你是搜索助手', metadata: { user_id: 'x' } }), key);
   check('② 正常调用 → 200，响应是上游的 Anthropic 正文', ok.status === 200 && ok.payload?.type === 'message'
     && ok.payload?.content?.some((b) => b.type === 'web_search_tool_result'), `实际 ${ok.status} ${ok.text.slice(0, 200)}`);
+  // ⭐ 2026-10-18（客户端 WebSearch 接入要用的两处）：结果条目与检索次数必须**原样到客户端**。
+  {
+    const result = (ok.payload?.content || []).find((b) => b.type === 'web_search_tool_result');
+    const first = result?.content?.[0] || {};
+    check('② 结果条目里 url/title 都在（客户端靠它们渲染来源）', first.type === 'web_search_result' && Boolean(first.url) && Boolean(first.title), JSON.stringify(first).slice(0, 160));
+    check('② usage.server_tool_use.web_search_requests 原样到客户端', ok.payload?.usage?.server_tool_use?.web_search_requests === 2,
+      JSON.stringify(ok.payload?.usage));
+  }
   {
     const hit = seen.at(-1);
     check('② 打到「同源主机的 /anthropic/v1/messages」', hit?.url === '/anthropic/v1/messages', String(hit?.url));
@@ -226,6 +237,25 @@ try {
     check('④ 一个搜索工具都没有 → 明确报错（不静默让上游干聊）', noTool.status === 400 && /web_search/.test(noTool.text), `${noTool.status} ${noTool.text.slice(0, 140)}`);
   }
 
+  /* ④b 客户端（ZCode 0.2.x）那一版请求形状：工具版本 `web_search_20260209`、max_uses=8、max_tokens=4096 */
+  {
+    seen.length = 0;
+    await search(pluginBody({ tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 8 }] }), key);
+    const tools = seen.at(-1)?.body?.tools || [];
+    check('④b 客户端那版 web_search_20260209 原样放行（版本不认死，上游实测两个版本都认）',
+      tools.length === 1 && tools[0].type === 'web_search_20260209', JSON.stringify(tools));
+    check('④b 客户端要的 max_uses=8 原样保留（没被抬到上限 10）', tools[0]?.max_uses === 8, String(tools[0]?.max_uses));
+
+    // ⚠️ 实测踩过：max_tokens=64 会把 web_search 的工具参数截断（上游回 invalid_tool_input）→ 抬到下限。
+    seen.length = 0;
+    await search(pluginBody({ max_tokens: 64 }), key);
+    check('④b max_tokens 太小被抬到下限 1024（否则工具参数会被截断成空 input）', seen.at(-1)?.body?.max_tokens === 1024, String(seen.at(-1)?.body?.max_tokens));
+    seen.length = 0;
+    await search(pluginBody({ max_tokens: 99999 }), key);
+    check('④b max_tokens 太大被夹到 16384', seen.at(-1)?.body?.max_tokens === 16384, String(seen.at(-1)?.body?.max_tokens));
+    seen.length = 0;
+  }
+
   /* ⑤ 记账：上游 tokens 与按合同单价折算的成本都落账 */
   {
      
@@ -253,7 +283,31 @@ try {
      
     const failed = await arow("SELECT * FROM usage_records WHERE class_session_id=? AND status='FAILED' ORDER BY created_at DESC, id DESC LIMIT 1", [sessionId]);
     check('⑥ 失败也落账（带 fail_code）', Boolean(failed?.fail_code), JSON.stringify({ code: failed?.fail_code }));
-    
+
+    // ⭐ 2026-10-18：**上游是 OpenAI 形错误时要归一成 Anthropic 形**。
+    // 实测 DeepSeek 的 `/anthropic/v1/messages` 报错返回 `{"error":{"message":…}}`（没有外层 type），
+    // 原来我们原样回吐，客户端按 Anthropic 解析就读不到原因。
+    reply = { status: 429, body: { error: { message: 'Rate limit reached for requests', type: 'rate_limit_error', code: 'invalid_request_error' } } };
+    const openaiShape = await search(pluginBody(), key);
+    check('⑥ 上游 OpenAI 形错误 → 归一成 Anthropic 形（type/message/code 都在）',
+      openaiShape.status === 429 && openaiShape.payload?.type === 'error'
+      && openaiShape.payload?.error?.type === 'rate_limit_error'
+      && /Rate limit reached/.test(String(openaiShape.payload?.error?.message || ''))
+      && openaiShape.payload?.error?.code === 'UPSTREAM_RATE_LIMITED',
+      openaiShape.text.slice(0, 220));
+
+    reply = { status: 401, body: { error: { message: 'Authentication Fails, Your api key is invalid', type: 'authentication_error' } } };
+    const openaiAuth = await search(pluginBody(), key);
+    check('⑥ 上游 401（OpenAI 形）→ type=authentication_error、code=UPSTREAM_AUTH、状态码仍是 401',
+      openaiAuth.status === 401 && openaiAuth.payload?.error?.type === 'authentication_error' && openaiAuth.payload?.error?.code === 'UPSTREAM_AUTH',
+      openaiAuth.text.slice(0, 220));
+
+    // 渠道本来就是 Anthropic 方言时：原样回吐，不做二次包装。
+    reply = { status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: '上游原话' } } };
+    const anthropicShape = await search(pluginBody(), key);
+    check('⑥ 上游本来就是 Anthropic 形 → 原样回吐（不二次包装）',
+      anthropicShape.status === 400 && anthropicShape.payload?.error?.message === '上游原话', anthropicShape.text.slice(0, 200));
+
     reply = null;
   }
 

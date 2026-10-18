@@ -185,6 +185,16 @@ try {
     const body = await real.json().catch(() => ({}));
     assert.equal(body?.error?.code, 'RUNTIME_KEY_INVALID', JSON.stringify(body).slice(0, 160));
   });
+  // ⭐ 2026-10-18（客户端 WebSearch 接入）：搜索网关的完整地址与能力开关随上下文下发。
+  await check('② gateway.searchUrl 指向 /search/messages（客户端不自己拼路径）', () => {
+    assert.equal(typeof ctx.gateway?.searchUrl, 'string', '没有 gateway.searchUrl');
+    assert.ok(/\/search\/messages$/.test(ctx.gateway.searchUrl), ctx.gateway.searchUrl);
+    // 与 baseUrl 同源：baseUrl + '/search/messages' 必须等于它
+    assert.equal(ctx.gateway.searchUrl, `${String(ctx.gateway.baseUrl).replace(/\/+$/, '')}/search/messages`);
+  });
+  await check('② features.webSearch 在课堂内为 true（没有课堂/备课模式为 false）', () => {
+    assert.equal(ctx.features?.webSearch, true, JSON.stringify(ctx.features));
+  });
   await check('② models 每项都有 id + displayName，且 displayName 优先运营别名', () => {
     assert.ok(Array.isArray(ctx.models) && ctx.models.length >= 2, JSON.stringify(ctx.models));
     for (const model of ctx.models) assert.ok(model.id && model.displayName, JSON.stringify(model));

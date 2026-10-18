@@ -40,10 +40,18 @@ export const SEARCH_GATEWAY_PATH = '/api/gateway/v1/search/messages';
 
 // 上游一次搜索是「模型一跳 + 最多 max_uses 次检索」，比聊天慢；但仍要在 nginx 给
 // `^/api/gateway/` 放宽的 600s 之内给结果，否则又变成「不报错、只表现为卡住」。
-const SEARCH_TIMEOUT_MS = Math.max(30000, Math.min(540000, Number(process.env.RUNTIME_SEARCH_TIMEOUT_MS || 240000)));
+// ⭐ 2026-10-18（客户端 WebSearch 接入）：默认从 240s 收到 **80s** —— 客户端那条 HTTP 超时是 85s，
+//    我们早它 5 秒回一个**结构化错误**（`RUNTIME_SEARCH_TIMEOUT`），比让它先断开、我们还在跑/还在计费好。
+const SEARCH_TIMEOUT_MS = Math.max(30000, Math.min(540000, Number(process.env.RUNTIME_SEARCH_TIMEOUT_MS || 80000)));
 const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_MAX_TOKENS = 4096;
 const MAX_TOKENS_CEILING = 16384;
+/**
+ * `max_tokens` 的**下限**（2026-10-18）。为什么不能"给多少算多少"：服务端搜索的**工具调用参数也算输出 token**，
+ * 上限太小会把 `web_search` 的参数截断 —— 实测 `max_tokens: 64` 时上游回
+ * `web_search_tool_result_error: invalid_tool_input`（模型发出的是空 input）。1024 足够装下一次工具调用。
+ */
+const MIN_TOKENS = 1024;
 // 一次请求最多允许几次检索：每多一次检索就多一跳的 token 与一笔检索费，上限由我们说了算。
 const MAX_SEARCH_USES_CEILING = 10;
 
@@ -67,17 +75,47 @@ function forwardedBody(body, { model, tools }) {
     ...body,
     model,
     tools,
-    // Anthropic 的必填项，缺了上游直接 400；给了也不能由调用方随意放大。
-    max_tokens: Number.isFinite(maxTokens) && maxTokens > 0 ? Math.min(maxTokens, MAX_TOKENS_CEILING) : DEFAULT_MAX_TOKENS,
+    // Anthropic 的必填项，缺了上游直接 400；给了也不能由调用方随意放大**或压到截断工具参数**。
+    max_tokens: Number.isFinite(maxTokens) && maxTokens > 0
+      ? Math.max(MIN_TOKENS, Math.min(maxTokens, MAX_TOKENS_CEILING))
+      : DEFAULT_MAX_TOKENS,
     stream: false,
   };
 }
 
-/** Anthropic 方言的错误响应：插件读的是 `error.message`，不是我们的 `{success,error}` 信封。 */
-function anthropicError(res, status, type, message) {
+/**
+ * Anthropic 方言的错误响应：调用方读的是 `error.message`，不是我们的 `{success,error}` 信封。
+ * ⭐ 2026-10-18：多带一个 `error.code`（平台错误码）—— 客户端要按"密钥过期/课堂结束/超时"分流重试，
+ * 靠中文字面量匹配太脆，给一个稳定的机器码。
+ */
+function anthropicError(res, status, type, message, code = '') {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-  res.end(JSON.stringify({ type: 'error', error: { type, message } }));
+  const error = { type, message };
+  if (code) error.code = String(code);
+  res.end(JSON.stringify({ type: 'error', error }));
   return { __streamed: true };
+}
+
+/** HTTP 状态 → Anthropic 的错误类型（把上游的 OpenAI 形错误归一成 Anthropic 形时用）。 */
+function anthropicStatusType(status) {
+  const value = Number(status) || 0;
+  if (value === 401) return 'authentication_error';
+  if (value === 403) return 'permission_error';
+  if (value === 404) return 'not_found_error';
+  if (value === 413) return 'request_too_large';
+  if (value === 429) return 'rate_limit_error';
+  if (value >= 500) return 'api_error';
+  return 'invalid_request_error';
+}
+
+/** 上游错误码（稳定机器码，客户端可据此决定"重试 / 换模型 / 提示用户"）。 */
+function upstreamCode(status) {
+  const value = Number(status) || 0;
+  if (value === 401 || value === 403) return 'UPSTREAM_AUTH';
+  if (value === 429) return 'UPSTREAM_RATE_LIMITED';
+  if (value === 404) return 'UPSTREAM_NOT_FOUND';
+  if (value >= 500) return 'UPSTREAM_UNAVAILABLE';
+  return 'UPSTREAM_INVALID_REQUEST';
 }
 
 /**
@@ -142,7 +180,8 @@ export async function handleRuntimeSearchGateway(ctx) {
       tools,
     };
   } catch (error) {
-    return anthropicError(ctx.res, error?.status || 500, anthropicErrorType(error?.code), String(error?.message || '搜索请求被拒绝'));
+    // `error.code` 一起带出去（密钥过期 / 课堂结束 / 参数错…），客户端据此决定是刷新密钥重试还是提示用户。
+    return anthropicError(ctx.res, error?.status || 500, anthropicErrorType(error?.code), String(error?.message || '搜索请求被拒绝'), error?.code);
   }
   const requestedModel = upstream.requestedModel;
   const started = Date.now();
@@ -216,7 +255,8 @@ export async function handleRuntimeSearchGateway(ctx) {
     await finish({ status: 'FAILED', failCode: timedOut ? PROVIDER_ERROR_CODES.TIMEOUT : PROVIDER_ERROR_CODES.UPSTREAM, raw: String(error?.message || error) });
     console.error(`[runtimeSearchGateway] 上游请求失败（${upstream.endpoint}）：${String(error?.message || error)}`);
     return anthropicError(ctx.res, timedOut ? 504 : 502, 'api_error',
-      timedOut ? '搜索上游超时，请稍后再试' : '连不上搜索上游，请让管理员检查渠道设置');
+      timedOut ? '搜索上游超时，请稍后再试' : '连不上搜索上游，请让管理员检查渠道设置',
+      timedOut ? 'RUNTIME_SEARCH_TIMEOUT' : 'RUNTIME_SEARCH_UPSTREAM_UNREACHABLE');
   }
 
   // 一次性读完再回吐（请求体已挡掉 stream，所以这里一定是完整 JSON）：用量必须从响应体里读出来
@@ -229,9 +269,26 @@ export async function handleRuntimeSearchGateway(ctx) {
     const normalized = normalizeProviderError(Object.assign(new Error(upstreamDetail(parsed, response.status)), { status: response.status }), { status: response.status }) || {};
     // 记 FAILED 也把用量带上（上游即便报错也可能已经计了 token），但折算不出来仍保持 UNKNOWN。
     await finish({ status: 'FAILED', failCode: normalized.code || PROVIDER_ERROR_CODES.UPSTREAM, raw, evidence: anthropicEvidence(parsed), webSearches: anthropicSearches(parsed), upstreamStatus: response.status });
-    // 上游的错误体原样回吐：它本来就是 Anthropic 方言，插件读得懂（还有上游自己的原话）。
+    /**
+     * ⭐ 2026-10-18：上游错误**归一成 Anthropic 形**（客户端契约第 7 条）。
+     * 为什么必须归一：DeepSeek 的 `/anthropic/v1/messages` 报错时返回的是 **OpenAI 形**
+     * （`{"error":{"message":…,"type":"authentication_error"}}`，没有外层 `type:"error"`），
+     * 实测 401 如此。原来这里原样回吐，客户端按 Anthropic 解析就会"读不出原因"。
+     * 已经是 Anthropic 形的（渠道本身就是 Anthropic）则原样回吐，不做二次包装。
+     */
+    const alreadyAnthropic = Boolean(parsed && parsed.type === 'error' && parsed.error);
+    const errorBody = alreadyAnthropic
+      ? parsed
+      : {
+        type: 'error',
+        error: {
+          type: anthropicStatusType(response.status),
+          message: upstreamDetail(parsed, response.status),
+          code: upstreamCode(response.status),
+        },
+      };
     ctx.res.writeHead(response.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    ctx.res.end(raw || JSON.stringify({ type: 'error', error: { type: 'api_error', message: `上游返回 HTTP ${response.status}` } }));
+    ctx.res.end(JSON.stringify(errorBody));
     return { __streamed: true };
   }
 

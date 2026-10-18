@@ -339,6 +339,9 @@ export async function handleStudentRuntime(ctx) {
         presets: prepLesson ? await vibecodingPresetPrompts(prepLesson.id) : [],
         models: await textModelOptions(),
         defaultModel: await textDefaultModel(),
+        // ⭐ 2026-10-18（客户端 WebSearch 接入）：备课模式**没有** gateway key（下面那支才发），
+        // 所以搜索也用不了 —— 明确告诉客户端把它收起来，别让老师点了没反应。
+        features: { webSearch: false },
       };
     }
     const entry = await resolveClassroomEntry(auth.user.id, ctx.search.get('sessionId'));
@@ -358,6 +361,7 @@ export async function handleStudentRuntime(ctx) {
           upcoming: null,
           reason: 'CLASSROOM_MODE_MISMATCH',
           message: '当前是画布课堂，请在学生端进入画布课堂',
+          features: { webSearch: false },
         };
       }
       const pending = await resolvePendingClassroom(auth.user.id);
@@ -376,6 +380,8 @@ export async function handleStudentRuntime(ctx) {
         } : null,
         reason: entry.reason,
         message: entry.reason === 'CLASSROOM_NOT_AVAILABLE' ? '你选的那节课已经结束了' : '老师还没有开始上课',
+        // 没有课堂就没有 gateway key —— 搜索同样不可用。
+        features: { webSearch: false },
       };
     }
     const lessonId = classroom.lessonId;
@@ -389,7 +395,16 @@ export async function handleStudentRuntime(ctx) {
       classroom,
       classrooms: entry.candidates,
       reason: null,
-      gateway: { baseUrl: runtimeGatewayUrl(), key: issueRuntimeKey({ orgId, userId: auth.user.id, sessionId: classroom.id, lessonId }) },
+      gateway: {
+        baseUrl: runtimeGatewayUrl(),
+        key: issueRuntimeKey({ orgId, userId: auth.user.id, sessionId: classroom.id, lessonId }),
+        // ⭐ 2026-10-18（客户端 WebSearch 接入）：搜索网关的**完整地址**随上下文下发，
+        // 客户端不用自己拼（拼错就是 404，而 404 在客户端看起来像"平台没有这个能力"）。
+        // 客户端仍可退回 `baseUrl + '/search/messages'`（两条路等价）。
+        searchUrl: `${String(runtimeGatewayUrl()).replace(/\/+$/, '')}/search/messages`,
+      },
+      // 能力开关：课堂内才给搜索（它需要 gateway.key）。灰度期可以用这里一键关掉。
+      features: { webSearch: true },
       presets: await vibecodingPresetPrompts(lessonId),
       sends: { limit, used, remaining: limit === null ? null : Math.max(0, limit - used) },
       // ⭐ 模型清单下发给客户端（2026-09-24 客户端口径）：客户端不再把模型名写死在补丁层里，
