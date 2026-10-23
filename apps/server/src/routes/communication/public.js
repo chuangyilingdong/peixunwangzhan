@@ -545,7 +545,10 @@ export async function handlePublicCommunication(ctx) {
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
     if (source === 'VIBECODING') {
       const mime = String(file.mime_type || '').toLowerCase();
-      return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFilePreview(ctx, file);
+      // 音视频走 `ossOffload`（与机构端/平台端同一条口径）：OSS 行直接 302 到签名直链，
+      // 浏览器按 Range 流式播放，几十 MB 的视频不从这台机过。`<video src>` 是嵌入媒体、
+      // 不是顶层导航 —— 桶上那条 `Content-Disposition: attachment` 不影响它（实测见 admin/works.js）。
+      return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFilePreview(ctx, file, { ossOffload: true });
     }
     return prepareFileDownload(ctx, file);
   }
@@ -910,7 +913,14 @@ async function publicVibeCodingWorkRow(row, { includeFiles = false, includePiece
     const trimmed = String(row.student_name).trim();
     if (trimmed) studentName = trimmed.charAt(0) + '同学';
   }
-  const files = includeFiles ? publicSnapshotFiles(row) : parseJson(row.files, {});
+  // ⚠️ 必须把 `base` 传下去：学生主页那条链路要列**未公开**的作品（没有 share_token），
+  //    作品 HTML 里引用的图/视频还是学生域地址 `/api/student/file-assets/<id>/download` ——
+  //    沙箱 iframe 不带 cookie、访客也没登录，那个地址必然 401（老师端/平台端能播是因为那边
+  //    把引用换成了 OSS 签名直链）。这里换成 creator 作用域的免登录代理，视频才播得出来。
+  //    已公开的作品仍走分享码那条代理（`publicSnapshotFiles` 自己的回退），响应形状不变。
+  const files = includeFiles
+    ? publicSnapshotFiles(row, { mediaBase: row.share_token ? '' : base })
+    : parseJson(row.files, {});
   return {
     id: row.id,
     type: 'VIBECODING',

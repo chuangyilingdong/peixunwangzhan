@@ -1075,13 +1075,23 @@ function rewritePrivateAssetRefs(files, fileIds, urlOf) {
   }));
 }
 
-/** 公开页面只把当前提交快照准入的私有素材地址改写成作品专属代理。 */
-export function publicSnapshotFiles(submission) {
+/**
+ * 公开页面只把当前提交快照准入的私有素材地址改写成作品专属代理。
+ *
+ * `mediaBase`：调用方给的作品作用域基址。学生个人主页要列**未公开**的作品，那些没有
+ * share_token，只能走 creator 作用域的代理（`/api/public/creators/<主页 token>/works/VIBECODING/<作品 id>`）。
+ * ⚠️ 不传就沿用分享码那条老路；两者都拿不到（未公开 + 不在主页链路）时**原样返回** ——
+ *    那种页面本来也看不到这件作品。
+ */
+export function publicSnapshotFiles(submission, { mediaBase = '' } = {}) {
   const files = parseSnapshotFiles(submission?.files);
   const token = String(submission?.share_token || '').trim();
-  if (!token) return files;
+  const base = String(mediaBase || '').trim()
+    || (token ? `/api/public/vibecoding-works/${encodeURIComponent(token)}` : '');
+  if (!base) return files;
+  const normalizedBase = base.replace(/\/+$/, '');
   return rewritePrivateAssetRefs(files, snapshotImageFileIds(submission),
-    (fileId) => `/api/public/vibecoding-works/${token}/images/${fileId}`);
+    (fileId) => `${normalizedBase}/images/${encodeURIComponent(fileId)}`);
 }
 
 /**
