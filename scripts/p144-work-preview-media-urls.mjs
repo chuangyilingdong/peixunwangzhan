@@ -84,10 +84,14 @@ console.log('② 两个机构端界面都改用它（不再为预览做 fetchDat
 check('② 课堂「只读作品」弹窗：快照解析与作品内容画廊都走 resolveWorkMediaUrl',
   /const snapshotImage = \(value\) => resolveWorkMediaUrl\(value, [^;]*data\?\.imageUrls/.test(classroom)
   && /resolveSrc=\{\(item\) => snapshotImage\(item\?\.url\) \|\| ''\}/.test(classroom));
-check('② 「学生学习结果与作品」弹窗：同上，且 workImageData 那套 data: 转换已移除',
-  /const snapshotImage = \(value\) => resolveWorkMediaUrl\(value, selectedWork\?\.imageUrls\);/.test(orgMain)
-  && /resolveSrc=\{\(item\) => resolveWorkMediaUrl\(item\?\.url, selectedWork\?\.imageUrls\) \|\| ''\}/.test(orgMain)
-  && !/workImageData/.test(orgMain));
+// ⭐ 2026-10-18：机构端这页改成**所有作品都走同一个预览弹窗**（画布不再在页面底部就地渲染），
+//    所以它自己不再有画廊/快照解析 —— 断言改成"确实走的是 ClassroomWork，且那份 data: 那套没回来"。
+//    媒体解析本身由上面那条（ClassroomWork）钉着。
+check('② 「学生学习结果与作品」：画布/VibeCoding 都走同一个预览弹窗，且 workImageData 那套 data: 转换已移除',
+  /function openWork\(work\)\s*\{\s*setPreviewWork\(work\);/.test(orgMain)
+  && /workBase="org\/works" work=\{previewWork\}/.test(orgMain)
+  && !/workImageData/.test(orgMain)
+  && !/<WorkMediaGallery/.test(orgMain));
 check('② 沙箱文档那条（VibeCoding HTML 在 opaque origin 里跑）仍保留 data: 内联（它拿不到 cookie）',
   /api\.fetchDataUrl\(path\)/.test(classroom) && /buildPreviewDocument\(files, entry\)/.test(classroom));
 

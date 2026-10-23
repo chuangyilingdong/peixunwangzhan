@@ -1410,6 +1410,11 @@ export async function normalizeWork(value, { includeSnapshot = false } = {}) {
   if (!value) return null;
   const result = {
     id: value.id,
+    // ⭐ 2026-10-18：`works` 表就是**画布作品**，这里显式给 `source`。
+    //    作品预览弹窗（ClassroomWork）用 `source + id` 拼详情地址 `/org/works/<source>/<id>`；
+    //    不给的话前端拿到 undefined，请求变成 `org/works/undefined/<id>` → 404「接口不存在」
+    //    （p189 抓到的就是这个：弹窗能开、内容区报接口不存在）。
+    source: 'CANVAS',
     projectId: value.project_id,
     studentId: value.student_id,
     studentName: value.student_name || null,

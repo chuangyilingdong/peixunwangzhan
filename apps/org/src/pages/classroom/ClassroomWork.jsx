@@ -149,7 +149,10 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
             : <WorkMediaGallery media={data.media} assets={data.assets} resolveSrc={(item) => snapshotImage(item?.url) || ''} />}
         </>
         : (data.canvasSnapshot
-          ? <CanvasEditor key={data.id} initialSnapshot={data.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={snapshotImage} />
+          // ⚠️ 2026-10-18：画布必须包一层有**确定高度**的容器（`.cv-dialog__preview` 给 420px；
+          //    不包的话 `.learning-canvas` 只有 `.cv-viewport` 下才有 height:100%，这里会塌成 0 高、
+          //    「创作画布」那一档看起来是空白）。
+          ? <div className="cv-dialog__preview"><CanvasEditor key={data.id} initialSnapshot={data.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={snapshotImage} /></div>
           : <Empty title="暂无画布快照" />))
         : <div data-console="vibecoding" className="classroom-work-preview c-work-preview-dialog__fill">
           {views.length > 1 ? <label>作品文件<select value={entry || ''} onChange={(event) => setActiveName(event.target.value)}>

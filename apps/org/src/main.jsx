@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
-import { CanvasEditor } from '@platform/canvas';
-import { ApiError, AppErrorBoundary, AppShell, CLIENT_DEEP_LINK, clearSession, createApiClient, Empty, ErrorState, formatDate, formatYuan, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, useDebouncedValue, WorkPlazaStatus, Status, useData, writeSession, WorkMediaGallery, resolveWorkMediaUrl, errorText, WorkSharePanel, shareablePiecesOf } from '@platform/shared';
+import { ApiError, AppErrorBoundary, AppShell, CLIENT_DEEP_LINK, clearSession, createApiClient, Empty, ErrorState, formatDate, formatYuan, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, useDebouncedValue, WorkPlazaStatus, Status, useData, writeSession, errorText } from '@platform/shared';
 import { StudentGrants } from './pages/StudentGrants.jsx';
 import { AccountSecurity } from './pages/AccountSecurity.jsx';
 import { SeriesOverview } from './pages/SeriesOverview.jsx';
@@ -335,25 +334,13 @@ function Works({ api }) {
   const [reportAction, setReportAction] = useState(null);
   const [reportForm, setReportForm] = useState({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' });
   const [reportBusy, setReportBusy] = useState(false);
-  const [selectedWork, setSelectedWork] = useState(null);
-  // ⭐ 2026-09-30 用户口径：机构/老师端也要能分享 —— 入口在"点进作品后的右上角"
-  const [shareWork, setShareWork] = useState(null);
-  // ⚠️ 2026-09-25（用户报「作品预览还是失效状态」）：这里原来把每张图 fetch 回来转成 data: ——
-  //    一是慢（2.4MB×N 张走 5Mbps 出口要几十秒，这段时间缩略图全是"失效"的样子），
-  //    二是**第一帧只能退回原始地址**，而原始地址是学生域的、机构端取必然 403，于是被打上「已失效」。
-  //    现在直接同步用服务端备好的**同源代理地址**（`selectedWork.imageUrls`）：同源 + 老师自己的 cookie
-  //    + 流式边下边显示，既不会先失败一次，也不用把整张图 base64 进 JS 内存。
-  //    （VibeCoding 那条走 ClassroomWork，沙箱文档要把图片内联，那边的 data: 逻辑保留。）
-  // 作品先看**做出来的东西**（图/视频/音频），画布只是过程（用户 2026-09-21 口径）。
-  const [workMediaView, setWorkMediaView] = useState('media');
-  // 「创作画布」那一档也要把快照里的素材地址换掉，否则那半屏**必然全是破图**：
-  // 快照里存的是学生域地址 `/api/student/file-assets/<id>/download`，而子资源请求带的是
-  // **机构端**的会话 —— 那条路只认学生角色，直接 403（2026-09-25 生产实测：`/org/works`
-  // 打开作品、24 个 403，响应体就是「当前角色无权访问此资源」）。判据与取值照
-  // `pages/classroom/ClassroomWork.jsx` 的 snapshotImage 抄一份（那边一直是这么做的）。
-  const snapshotImage = (value) => resolveWorkMediaUrl(value, selectedWork?.imageUrls);
-  // VibeCoding 产物的预览走弹窗（画布那半仍是就地开只读画布）
-  const [vibeWork, setVibeWork] = useState(null);
+  // ⭐ 2026-10-18（用户报「画布作品点查看作品没反应」）：**所有作品都走预览弹窗**。
+  //    原来画布作品是"在列表最底部就地渲染一个面板"（页面最下方、还在「待处理举报」之后），
+  //    点完不滚动、面板落在屏幕外 —— 看起来就是"没反应"；VibeCoding 作品走的是弹窗，所以那几行是好的。
+  //    `ClassroomWork` 本来就同时支持画布（作品内容 / 创作画布两档）与 VibeCoding 产物，
+  //    取数用 `work.source + work.id`（列表两样都带），分享 / 改名也都在那个弹窗里，
+  //    所以这里只留一个状态，原来那套内联面板的 state 与图片合成逻辑整块删掉。
+  const [previewWork, setPreviewWork] = useState(null);
   // ⭐ 2026-10-05（用户口径「老师/机构/平台都可以改作品名称」）：作品管理里也要能改名 ——
   //    改的就是列表读的那一列 `title`，改完 `refresh()` 一下这张表就是新名字。
   const [renameWork, setRenameWork] = useState(null);
@@ -361,14 +348,10 @@ function Works({ api }) {
   const [featureForm, setFeatureForm] = useState({ featured: true, reason: '' });
   const [featureBusy, setFeatureBusy] = useState(false);
 
-  // 画布作品就地开只读画布；VibeCoding 产物（网页 / PPT / Word / Excel）走只读预览弹窗，而且用
-  // **机构作用域**（`org/works`）—— 有的提交没挂课堂，课堂作用域根本打不开它
+  // 点「查看作品」：**一律打开只读预览弹窗**（画布 / VibeCoding 同一套，见上面那段的说明）。
+  // 用**机构作用域**（`org/works`）取数 —— 有的提交没挂课堂，课堂作用域根本打不开它
   // （2026-09-20 用户报「机构/老师看不到学生提交的作品」）。
-  function openWork(work) {
-    if (work.source === 'VIBECODING') { setVibeWork(work); return; }
-    setWorkMediaView('media');
-    setSelectedWork(work);
-  }
+  function openWork(work) { setPreviewWork(work); }
 
 
   async function handleReport() {
@@ -409,42 +392,19 @@ function Works({ api }) {
     {featureAction && <Panel title={`机构精选 · ${featureAction.title}`}><div className="form-grid"><label>精选状态<select value={featureForm.featured ? 'true' : 'false'} onChange={(event) => setFeatureForm({ ...featureForm, featured: event.target.value === 'true' })}><option value="true">设为机构精选</option><option value="false">取消机构精选</option></select></label></div>{featureForm.featured && <label>精选理由（可选）<input value={featureForm.reason} maxLength={500} placeholder="例如：故事结构完整，画面表达清晰。" onChange={(event) => setFeatureForm({ ...featureForm, reason: event.target.value })} /></label>}<div className="row-actions top-gap"><button className="primary-button" disabled={featureBusy} onClick={handleFeature}>{featureBusy ? '处理中…' : '确认精选设置'}</button><button className="secondary-button" disabled={featureBusy} onClick={() => setFeatureAction(null)}>取消</button></div></Panel>}
     <Panel title={`待处理举报 · ${reports.data?.pending || 0} 条`}>{reports.loading ? <Loading /> : reports.error ? <ErrorState error={reports.error} onRetry={reports.refresh} /> : reports.data.items.length ? <><div className="table-wrap"><table><thead><tr><th>作品</th><th>举报人</th><th>类型 / 说明</th><th>时间</th><th>操作</th></tr></thead><tbody>{reports.data.items.map((item) => <tr key={item.id}><td>{item.workTitle}<div className="muted"><Status value={item.workStatus} /></div></td><td>{item.reporterName || '学生'}</td><td>{item.category}<div className="muted">{item.details || '未补充说明'}</div></td><td>{formatDate(item.createdAt)}</td><td><button className="text-button" onClick={() => { setReportAction(item); setReportForm({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); }}>处理</button></td></tr>)}</tbody></table></div><Pagination page={reports.data.page} totalPages={reports.data.totalPages} onChange={setReportsPage} disabled={reports.loading} /></> : <Empty title="暂无待处理举报" />}</Panel>
     {reportAction && <Panel title={`处理举报 · ${reportAction.workTitle}`}><div className="form-grid"><label>处理结果<select value={reportForm.status} onChange={(event) => setReportForm({ ...reportForm, status: event.target.value })}><option value="RESOLVED">已处理</option><option value="DISMISSED">驳回举报</option></select></label><label>作品动作<select value={reportForm.actionTaken} onChange={(event) => setReportForm({ ...reportForm, actionTaken: event.target.value })}><option value="NONE">保留作品</option><option value="UNPUBLISH">下架作品</option></select></label></div><label>处理说明<textarea value={reportForm.resolution} required maxLength={2000} placeholder="说明处理结论；下架时该说明会作为学生可见的下架原因。" onChange={(event) => setReportForm({ ...reportForm, resolution: event.target.value })} /></label><div className="row-actions top-gap"><button className="primary-button" disabled={reportBusy || !reportForm.resolution.trim()} onClick={handleReport}>{reportBusy ? '处理中…' : '确认处理'}</button><button className="secondary-button" disabled={reportBusy} onClick={() => setReportAction(null)}>取消</button></div></Panel>}
-    {selectedWork && <>
-      <Panel title={`作品内容 · ${selectedWork.title}`} actions={<div className="row-actions">
-        {/* ⭐ 2026-09-30 用户口径：机构/老师端也要能分享 —— 入口在**作品详情的右上角**（与参考图一致） */}
-        <button type="button" className="primary-button" data-testid="work-share" disabled={!shareablePiecesOf(selectedWork, selectedWork.source || 'CANVAS').length}
-          onClick={() => setShareWork(selectedWork)}>分享</button>
-        <button className="secondary-button" onClick={() => setSelectedWork(null)}>关闭预览</button>
-      </div>}>
-        <div className="row-actions canvas-meta"><span className="muted">学生：{selectedWork.studentName}</span><span className="muted">提交时间：{formatDate(selectedWork.submittedAt)}</span><Status value={selectedWork.status} /></div>
-        <div className="row-actions" role="tablist">
-          <button type="button" role="tab" aria-selected={workMediaView === 'media'} className={workMediaView === 'media' ? 'primary-button' : 'secondary-button'} onClick={() => setWorkMediaView('media')}>作品内容</button>
-          <button type="button" role="tab" aria-selected={workMediaView === 'canvas'} className={workMediaView === 'canvas' ? 'primary-button' : 'secondary-button'} onClick={() => setWorkMediaView('canvas')}>创作画布</button>
-        </div>
-        {workMediaView === 'canvas'
-          ? <CanvasEditor key={selectedWork.id} initialSnapshot={selectedWork.canvasSnapshot} readOnly resolveAssetUrl={snapshotImage} />
-          : <WorkMediaGallery media={selectedWork.media} assets={selectedWork.assets} resolveSrc={(item) => resolveWorkMediaUrl(item?.url, selectedWork?.imageUrls) || ''} />}
-      </Panel>
-    </>}
-
-    {/* VibeCoding 产物的只读预览（网页能玩、文档给服务端转的 PDF）—— 机构作用域 */}
-    {vibeWork ? <ClassroomWork api={api} workBase="org/works" work={vibeWork} onClose={() => setVibeWork(null)}
+    {/* 作品的只读预览弹窗（**画布与 VibeCoding 同一个**：网页能玩、文档给服务端转的 PDF、
+        画布给"作品内容 / 创作画布"两档）—— 机构作用域，分享与改名都在弹窗里。 */}
+    {previewWork ? <ClassroomWork api={api} workBase="org/works" work={previewWork} onClose={() => setPreviewWork(null)}
       canShare
       onRenamed={() => refresh()}
-      shareCreate={(pieceKey) => api.post('org/share-links', { source: 'VIBECODING', workId: vibeWork.id, pieceKey })} /> : null}
+      shareCreate={(pieceKey) => api.post('org/share-links', { source: previewWork.source || 'VIBECODING', workId: previewWork.id, pieceKey })} /> : null}
 
     {/* 修改作品名称（2026-10-05）：机构作用域 —— 没有课堂的提交在这里也改得了 */}
     {renameWork ? <RenameWorkDialog api={api} workBase="org/works" work={renameWork} onClose={() => setRenameWork(null)}
       onRenamed={() => refresh()} /> : null}
 
-    {/* 分享面板（与网站端**同一个组件**）：选哪一件 + 二维码。码归学生（分享卡上是学生与他的机构），
-        老师替学生分享时拿到的与学生自己那枚是**同一枚**（服务端幂等）。 */}
-    {shareWork ? <WorkSharePanel
-      title={shareWork.title || '作品'}
-      pieces={shareablePiecesOf(shareWork, shareWork.source || 'CANVAS')}
-      createShare={(pieceKey) => api.post('org/share-links', { source: shareWork.source || 'CANVAS', workId: shareWork.id, pieceKey })}
-      onClose={() => setShareWork(null)}
-    /> : null}
+    {/* ⚠️ 2026-10-18：分享面板不在这里了 —— 作品一律走上面的预览弹窗，弹窗底部自带分享
+        （与 `ClassroomWork` 的其它调用点同一套：选哪一件 + 二维码都在那里）。 */}
   </>;
 }
 

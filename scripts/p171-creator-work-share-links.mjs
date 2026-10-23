@@ -415,8 +415,13 @@ console.log('⑩ 三处「分享」入口都在右上角（面板/弹窗页眉�
   check('⑩ 弹窗组件真的支持 headerAction（页眉右侧那格）',
     /headerAction/.test(modal) && /classroom-dialog-head/.test(modal));
   const orgList = readFile('apps/org/src/main.jsx');
-  check('⑩ 机构端作品库：分享入口在面板 `actions`（详情右上角）',
-    /actions=\{<div className="row-actions">[\s\S]{0,400}data-testid="work-share"/.test(orgList));
+  // ⭐ 2026-10-18：机构端作品库改成**所有作品都走预览弹窗**（画布不再在页面底部就地渲染 ——
+  //    用户报「画布作品点查看作品没反应」就是它）。分享入口随之挪进弹窗底部（由上面那条钉着），
+  //    这里反过来钉住：点「查看作品」打开弹窗、页面上不再有那个内联的「作品内容 · …」面板。
+  check('⑩ 机构端作品库：点「查看作品」打开的是预览弹窗（不再有页面底部的内联面板）',
+    /function openWork\(work\)\s*\{\s*setPreviewWork\(work\);/.test(orgList)
+    && /<ClassroomWork [^>]*workBase="org\/works" work=\{previewWork\}/.test(orgList)
+    && !/作品内容 · \$\{selectedWork/.test(orgList));
   const websiteModal = readFile('apps/website/src/components/WorkPreviewModal.jsx');
   check('⑩ 网站端预览弹窗：分享入口在 `pl-viewer-head__actions`（弹窗右上角）',
     /pl-viewer-head__actions[\s\S]{0,300}data-testid="work-share"/.test(websiteModal));

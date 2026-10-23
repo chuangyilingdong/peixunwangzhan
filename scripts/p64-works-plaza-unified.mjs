@@ -144,12 +144,16 @@ try {
       && /<video src=\{displaySrc\} controls/.test(gallery)
       && /import \{ AudioPlayer \} from '@platform\/canvas'/.test(gallery)
       && /<AudioPlayer className="work-media__player"/.test(gallery)
-      && ['apps/website/src/pages/WorkDetail.jsx', 'apps/org/src/main.jsx', 'apps/org/src/pages/classroom/ClassroomWork.jsx']
+      // ⭐ 2026-10-18：机构端「作品管理」的画布 / VibeCoding 都走 `ClassroomWork` 这一个弹窗
+      //    （原来画布那条是页面底部的内联面板，已删），所以读面文件是它、不再是 main.jsx。
+      && ['apps/website/src/pages/WorkDetail.jsx', 'apps/org/src/pages/classroom/ClassroomWork.jsx']
         .every((file) => read(file).includes('WorkMediaGallery')));
     check('② 广场与老师端**默认**看媒体，画布退到一个「创作画布」标签里',
       /useState\('media'\)/.test(read('apps/website/src/pages/WorkDetail.jsx'))
       && /创作画布/.test(read('apps/website/src/pages/WorkDetail.jsx'))
-      && /workMediaView === 'canvas'/.test(read('apps/org/src/main.jsx')));
+      // 老师端现在也在这一个弹窗里（`workView` 默认 media、画布是「创作画布」那一档）。
+      && /useState\('media'\)/.test(read('apps/org/src/pages/classroom/ClassroomWork.jsx'))
+      && /workView === 'canvas'/.test(read('apps/org/src/pages/classroom/ClassroomWork.jsx')));
   }
 
   console.log(JSON.stringify({ name: 'works-plaza-unified', pass: failures === 0, failures }, null, 2));

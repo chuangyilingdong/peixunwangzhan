@@ -157,10 +157,15 @@ const orgApp = read('apps/org/src/main.jsx');
 //    而这期间前端只能退回**学生域地址**，机构端取它必然 403（用户报的「作品预览还是失效状态」）。
 //    现在改成同步用服务端备好的**同源代理地址**（`imageUrls` → `/api/org/works/.../images/...`）：
 //    同源 + 老师自己的 cookie + 流式边下边显示。专门的守卫见 scripts/p144-work-preview-media-urls.mjs。
+// ⭐ 2026-10-18：机构端「学生学习结果与作品」改成**所有作品都走预览弹窗**（画布不再在页面底部
+//    就地渲染）——画廊那一段因此搬进了 `ClassroomWork`，断言跟着搬过去（意图不变：
+//    传 resolveSrc、走同源代理地址、不再转 data:）。见 §一百二十。
+const orgWork = read('apps/org/src/pages/classroom/ClassroomWork.jsx');
 check('⑮ 机构端预览传了 resolveSrc，且走的是**同源代理地址**（不再转 data:）',
-  /<WorkMediaGallery media=\{selectedWork\.media\} assets=\{selectedWork\.assets\} resolveSrc=\{/.test(orgApp)
-  && /resolveWorkMediaUrl\(item\?\.url, selectedWork\?\.imageUrls\)/.test(orgApp)
-  && !/workImageData/.test(orgApp));
+  /<WorkMediaGallery media=\{data\.media\} assets=\{data\.assets\} resolveSrc=\{/.test(orgWork)
+  && /resolveWorkMediaUrl\(value, [^;]*data\?\.imageUrls/.test(orgWork)
+  && !/workImageData/.test(orgWork)
+  && !/<WorkMediaGallery/.test(orgApp));
 
 /* ── ⑥ 读面：失效的媒体说人话，不再是浏览器的破图图标 ───────────────────────── */
 const gallery = read('packages/shared/src/workMedia.jsx');
