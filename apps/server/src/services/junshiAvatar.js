@@ -2,12 +2,22 @@
  * 招生军师 · 数字人口播服务（2026-10-24 五期）。
  *
  * 全部走 seedance.nz 聚合渠道（与图片/视频/转写同一把 Key）：
- *   音色克隆  POST /v1/audio/generations  model=doubao-voice-clone（样本≤10MB 直链 + 试听文本）
- *   语音合成  POST /v1/audio/generations  model=doubao-seed-icl-2.0（用克隆出的 speaker）
- *   人脸分析  POST /v1/video/generations  model=kling-lip-sync-identify-face（形象照直链）
+ *   音色克隆  POST /v1/audio/generations  model=doubao-voice-clone 或 minimax-voice-clone
+ *   语音合成  POST /v1/audio/generations  model=doubao-seed-icl-2.0（克隆 speaker）或 doubao-seed-audio-1.0（预置音色）
+ *   底片生成  POST /v1/videos             model=seedance-2.0-standard-i2v（形象照 → 5 秒人物正面出镜视频）
+ *   人脸分析  POST /v1/video/generations  model=kling-lip-sync-identify-face（签名直链视频）
  *   对口型    POST /v1/video/generations  model=kling-lip-sync-video（sessionId/faceId + audio_url）
- *   素材直链  POST /v1/files/upload（24h）
+ *   素材直链  POST /v1/files/upload（24h；identify-face 必须用完整签名 URL，裸 URL 会报「文件处理失败」；
+ *                                  且视频要 ffmpeg baseline/faststart 标准化，上游不接受 profile 过高的 mp4）
  * 音频任务轮询 GET /v1/audio/generations/{id}，视频任务轮询 GET /v1/videos/{id}。
+ *
+ * ⚠️ 2026-10-24 生产实测：identify-face 的 session_id 拿到后立即（1.3 秒内）提交
+ *    kling-lip-sync-video 仍报「session_id has expired」——上游 identify-face 与
+ *    lip-sync-video 两步的状态不互通，属于上游侧故障，已排查清单见交接文档四期/五期节。
+ *    本模块保留全部正确实现；上游修复后 runTalkingHead 无需改动即可用。
+ *    音色克隆同样被上游阻：doubao-voice-clone 在 default 分组无通道（503），
+ *    minimax-voice-clone 通道在但任务一律「模型响应异常」。预置音色合成
+ *    （doubao-seed-audio-1.0 + 内置 speaker）是可用的，已用于底片链路验证。
  */
 import { getProviderApiKey } from './providerSecret.js';
 import { AI_PROVIDER_API_KEY } from '../config.js';
@@ -91,8 +101,10 @@ export async function pollAudioTask({ endpoint, apiKey, taskId, timeoutMs = 6000
 }
 
 /* ── 视频任务：提交与轮询（/v1/videos 家族） ── */
-export async function submitVideoTask({ endpoint, apiKey, model, metadata }) {
-  const json = await apiFetch({ endpoint, apiKey, path: '/v1/video/generations', method: 'POST', body: { model, metadata: metadata || {} } });
+export async function submitVideoTask({ endpoint, apiKey, model, metadata, promptOverride }) {
+  const body = { model, metadata: metadata || {} };
+  if (promptOverride) body.prompt = promptOverride;
+  const json = await apiFetch({ endpoint, apiKey, path: '/v1/video/generations', method: 'POST', body });
   const taskId = json?.task_id || json?.id || json?.data?.task_id || '';
   if (!taskId) throw Object.assign(new Error(`提交 ${model} 没有返回任务号`), { status: 502 });
   return String(taskId);

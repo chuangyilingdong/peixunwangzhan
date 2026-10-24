@@ -880,11 +880,13 @@ async function runCloneVoice(owner, { voiceId, assetRow, auditionText }) {
   }
 }
 
-/** 后台数字人合成：TTS → 人脸分析 → 对口型 → 存素材库。 */
+/** 后台数字人合成：底片生成（形象照 i2v）→ TTS → 人脸分析 → 对口型 → 存素材库。
+ *  合同细节与上游已知故障见 services/junshiAvatar.js 文件头。 */
 async function runTalkingHead(owner, { runId, text, speakerId, imageAssetRow }) {
   const steps = [
-    { key: 'tts', label: '口播语音合成', status: 'running' },
-    { key: 'face', label: '形象照人脸分析', status: 'pending' },
+    { key: 'base', label: '生成人物底片（形象照 → 视频）', status: 'running' },
+    { key: 'tts', label: '口播语音合成', status: 'pending' },
+    { key: 'face', label: '人脸分析', status: 'pending' },
     { key: 'lipsync', label: '对口型合成视频', status: 'pending' },
     { key: 'save', label: '存入素材库', status: 'pending' },
   ];
@@ -896,21 +898,26 @@ async function runTalkingHead(owner, { runId, text, speakerId, imageAssetRow }) 
     const policy = await getAiProviderPolicy();
     const config = await seedanceChannelConfig(policy?.channels);
     if (!config) throw Object.assign(new Error('数字人渠道未配置（需要 seedance.nz 渠道 Key）'), { code: 'WORKBENCH_AVATAR_NOT_CONFIGURED' });
+    // ⓪ 底片：形象照 → 5 秒人物正面视频（kling 对口型吃视频不吃照片）
+    const imageBuffer = await assetBytes(imageAssetRow);
+    if (imageBuffer.length > 10 * 1024 * 1024) throw Object.assign(new Error('形象照超过 10MB，请压缩后重传'), { code: 'WORKBENCH_AVATAR_IMAGE_TOO_LARGE' });
+    const imageUrl = await uploadToSeedance({ ...config, buffer: imageBuffer, fileName: imageAssetRow.file_name || 'face.jpg', mimeType: imageAssetRow.mime_type || 'image/jpeg' });
+    const baseTask = await submitVideoTask({ ...config, model: 'seedance-2.0-standard-i2v', metadata: { images: [imageUrl] }, promptOverride: '一位教师正面面对镜头，微微点头，嘴唇自然开合像在讲话，背景不变，光线稳定' });
+    const base = await pollVideoTask({ ...config, taskId: baseTask, timeoutMs: 600000 });
+    if (!base.url) throw Object.assign(new Error('底片生成没有返回视频地址'), { code: 'WORKBENCH_BASE_NO_URL' });
+    await mark('base', 'done'); await mark('tts', 'running');
     // ① TTS（用克隆音色）
     const ttsTask = await submitAudioTask({ ...config, model: 'doubao-seed-icl-2.0', prompt: text, metadata: { speaker: speakerId, voice_model: 'seed-tts-2.0-standard', format: 'mp3' } });
     const tts = await pollAudioTask({ ...config, taskId: ttsTask, timeoutMs: 600000 });
     if (!tts.url) throw Object.assign(new Error('语音合成没有返回音频地址'), { code: 'WORKBENCH_TTS_NO_URL' });
     await mark('tts', 'done'); await mark('face', 'running');
-    // ② 人脸分析（形象照直链）
-    const imageBuffer = await assetBytes(imageAssetRow);
-    if (imageBuffer.length > 10 * 1024 * 1024) throw Object.assign(new Error('形象照超过 10MB，请压缩后重传'), { code: 'WORKBENCH_AVATAR_IMAGE_TOO_LARGE' });
-    const imageUrl = await uploadToSeedance({ ...config, buffer: imageBuffer, fileName: imageAssetRow.file_name || 'face.jpg', mimeType: imageAssetRow.mime_type || 'image/jpeg' });
-    const faceTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-identify-face', metadata: { video_url: imageUrl } });
+    // ② 人脸分析（底片签名直链；注意必须完整签名 URL，裸 COS 路径上游处理不了）
+    const faceTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-identify-face', metadata: { video_url: base.url } });
     const face = await pollVideoTask({ ...config, taskId: faceTask, timeoutMs: 600000 });
     const { sessionId, faceId } = parseFaceSession(face.resultText);
     await mark('face', 'done'); await mark('lipsync', 'running');
-    // ③ 对口型合成
-    const syncTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-video', metadata: { sessionId, faceId, audio_url: tts.url, soundStartTime: 0, soundEndTime: 600000, soundVolume: 1, originalAudioVolume: 0 } });
+    // ③ 对口型合成（soundEndTime 用底片实际时长上限 30000ms 内；session 过期是上游已知故障）
+    const syncTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-video', metadata: { sessionId, faceId, audio_url: tts.url, soundStartTime: 0, soundEndTime: 30000, soundInsertTime: 0, soundVolume: 1, originalAudioVolume: 0 } });
     const synced = await pollVideoTask({ ...config, taskId: syncTask, timeoutMs: 900000 });
     if (!synced.url) throw Object.assign(new Error('对口型完成但没有返回视频地址'), { code: 'WORKBENCH_LIPSYNC_NO_URL' });
     await mark('lipsync', 'done'); await mark('save', 'running');
