@@ -1381,6 +1381,28 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_memories (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_mem_owner ON junshi_workbench_memories(owner_key, created_at DESC);
+
+-- 视频转写档案（抖音采集/手动上传 → whisper 带时间码转写；供爆款复刻与同行拆解）。
+CREATE TABLE IF NOT EXISTS junshi_workbench_transcripts (
+  id               TEXT NOT NULL PRIMARY KEY,
+  owner_key        TEXT NOT NULL,
+  org_id           TEXT,
+  account_id       TEXT NOT NULL DEFAULT 'default',
+  asset_id         TEXT,
+  source           TEXT NOT NULL DEFAULT 'upload',
+  title            TEXT NOT NULL DEFAULT '',
+  video_url        TEXT NOT NULL DEFAULT '',
+  source_url       TEXT NOT NULL DEFAULT '',
+  nickname         TEXT NOT NULL DEFAULT '',
+  duration_seconds REAL NOT NULL DEFAULT 0,
+  status           TEXT NOT NULL DEFAULT 'running',
+  error            TEXT NOT NULL DEFAULT '',
+  text             TEXT NOT NULL DEFAULT '',
+  segments         TEXT NOT NULL DEFAULT '[]',
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_ts_owner ON junshi_workbench_transcripts(owner_key, created_at DESC);
 `;
 
 db.exec(SCHEMA);

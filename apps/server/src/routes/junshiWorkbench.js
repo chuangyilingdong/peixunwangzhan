@@ -18,6 +18,15 @@ import { providerSelectionForModality, generationOptionsFor } from './aiGenerati
 import { getAiProviderPolicy } from './billingConfig.js';
 import { getProviderApiKey } from '../services/providerSecret.js';
 import { AI_PROVIDER_API_KEY } from '../config.js';
+import {
+  douyinRateLimit,
+  resolveDouyinTarget,
+  fetchDouyinVideo,
+  fetchDouyinProfile,
+  downloadDouyinVideo,
+  seedanceAsrConfig,
+  transcribeMedia,
+} from '../services/junshiDouyin.js';
 import { maxUploadBytes, parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
 import { ossRedirectUrl, removeObject, rowStorageBackend } from '../services/fileStorage.js';
 import {
@@ -808,6 +817,73 @@ async function generateOptions(ctx, owner, { prompt, demoContent }) {
   return { options: demoContent.map((item, index) => ({ id: `opt${index + 1}`, ...item })), demo: true };
 }
 
+/* ───────────── 视频转写档案（抖音采集 / 手动素材 → whisper 带时间码） ───────────── */
+function transcriptOut(row, { withSegments = false } = {}) {
+  let segments = [];
+  try { segments = JSON.parse(row.segments || '[]'); } catch { /* ignore */ }
+  return {
+    id: row.id,
+    assetId: row.asset_id || null,
+    source: row.source,
+    title: row.title,
+    sourceUrl: row.source_url || '',
+    nickname: row.nickname || '',
+    durationSeconds: Number(row.duration_seconds || 0),
+    status: row.status,
+    error: row.error || '',
+    text: row.text || '',
+    segments: withSegments ? segments : undefined,
+    segmentCount: segments.length,
+    accountId: row.account_id || 'default',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** 读取素材字节：本地盘直读，OSS 走签名 URL（sign 后取回字节）。 */
+async function assetBytes(row) {
+  const pseudo = { storage_key: row.storage_key, metadata: JSON.stringify({ storageBackend: row.storage_backend }) };
+  if (rowStorageBackend(pseudo) === 'oss') {
+    const url = ossRedirectUrl(pseudo, { expires: 600 });
+    if (!url) throw Object.assign(new Error('素材签名地址生成失败'), { status: 502 });
+    const response = await fetch(url, { signal: AbortSignal.timeout(180000) });
+    if (!response.ok) throw Object.assign(new Error(`素材读取失败（HTTP ${response.status}）`), { status: 502 });
+    return Buffer.from(await response.arrayBuffer());
+  }
+  const root = uploadRoot();
+  const absolute = path.resolve(root, String(row.storage_key || ''));
+  if (absolute !== root && !absolute.startsWith(root + path.sep)) throw errors.notFound('素材路径不合法', 'NOT_FOUND');
+  const { readFile } = await import('node:fs/promises');
+  return Buffer.from(await readFile(absolute));
+}
+
+/** 后台转写一条素材：写档案行（running）→ whisper → 回填。返回档案 id。 */
+async function startTranscription(owner, { assetRow, source, title, sourceUrl, nickname, accountId }) {
+  const transcriptId = id('jwts');
+  const at = nowIso();
+  await aq('INSERT INTO junshi_workbench_transcripts (id,owner_key,org_id,account_id,asset_id,source,title,source_url,nickname,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+    [transcriptId, owner.key, owner.orgId, accountId, assetRow?.id || null, source, String(title || '').slice(0, 300), String(sourceUrl || '').slice(0, 1000), String(nickname || '').slice(0, 200), 'running', at, at]);
+  const job = jobStart(owner, '视频转写', String(title || '').slice(0, 60));
+  void (async () => {
+    try {
+      const policy = await getAiProviderPolicy();
+      const asr = seedanceAsrConfig(policy?.channels);
+      if (!asr) throw Object.assign(new Error('转写渠道未配置（需要 seedance.nz 渠道 Key 或 JUNSHI_ASR_ENDPOINT/KEY）'), { code: 'WORKBENCH_ASR_NOT_CONFIGURED' });
+      const buffer = await assetBytes(assetRow);
+      const result = await transcribeMedia({ endpoint: asr.endpoint, apiKey: asr.apiKey, buffer, fileName: assetRow.file_name || `${transcriptId}.mp4`, mimeType: assetRow.mime_type || 'video/mp4' });
+      if (!result.text.trim()) throw Object.assign(new Error('这条内容没有识别出语音（可能是纯音乐或时长太短）'), { code: 'WORKBENCH_ASR_EMPTY' });
+      await aq('UPDATE junshi_workbench_transcripts SET status=?, text=?, segments=?, duration_seconds=?, error="", updated_at=? WHERE id=?',
+        ['succeeded', result.text.slice(0, 100000), JSON.stringify(result.segments.slice(0, 2000)), Number(result.duration) || 0, nowIso(), transcriptId]);
+      await jobDone(job, 'succeeded', `转写完成：${result.segments.length} 段 / ${Math.round(result.duration)} 秒`);
+    } catch (error) {
+      await aq('UPDATE junshi_workbench_transcripts SET status=?, error=?, updated_at=? WHERE id=?',
+        ['failed', String(error?.message || error).slice(0, 1000), nowIso(), transcriptId]).catch(() => {});
+      await jobDone(job, 'failed', String(error?.message || error).slice(0, 1000)).catch(() => {});
+    }
+  })();
+  return transcriptId;
+}
+
 async function workflowsRoute(ctx, rest, search, method, owner) {
   /* 列表：进行中的排最前，再带最近 10 条 */
   if (rest === '/workflows' && method === 'GET') {
@@ -849,10 +925,20 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
         throw error;
       }
     } else if (kind === 'viral') {
-      const sourceText = text(input.sourceText).slice(0, 4000);
-      if (!sourceText) throw errors.badRequest('请粘贴爆款原文（口播文字或文案）', 'VALIDATION_ERROR', { field: 'sourceText' });
-      stage = 'transcript';
-      state = { transcript: sourceText };
+      // 两种来源：直接粘贴文案；或选一条已转写档案（抖音采集/上传素材 → whisper）。
+      const transcriptId = text(input.transcriptId);
+      if (transcriptId) {
+        const tsRow = await arow('SELECT * FROM junshi_workbench_transcripts WHERE id=? AND owner_key=?', [transcriptId, owner.key]);
+        if (!tsRow) throw errors.notFound('转写档案不存在', 'NOT_FOUND');
+        if (tsRow.status !== 'succeeded') throw errors.badRequest('这条档案还没转写完成（或转写失败），等它完成后再来复刻', 'WORKBENCH_TRANSCRIPT_NOT_READY');
+        stage = 'transcript';
+        state = { transcript: String(tsRow.text || '').slice(0, 4000), transcriptId, transcriptTitle: tsRow.title || '', transcriptNickname: tsRow.nickname || '' };
+      } else {
+        const sourceText = text(input.sourceText).slice(0, 4000);
+        if (!sourceText) throw errors.badRequest('请粘贴爆款原文（口播文字或文案）', 'VALIDATION_ERROR', { field: 'sourceText' });
+        stage = 'transcript';
+        state = { transcript: sourceText };
+      }
     } else {
       if (text(input.mode) === 'keyword') {
         const keyword = text(input.keyword).slice(0, 120);
@@ -1301,6 +1387,82 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
         id: row.id, kind: row.kind, status: row.status, detail: row.detail, createdAt: row.created_at, updatedAt: row.updated_at,
       })),
     };
+  }
+
+  /* ── 抖音采集（公开数据走 F2 隔离进程；自有账号登录在后续版本） ── */
+  if (rest === '/douyin/resolve' && method === 'POST') {
+    douyinRateLimit(owner.key);
+    const target = await resolveDouyinTarget(ctx.body?.text).catch((error) => { throw errors.badRequest(error.message, 'DOUYIN_RESOLVE_FAILED'); });
+    return { target };
+  }
+  if (rest === '/douyin/profile' && method === 'POST') {
+    douyinRateLimit(owner.key);
+    const secUserId = text(ctx.body?.secUserId);
+    if (!secUserId) throw errors.badRequest('缺少主页 ID', 'VALIDATION_ERROR', { field: 'secUserId' });
+    const cursor = clampInt(ctx.body?.cursor, 0, 0, Number.MAX_SAFE_INTEGER);
+    const profile = await fetchDouyinProfile(secUserId, cursor).catch((error) => { throw errors.badRequest(error.message, 'DOUYIN_FETCH_FAILED'); });
+    return { profile };
+  }
+  if (rest === '/douyin/video' && method === 'POST') {
+    douyinRateLimit(owner.key);
+    const awemeId = text(ctx.body?.awemeId);
+    if (!/^\d{6,25}$/.test(awemeId)) throw errors.badRequest('作品 ID 无效', 'VALIDATION_ERROR', { field: 'awemeId' });
+    const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
+    const video = await fetchDouyinVideo(awemeId).catch((error) => { throw errors.badRequest(error.message, 'DOUYIN_FETCH_FAILED'); });
+    if (!video.playUrl) throw errors.badRequest('这条作品取不到可下载的视频地址（可能已删除）', 'DOUYIN_NO_PLAY_URL');
+    const buffer = await downloadDouyinVideo(video.playUrl).catch((error) => { throw errors.badRequest(error.message, 'DOUYIN_DOWNLOAD_FAILED'); });
+    const stored = await persistSecureUpload({ fileName: `${video.awemeId}.mp4`, mimeType: 'video/mp4', buffer });
+    const assetId = id('jwa');
+    try {
+      await aq('INSERT INTO junshi_workbench_assets (id,owner_key,org_id,account_id,file_name,storage_key,storage_backend,mime_type,kind,file_size,folder,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+        [assetId, owner.key, owner.orgId, accountId, stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || 'video/mp4', 'video', stored.fileSize || buffer.length, '抖音采集', nowIso()]);
+    } catch (error) {
+      if (stored.storagePath) await rm(stored.storagePath, { force: true }).catch(() => {});
+      else await removeObject({ storage_key: stored.storageKey, metadata: JSON.stringify({ storageBackend: stored.storageBackend }) }).catch(() => {});
+      throw error;
+    }
+    const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=?', [assetId]);
+    const transcriptId = await startTranscription(owner, {
+      assetRow, source: 'douyin',
+      title: video.desc || `抖音视频 ${video.awemeId}`,
+      sourceUrl: `https://www.douyin.com/video/${video.awemeId}`,
+      nickname: video.nickname, accountId,
+    });
+    return {
+      video,
+      asset: assetOut(assetRow),
+      transcriptId,
+    };
+  }
+
+  /* ── 转写档案 ── */
+  if (rest === '/transcripts' && method === 'GET') {
+    const accountIdFilter = text(search.get('accountId'));
+    const rows = accountIdFilter
+      ? await arows('SELECT * FROM junshi_workbench_transcripts WHERE owner_key=? AND account_id=? ORDER BY created_at DESC LIMIT 50', [owner.key, accountIdFilter])
+      : await arows('SELECT * FROM junshi_workbench_transcripts WHERE owner_key=? ORDER BY created_at DESC LIMIT 50', [owner.key]);
+    return { items: rows.map((row) => transcriptOut(row)) };
+  }
+  const transcriptDetailMatch = rest.match(/^\/transcripts\/([^/]+)$/);
+  if (transcriptDetailMatch && method === 'GET') {
+    const row = await arow('SELECT * FROM junshi_workbench_transcripts WHERE id=? AND owner_key=?', [decodeURIComponent(transcriptDetailMatch[1]), owner.key]);
+    if (!row) throw errors.notFound('档案不存在', 'NOT_FOUND');
+    return { transcript: transcriptOut(row, { withSegments: true }) };
+  }
+  const transcribeMatch = rest.match(/^\/assets\/([^/]+)\/transcribe$/);
+  if (transcribeMatch && method === 'POST') {
+    const assetId = decodeURIComponent(transcribeMatch[1]);
+    const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, owner.key]);
+    if (!assetRow) throw errors.notFound('素材不存在', 'NOT_FOUND');
+    if (!/^(video|audio)\//.test(String(assetRow.mime_type || ''))) throw errors.badRequest('只能转写视频或音频素材', 'VALIDATION_ERROR');
+    douyinRateLimit(owner.key);
+    const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
+    const transcriptId = await startTranscription(owner, {
+      assetRow, source: 'upload',
+      title: text(ctx.body?.title) || assetRow.file_name || '素材转写',
+      sourceUrl: '', nickname: '', accountId,
+    });
+    return { transcriptId };
   }
 
   /* ── 引导式创作工作流 + 长期记忆（今日选题/爆款复刻/热点结合/记忆） ── */

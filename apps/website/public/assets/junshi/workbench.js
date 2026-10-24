@@ -222,6 +222,9 @@
     workflow: null,
     workflowMeta: null,
     memories: [],
+    transcripts: [],
+    tsTimer: null,
+    douyinPanel: null,
   };
 
   function accountName(accountId) {
@@ -244,6 +247,7 @@
     state.tab = tab;
     if (tab !== 'video') stopRenderPolling();
     if (tab !== 'chat') stopWfPolling();
+    if (tab !== 'references') stopTsPolling();
     $$('#wb-tabs [data-wb]').forEach(function (button) {
       if (button.dataset.wb === tab) button.setAttribute('aria-current', 'true');
       else button.removeAttribute('aria-current');
@@ -298,6 +302,7 @@
         call('/jobs').catch(function () { return { items: [] }; }),
         call('/workflows').catch(function () { return { items: [], styles: [], angles: [], strengths: [] }; }),
         call('/memories').catch(function () { return { items: [] }; }),
+        call('/transcripts').catch(function () { return { items: [] }; }),
       ]);
       state.messages = results[0].messages || [];
       state.copy = results[1].items || [];
@@ -310,6 +315,7 @@
       state.workflow = (wfData.items || []).filter(function (item) { return item.status === 'active'; })[0] || null;
       state.workflowMeta = { styles: wfData.styles || [], angles: wfData.angles || [], strengths: wfData.strengths || [] };
       state.memories = results[7].items || [];
+      state.transcripts = results[8].items || [];
       state.loaded = true;
       render();
     } catch (error) {
@@ -589,11 +595,154 @@
     };
   }
 
-  /* ───────────── 同行观察 ───────────── */
+  /* ───────────── 同行观察（含抖音采集 + 转写档案） ───────────── */
+  function stopTsPolling() {
+    if (state.tsTimer) { clearInterval(state.tsTimer); state.tsTimer = null; }
+  }
+  async function refreshTranscripts(silent) {
+    try {
+      var data = await call('/transcripts');
+      state.transcripts = data.items || [];
+    } catch (error) {
+      if (!silent) toast(error.message, 'error');
+      return;
+    }
+    if (state.tab === 'references') renderTranscriptList();
+    var running = state.transcripts.some(function (item) { return item.status === 'running'; });
+    if (running && !state.tsTimer) {
+      state.tsTimer = setInterval(function () {
+        if (state.tab !== 'references') { stopTsPolling(); return; }
+        refreshTranscripts(true);
+      }, 3000);
+    } else if (!running) {
+      stopTsPolling();
+    }
+  }
+  function fmtDuration(seconds) {
+    var n = Math.round(Number(seconds) || 0);
+    var m = Math.floor(n / 60); var s = n % 60;
+    return (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s);
+  }
+  function transcriptCardHtml(item) {
+    var body = '';
+    if (item.status === 'running') body = '<p class="wb-note">' + ic('loader', 12) + ' 正在转写（whisper），通常几十秒；这一页会自动刷新。</p>';
+    else if (item.status === 'failed') body = '<p class="err">' + ic('alert', 13) + '<span>' + esc(item.error || '转写失败') + '</span></p>';
+    else {
+      body = '<p class="wb-preview" style="-webkit-line-clamp:3">' + esc(item.text.slice(0, 200)) + '</p>' +
+        '<div class="wb-actions"><button class="btn primary" type="button" data-ts-recreate="' + esc(item.id) + '">' + ic('copy', 12) + '用它复刻</button>' +
+        '<button class="btn" type="button" data-ts-detail="' + esc(item.id) + '">看时间码</button></div>';
+    }
+    return '<article class="wb-item"><div class="wb-card-head"><div><h4>' + esc(item.title || '转写档案') + '</h4>' +
+      '<div class="wb-meta">' + esc(item.nickname || (item.source === 'douyin' ? '抖音采集' : '素材转写')) +
+      ' · ' + fmtDuration(item.durationSeconds) + ' · ' + (item.segmentCount || 0) + ' 段 · ' + fmtDate(item.createdAt) + '</div></div>' +
+      '<span class="wb-tag ' + (item.status === 'succeeded' ? 'ok' : item.status === 'failed' ? 'bad' : '') + '">' + esc(item.status === 'running' ? '转写中' : item.status === 'succeeded' ? '已转写' : item.status === 'failed' ? '失败' : item.status) + '</span></div>' +
+      body + '</article>';
+  }
+  function renderTranscriptList() {
+    var box = $('#wb-ts-list');
+    if (!box) return;
+    box.innerHTML = state.transcripts.length
+      ? '<h4 style="margin:14px 0 8px">转写档案（' + state.transcripts.length + '）</h4><div class="wb-cards">' + state.transcripts.map(transcriptCardHtml).join('') + '</div>'
+      : '<p class="wb-muted" style="margin-top:12px">还没有转写档案。粘贴同行分享链接，下载并转写第一条。</p>';
+    $$('[data-ts-recreate]').forEach(function (button) {
+      button.onclick = async function () {
+        try {
+          var result = await call('/workflows', { method: 'POST', body: { kind: 'viral', accountId: state.accountId, input: { transcriptId: button.dataset.tsRecreate } } });
+          state.workflow = (result.data || result).workflow;
+          setTab('chat');
+          toast('已带入原文，确认后选改造强度', 'success');
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    });
+    $$('[data-ts-detail]').forEach(function (button) {
+      button.onclick = async function () {
+        try {
+          var data = await call('/transcripts/' + encodeURIComponent(button.dataset.tsDetail));
+          var t = (data.data || data).transcript;
+          var segs = (t.segments || []).slice(0, 60).map(function (s) {
+            return '<p><b>' + fmtDuration(s.start) + '-' + fmtDuration(s.end) + '</b> ' + esc(s.text) + '</p>';
+          }).join('');
+          showDialog('时间码 · ' + (t.title || ''), segs || '<p class="wb-muted">没有分段信息。</p>');
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    });
+  }
+  async function douyinCollect(text) {
+    var button = $('#wb-dy-go');
+    var original = button.innerHTML;
+    button.disabled = true; button.innerHTML = ic('loader', 12) + '解析中…';
+    try {
+      var resolved = await call('/douyin/resolve', { method: 'POST', body: { text: text } });
+      var target = (resolved.data || resolved).target;
+      if (target.kind === 'video') {
+        button.innerHTML = ic('loader', 12) + '下载中…';
+        var result = await call('/douyin/video', { method: 'POST', body: { awemeId: target.id, accountId: state.accountId } });
+        var data = result.data || result;
+        toast('已下载进素材库（抖音采集），开始转写', 'success');
+        state.douyinPanel = { video: data.video };
+        renderDouyinPanel();
+        refreshTranscripts(true);
+      } else {
+        button.innerHTML = ic('loader', 12) + '读取主页…';
+        var profileResult = await call('/douyin/profile', { method: 'POST', body: { secUserId: target.id } });
+        state.douyinPanel = { profile: (profileResult.data || profileResult).profile };
+        renderDouyinPanel();
+        toast('已读到主页和最近作品', 'success');
+      }
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      button.disabled = false; button.innerHTML = original;
+    }
+  }
+  function renderDouyinPanel() {
+    var box = $('#wb-dy-result');
+    if (!box) return;
+    var panel = state.douyinPanel;
+    if (!panel) { box.innerHTML = ''; return; }
+    if (panel.video) {
+      var v = panel.video;
+      box.innerHTML = '<div class="wb-dy-video"><b>' + esc(v.desc || '抖音视频') + '</b>' +
+        '<div class="wb-meta">' + esc(v.nickname || '') + ' · 赞 ' + (v.stats.digg || 0) + ' · 评论 ' + (v.stats.comment || 0) + '</div>' +
+        '<p class="wb-note">' + ic('check', 11) + ' 已存入素材库并开始转写，档案出现在下方「转写档案」。</p></div>';
+      return;
+    }
+    var p = panel.profile || {};
+    var works = p.works || [];
+    box.innerHTML = '<div class="wb-dy-profile"><div class="wb-card-head"><div><h4>' + esc(p.nickname || '同行主页') + '</h4>' +
+      '<div class="wb-meta">粉丝 ' + (p.followerCount || 0) + ' · 获赞 ' + (p.totalFavorited || 0) + ' · 作品 ' + works.length + ' 条</div></div></div>' +
+      (p.signature ? '<p class="wb-note">' + esc(p.signature.slice(0, 120)) + '</p>' : '') +
+      (works.length ? '<div class="wb-dy-works">' + works.map(function (work) {
+        return '<article class="wb-item"><div class="wb-card-head"><h4>' + esc(work.desc || work.awemeId) + '</h4></div>' +
+          '<div class="wb-meta">' + fmtDuration((work.durationMs || 0) / 1000) + ' · 赞 ' + (work.stats.digg || 0) + ' · 分享 ' + (work.stats.share || 0) + '</div>' +
+          '<div class="wb-actions"><button class="btn primary" type="button" data-dy-video="' + esc(work.awemeId) + '">下载并转写</button></div></article>';
+      }).join('') + '</div>' : '<p class="wb-muted">这个主页没有读到作品（可能被抖音限制），稍后再试。</p>') + '</div>';
+    $$('[data-dy-video]').forEach(function (button) {
+      button.onclick = function () { douyinCollectVideo(button.dataset.dyVideo, button); };
+    });
+  }
+  async function douyinCollectVideo(awemeId, button) {
+    button.disabled = true; button.innerHTML = ic('loader', 12) + '下载中…';
+    try {
+      await call('/douyin/video', { method: 'POST', body: { awemeId: awemeId, accountId: state.accountId } });
+      toast('已下载进素材库，开始转写', 'success');
+      button.innerHTML = ic('check', 12) + '转写中';
+      refreshTranscripts(true);
+    } catch (error) {
+      toast(error.message, 'error');
+      button.disabled = false; button.innerHTML = '下载并转写';
+    }
+  }
   function renderReferences() {
     var items = state.refs;
     $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
-      '<div class="wb-card"><div class="wb-card-head"><div><h3>记录同行</h3><p>拆结构，不抄内容。自动采集在二期接入。</p></div></div>' +
+      '<div class="wb-card"><div class="wb-card-head"><div><h3>抖音采集</h3><p>粘贴同行的「分享→复制链接」内容或主页链接：读公开主页与作品，下载视频并自动转写带时间码的口播档案。只读公开数据、每机构每小时限 40 次。</p></div>' +
+      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-dy-account"') + '</label></div>' +
+      '<div class="wb-composer" style="padding:0 2px"><textarea id="wb-dy-input" placeholder="例如：8.xx 复制打开抖音 https://v.douyin.com/xxxx/ 或 https://www.douyin.com/user/xxxx"></textarea>' +
+      '<button class="btn primary" type="button" id="wb-dy-go">' + ic('search', 13) + '解析</button></div>' +
+      '<div id="wb-dy-result"></div></div>' +
+      '<div id="wb-ts-list"></div>' +
+      '<div class="wb-card"><div class="wb-card-head"><div><h3>记录同行</h3><p>拆结构，不抄内容。手动记录仍然可用；也可以把采集到的主页直接加进来。</p></div></div>' +
       '<form id="wb-ref-form" class="wb-form">' +
       '<label class="wb-field"><span>名称</span><input name="name" required placeholder="例如：某某教育号"></label>' +
       '<label class="wb-field"><span>链接</span><input name="url" type="url" placeholder="https://..."></label>' +
@@ -604,8 +753,18 @@
           (item.url ? '<p><a href="' + esc(item.url) + '" target="_blank" rel="noopener noreferrer">' + esc(item.url) + '</a></p>' : '') +
           '<p class="wb-preview" style="-webkit-line-clamp:6">' + esc(item.notes || '还没有观察笔记。') + '</p>' +
           '<div class="wb-meta">' + fmtDate(item.createdAt) + '</div></article>';
-      }).join('') + '</div>' : '<div class="wb-card"><p class="wb-muted">还没有同行记录。先加入 3-5 个值得研究的账号。</p></div>') +
+      }).join('') + '</div>' : '<div class="wb-card"><p class="wb-muted">还没有同行记录。</p></div>') +
       '</div></div>';
+    bindAccountSwitch('#wb-dy-account');
+    var go = $('#wb-dy-go');
+    go.onclick = function () {
+      var value = String(($('#wb-dy-input') || {}).value || '').trim();
+      if (!value) { toast('先粘贴分享内容或链接', 'error'); return; }
+      douyinCollect(value);
+    };
+    renderDouyinPanel();
+    renderTranscriptList();
+    refreshTranscripts(true);
     $('#wb-ref-form').onsubmit = async function (event) {
       event.preventDefault();
       var form = event.currentTarget;
@@ -1196,8 +1355,17 @@
     if (kind === 'today') {
       form = '<label class="wb-field full"><span>今天的方向（可留空）</span><input id="wb-flow-goal" placeholder="例如：寒假班 / 续费 / 到店体验"></label>';
     } else if (kind === 'viral') {
-      form = '<p class="wb-note">粘贴一条爆款原文（口播文字或文案）。系统只学习它的传播机制，产出合规改写，不复用原钩子、原案例、原画面或原音频。</p>' +
-        '<label class="wb-field full"><span>爆款原文</span><textarea id="wb-flow-source" placeholder="把原文粘进来…"></textarea></label>';
+      var doneTranscripts = state.transcripts.filter(function (item) { return item.status === 'succeeded'; });
+      form = '<div class="wb-choice-grid">' +
+        '<button class="wb-choice recommended" type="button" id="wb-viral-src-text"><b>粘贴文案 · 推荐</b><small>直接把爆款口播/文案粘进来。</small></button>' +
+        '<button class="wb-choice" type="button" id="wb-viral-src-ts"' + (doneTranscripts.length ? '' : ' disabled') + '><b>从转写档案</b><small>' + (doneTranscripts.length ? '用抖音采集/素材转写的带时间码档案（' + doneTranscripts.length + ' 条）。' : '还没有已完成的转写档案（去「同行观察」采集）。') + '</small></button></div>' +
+        '<div id="wb-viral-text-form"><p class="wb-note">粘贴一条爆款原文（口播文字或文案）。系统只学习它的传播机制，产出合规改写，不复用原钩子、原案例、原画面或原音频。</p>' +
+        '<label class="wb-field full"><span>爆款原文</span><textarea id="wb-flow-source" placeholder="把原文粘进来…"></textarea></label></div>' +
+        '<div id="wb-viral-ts-form" hidden><div class="wb-news-list">' + (doneTranscripts.length ? doneTranscripts.slice(0, 10).map(function (item) {
+          return '<article class="wb-news-card"><div class="wb-news-head"><b>' + esc(item.title || '档案') + '</b></div>' +
+            '<p>' + esc((item.text || '').slice(0, 120)) + '…</p><small>' + esc(item.nickname || '') + ' · ' + fmtDuration(item.durationSeconds) + ' · ' + (item.segmentCount || 0) + ' 段</small>' +
+            '<div class="wb-actions"><button class="btn primary" type="button" data-viral-ts="' + esc(item.id) + '">用这条档案</button></div></article>';
+        }).join('') : '') + '</div></div>';
     } else {
       form = '<div class="wb-choice-grid">' +
         '<button class="wb-choice recommended" type="button" id="wb-flow-hotspot-auto"><b>关键词联网搜索 · 推荐</b><small>输入一个方向，系统用 DeepSeek 搜索近 3 天新闻，挑出 3 条最值得结合的热点。</small></button>' +
@@ -1224,6 +1392,37 @@
       autoCard.onclick = function () { paintHotspotMode('keyword'); };
       manualCard.onclick = function () { paintHotspotMode('manual'); };
     }
+    var viralMode = { mode: 'text' };
+    var viralTextCard = $('#wb-viral-src-text');
+    var viralTsCard = $('#wb-viral-src-ts');
+    if (viralTextCard && viralTsCard) {
+      var paintViralMode = function (mode) {
+        viralMode.mode = mode;
+        viralTextCard.classList.toggle('recommended', mode === 'text');
+        viralTsCard.classList.toggle('recommended', mode === 'ts');
+        ($('#wb-viral-text-form') || {}).hidden = mode !== 'text';
+        ($('#wb-viral-ts-form') || {}).hidden = mode !== 'ts';
+      };
+      viralTextCard.onclick = function () { paintViralMode('text'); };
+      if (!viralTsCard.disabled) viralTsCard.onclick = function () { paintViralMode('ts'); };
+    }
+    $$('[data-viral-ts]').forEach(function (card) {
+      card.onclick = async function () {
+        var button = card;
+        button.disabled = true;
+        try {
+          var result = await call('/workflows', { method: 'POST', body: { kind: 'viral', accountId: state.accountId, input: { transcriptId: button.dataset.viralTs } } });
+          state.workflow = (result.data || result).workflow;
+          closeDialog();
+          if (state.tab !== 'chat') setTab('chat'); else refreshWorkflowCard();
+          var box = $('#wb-flow-card');
+          if (box) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (error) {
+          toast(error.message, 'error');
+          button.disabled = false;
+        }
+      };
+    });
     $('#wb-flow-start').onclick = async function () {
       var button = this;
       button.disabled = true; button.innerHTML = ic('loader', 12) + '生成中…';

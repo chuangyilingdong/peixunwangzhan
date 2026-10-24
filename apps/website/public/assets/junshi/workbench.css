@@ -336,3 +336,8 @@
 #js-app .wb-news-card { border: 1px solid var(--hairline); border-radius: var(--r-card); padding: 10px 12px; }
 #js-app .wb-news-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 #js-app .wb-news-card small { color: var(--text-3); }
+
+/* ── 四期：抖音采集 + 转写档案 ── */
+#js-app .wb-dy-works { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; margin-top: 8px; }
+#js-app .wb-dy-video { border: 1px solid var(--hairline); border-radius: var(--r-card); padding: 10px 12px; margin-top: 10px; }
+#js-app .wb-dy-profile { border: 1px solid var(--hairline); border-radius: var(--r-card); padding: 10px 12px; margin-top: 10px; }
