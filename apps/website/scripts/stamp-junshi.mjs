@@ -21,7 +21,7 @@ const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const htmlPath = path.join(appRoot, 'dist', 'junshi', 'index.html');
 // 需要打版本号的外链资源（都在 dist/assets/junshi/ 下）：脚本 + 字体声明。
 // 字体 CSS 不常改，但同样躺在 /assets/ 的 7 天强缓存里，走同一套内容哈希最省心。
-const assets = ['prototype.js', 'fonts.css'];
+const assets = ['prototype.js', 'workbench.js', 'fonts.css', 'workbench.css'];
 
 let html = await readFile(htmlPath, 'utf8');
 if (!html.includes('__STAMP__')) {

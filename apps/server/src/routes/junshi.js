@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { arow, arows, aq, corsHeaders, errors, id, nowIso, requireAuth, requireRole } from '../lib.js';
 import { EXPERTS, runChat, runRawText } from '../services/junshiChat.js';
 import { audit as auditCompliance, AUDIT_PROMPT, loadPack as loadCompliancePack } from '../services/complianceEngine.js';
+import { handleJunshiWorkbench } from './junshiWorkbench.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../../data/junshi');
@@ -269,6 +270,12 @@ export async function handleJunshi(ctx) {
   const rest = pathname.slice(PREFIX.length) || '/';
   const search = ctx.search;
   const method = ctx.method;
+
+  // 内容工作台独立成模块：不加载 2.6MB 参考数据，也不经过上面的专家/会话路由。
+  if (rest === '/workbench' || rest.startsWith('/workbench/')) {
+    return handleJunshiWorkbench(ctx, rest.slice('/workbench'.length) || '/', search, method);
+  }
+
   const { library, knowledge, compliance } = load();
 
   // ── GET /api/junshi/overview ── 作战台首屏：当前月份、日历、画像完成度、数据规模
@@ -439,7 +446,7 @@ export async function handleJunshi(ctx) {
       clearInterval(heartbeat);
       if (!ctx.res.writableEnded) ctx.res.end();
     }
-    return;
+    return { __streamed: true };
   }
 
   // ── GET /api/junshi/compliance/words ── 词表本身（合规哨兵页展示用）

@@ -10,6 +10,7 @@
 <!-- 字体与主站一致：Geist（拉丁）+ Noto Sans SC（中文）。字体文件自托管在 /fonts/，同源、CSP 放行。
      放外链不放内联：104 个 @font-face 约 96KB，外链可缓存，也交给打哈希脚本管版本。 -->
 <link rel="stylesheet" href="/assets/junshi/fonts.css?v=__STAMP__">
+<link rel="stylesheet" href="/assets/junshi/workbench.css?v=__STAMP__">
 <style>
   /* 铺满全屏：app 自己占满视口，页面不再有外边距与圆角窗口（2026-10-15 用户口径「界面太小了，要铺满全屏」）。
      高度用 100dvh：移动端地址栏收放时不会跳。 */
@@ -131,6 +132,55 @@
     <path d="M14 8v-2a2 2 0 0 0 -2 -2h-7a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2 -2v-2" />
     <path d="M9 12h12l-3 -3" />
     <path d="M18 15l3 -3" />
+  </symbol>
+  <symbol id="i-workbench" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" />
+    <rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" />
+  </symbol>
+  <symbol id="i-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 4-7 8-7s8 3 8 7" />
+  </symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" />
+  </symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 20l4-1 11-11a2.1 2.1 0 0 0-3-3L5 16z" /><path d="M14 6l4 4" />
+  </symbol>
+  <symbol id="i-video" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="6" width="12" height="12" rx="2" /><path d="M15 10l6-3v10l-6-3" />
+  </symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+  </symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 20V10" /><path d="M10 20V4" /><path d="M16 20v-7" /><path d="M22 20H2" />
+  </symbol>
+  <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 6h13M8 12h13M8 18h13" /><path d="M3 6h.01M3 12h.01M3 18h.01" />
+  </symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 5v14M5 12h14" />
+  </symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />
+  </symbol>
+  <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 4v11M7 10l5 5 5-5" /><path d="M5 20h14" />
+  </symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 20V9M7 14l5-5 5 5" /><path d="M5 4h14" />
+  </symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7 4l12 8-12 8z" />
+  </symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="6" y="6" width="12" height="12" rx="2" />
+  </symbol>
+  <symbol id="i-image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="2" /><path d="M21 15l-5-5L5 20" />
+  </symbol>
+  <symbol id="i-music" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 18V5l10-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="16" cy="16" r="3" />
   </symbol>
 </defs></svg>
 
@@ -593,7 +643,9 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
   #js-app .refbody,#js-app .expertlist{max-height:none}
 }
 @media (max-width:820px){
-  #js-app .body{grid-template-columns:1fr}
+  /* 窄屏只有一列：侧栏一行 + 主区剩余高度必须写成两行。
+     只改列不改行时，.main 会和横向侧栏叠在同一格，导航被内容盖住、点不到（390px 实测）。 */
+  #js-app .body{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
   #js-app .side{flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--hairline);overflow:visible}
   #js-app .sidenote{display:none}
   #js-app .main{padding:14px}
@@ -614,6 +666,7 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
 <div class="body">
   <nav class="side" aria-label="主导航">
     <button class="navitem" type="button" data-screen="chat" aria-current="true"><svg class="ic" width="17" height="17" aria-hidden="true"><use href="#i-chat"></use></svg>专家团</button>
+    <button class="navitem" type="button" data-screen="workbench"><svg class="ic" width="17" height="17" aria-hidden="true"><use href="#i-workbench"></use></svg>内容工作台</button>
     <!-- 知识库入口暂时隐藏（2026-10-16 用户口径：文档列表只能看不能点、只是展示用）。
          屏与 JS 都原样留着，把下面这行放回去即可恢复：
          <button class="navitem" type="button" data-screen="library"><svg class="ic" width="17" height="17" aria-hidden="true"><use href="#i-library"></use></svg>知识库</button> -->
@@ -657,6 +710,33 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
         <div class="panel" style="display:grid;grid-template-rows:auto minmax(0,1fr)">
           <div class="ptitle">引用了你的资料<small id="ref-count"></small></div>
           <div class="refbody" id="js-refs"><p class="empty">发出问题后，这里会显示这次回答参考了你资料库里的哪几份文件。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" id="scr-workbench" hidden aria-label="内容工作台">
+      <div class="wb">
+        <div class="wb-head">
+          <div class="wb-title"><b>内容工作台</b><span>账号档案、同行观察、文案大脑、视频创作、素材库、报表和任务</span></div>
+          <div class="wb-tabs" id="wb-tabs" role="tablist" aria-label="工作台功能">
+            <button class="wb-tab" type="button" role="tab" data-wb="chat" aria-current="true">小铃铛</button>
+            <button class="wb-tab" type="button" role="tab" data-wb="account">账号档案</button>
+            <button class="wb-tab" type="button" role="tab" data-wb="references">同行观察</button>
+            <button class="wb-tab" type="button" role="tab" data-wb="copy">文案大脑</button>
+            <button class="wb-tab" type="button" role="tab" data-wb="video">视频创作</button>
+            <button class="wb-tab" type="button" role="tab" data-wb="assets">素材库</button>
+            <button class="wb-tab" type="button" role="tab" data-wb="reports">数据报表</button>
+            <button class="wb-tab" type="button" role="tab" data-wb="jobs">历史任务</button>
+          </div>
+        </div>
+        <div class="wb-body" id="wb-view">
+          <div class="loading">正在打开内容工作台…</div>
+        </div>
+      </div>
+      <div class="wb-dialog" id="wb-dialog" hidden>
+        <div class="wb-dialog-card" role="dialog" aria-modal="true">
+          <button class="wb-dialog-close" type="button" id="wb-dialog-close" aria-label="关闭">×</button>
+          <div id="wb-dialog-body"></div>
         </div>
       </div>
     </section>
@@ -733,5 +813,6 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
 </div>
 </div>
 <script src="/assets/junshi/prototype.js?v=__STAMP__" defer></script>
+<script src="/assets/junshi/workbench.js?v=__STAMP__" defer></script>
 </body>
 </html>

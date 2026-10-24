@@ -1216,6 +1216,92 @@ CREATE TABLE IF NOT EXISTS junshi_messages (
   created_at      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_msg_conv ON junshi_messages(conversation_id, created_at);
+
+-- 招生军师 · 内容工作台（2026-10-24，机构级）。
+-- 复用 junshi_profiles 的 owner_key 口径：org:<机构id> / user:<用户id>。
+-- 生产 MySQL 必须手工执行 deploy/production/migrate/29-junshi-workbench-mysql.sql。
+CREATE TABLE IF NOT EXISTS junshi_workbench_profiles (
+  owner_key   TEXT NOT NULL PRIMARY KEY,
+  org_id      TEXT,
+  content     TEXT NOT NULL DEFAULT '{}',
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS junshi_workbench_messages (
+  id          TEXT NOT NULL PRIMARY KEY,
+  owner_key   TEXT NOT NULL,
+  org_id      TEXT,
+  role        TEXT NOT NULL,
+  content     TEXT NOT NULL,
+  citations   TEXT,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_msg_owner ON junshi_workbench_messages(owner_key, created_at);
+
+CREATE TABLE IF NOT EXISTS junshi_workbench_copy_drafts (
+  id          TEXT NOT NULL PRIMARY KEY,
+  owner_key   TEXT NOT NULL,
+  org_id      TEXT,
+  topic       TEXT NOT NULL DEFAULT '',
+  style       TEXT NOT NULL DEFAULT '',
+  content     TEXT NOT NULL,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_copy_owner ON junshi_workbench_copy_drafts(owner_key, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS junshi_workbench_video_projects (
+  id             TEXT NOT NULL PRIMARY KEY,
+  owner_key      TEXT NOT NULL,
+  org_id         TEXT,
+  title          TEXT NOT NULL DEFAULT '',
+  brief          TEXT NOT NULL DEFAULT '',
+  reference_text TEXT NOT NULL DEFAULT '',
+  mode           TEXT NOT NULL DEFAULT '原创',
+  script         TEXT NOT NULL DEFAULT '',
+  status         TEXT NOT NULL DEFAULT 'draft',
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_video_owner ON junshi_workbench_video_projects(owner_key, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS junshi_workbench_assets (
+  id              TEXT NOT NULL PRIMARY KEY,
+  owner_key       TEXT NOT NULL,
+  org_id          TEXT,
+  file_name       TEXT NOT NULL,
+  storage_key     TEXT NOT NULL,
+  storage_backend TEXT NOT NULL DEFAULT 'local',
+  mime_type       TEXT NOT NULL DEFAULT '',
+  kind            TEXT NOT NULL DEFAULT 'file',
+  file_size       INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_asset_owner ON junshi_workbench_assets(owner_key, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS junshi_workbench_refs (
+  id          TEXT NOT NULL PRIMARY KEY,
+  owner_key   TEXT NOT NULL,
+  org_id      TEXT,
+  name        TEXT NOT NULL DEFAULT '',
+  url         TEXT NOT NULL DEFAULT '',
+  notes       TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_ref_owner ON junshi_workbench_refs(owner_key, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS junshi_workbench_jobs (
+  id          TEXT NOT NULL PRIMARY KEY,
+  owner_key   TEXT NOT NULL,
+  org_id      TEXT,
+  kind        TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'running',
+  detail      TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_job_owner ON junshi_workbench_jobs(owner_key, created_at DESC);
 `;
 
 db.exec(SCHEMA);

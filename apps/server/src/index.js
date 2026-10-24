@@ -227,6 +227,13 @@ const server = http.createServer(async (req, res) => {
       console.warn(`[API] 请求体过大被拒：${ctx.method} ${ctx.pathname}（上限 ${jsonBodyLimitFor(ctx.pathname)}，`
         + `nginx 收到的 content-length ${String(ctx.req?.headers?.['content-length'] || '未知')}）`);
     }
+    // SSE/文件流可能已经写了响应头；这时再套 JSON 信封会抛 ERR_HTTP_HEADERS_SENT，
+    // 而且未捕获会把整个进程带走（2026-10-24 工作台「去 AI 深度审读」实测触发）。
+    if (res.headersSent) {
+      console.warn(`[API] 响应已开始，无法再发送 JSON 错误，直接关闭连接：${ctx.method} ${ctx.pathname}`);
+      if (!res.destroyed) res.destroy();
+      return;
+    }
     sendJson(res, apiError.status || 500, apiError.toResponse(), req, {
       ...(ctx.setCookie ? { 'set-cookie': ctx.setCookie } : {}),
       // ⭐ 请求体**没读完**就不能再宣称 keep-alive：客户端会把这条连接放回池子，下一个请求

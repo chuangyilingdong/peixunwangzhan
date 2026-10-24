@@ -947,6 +947,7 @@
   /* ───────────── 各屏首次进入 ───────────── */
   var INIT = {
     chat: function () { renderExperts(); renderConversations(); },
+    workbench: function () { if (window.JunshiWorkbench) window.JunshiWorkbench.mount(); },
     library: function () {
       renderLib();
       call('/library/facets').then(function (f) {
