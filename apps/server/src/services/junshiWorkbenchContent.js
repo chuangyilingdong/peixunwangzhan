@@ -487,3 +487,37 @@ export function demoHotspotCopies(profile, hotspot, angle, style) {
     { title: `别只看${title}的热闹`, content: `${fact} 很多人看完就划走了，但${audience}可以多想一层：这类事情发生时，最该守住的是自己的节奏。报班、续费、换机构，都一样——先确认自己的目标没被带偏。守住节奏的具体做法，这条讲清楚。`, angle, style },
   ].map((item) => ({ ...item, demo: true }));
 }
+
+/* ───────────── 热点自动搜索（DeepSeek Search API，2026-10-24 三期+） ─────────────
+ * 官方文档：POST https://api.deepseek.com/v1/tools/search，Bearer 同一把 Key，
+ * 按成功请求计费（5 元/千次，空结果不计费）。搜索结果喂给 TEXT 模型，
+ * 按账号相关性挑 3 条并给出结合方式建议 —— 对齐原版 hotspot-combinations 的链路。 */
+
+export function buildHotspotPickPrompt({ profile, orgProfile, keyword, results }) {
+  const list = (results || []).slice(0, 8).map((item, index) => `〔${index + 1}〕${item.title}\n来源：${item.siteName || ''} ${item.url || ''}\n日期：${item.date || '未知'}\n摘要：${String(item.summary || item.snippet || '').slice(0, 400)}`).join('\n\n');
+  return `【任务】从下面的搜索结果里，为这个内容账号挑出 3 条「最近、真实、和它的受众有关」的热点。
+
+【机构画像】
+${orgProfile || '（未填写）'}
+
+【内容账号档案】
+${workbenchProfileBlock(profile)}
+
+【搜索关键词】${clean(keyword)}
+
+【搜索结果（只用这里的事实，不得编造）】
+${list || '（无结果）'}
+
+【每条输出】id（"h1"/"h2"/"h3"）、title（热点标题）、fact（1-3 句事实，只能来自上面摘要）、sourceUrl、source（来源媒体名）、publishedAt（原文日期，没有就空串）、relation（一句话：为什么和这个账号的受众有关）、recommendedAngle（从这七个里选一个：${HOTSPOT_ANGLES.map((item) => item[0]).join('、')}）。
+
+${JSON_ONLY}
+格式：[{"id":"h1","title":"…","fact":"…","sourceUrl":"…","source":"…","publishedAt":"…","relation":"…","recommendedAngle":"…"}]，正好 3 个；不够 3 条真实相关的就少给，禁止凑数。`;
+}
+
+export function demoPickedHotspots(keyword) {
+  return [
+    { id: 'h1', title: `「${clean(keyword) || '教育'}」相关报道一`, fact: '（演示样本）搜索渠道未配置或未返回结果时展示；上线后这里会是 DeepSeek 搜索到的真实新闻。', sourceUrl: '', source: '演示', publishedAt: '', relation: '与账号受众的关注点相关。', recommendedAngle: '热点做引子' },
+    { id: 'h2', title: `「${clean(keyword) || '教育'}」相关报道二`, fact: '（演示样本）', sourceUrl: '', source: '演示', publishedAt: '', relation: '可作为近期内容的话题引子。', recommendedAngle: '热点做论据' },
+    { id: 'h3', title: `「${clean(keyword) || '教育'}」相关报道三`, fact: '（演示样本）', sourceUrl: '', source: '演示', publishedAt: '', relation: '可支撑账号的核心观点。', recommendedAngle: '热点做趋势信号' },
+  ];
+}

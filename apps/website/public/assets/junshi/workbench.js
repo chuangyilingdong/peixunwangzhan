@@ -217,6 +217,7 @@
     assetFolder: '',
     renders: [],
     renderTimer: null,
+    wfPollTimer: null,
     // 引导式创作工作流（今日选题/爆款复刻/热点结合，参考原版 XiaoLingDang 的顶栏工作流）
     workflow: null,
     workflowMeta: null,
@@ -242,6 +243,7 @@
   function setTab(tab) {
     state.tab = tab;
     if (tab !== 'video') stopRenderPolling();
+    if (tab !== 'chat') stopWfPolling();
     $$('#wb-tabs [data-wb]').forEach(function (button) {
       if (button.dataset.wb === tab) button.setAttribute('aria-current', 'true');
       else button.removeAttribute('aria-current');
@@ -1005,13 +1007,34 @@
         (state.workflowMeta.strengths || []).map(function (item) {
           return '<button class="wb-choice" type="button" data-wf-strength="' + esc(item.id) + '"><b>' + esc(item.label) + '</b><small>' + esc(item.detail) + '</small></button>';
         }).join('') + '</div>';
+    } else if (wf.kind === 'hotspot' && wf.stage === 'searching') {
+      body = '<p class="wb-note">关键词：' + esc(wf.state.keyword || '') + ' · 正在用 DeepSeek 搜索近 3 天新闻并按你的账号挑热点，通常十几秒；这一页会自动刷新。</p><progress></progress>';
+    } else if (wf.kind === 'hotspot' && wf.stage === 'hotspots_ready') {
+      var found = wf.state.hotspots || [];
+      body = '<h4>最值得这个账号结合的 ' + found.length + ' 个热点</h4>' +
+        '<p class="wb-note">来自 DeepSeek 联网搜索（近 3 天），已按账号相关性筛选。只用标题与事实里写明的内容。</p>' +
+        '<div class="wb-news-list">' + found.map(function (item) {
+          return '<article class="wb-news-card"><div class="wb-news-head"><b>' + esc(item.title || '') + '</b>' +
+            (item.recommendedAngle ? '<span class="wb-tag ok">建议：' + esc(item.recommendedAngle) + '</span>' : '') + '</div>' +
+            '<p>' + esc(item.fact || '') + '</p>' +
+            (item.relation ? '<p class="wb-note">与你的账号：' + esc(item.relation) + '</p>' : '') +
+            '<small>' + esc(item.source || '') + (item.publishedAt ? ' · ' + esc(String(item.publishedAt).slice(0, 10)) : '') + '</small>' +
+            '<div class="wb-actions"><button class="btn primary" type="button" data-wf-hotspot="' + esc(item.id) + '">用这个热点创作</button>' +
+            (item.sourceUrl ? '<a class="btn" href="' + esc(item.sourceUrl) + '" target="_blank" rel="noopener noreferrer">查看来源 ↗</a>' : '') +
+            '</div></article>';
+        }).join('') + '</div>';
+    } else if (wf.kind === 'hotspot' && wf.stage === 'search_failed') {
+      body = '<p class="err">' + ic('alert', 13) + '<span>' + esc(wf.state.searchError || '搜索没有成功') + '</span></p>' +
+        '<div class="wb-actions"><button class="btn primary" type="button" data-wf-search-retry>' + ic('refresh', 12) + '重新搜索</button>' +
+        '<button class="btn" type="button" data-wf-search-manual>改用手动填写</button></div>';
     } else if (wf.kind === 'hotspot' && wf.stage === 'angle') {
       var hotspot = wf.state.hotspot || {};
       body = '<div class="wb-flow-hotspot"><b>' + esc(hotspot.title || '') + '</b><p>' + esc(hotspot.fact || '') + '</p>' +
         (hotspot.sourceUrl ? '<a href="' + esc(hotspot.sourceUrl) + '" target="_blank" rel="noopener noreferrer">查看来源 ↗</a>' : '') + '</div>' +
         '<h4>这个热点准备怎么用？</h4><div class="wb-choice-grid">' +
-        (state.workflowMeta.angles || []).map(function (item, index) {
-          return '<button class="wb-choice' + (index === 0 ? ' recommended' : '') + '" type="button" data-wf-angle="' + esc(item[0]) + '"><b>' + esc(item[0]) + (index === 0 ? ' · 推荐' : '') + '</b><small>' + esc(item[1]) + '</small></button>';
+        (state.workflowMeta.angles || []).map(function (item) {
+          var recommended = wf.state.recommendedAngle || (state.workflowMeta.angles[0] || [])[0];
+          return '<button class="wb-choice' + (item[0] === recommended ? ' recommended' : '') + '" type="button" data-wf-angle="' + esc(item[0]) + '"><b>' + esc(item[0]) + (item[0] === recommended ? ' · 推荐' : '') + '</b><small>' + esc(item[1]) + '</small></button>';
         }).join('') + '</div>';
     } else if (wf.stage === 'style') {
       var context = wf.kind === 'today'
@@ -1034,10 +1057,54 @@
     if (!box) return;
     box.innerHTML = workflowCardHtml(state.workflow);
     bindWorkflowCard();
+    // 联网搜索阶段：3 秒轮询直到阶段变化
+    if (state.workflow && state.workflow.status === 'active' && state.workflow.stage === 'searching' && !state.wfPollTimer) {
+      var wfId = state.workflow.id;
+      state.wfPollTimer = setInterval(async function () {
+        if (state.tab !== 'chat' || !state.workflow || state.workflow.id !== wfId) { stopWfPolling(); return; }
+        try {
+          var data = await call('/workflows?accountId=' + encodeURIComponent(state.workflow.accountId || state.accountId));
+          var latest = (data.items || []).filter(function (item) { return item.id === wfId; })[0];
+          if (!latest) { stopWfPolling(); return; }
+          if (latest.stage !== state.workflow.stage || latest.updatedAt !== state.workflow.updatedAt) {
+            state.workflow = latest;
+            if (latest.stage !== 'searching') stopWfPolling();
+            refreshWorkflowCard();
+          }
+        } catch (error) { stopWfPolling(); }
+      }, 3000);
+    } else if (!state.workflow || state.workflow.stage !== 'searching') {
+      stopWfPolling();
+    }
+  }
+  function stopWfPolling() {
+    if (state.wfPollTimer) { clearInterval(state.wfPollTimer); state.wfPollTimer = null; }
   }
   function bindWorkflowCard() {
     var card = $('#wb-flow-card');
     if (!card) return;
+    $$('[data-wf-hotspot]').forEach(function (button) {
+      button.onclick = function () { wfChoose({ action: 'select_hotspot', hotspotId: button.dataset.wfHotspot }, button); };
+    });
+    var retryButton = $('[data-wf-search-retry]');
+    if (retryButton) {
+      retryButton.onclick = async function () {
+        try {
+          var result = await call('/workflows/' + encodeURIComponent(state.workflow.id) + '/action', { method: 'POST', body: { action: 'search_retry' } });
+          state.workflow = (result.data || result).workflow;
+          refreshWorkflowCard();
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    }
+    var manualButton = $('[data-wf-search-manual]');
+    if (manualButton) {
+      manualButton.onclick = async function () {
+        try { await call('/workflows/' + encodeURIComponent(state.workflow.id) + '/action', { method: 'POST', body: { action: 'search_switch_manual' } }); } catch (error) { /* 忽略 */ }
+        state.workflow = null;
+        refreshWorkflowCard();
+        openFlowStartDialog('hotspot');
+      };
+    }
     $$('[data-wf-cancel]').forEach(function (button) {
       button.onclick = async function () {
         if (!confirm('放弃当前创作流程？')) return;
@@ -1132,13 +1199,31 @@
       form = '<p class="wb-note">粘贴一条爆款原文（口播文字或文案）。系统只学习它的传播机制，产出合规改写，不复用原钩子、原案例、原画面或原音频。</p>' +
         '<label class="wb-field full"><span>爆款原文</span><textarea id="wb-flow-source" placeholder="把原文粘进来…"></textarea></label>';
     } else {
-      form = '<p class="wb-note">把你今天刷到、想借的热点填进来（手机上看到的新闻即可）。系统只引用你写的事实，不编造细节。</p>' +
+      form = '<div class="wb-choice-grid">' +
+        '<button class="wb-choice recommended" type="button" id="wb-flow-hotspot-auto"><b>关键词联网搜索 · 推荐</b><small>输入一个方向，系统用 DeepSeek 搜索近 3 天新闻，挑出 3 条最值得结合的热点。</small></button>' +
+        '<button class="wb-choice" type="button" id="wb-flow-hotspot-manual"><b>手动填写热点</b><small>把你刷到的新闻填进来，系统只引用你写的事实。</small></button></div>' +
+        '<div id="wb-flow-hotspot-manual-form" hidden><p class="wb-note">把你今天刷到、想借的热点填进来（手机上看到的新闻即可）。系统只引用你写的事实，不编造细节。</p>' +
         '<label class="wb-field full"><span>热点标题</span><input id="wb-flow-title" placeholder="例如：多地推行寒假托管"></label>' +
         '<label class="wb-field full"><span>事实描述</span><textarea id="wb-flow-fact" placeholder="这条新闻说了什么（1-3 句）"></textarea></label>' +
-        '<label class="wb-field full"><span>来源链接（可留空）</span><input id="wb-flow-url" placeholder="https://…"></label>';
+        '<label class="wb-field full"><span>来源链接（可留空）</span><input id="wb-flow-url" placeholder="https://…"></label></div>' +
+        '<div id="wb-flow-hotspot-key-form"><label class="wb-field full"><span>搜索关键词</span><input id="wb-flow-keyword" placeholder="例如：寒假托管 / 素质教育新政 / 校外培训监管"></label></div>';
     }
     showDialog(titles[kind], '<div class="wb-form">' + form +
       '<div class="wb-actions"><button class="btn primary" type="button" id="wb-flow-start">' + ic('sparkle', 12) + '开始</button></div></div>');
+    var hotspotMode = { mode: 'keyword' };
+    var autoCard = $('#wb-flow-hotspot-auto');
+    var manualCard = $('#wb-flow-hotspot-manual');
+    if (autoCard && manualCard) {
+      var paintHotspotMode = function (mode) {
+        hotspotMode.mode = mode;
+        autoCard.classList.toggle('recommended', mode === 'keyword');
+        manualCard.classList.toggle('recommended', mode === 'manual');
+        $('#wb-flow-hotspot-key-form').hidden = mode !== 'keyword';
+        $('#wb-flow-hotspot-manual-form').hidden = mode !== 'manual';
+      };
+      autoCard.onclick = function () { paintHotspotMode('keyword'); };
+      manualCard.onclick = function () { paintHotspotMode('manual'); };
+    }
     $('#wb-flow-start').onclick = async function () {
       var button = this;
       button.disabled = true; button.innerHTML = ic('loader', 12) + '生成中…';
@@ -1146,9 +1231,15 @@
       if (kind === 'today') input.goal = ($('#wb-flow-goal') || {}).value || '';
       if (kind === 'viral') input.sourceText = ($('#wb-flow-source') || {}).value || '';
       if (kind === 'hotspot') {
-        input.title = ($('#wb-flow-title') || {}).value || '';
-        input.fact = ($('#wb-flow-fact') || {}).value || '';
-        input.sourceUrl = ($('#wb-flow-url') || {}).value || '';
+        if (hotspotMode.mode === 'keyword') {
+          input.mode = 'keyword';
+          input.keyword = ($('#wb-flow-keyword') || {}).value || '';
+        } else {
+          input.mode = 'manual';
+          input.title = ($('#wb-flow-title') || {}).value || '';
+          input.fact = ($('#wb-flow-fact') || {}).value || '';
+          input.sourceUrl = ($('#wb-flow-url') || {}).value || '';
+        }
       }
       try {
         var result = await call('/workflows', { method: 'POST', body: { kind: kind, accountId: state.accountId, input: input } });

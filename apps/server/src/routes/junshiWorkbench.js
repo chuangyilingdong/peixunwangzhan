@@ -16,6 +16,8 @@ import { isMockProvider, normalizeProviderError } from '../services/providerCont
 import { getGenerationProvider, generationProviderInfo } from '../services/generationProvider.js';
 import { providerSelectionForModality, generationOptionsFor } from './aiGeneration.js';
 import { getAiProviderPolicy } from './billingConfig.js';
+import { getProviderApiKey } from '../services/providerSecret.js';
+import { AI_PROVIDER_API_KEY } from '../config.js';
 import { maxUploadBytes, parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
 import { ossRedirectUrl, removeObject, rowStorageBackend } from '../services/fileStorage.js';
 import {
@@ -24,6 +26,7 @@ import {
   HOTSPOT_ANGLES,
   VIRAL_STRENGTHS,
   buildChatSystem,
+  buildHotspotPickPrompt,
   buildCopyPrompt,
   buildHotspotCopyPrompt,
   buildSrt,
@@ -34,6 +37,7 @@ import {
   demoCopy,
   demoHotspotCopies,
   demoIdeas,
+  demoPickedHotspots,
   demoVideo,
   demoViralRewrites,
 } from '../services/junshiWorkbenchContent.js';
@@ -665,7 +669,94 @@ const WORKFLOW_KINDS = { today: '今日选题', viral: '爆款复刻', hotspot: 
 const WORKFLOW_STAGE_LABELS = {
   idea: '选选题', style: '选表达', copy: '选版本', done: '完成',
   transcript: '确认原文', strength: '选改造强度', angle: '选结合方式',
+  searching: '联网搜索中', hotspots_ready: '选热点', search_failed: '搜索失败',
 };
+
+/* ── DeepSeek Search API（与文本渠道同一把 Key；官方文档 /v1/tools/search）── */
+/* 本地开发：WORKBENCH_FAKE_SEARCH=1 时用 canned 结果走通全链（不花真钱、不需要真 Key）。 */
+const FAKE_SEARCH_RESULTS = [
+  { title: '多地教育部门发布寒假托管服务指引', url: 'https://example.com/news/1', snippet: '多地把寒假托管纳入公共服务，明确开放时段与报名方式。', summary: '多地把寒假托管纳入公共服务，明确开放时段与报名方式，家长讨论度高。', siteName: '示例新闻网', date: new Date().toISOString(), rerankScore: 2.4, authority: 3 },
+  { title: '“体育类校外培训”新规征求意见', url: 'https://example.com/news/2', snippet: '主管部门就体育类校外培训准入与收费公示征求意见。', summary: '主管部门就体育类校外培训准入、收费公示与退费规则公开征求意见，行业关注。', siteName: '示例教育报', date: new Date().toISOString(), rerankScore: 1.9, authority: 4 },
+  { title: '寒假研学类课程搜索量上涨', url: 'https://example.com/news/3', snippet: '平台数据显示寒假前后研学类课程搜索量明显上涨。', summary: '平台数据显示寒假前后研学、托管类课程搜索量明显上涨，机构备战寒假档。', siteName: '示例财经', date: new Date().toISOString(), rerankScore: 1.6, authority: 2 },
+];
+async function textChannelSearchConfig() {
+  const policy = await getAiProviderPolicy();
+  const selection = providerSelectionForModality(policy, 'TEXT');
+  if (process.env.WORKBENCH_FAKE_SEARCH === '1' && isMockProvider(selection.provider)) {
+    return { origin: 'https://api.deepseek.com', apiKey: 'fake-local', model: selection.model };
+  }
+  let origin = '';
+  try { origin = new URL(selection.endpoint || '').origin; } catch { return null; }
+  if (!/^(https?:)?\/\/api\.deepseek\.com$/i.test(origin)) return null;
+  const apiKey = selection.apiKey || getProviderApiKey(selection.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY;
+  return apiKey ? { origin, apiKey, model: selection.model } : null;
+}
+
+/** 联网搜索：返回归一化结果；失败抛错（调用方兜底）。计费口径见官方文档：成功且有结果才计费。 */
+async function deepseekWebSearch({ query, count = 10 }) {
+  const config = await textChannelSearchConfig();
+  if (!config) throw Object.assign(new Error('当前文本渠道不是 DeepSeek 官方接口，或没有可用 Key；请改用手动填写热点'), { code: 'WORKBENCH_SEARCH_UNSUPPORTED' });
+  if (config.apiKey === 'fake-local') return FAKE_SEARCH_RESULTS.slice(0, Math.max(1, Math.min(3, count)));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  timer.unref?.();
+  try {
+    const response = await fetch(`${config.origin}/v1/tools/search`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ query: String(query).slice(0, 128), count: Math.min(50, Math.max(1, count)) }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const detail = String(await response.text().catch(() => '')).slice(0, 200);
+      if (response.status === 402) throw Object.assign(new Error('搜索服务余额不足（DeepSeek 账户需充值），请联系平台管理员'), { code: 'WORKBENCH_SEARCH_402' });
+      throw Object.assign(new Error(`搜索接口返回 HTTP ${response.status}${detail ? `：${detail}` : ''}`), { code: 'WORKBENCH_SEARCH_HTTP' });
+    }
+    const payload = await response.json();
+    return (Array.isArray(payload?.results) ? payload.results : []).map((item) => ({
+      title: String(item.title || '').slice(0, 200),
+      url: String(item.url || ''),
+      snippet: String(item.snippet || '').slice(0, 300),
+      summary: String(item.summary || item.snippet || '').slice(0, 800),
+      siteName: String(item.site_name || ''),
+      date: String(item.date || ''),
+      rerankScore: Number(item.rerank_score || 0),
+      authority: Number(item.authority || 0),
+    }));
+  } finally { clearTimeout(timer); }
+}
+
+/** 关键词模式的后台执行：搜索 → 模型按账号相关性挑 3 条 → 进 hotspots_ready。 */
+async function runHotspotSearch(ctx, owner, { wfId, keyword, accountId }) {
+  const fail = async (message) => {
+    await wfUpdate(wfId, owner.key, { stage: 'search_failed', state: JSON.stringify({ keyword, searchError: String(message).slice(0, 500) }) }).catch(() => {});
+  };
+  try {
+    const after = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const query = `${keyword} after:${after}`;
+    const results = await deepseekWebSearch({ query, count: 12 });
+    const profile = (await readProfile(owner.key, accountId)).profile;
+    const orgProfile = await orgProfileText(owner.key);
+    let hotspots; let demo = false;
+    const providerMock = await textProviderIsMock().catch(() => false);
+    if (providerMock || !results.length) {
+      // 渠道是 mock（本地开发）或搜索无结果：mock 时给演示热点；无结果时如实失败。
+      if (providerMock) { hotspots = demoPickedHotspots(keyword); demo = true; }
+      else { await fail(`“${keyword.slice(0, 40)}”近 3 天没有搜到结果，换个关键词试试，或改用手动填写`); return; }
+    } else {
+      const generated = await generateOptions(ctx, owner, {
+        prompt: buildHotspotPickPrompt({ profile, orgProfile, keyword, results }),
+        demoContent: demoPickedHotspots(keyword),
+      });
+      hotspots = generated.options.map((option, index) => ({ id: `h${index + 1}`, ...option }));
+      demo = generated.demo;
+      if (!hotspots.length) { await fail('模型没有从搜索结果里挑出可用热点，请重试或改用手动填写'); return; }
+    }
+    await wfUpdate(wfId, owner.key, { stage: 'hotspots_ready', state: JSON.stringify({ keyword, hotspots, demo }) });
+  } catch (error) {
+    await fail(error?.message || '搜索失败');
+  }
+}
 
 /** 模型被要求「只输出 JSON 数组」，但仍可能带围栏或前后杂字：宽松取出第一个 JSON 数组。 */
 function parseLooseJsonArray(text) {
@@ -763,16 +854,32 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
       stage = 'transcript';
       state = { transcript: sourceText };
     } else {
-      const title = text(input.title).slice(0, 200);
-      const fact = text(input.fact).slice(0, 2000);
-      if (!title || !fact) throw errors.badRequest('热点需要标题和事实描述', 'VALIDATION_ERROR', { field: 'title' });
-      stage = 'angle';
-      state = { hotspot: { title, fact, sourceUrl: text(input.sourceUrl).slice(0, 500) } };
+      if (text(input.mode) === 'keyword') {
+        const keyword = text(input.keyword).slice(0, 120);
+        if (!keyword) throw errors.badRequest('请填写搜索关键词', 'VALIDATION_ERROR', { field: 'keyword' });
+        rateLimit(owner.key);
+        const searchConfig = await textChannelSearchConfig();
+        if (!searchConfig) throw errors.badRequest('当前文本渠道不支持自动搜索（需 DeepSeek 官方接口）。请改用「手动填写热点」。', 'WORKBENCH_SEARCH_UNSUPPORTED');
+        stage = 'searching';
+        state = { keyword };
+      } else {
+        const title = text(input.title).slice(0, 200);
+        const fact = text(input.fact).slice(0, 2000);
+        if (!title || !fact) throw errors.badRequest('热点需要标题和事实描述', 'VALIDATION_ERROR', { field: 'title' });
+        stage = 'angle';
+        state = { hotspot: { title, fact, sourceUrl: text(input.sourceUrl).slice(0, 500) } };
+      }
     }
     const wfId = id('jwwf');
     const at = nowIso();
     await aq('INSERT INTO junshi_workbench_workflows (id,owner_key,org_id,account_id,kind,stage,input,state,status,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
       [wfId, owner.key, owner.orgId, accountId, kind, stage, JSON.stringify(input), JSON.stringify(state), 'active', '', at, at]);
+    if (kind === 'hotspot' && stage === 'searching') {
+      const job = jobStart(owner, '热点搜索', String(state.keyword || '').slice(0, 60));
+      await job.promise;
+      void runHotspotSearch(ctx, owner, { wfId, keyword: state.keyword || '', accountId })
+        .finally(() => jobDone(job, 'succeeded', '热点搜索完成').catch(() => {}));
+    }
     return { workflow: wfOut(await arow('SELECT * FROM junshi_workbench_workflows WHERE id=?', [wfId])) };
   }
 
@@ -794,8 +901,30 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
       return { workflow: wfOut(await arow('SELECT * FROM junshi_workbench_workflows WHERE id=?', [wfId])) };
     }
 
-    /* 阶段一：各类选择/确认（无 LLM） */
-    if (action === 'select_idea' && wf.kind === 'today' && wf.stage === 'idea') {
+    /* 热点·关键词模式：搜索完成后的三个阶段动作 */
+    if (action === 'select_hotspot' && wf.kind === 'hotspot' && wf.stage === 'hotspots_ready') {
+      const hotspot = (state.hotspots || []).find((item) => item.id === text(ctx.body?.hotspotId));
+      if (!hotspot) throw errors.badRequest('热点不存在', 'VALIDATION_ERROR', { field: 'hotspotId' });
+      state.selectedHotspot = hotspot;
+      state.hotspot = { title: hotspot.title, fact: hotspot.fact, sourceUrl: hotspot.sourceUrl || '' };
+      if (hotspot.recommendedAngle && HOTSPOT_ANGLES.some((item) => item[0] === hotspot.recommendedAngle)) state.recommendedAngle = hotspot.recommendedAngle;
+      await wfUpdate(wfId, owner.key, { stage: 'angle', state: JSON.stringify(state) });
+    } else if (action === 'search_retry' && wf.kind === 'hotspot' && wf.stage === 'search_failed') {
+      rateLimit(owner.key);
+      await wfUpdate(wfId, owner.key, { stage: 'searching', state: JSON.stringify({ keyword: state.keyword || '' }) });
+      const job = jobStart(owner, '热点搜索', String(state.keyword || '').slice(0, 60));
+      await job.promise;
+      void runHotspotSearch(ctx, owner, { wfId, keyword: state.keyword || '', accountId: wf.accountId })
+        .finally(() => jobDone(job, 'succeeded', '热点搜索完成').catch(() => {}));
+      return { workflow: wfOut(await arow('SELECT * FROM junshi_workbench_workflows WHERE id=?', [wfId])) };
+    } else if (action === 'search_switch_manual' && wf.kind === 'hotspot' && wf.stage === 'search_failed') {
+      await wfUpdate(wfId, owner.key, { status: 'cancelled' });
+      return { workflow: wfOut(await arow('SELECT * FROM junshi_workbench_workflows WHERE id=?', [wfId])), switchToManual: true };
+    }
+
+    /* 阶段一：各类选择/确认（无 LLM）。⚠️ 必须与上面的搜索分支同一条 if/else 链，
+       否则匹配过搜索分支后会掉进链尾的 WORKFLOW_ACTION_INVALID（2026-10-24 踩过）。 */
+    else if (action === 'select_idea' && wf.kind === 'today' && wf.stage === 'idea') {
       const option = (state.ideaOptions || []).find((item) => item.id === text(ctx.body?.optionId));
       if (!option) throw errors.badRequest('候选不存在', 'VALIDATION_ERROR', { field: 'optionId' });
       state.selectedIdea = option;

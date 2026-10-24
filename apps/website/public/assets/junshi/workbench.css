@@ -332,3 +332,7 @@
   #js-app .wb-flow-entry { width: 100%; }
   #js-app .wb-choice-grid { grid-template-columns: 1fr; }
 }
+#js-app .wb-news-list { display: flex; flex-direction: column; gap: 8px; }
+#js-app .wb-news-card { border: 1px solid var(--hairline); border-radius: var(--r-card); padding: 10px 12px; }
+#js-app .wb-news-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+#js-app .wb-news-card small { color: var(--text-3); }
