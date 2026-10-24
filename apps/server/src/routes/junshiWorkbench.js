@@ -868,7 +868,7 @@ async function startTranscription(owner, { assetRow, source, title, sourceUrl, n
   void (async () => {
     try {
       const policy = await getAiProviderPolicy();
-      const asr = seedanceAsrConfig(policy?.channels);
+      const asr = await seedanceAsrConfig(policy?.channels);
       if (!asr) throw Object.assign(new Error('转写渠道未配置（需要 seedance.nz 渠道 Key 或 JUNSHI_ASR_ENDPOINT/KEY）'), { code: 'WORKBENCH_ASR_NOT_CONFIGURED' });
       const buffer = await assetBytes(assetRow);
       const result = await transcribeMedia({ endpoint: asr.endpoint, apiKey: asr.apiKey, buffer, fileName: assetRow.file_name || `${transcriptId}.mp4`, mimeType: assetRow.mime_type || 'video/mp4' });
