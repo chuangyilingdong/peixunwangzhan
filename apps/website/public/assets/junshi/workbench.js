@@ -217,6 +217,10 @@
     assetFolder: '',
     renders: [],
     renderTimer: null,
+    // 引导式创作工作流（今日选题/爆款复刻/热点结合，参考原版 XiaoLingDang 的顶栏工作流）
+    workflow: null,
+    workflowMeta: null,
+    memories: [],
   };
 
   function accountName(accountId) {
@@ -290,6 +294,8 @@
         call('/assets').catch(function () { return { items: [], folders: [] }; }),
         call('/refs').catch(function () { return { items: [] }; }),
         call('/jobs').catch(function () { return { items: [] }; }),
+        call('/workflows').catch(function () { return { items: [], styles: [], angles: [], strengths: [] }; }),
+        call('/memories').catch(function () { return { items: [] }; }),
       ]);
       state.messages = results[0].messages || [];
       state.copy = results[1].items || [];
@@ -298,6 +304,10 @@
       state.assetFolders = results[3].folders || [];
       state.refs = results[4].items || [];
       state.jobs = results[5].items || [];
+      var wfData = results[6];
+      state.workflow = (wfData.items || []).filter(function (item) { return item.status === 'active'; })[0] || null;
+      state.workflowMeta = { styles: wfData.styles || [], angles: wfData.angles || [], strengths: wfData.strengths || [] };
+      state.memories = results[7].items || [];
       state.loaded = true;
       render();
     } catch (error) {
@@ -317,10 +327,14 @@
       '<button class="wb-suggestion" type="button" data-wb-prompt="帮我做一条 45 秒视频的脚本和分镜，课程、人群和目标都按我的账号档案来。">做一条分镜<small>含口播和拍摄清单</small></button>' +
       '</div></div>';
   }
-  function messageHtml(message) {
+  function messageHtml(message, index) {
     var me = message.role === 'user';
     var content = message.content || '';
     var body = me ? esc(content).replace(/\n/g, '<br>') : (content ? md(content) : '<span class="loading">正在写…</span>');
+    var saveMem = '';
+    if (!me && content && !message.pending) {
+      saveMem = '<button class="wb-mini-btn" type="button" data-mem-save="' + index + '" title="把这条回答里值得长期记住的事实或偏好存进记忆">' + ic('quote', 11) + '记为长期记忆</button>';
+    }
     var sources = '';
     var chunks = message.citations && message.citations.chunks;
     if (!me && chunks && chunks.length) {
@@ -329,14 +343,30 @@
         '</details>';
     }
     return '<div class="wb-msg' + (me ? ' me' : '') + '"><div class="wb-msg-meta">' + (me ? '你' : '小铃铛') + (message.pending ? ' · 正在写' : '') + '</div>' +
-      '<div class="wb-bubble">' + body + '</div>' + sources + '</div>';
+      '<div class="wb-bubble">' + body + '</div>' + saveMem + sources + '</div>';
   }
   function renderMessages(forceBottom) {
     var box = $('#wb-msgs');
     if (!box) return;
     var near = box.scrollHeight - box.scrollTop - box.clientHeight < 140;
     box.innerHTML = state.messages.length ? state.messages.map(messageHtml).join('') : chatEmpty();
+    bindMemSaveButtons();
     if (forceBottom || near) box.scrollTop = box.scrollHeight;
+  }
+  function bindMemSaveButtons() {
+    $$('[data-mem-save]').forEach(function (button) {
+      button.onclick = async function () {
+        var message = state.messages[Number(button.dataset.memSave)];
+        if (!message || !message.content) return;
+        try {
+          var result = await call('/memories', { method: 'POST', body: { kind: 'memory', content: String(message.content).replace(/[#*`>]/g, '').trim().slice(0, 1200), source: '小铃铛对话', accountId: state.accountId } });
+          state.memories.unshift((result.data || result).memory);
+          var counter = $('#wb-mem-open');
+          if (counter) counter.innerHTML = ic('quote', 12) + '记忆(' + state.memories.length + ')';
+          toast('已记入长期记忆，小铃铛之后的回答会参考它', 'success');
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    });
   }
   function bindPromptButtons() {
     $$('[data-wb-prompt]').forEach(function (button) {
@@ -355,7 +385,13 @@
     }
     $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-chat">' +
       '<div class="wb-chat-head"><b>小铃铛</b><span class="wb-note">' + esc(chips.join(' · ') || '先补账号档案，建议会更具体') + '</span>' +
-      '<button class="btn" type="button" id="wb-clear-chat">清空对话</button></div>' +
+      '<div class="wb-flow-entry">' +
+      '<button class="btn" type="button" id="wb-flow-today">' + ic('bulb', 12) + '今日选题</button>' +
+      '<button class="btn" type="button" id="wb-flow-viral">' + ic('copy', 12) + '爆款复刻</button>' +
+      '<button class="btn" type="button" id="wb-flow-hotspot">' + ic('sparkle', 12) + '热点结合</button>' +
+      '<button class="btn" type="button" id="wb-mem-open">' + ic('quote', 12) + '记忆(' + state.memories.length + ')</button>' +
+      '<button class="btn" type="button" id="wb-clear-chat">清空对话</button></div></div>' +
+      '<div id="wb-flow-card">' + workflowCardHtml(state.workflow) + '</div>' +
       '<div class="wb-msgs" id="wb-msgs"></div>' +
       '<div><div class="wb-quick">' +
       '<button class="chip" type="button" data-wb-prompt="给我 3 个今天能拍的选题">今日选题</button>' +
@@ -366,6 +402,11 @@
       '<button class="btn primary" type="button" id="wb-send">' + (state.busy ? ic('stop', 14) + '停止' : ic('arrow-up', 15) + '发送') + '</button></div></div></div></div>';
     renderMessages(true);
     bindPromptButtons();
+    bindWorkflowCard();
+    $('#wb-flow-today').onclick = function () { openFlowStartDialog('today'); };
+    $('#wb-flow-viral').onclick = function () { openFlowStartDialog('viral'); };
+    $('#wb-flow-hotspot').onclick = function () { openFlowStartDialog('hotspot'); };
+    $('#wb-mem-open').onclick = openMemoriesDialog;
     var input = $('#wb-input');
     var send = $('#wb-send');
     function doSend() {
@@ -923,6 +964,238 @@
       (jobs.length ? '<table class="wb-table"><thead><tr><th>类型</th><th>状态</th><th>说明</th><th>创建</th><th>更新</th></tr></thead><tbody>' +
         jobs.map(function (job) { return '<tr><td>' + esc(job.kind) + '</td><td>' + esc(jobStatusText(job.status)) + '</td><td>' + esc(job.detail) + '</td><td>' + fmtDate(job.createdAt) + '</td><td>' + fmtDate(job.updatedAt) + '</td></tr>'; }).join('') + '</tbody></table>' : '<p class="wb-muted">还没有历史任务。</p>') +
       '</div></div></div>';
+  }
+
+  /* ───────────── 引导式创作工作流（今日选题 / 爆款复刻 / 热点结合） ───────────── */
+  function wfStageSteps(wf) {
+    var steps = { today: ['选题', '表达', '版本', '完成'], viral: ['原文', '强度', '版本', '完成'], hotspot: ['热点', '结合方式', '表达', '版本', '完成'] };
+    var order = { transcript: 0, idea: 0, angle: 0, strength: 1, style: wf.kind === 'hotspot' ? 2 : 1, copy: wf.kind === 'hotspot' ? 3 : 2, done: 99 };
+    var list = steps[wf.kind] || [];
+    var current = order[wf.stage] != null ? order[wf.stage] : 0;
+    if (wf.stage === 'done') return list.map(function (label) { return '<span class="done">✓ ' + label + '</span>'; }).join('');
+    return list.map(function (label, index) {
+      return '<span class="' + (index < current ? 'done' : index === current ? 'current' : '') + '">' + (index < current ? '✓ ' : index === current ? '● ' : '') + label + '</span>';
+    }).join('');
+  }
+  function wfOptionCard(wf, option, index) {
+    var isIdea = wf.stage === 'idea';
+    var body = isIdea
+      ? '<p><b>' + esc(option.title || '') + '</b></p><p>钩子：' + esc(option.hook || '') + '</p><p class="wb-note">为什么今天发：' + esc(option.why || '') + '</p>'
+      : '<h4>' + esc(option.title || '版本' + (index + 1)) + '</h4><div class="wb-copy-body">' + md(option.content || '') + '</div>';
+    var actions = '<div class="wb-actions">' +
+      '<button class="btn primary" type="button" data-wf-select="' + esc(option.id) + '">' + (isIdea ? '用这个选题' : '选这个版本') + '</button>' +
+      (isIdea ? '<button class="btn" type="button" data-wf-inspire="' + esc(option.id) + '">存为灵感</button>' : '') +
+      (!isIdea ? '<button class="btn" type="button" data-wf-copy-text="' + esc(option.id) + '">' + ic('copy', 12) + '复制</button>' : '') +
+      '</div>';
+    return '<article class="wb-item wb-flow-option">' + body + actions + '</article>';
+  }
+  function workflowCardHtml(wf) {
+    if (!wf || wf.status !== 'active') return '';
+    var head = '<div class="wb-card-head"><h3>' + esc(wf.kindLabel) + '</h3>' +
+      '<button class="btn" type="button" data-wf-cancel="' + esc(wf.id) + '">放弃</button></div>' +
+      '<div class="wb-flow-steps">' + wfStageSteps(wf) + '</div>' +
+      (wf.state.demo ? '<p class="wb-note">当前模型渠道未返回内容，以下是演示样本。</p>' : '');
+    var body = '';
+    if (wf.kind === 'viral' && wf.stage === 'transcript') {
+      body = '<p class="wb-note">先确认原文（可直接修改）。只学习传播机制，不复用原钩子、原案例、原画面或原音频。</p>' +
+        '<textarea id="wb-wf-transcript" class="wb-script" style="min-height:120px">' + esc(wf.state.transcript || '') + '</textarea>' +
+        '<div class="wb-actions"><button class="btn primary" type="button" data-wf-action="confirm_transcript">确认原文，选改造强度</button></div>';
+    } else if (wf.kind === 'viral' && wf.stage === 'strength') {
+      body = '<h4>选择爆款改造强度</h4><div class="wb-choice-grid">' +
+        (state.workflowMeta.strengths || []).map(function (item) {
+          return '<button class="wb-choice" type="button" data-wf-strength="' + esc(item.id) + '"><b>' + esc(item.label) + '</b><small>' + esc(item.detail) + '</small></button>';
+        }).join('') + '</div>';
+    } else if (wf.kind === 'hotspot' && wf.stage === 'angle') {
+      var hotspot = wf.state.hotspot || {};
+      body = '<div class="wb-flow-hotspot"><b>' + esc(hotspot.title || '') + '</b><p>' + esc(hotspot.fact || '') + '</p>' +
+        (hotspot.sourceUrl ? '<a href="' + esc(hotspot.sourceUrl) + '" target="_blank" rel="noopener noreferrer">查看来源 ↗</a>' : '') + '</div>' +
+        '<h4>这个热点准备怎么用？</h4><div class="wb-choice-grid">' +
+        (state.workflowMeta.angles || []).map(function (item, index) {
+          return '<button class="wb-choice' + (index === 0 ? ' recommended' : '') + '" type="button" data-wf-angle="' + esc(item[0]) + '"><b>' + esc(item[0]) + (index === 0 ? ' · 推荐' : '') + '</b><small>' + esc(item[1]) + '</small></button>';
+        }).join('') + '</div>';
+    } else if (wf.stage === 'style') {
+      var context = wf.kind === 'today'
+        ? '选题：<b>' + esc((wf.state.selectedIdea || {}).title || '') + '</b>'
+        : '结合方式：<b>' + esc(wf.state.angle || '') + '</b>';
+      body = '<p class="wb-note">' + context + '</p><h4>用哪种表达写 3 个版本？</h4><div class="wb-choice-grid">' +
+        (state.workflowMeta.styles || []).map(function (style) {
+          return '<button class="wb-choice" type="button" data-wf-style="' + esc(style) + '"><b>' + esc(style) + '</b></button>';
+        }).join('') + '</div>';
+    } else if (wf.stage === 'idea' || wf.stage === 'copy') {
+      var options = wf.stage === 'idea' ? wf.state.ideaOptions : wf.state.copyOptions;
+      body = (wf.stage === 'idea' ? '<h4>今天最值得拍的 3 个选题</h4>' : '<h4>3 个版本，选一个直接进文案草稿</h4>') +
+        '<div class="wb-cards">' + (options || []).map(function (option, index) { return wfOptionCard(wf, option, index); }).join('') + '</div>' +
+        '<div class="wb-actions"><button class="btn" type="button" data-wf-action="regenerate">' + ic('refresh', 12) + '换一批</button></div>';
+    }
+    return '<div class="wb-card wb-flow-card">' + head + body + '</div>';
+  }
+  function refreshWorkflowCard() {
+    var box = $('#wb-flow-card');
+    if (!box) return;
+    box.innerHTML = workflowCardHtml(state.workflow);
+    bindWorkflowCard();
+  }
+  function bindWorkflowCard() {
+    var card = $('#wb-flow-card');
+    if (!card) return;
+    $$('[data-wf-cancel]').forEach(function (button) {
+      button.onclick = async function () {
+        if (!confirm('放弃当前创作流程？')) return;
+        try { await call('/workflows/' + encodeURIComponent(button.dataset.wfCancel) + '/action', { method: 'POST', body: { action: 'cancel' } }); } catch (error) { toast(error.message, 'error'); }
+        state.workflow = null;
+        refreshWorkflowCard();
+      };
+    });
+    var actionButton = $('[data-wf-action]');
+    if (actionButton) {
+      actionButton.onclick = async function () {
+        var action = actionButton.dataset.wfAction;
+        var payload = { action: action };
+        if (action === 'confirm_transcript') {
+          var textarea = $('#wb-wf-transcript');
+          if (!textarea || !textarea.value.trim()) { toast('原文不能为空', 'error'); return; }
+          payload.text = textarea.value;
+        }
+        var original = actionButton.innerHTML;
+        actionButton.disabled = true; actionButton.innerHTML = ic('loader', 12) + '生成中…';
+        try {
+          var result = await call('/workflows/' + encodeURIComponent(state.workflow.id) + '/action', { method: 'POST', body: payload });
+          state.workflow = (result.data || result).workflow;
+          refreshWorkflowCard();
+        } catch (error) {
+          toast(error.message, 'error');
+          actionButton.disabled = false; actionButton.innerHTML = original;
+        }
+      };
+    }
+    $$('[data-wf-strength]').forEach(function (button) {
+      button.onclick = function () { wfChoose({ action: 'choose_strength', strength: button.dataset.wfStrength }, button); };
+    });
+    $$('[data-wf-angle]').forEach(function (button) {
+      button.onclick = function () { wfChoose({ action: 'select_angle', angle: button.dataset.wfAngle }, button); };
+    });
+    $$('[data-wf-style]').forEach(function (button) {
+      button.onclick = function () { wfChoose({ action: 'select_style', style: button.dataset.wfStyle }, button); };
+    });
+    $$('[data-wf-select]').forEach(function (button) {
+      var optionId = button.dataset.wfSelect;
+      var isIdea = state.workflow && state.workflow.stage === 'idea';
+      button.onclick = function () {
+        wfChoose(isIdea ? { action: 'select_idea', optionId: optionId } : { action: 'select_copy', optionId: optionId }, button);
+      };
+    });
+    $$('[data-wf-copy-text]').forEach(function (button) {
+      button.onclick = function () {
+        var options = (state.workflow && state.workflow.state.copyOptions) || [];
+        var option = options.filter(function (item) { return item.id === button.dataset.wfCopyText; })[0];
+        if (option && navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(option.content || '').then(function () { toast('已复制', 'success'); });
+        }
+      };
+    });
+    $$('[data-wf-inspire]').forEach(function (button) {
+      button.onclick = async function () {
+        var options = (state.workflow && state.workflow.state.ideaOptions) || [];
+        var option = options.filter(function (item) { return item.id === button.dataset.wfInspire; })[0];
+        if (!option) return;
+        try {
+          var saved = await call('/memories', { method: 'POST', body: { kind: 'inspiration', content: (option.title || '') + '——' + (option.hook || ''), source: '今日选题', accountId: state.accountId } });
+          state.memories.unshift((saved.data || saved).memory);
+          toast('已存为灵感', 'success');
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    });
+  }
+  async function wfChoose(payload, button) {
+    if (button) { button.disabled = true; }
+    try {
+      var result = await call('/workflows/' + encodeURIComponent(state.workflow.id) + '/action', { method: 'POST', body: payload });
+      var data = result.data || result;
+      if (data.workflow) state.workflow = data.workflow;
+      if (data.draft) {
+        state.copy.unshift(data.draft);
+        toast('已选定，文案已存入「文案大脑」', 'success');
+      }
+      refreshWorkflowCard();
+    } catch (error) {
+      toast(error.message, 'error');
+      if (button) button.disabled = false;
+    }
+  }
+  function openFlowStartDialog(kind) {
+    if (state.workflow && state.workflow.status === 'active') { toast('先完成或放弃当前的创作流程', 'error'); return; }
+    var titles = { today: '今日选题', viral: '爆款复刻', hotspot: '热点结合' };
+    var form = '';
+    if (kind === 'today') {
+      form = '<label class="wb-field full"><span>今天的方向（可留空）</span><input id="wb-flow-goal" placeholder="例如：寒假班 / 续费 / 到店体验"></label>';
+    } else if (kind === 'viral') {
+      form = '<p class="wb-note">粘贴一条爆款原文（口播文字或文案）。系统只学习它的传播机制，产出合规改写，不复用原钩子、原案例、原画面或原音频。</p>' +
+        '<label class="wb-field full"><span>爆款原文</span><textarea id="wb-flow-source" placeholder="把原文粘进来…"></textarea></label>';
+    } else {
+      form = '<p class="wb-note">把你今天刷到、想借的热点填进来（手机上看到的新闻即可）。系统只引用你写的事实，不编造细节。</p>' +
+        '<label class="wb-field full"><span>热点标题</span><input id="wb-flow-title" placeholder="例如：多地推行寒假托管"></label>' +
+        '<label class="wb-field full"><span>事实描述</span><textarea id="wb-flow-fact" placeholder="这条新闻说了什么（1-3 句）"></textarea></label>' +
+        '<label class="wb-field full"><span>来源链接（可留空）</span><input id="wb-flow-url" placeholder="https://…"></label>';
+    }
+    showDialog(titles[kind], '<div class="wb-form">' + form +
+      '<div class="wb-actions"><button class="btn primary" type="button" id="wb-flow-start">' + ic('sparkle', 12) + '开始</button></div></div>');
+    $('#wb-flow-start').onclick = async function () {
+      var button = this;
+      button.disabled = true; button.innerHTML = ic('loader', 12) + '生成中…';
+      var input = {};
+      if (kind === 'today') input.goal = ($('#wb-flow-goal') || {}).value || '';
+      if (kind === 'viral') input.sourceText = ($('#wb-flow-source') || {}).value || '';
+      if (kind === 'hotspot') {
+        input.title = ($('#wb-flow-title') || {}).value || '';
+        input.fact = ($('#wb-flow-fact') || {}).value || '';
+        input.sourceUrl = ($('#wb-flow-url') || {}).value || '';
+      }
+      try {
+        var result = await call('/workflows', { method: 'POST', body: { kind: kind, accountId: state.accountId, input: input } });
+        state.workflow = (result.data || result).workflow;
+        closeDialog();
+        if (state.tab !== 'chat') setTab('chat'); else refreshWorkflowCard();
+        var box = $('#wb-flow-card');
+        if (box) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (error) {
+        toast(error.message, 'error');
+        button.disabled = false; button.innerHTML = ic('sparkle', 12) + '开始';
+      }
+    };
+  }
+  function openMemoriesDialog() {
+    var groups = [
+      ['长期记忆', state.memories.filter(function (item) { return item.kind === 'memory'; })],
+      ['灵感收藏', state.memories.filter(function (item) { return item.kind === 'inspiration'; })],
+    ];
+    showDialog('记忆与灵感', '<p class="wb-note">长期记忆会进入小铃铛的每次回答；灵感是存下来的选题。</p>' +
+      '<div class="wb-mem-add"><input id="wb-mem-new" placeholder="手动记一条：例如「我们体验课转化率 40%，主打寒暑假」"><button class="btn" type="button" id="wb-mem-add-btn">记一条</button></div>' +
+      groups.map(function (group) {
+        return '<h4 style="margin:12px 0 6px">' + group[0] + '（' + group[1].length + '）</h4>' +
+          (group[1].length ? group[1].map(function (item) {
+            return '<div class="wb-mem-item"><p>' + esc(item.content) + '</p><small>' + esc(item.source || '') + ' · ' + fmtDate(item.createdAt) + '</small>' +
+              '<button class="btn" type="button" data-mem-del="' + esc(item.id) + '">' + ic('trash', 11) + '</button></div>';
+          }).join('') : '<p class="wb-muted">还没有。在小铃铛的回答下点「记为长期记忆」，或在今日选题里存灵感。</p>');
+      }).join(''));
+    $('#wb-mem-add-btn').onclick = async function () {
+      var value = String(($('#wb-mem-new') || {}).value || '').trim();
+      if (!value) return;
+      try {
+        var result = await call('/memories', { method: 'POST', body: { kind: 'memory', content: value, source: '手动添加', accountId: state.accountId } });
+        state.memories.unshift((result.data || result).memory);
+        openMemoriesDialog();
+        toast('已记下', 'success');
+      } catch (error) { toast(error.message, 'error'); }
+    };
+    $$('[data-mem-del]').forEach(function (button) {
+      button.onclick = async function () {
+        try {
+          await call('/memories/' + encodeURIComponent(button.dataset.memDel), { method: 'DELETE' });
+          state.memories = state.memories.filter(function (item) { return item.id !== button.dataset.memDel; });
+          openMemoriesDialog();
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    });
   }
 
   /* ───────────── 合规体检（复用 junshi 的规则引擎） ───────────── */

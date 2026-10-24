@@ -20,13 +20,22 @@ import { maxUploadBytes, parseMultipartFormData, persistSecureUpload, uploadRoot
 import { ossRedirectUrl, removeObject, rowStorageBackend } from '../services/fileStorage.js';
 import {
   WORKBENCH_SYSTEM,
+  COPY_STYLES,
+  HOTSPOT_ANGLES,
+  VIRAL_STRENGTHS,
   buildChatSystem,
   buildCopyPrompt,
+  buildHotspotCopyPrompt,
   buildSrt,
+  buildTodayIdeasPrompt,
   buildVideoPrompt,
+  buildViralRewritePrompt,
   demoChat,
   demoCopy,
+  demoHotspotCopies,
+  demoIdeas,
   demoVideo,
+  demoViralRewrites,
 } from '../services/junshiWorkbenchContent.js';
 
 const EMPTY_PROFILE = {
@@ -424,12 +433,13 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
     const history = historyRows.reverse().map((row) => ({ role: row.role, content: String(row.content || '').slice(0, 4000) }));
     const chatAccountId = await resolveAccountId(owner.key, ctx.body?.accountId);
     const profile = (await readProfile(owner.key, chatAccountId)).profile;
+    const memories = await arows("SELECT kind, content FROM junshi_workbench_memories WHERE owner_key=? AND account_id=? ORDER BY created_at DESC LIMIT 12", [owner.key, chatAccountId]).catch(() => []);
     const orgProfile = await orgProfileText(owner.key);
     const refs = await arows('SELECT * FROM junshi_workbench_refs WHERE owner_key=? ORDER BY created_at DESC LIMIT 5', [owner.key]);
     const chunks = retrieve(message);
     const citations = citationsOf(chunks);
     const kb = knowledge();
-    const system = buildChatSystem({ profile, orgProfile, chunks, refs, calendar: kb.calendar, hooks: kb.hooks });
+    const system = buildChatSystem({ profile, orgProfile, chunks, refs, calendar: kb.calendar, hooks: kb.hooks, memories });
     const messages = [{ role: 'system', content: system }, ...history];
 
     sseOpen(ctx);
@@ -650,7 +660,296 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
     return { __streamed: true };
   }
 
-  /* ── 真实视频渲染（走平台既有 VIDEO 渠道：提交 + 轮询 + 成本观测都在 provider 层） ── */
+/* ───────────── 引导式创作工作流（今日选题/爆款复刻/热点结合）+ 长期记忆 ───────────── */
+const WORKFLOW_KINDS = { today: '今日选题', viral: '爆款复刻', hotspot: '热点结合' };
+const WORKFLOW_STAGE_LABELS = {
+  idea: '选选题', style: '选表达', copy: '选版本', done: '完成',
+  transcript: '确认原文', strength: '选改造强度', angle: '选结合方式',
+};
+
+/** 模型被要求「只输出 JSON 数组」，但仍可能带围栏或前后杂字：宽松取出第一个 JSON 数组。 */
+function parseLooseJsonArray(text) {
+  const raw = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '');
+  const start = raw.indexOf('[');
+  const end = raw.lastIndexOf(']');
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1));
+    return Array.isArray(parsed) ? parsed : null;
+  } catch { return null; }
+}
+
+function wfOut(row) {
+  let input = {}; let state = {};
+  try { input = JSON.parse(row.input || '{}'); } catch { /* ignore */ }
+  try { state = JSON.parse(row.state || '{}'); } catch { /* ignore */ }
+  return {
+    id: row.id,
+    kind: row.kind,
+    kindLabel: WORKFLOW_KINDS[row.kind] || row.kind,
+    accountId: row.account_id || 'default',
+    stage: row.stage,
+    stageLabel: WORKFLOW_STAGE_LABELS[row.stage] || row.stage,
+    status: row.status,
+    error: row.error || '',
+    draftId: row.draft_id || null,
+    input,
+    state,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function wfUpdate(id, ownerKey, fields) {
+  const sets = Object.keys(fields).map((key) => `${key}=?`).join(', ');
+  await aq(`UPDATE junshi_workbench_workflows SET ${sets}, updated_at=? WHERE id=? AND owner_key=?`,
+    [...Object.values(fields), nowIso(), id, ownerKey]);
+}
+
+/** 走 TEXT 渠道生成一组候选；mock/空回执落演示内容（与文案大脑同一口径）。 */
+async function generateOptions(ctx, owner, { prompt, demoContent }) {
+  const providerMock = await textProviderIsMock().catch(() => false);
+  const result = providerMock ? { text: '', provider: 'demo' } : await collectText(ctx, { system: WORKBENCH_SYSTEM, user: prompt });
+  const parsed = mockOrEmpty(result) ? null : parseLooseJsonArray(result.text);
+  if (parsed && parsed.length) {
+    return { options: parsed.filter((item) => item && typeof item === 'object').slice(0, 3).map((item, index) => ({ id: `opt${index + 1}`, ...item })), demo: false };
+  }
+  return { options: demoContent.map((item, index) => ({ id: `opt${index + 1}`, ...item })), demo: true };
+}
+
+async function workflowsRoute(ctx, rest, search, method, owner) {
+  /* 列表：进行中的排最前，再带最近 10 条 */
+  if (rest === '/workflows' && method === 'GET') {
+    const accountIdFilter = text(search.get('accountId'));
+    const rows = accountIdFilter
+      ? await arows('SELECT * FROM junshi_workbench_workflows WHERE owner_key=? AND account_id=? ORDER BY created_at DESC LIMIT 30', [owner.key, accountIdFilter])
+      : await arows('SELECT * FROM junshi_workbench_workflows WHERE owner_key=? ORDER BY created_at DESC LIMIT 30', [owner.key]);
+    const items = rows.map(wfOut);
+    items.sort((a, b) => (b.status === 'active') - (a.status === 'active'));
+    return { items: items.slice(0, 11), styles: COPY_STYLES, angles: HOTSPOT_ANGLES, strengths: VIRAL_STRENGTHS };
+  }
+
+  /* 发起：today 先出 3 个选题；viral 先确认原文；hotspot 先选结合方式 */
+  if (rest === '/workflows' && method === 'POST') {
+    const kind = text(ctx.body?.kind);
+    if (!WORKFLOW_KINDS[kind]) throw errors.badRequest('未知的工作流类型', 'VALIDATION_ERROR', { field: 'kind' });
+    const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
+    const input = ctx.body?.input && typeof ctx.body.input === 'object' ? ctx.body.input : {};
+    let stage; let state = {};
+    const jobLabel = WORKFLOW_KINDS[kind];
+    if (kind === 'today') {
+      const goal = text(input.goal).slice(0, 200);
+      rateLimit(owner.key);
+      const job = jobStart(owner, jobLabel, goal ? `方向：${goal}` : '不限方向');
+      await job.promise;
+      try {
+        const profile = (await readProfile(owner.key, accountId)).profile;
+        const orgProfile = await orgProfileText(owner.key);
+        const chunks = retrieve(goal || '今日选题', ['营销', '文案', '转化'], 4);
+        const generated = await generateOptions(ctx, owner, {
+          prompt: buildTodayIdeasPrompt({ profile, orgProfile, goal, chunks }),
+          demoContent: demoIdeas(profile, goal),
+        });
+        stage = 'idea';
+        state = { goal, ideaOptions: generated.options, demo: generated.demo };
+        await jobDone(job, 'succeeded', `已给出 ${generated.options.length} 个选题候选`);
+      } catch (error) {
+        await jobDone(job, 'failed', String(error?.message || error).slice(0, 1000));
+        throw error;
+      }
+    } else if (kind === 'viral') {
+      const sourceText = text(input.sourceText).slice(0, 4000);
+      if (!sourceText) throw errors.badRequest('请粘贴爆款原文（口播文字或文案）', 'VALIDATION_ERROR', { field: 'sourceText' });
+      stage = 'transcript';
+      state = { transcript: sourceText };
+    } else {
+      const title = text(input.title).slice(0, 200);
+      const fact = text(input.fact).slice(0, 2000);
+      if (!title || !fact) throw errors.badRequest('热点需要标题和事实描述', 'VALIDATION_ERROR', { field: 'title' });
+      stage = 'angle';
+      state = { hotspot: { title, fact, sourceUrl: text(input.sourceUrl).slice(0, 500) } };
+    }
+    const wfId = id('jwwf');
+    const at = nowIso();
+    await aq('INSERT INTO junshi_workbench_workflows (id,owner_key,org_id,account_id,kind,stage,input,state,status,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+      [wfId, owner.key, owner.orgId, accountId, kind, stage, JSON.stringify(input), JSON.stringify(state), 'active', '', at, at]);
+    return { workflow: wfOut(await arow('SELECT * FROM junshi_workbench_workflows WHERE id=?', [wfId])) };
+  }
+
+  /* 推进 / 取消 */
+  const actionMatch = rest.match(/^\/workflows\/([^/]+)\/action$/);
+  if (actionMatch && method === 'POST') {
+    const wfId = decodeURIComponent(actionMatch[1]);
+    const row = await arow('SELECT * FROM junshi_workbench_workflows WHERE id=? AND owner_key=?', [wfId, owner.key]);
+    if (!row) throw errors.notFound('工作流不存在', 'NOT_FOUND');
+    if (row.status !== 'active') throw errors.conflict('这个工作流已经结束', 'WORKFLOW_NOT_ACTIVE');
+    const wf = wfOut(row);
+    const action = text(ctx.body?.action);
+    const state = { ...wf.state };
+    const profile = async () => (await readProfile(owner.key, wf.accountId)).profile;
+    const orgProfile = () => orgProfileText(owner.key);
+
+    if (action === 'cancel') {
+      await wfUpdate(wfId, owner.key, { status: 'cancelled' });
+      return { workflow: wfOut(await arow('SELECT * FROM junshi_workbench_workflows WHERE id=?', [wfId])) };
+    }
+
+    /* 阶段一：各类选择/确认（无 LLM） */
+    if (action === 'select_idea' && wf.kind === 'today' && wf.stage === 'idea') {
+      const option = (state.ideaOptions || []).find((item) => item.id === text(ctx.body?.optionId));
+      if (!option) throw errors.badRequest('候选不存在', 'VALIDATION_ERROR', { field: 'optionId' });
+      state.selectedIdea = option;
+      await wfUpdate(wfId, owner.key, { stage: 'style', state: JSON.stringify(state) });
+    } else if (action === 'select_angle' && wf.kind === 'hotspot' && wf.stage === 'angle') {
+      const angle = text(ctx.body?.angle);
+      if (!HOTSPOT_ANGLES.some((item) => item[0] === angle)) throw errors.badRequest('未知结合方式', 'VALIDATION_ERROR', { field: 'angle' });
+      state.angle = angle;
+      await wfUpdate(wfId, owner.key, { stage: 'style', state: JSON.stringify(state) });
+    } else if (action === 'confirm_transcript' && wf.kind === 'viral' && wf.stage === 'transcript') {
+      const transcript = text(ctx.body?.text).slice(0, 4000);
+      if (!transcript) throw errors.badRequest('原文不能为空', 'VALIDATION_ERROR', { field: 'text' });
+      state.transcript = transcript;
+      await wfUpdate(wfId, owner.key, { stage: 'strength', state: JSON.stringify(state) });
+    } else if (action === 'choose_strength' && wf.kind === 'viral' && wf.stage === 'strength') {
+      const strength = text(ctx.body?.strength);
+      if (!VIRAL_STRENGTHS.some((item) => item.id === strength)) throw errors.badRequest('未知改造强度', 'VALIDATION_ERROR', { field: 'strength' });
+      state.strength = strength;
+      rateLimit(owner.key);
+      const job = jobStart(owner, WORKFLOW_KINDS.viral, `强度：${VIRAL_STRENGTHS.find((item) => item.id === strength).label}`);
+      await job.promise;
+      try {
+        const generated = await generateOptions(ctx, owner, {
+          prompt: buildViralRewritePrompt({ profile: await profile(), orgProfile: await orgProfile(), sourceText: state.transcript, strength }),
+          demoContent: demoViralRewrites(await profile(), state.transcript, strength),
+        });
+        state.copyOptions = generated.options;
+        state.demo = generated.demo;
+        await wfUpdate(wfId, owner.key, { stage: 'copy', state: JSON.stringify(state) });
+        await jobDone(job, 'succeeded', `已给出 ${generated.options.length} 个合规改写版本`);
+      } catch (error) {
+        await jobDone(job, 'failed', String(error?.message || error).slice(0, 1000));
+        throw error;
+      }
+    } else if (action === 'select_style' && wf.stage === 'style') {
+      const style = text(ctx.body?.style) || '口语化';
+      if (!COPY_STYLES.includes(style)) throw errors.badRequest('未知表达风格', 'VALIDATION_ERROR', { field: 'style' });
+      state.style = style;
+      rateLimit(owner.key);
+      const job = jobStart(owner, wf.kindLabel, `${style} · 3 个版本`);
+      await job.promise;
+      try {
+        const profileData = await profile();
+        const orgProfileTextValue = await orgProfile();
+        let prompt; let demoContent;
+        if (wf.kind === 'today') {
+          const idea = state.selectedIdea || {};
+          prompt = buildHotspotCopyPrompt({ profile: profileData, orgProfile: orgProfileTextValue, hotspot: { title: idea.title || '', fact: `选题：${idea.title || ''}。钩子：${idea.hook || ''}。适合原因：${idea.why || ''}` }, angle: '热点做引子', style });
+          demoContent = demoHotspotCopies(profileData, { title: idea.title, fact: idea.hook }, '热点做引子', style);
+        } else {
+          prompt = buildHotspotCopyPrompt({ profile: profileData, orgProfile: orgProfileTextValue, hotspot: state.hotspot || {}, angle: state.angle || '热点做引子', style });
+          demoContent = demoHotspotCopies(profileData, state.hotspot, state.angle, style);
+        }
+        const generated = await generateOptions(ctx, owner, { prompt, demoContent });
+        state.copyOptions = generated.options;
+        state.demo = generated.demo;
+        await wfUpdate(wfId, owner.key, { stage: 'copy', state: JSON.stringify(state) });
+        await jobDone(job, 'succeeded', `已给出 ${generated.options.length} 个版本`);
+      } catch (error) {
+        await jobDone(job, 'failed', String(error?.message || error).slice(0, 1000));
+        throw error;
+      }
+    } else if (action === 'regenerate' && (wf.stage === 'idea' || wf.stage === 'copy')) {
+      rateLimit(owner.key);
+      const job = jobStart(owner, wf.kindLabel, '换一批');
+      await job.promise;
+      try {
+        const profileData = await profile();
+        const orgProfileTextValue = await orgProfile();
+        let generated;
+        if (wf.stage === 'idea') {
+          generated = await generateOptions(ctx, owner, {
+            prompt: buildTodayIdeasPrompt({ profile: profileData, orgProfile: orgProfileTextValue, goal: state.goal, chunks: retrieve(state.goal || '今日选题', ['营销', '文案'], 4) }),
+            demoContent: demoIdeas(profileData, state.goal),
+          });
+          state.ideaOptions = generated.options;
+        } else {
+          generated = await generateOptions(ctx, owner, {
+            prompt: wf.kind === 'viral'
+              ? buildViralRewritePrompt({ profile: profileData, orgProfile: orgProfileTextValue, sourceText: state.transcript, strength: state.strength })
+              : buildHotspotCopyPrompt({ profile: profileData, orgProfile: orgProfileTextValue, hotspot: state.hotspot || {}, angle: state.angle || '热点做引子', style: state.style }),
+            demoContent: wf.kind === 'viral'
+              ? demoViralRewrites(profileData, state.transcript, state.strength)
+              : demoHotspotCopies(profileData, state.hotspot, state.angle, state.style),
+          });
+          state.copyOptions = generated.options;
+        }
+        state.demo = generated.demo;
+        await wfUpdate(wfId, owner.key, { state: JSON.stringify(state) });
+        await jobDone(job, 'succeeded', '已换一批候选');
+      } catch (error) {
+        await jobDone(job, 'failed', String(error?.message || error).slice(0, 1000));
+        throw error;
+      }
+    } else if (action === 'select_copy' && wf.stage === 'copy') {
+      const option = (state.copyOptions || []).find((item) => item.id === text(ctx.body?.optionId));
+      if (!option) throw errors.badRequest('候选不存在', 'VALIDATION_ERROR', { field: 'optionId' });
+      const draftId = id('jwc');
+      const at = nowIso();
+      const topic = String(option.title || wf.input?.title || wf.kindLabel).slice(0, 200);
+      const content = String(option.content || '').trim()
+        || `**${option.title || ''}**\n${option.hook || ''}\n${option.why || ''}`;
+      await aq('INSERT INTO junshi_workbench_copy_drafts (id,owner_key,org_id,account_id,topic,style,content,created_at) VALUES (?,?,?,?,?,?,?,?)',
+        [draftId, owner.key, owner.orgId, wf.accountId, topic, state.style || '口语化', content, at]);
+      await wfUpdate(wfId, owner.key, { status: 'done', stage: 'done', draft_id: draftId, state: JSON.stringify({ ...state, selectedCopy: option }) });
+      return {
+        workflow: wfOut(await arow('SELECT * FROM junshi_workbench_workflows WHERE id=?', [wfId])),
+        draft: { id: draftId, topic, style: state.style || '口语化', content, accountId: wf.accountId, createdAt: at },
+      };
+    } else {
+      throw errors.badRequest('当前阶段不支持这个操作', 'WORKFLOW_ACTION_INVALID');
+    }
+    return { workflow: wfOut(await arow('SELECT * FROM junshi_workbench_workflows WHERE id=?', [wfId])) };
+  }
+
+  /* ── 长期记忆 / 灵感 ── */
+  if (rest === '/memories' && method === 'GET') {
+    const accountIdFilter = text(search.get('accountId'));
+    const kindFilter = text(search.get('kind'));
+    const conditions = ['owner_key=?'];
+    const params = [owner.key];
+    if (accountIdFilter) { conditions.push('account_id=?'); params.push(accountIdFilter); }
+    if (kindFilter) { conditions.push('kind=?'); params.push(kindFilter); }
+    const rows = await arows(`SELECT * FROM junshi_workbench_memories WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC LIMIT 100`, params);
+    return {
+      items: rows.map((row) => ({
+        id: row.id, kind: row.kind, content: row.content, source: row.source,
+        accountId: row.account_id || 'default', createdAt: row.created_at,
+      })),
+    };
+  }
+  if (rest === '/memories' && method === 'POST') {
+    const content = text(ctx.body?.content);
+    if (!content) throw errors.badRequest('内容不能为空', 'VALIDATION_ERROR', { field: 'content' });
+    if (content.length > 2000) throw errors.badRequest('记忆最多 2000 字', 'VALIDATION_ERROR', { field: 'content' });
+    const kind = text(ctx.body?.kind) === 'inspiration' ? 'inspiration' : 'memory';
+    const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
+    const source = text(ctx.body?.source).slice(0, 200);
+    const memoryId = id('jwm2');
+    const at = nowIso();
+    await aq('INSERT INTO junshi_workbench_memories (id,owner_key,org_id,account_id,kind,content,source,created_at) VALUES (?,?,?,?,?,?,?,?)',
+      [memoryId, owner.key, owner.orgId, accountId, kind, content, source, at]);
+    return { memory: { id: memoryId, kind, content, source, accountId, createdAt: at } };
+  }
+  if (rest.startsWith('/memories/') && method === 'DELETE') {
+    const memoryId = decodeURIComponent(rest.slice('/memories/'.length));
+    await aq('DELETE FROM junshi_workbench_memories WHERE id=? AND owner_key=?', [memoryId, owner.key]);
+    return { ok: true };
+  }
+
+  return null;
+}
+
+/* ── 真实视频渲染（走平台既有 VIDEO 渠道：提交 + 轮询 + 成本观测都在 provider 层） ── */
   if (rest === '/video/render' && method === 'POST') {
     const prompt = text(ctx.body?.prompt);
     if (!prompt) throw errors.badRequest('请填写要生成视频的画面描述或口播', 'VALIDATION_ERROR', { field: 'prompt' });
@@ -874,6 +1173,10 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
       })),
     };
   }
+
+  /* ── 引导式创作工作流 + 长期记忆（今日选题/爆款复刻/热点结合/记忆） ── */
+  const workflowResult = await workflowsRoute(ctx, rest, search, method, owner);
+  if (workflowResult) return workflowResult;
 
   return null;
 }

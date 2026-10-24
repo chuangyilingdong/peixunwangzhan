@@ -1349,6 +1349,38 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_video_renders (
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_render_owner ON junshi_workbench_video_renders(owner_key, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_render_project ON junshi_workbench_video_renders(project_id, created_at DESC);
+
+-- 引导式创作工作流（今日选题/爆款复刻/热点结合，链路参考原版 XiaoLingDang 的会话状态机）。
+-- input/state 存 JSON 文本：input=发起参数，state=阶段间的候选与选择。
+CREATE TABLE IF NOT EXISTS junshi_workbench_workflows (
+  id         TEXT NOT NULL PRIMARY KEY,
+  owner_key  TEXT NOT NULL,
+  org_id     TEXT,
+  account_id TEXT NOT NULL DEFAULT 'default',
+  kind       TEXT NOT NULL,
+  stage      TEXT NOT NULL,
+  input      TEXT NOT NULL DEFAULT '{}',
+  state      TEXT NOT NULL DEFAULT '{}',
+  status     TEXT NOT NULL DEFAULT 'active',
+  error      TEXT NOT NULL DEFAULT '',
+  draft_id   TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_wf_owner ON junshi_workbench_workflows(owner_key, created_at DESC);
+
+-- 长期记忆 + 灵感收藏（kind: memory / inspiration），注入小铃铛对话上下文。
+CREATE TABLE IF NOT EXISTS junshi_workbench_memories (
+  id         TEXT NOT NULL PRIMARY KEY,
+  owner_key  TEXT NOT NULL,
+  org_id     TEXT,
+  account_id TEXT NOT NULL DEFAULT 'default',
+  kind       TEXT NOT NULL DEFAULT 'memory',
+  content    TEXT NOT NULL,
+  source     TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_mem_owner ON junshi_workbench_memories(owner_key, created_at DESC);
 `;
 
 db.exec(SCHEMA);

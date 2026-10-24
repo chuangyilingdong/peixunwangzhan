@@ -102,7 +102,8 @@
 /* chat */
 #js-app .wb-chat {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  /* 第 2 行是创作流程卡（#wb-flow-card）：没流程时是空 div，高度塌缩为 0，不影响原布局 */
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   min-height: 0;
   flex: 1;
   background: var(--surface);
@@ -299,4 +300,35 @@
 @media (max-width: 820px) {
   #js-app .wb-inline { width: 100%; }
   #js-app .wb-render-video { max-width: 100%; }
+}
+
+/* ── 三期：引导式创作工作流 + 记忆/灵感 ── */
+#js-app .wb-flow-entry { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+#js-app .wb-flow-card { border: 1px solid var(--accent, #4b7bec); }
+#js-app .wb-flow-steps { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-3); margin: 4px 0 8px; }
+#js-app .wb-flow-steps .done { color: var(--green, #2f9e63); }
+#js-app .wb-flow-steps .current { color: var(--accent, #4b7bec); font-weight: 600; }
+#js-app .wb-choice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+#js-app .wb-choice {
+  text-align: left; border: 1px solid var(--hairline); border-radius: var(--r-card); background: var(--surface);
+  padding: 10px 12px; cursor: pointer; font: inherit; color: var(--text); display: flex; flex-direction: column; gap: 4px;
+}
+#js-app .wb-choice:hover { border-color: var(--accent, #4b7bec); }
+#js-app .wb-choice.recommended { border-color: var(--accent, #4b7bec); }
+#js-app .wb-choice small { color: var(--text-3); font-size: 11.5px; }
+#js-app .wb-flow-hotspot { border-left: 3px solid var(--accent, #4b7bec); padding: 2px 0 2px 10px; margin: 6px 0 10px; }
+#js-app .wb-flow-hotspot p { color: var(--text-2); font-size: 12.5px; }
+#js-app .wb-mini-btn {
+  border: 0; background: none; color: var(--text-3); font-size: 11px; cursor: pointer; padding: 3px 0;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+#js-app .wb-mini-btn:hover { color: var(--accent, #4b7bec); }
+#js-app .wb-mem-add { display: flex; gap: 8px; margin-top: 8px; }
+#js-app .wb-mem-add input { flex: 1; border: 1px solid var(--hairline); border-radius: var(--r-pill); padding: 7px 12px; font: inherit; background: var(--surface); color: var(--text); }
+#js-app .wb-mem-item { border-bottom: 1px solid var(--hairline); padding: 8px 0; display: flex; align-items: flex-start; gap: 8px; }
+#js-app .wb-mem-item p { flex: 1; margin: 0; font-size: 12.5px; }
+#js-app .wb-mem-item small { color: var(--text-3); display: block; flex-basis: 100%; }
+@media (max-width: 820px) {
+  #js-app .wb-flow-entry { width: 100%; }
+  #js-app .wb-choice-grid { grid-template-columns: 1fr; }
 }

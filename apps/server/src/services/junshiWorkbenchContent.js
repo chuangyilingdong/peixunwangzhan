@@ -72,12 +72,13 @@ export const WORKBENCH_SYSTEM = `你是「小铃铛」，招生军师的内容�
 5. 中文口语化，短段落，能列点就列点；不要用「作为AI」这类自我指称。
 6. 如果缺少关键信息，只问 1-2 个最重要的问题，不要一次问一堆。`;
 
-export function buildChatSystem({ profile, orgProfile, chunks, refs, calendar, hooks }) {
+export function buildChatSystem({ profile, orgProfile, chunks, refs, calendar, hooks, memories }) {
+  const memoryText = memoriesBlock(memories || []);
   return `${WORKBENCH_SYSTEM}
 
 【这家机构的情况（来自机构画像）】
 ${orgProfile || '机构画像未填写。需要品类、价格、校区等信息时，先问最关键的一项。'}
-
+${memoryText ? `\n${memoryText}\n` : ''}
 【本月节点（来自招生军师的全年日历，安排内容时优先使用）】
 ${calendarBlock(calendar, currentMonth()) || '（本月还没有配置节点）'}
 
@@ -356,4 +357,133 @@ export function buildSrt(script) {
     cursor += duration;
     return cue;
   }).join('\n');
+}
+
+/* ───────────── 引导式创作工作流（今日选题 / 爆款复刻 / 热点结合，2026-10-24 二期+） ─────────────
+ * 交互链路参考原版 XiaoLingDang 的会话状态机（creative-sessions / viral-recreations / hotspot-combinations）：
+ * 分阶段出候选 → 机构选择 → 进入下一阶段；文案阶段一次出 3 个版本，可整批重生成。
+ * 合规口径与原版一致：爆款复刻只学习传播机制，不复用原钩子、原案例、原画面或原音频。 */
+
+export function memoriesBlock(memories = []) {
+  if (!memories.length) return '';
+  const lines = memories.slice(0, 12).map((item, index) => `${index + 1}. ${String(item.content || '').slice(0, 300)}`);
+  return `【长期记忆（机构确认过的事实与偏好，回答时遵循）】\n${lines.join('\n')}`;
+}
+
+export const COPY_STYLES = ['口语化', '专业理性', '故事感', '犀利反常识'];
+
+export const HOTSPOT_ANGLES = [
+  ['热点做引子', '先用热点把注意力拉进来，再自然转回账号自己的观点和问题。'],
+  ['热点做论据', '把热点作为一个现实证据，用来支撑账号要表达的核心观点。'],
+  ['热点做趋势信号', '把热点视为正在发生的趋势信号，解释它对受众意味着什么。'],
+  ['热点做反例', '借热点指出一个常见误区或反面现象，再给出账号自己的判断。'],
+  ['热点做冲突', '把热点与另一种现实放在一起形成反差或冲突，推动观点展开。'],
+  ['热点做案例', '把热点作为一个现实案例，再提炼可迁移的方法或结论。'],
+  ['热点做类比', '把热点中的逻辑类比到账号自己的领域，让复杂观点更容易理解。'],
+];
+
+export const VIRAL_STRENGTHS = [
+  { id: 'low', label: '低强度', detail: '只借鉴选题机制，结构与表达全部重建。' },
+  { id: 'medium', label: '中强度', detail: '借鉴冲突与信息递进，换主题、证据、表达与镜头。' },
+  { id: 'high', label: '高强度', detail: '尽量保留传播机制和节奏，但不复用原句、原素材或一一对应镜头。' },
+];
+
+const JSON_ONLY = '只输出一个 JSON 数组，不要输出任何解释、前言或代码围栏。';
+
+export function buildTodayIdeasPrompt({ profile, orgProfile, goal, chunks }) {
+  return `【任务】为这个内容账号生成 3 个今天就能拍的选题候选。
+
+【机构画像】
+${orgProfile || '（未填写）'}
+
+【内容账号档案】
+${workbenchProfileBlock(profile)}
+
+【机构资料库相关原文】
+${chunkBlock(chunks)}
+
+【本次方向】${clean(goal) || '不限，优先结合本月招生节点和账号当前目标'}
+
+【每个候选包含】title（选题标题，20 字内）、hook（开头 3 秒怎么说，60 字内）、why（为什么今天适合这个账号发，80 字内）。
+
+${JSON_ONLY}
+格式：[{"title":"…","hook":"…","why":"…"}]，正好 3 个对象。`;
+}
+
+export function buildViralRewritePrompt({ profile, orgProfile, sourceText, strength }) {
+  const rule = { low: '低强度：只借鉴选题机制，结构与表达全部重建。', medium: '中强度：借鉴冲突与信息递进，换主题、证据、表达与镜头。', high: '高强度：尽量保留传播机制和节奏，但不复用原句、原素材或一一对应镜头。' }[strength] || '';
+  return `【任务】参考下面这条爆款原文，为这个内容账号产出 3 个合规的改写版本。
+
+【铁律】只学习传播机制，不复用原钩子、原案例、原画面或原音频；不出现「保证」「第一」「最」等绝对化用语；不承诺流量、收益、提分或效果。
+【改造强度】${rule}
+
+【爆款原文（只作机制参考）】
+${String(sourceText || '').slice(0, 3000)}
+
+【机构画像】
+${orgProfile || '（未填写）'}
+
+【内容账号档案】
+${workbenchProfileBlock(profile)}
+
+【每个版本包含】title（标题，20 字内）、content（完整口播，180-320 字，符合铁律与强度）。
+
+${JSON_ONLY}
+格式：[{"title":"…","content":"…"}]，正好 3 个对象。`;
+}
+
+export function buildHotspotCopyPrompt({ profile, orgProfile, hotspot, angle, style }) {
+  const angleRule = HOTSPOT_ANGLES.find((item) => item[0] === angle);
+  return `【任务】把下面的热点事实转化为这个内容账号的 3 个口播版本。
+
+【热点事实（只能引用这里写的事实，不要编造细节）】
+标题：${clean(hotspot?.title)}
+事实：${clean(hotspot?.fact)}
+来源：${clean(hotspot?.sourceUrl) || '（未提供）'}
+
+【结合方式】${angle}${angleRule ? `——${angleRule[1]}` : ''}
+【表达风格】${style || '口语化'}
+
+【机构画像】
+${orgProfile || '（未填写）'}
+
+【内容账号档案】
+${workbenchProfileBlock(profile)}
+
+【每个版本包含】title（标题，20 字内）、content（完整口播，180-320 字；热点只做引子/证据，主体回到账号自己的观点和课程场景；不承诺效果）。
+
+${JSON_ONLY}
+格式：[{"title":"…","content":"…"}]，正好 3 个对象。`;
+}
+
+export function demoIdeas(profile, goal) {
+  const subject = subjectOf(profile);
+  return [
+    { title: `${subject}体验课的一天`, hook: '你以为的体验课和真实的体验课，差的不止一点。', why: '贴合账号当前「预约到店体验」的目标，可拍素材都在机构里。' },
+    { title: '三种孩子三种安排', hook: '同样一门课，三种孩子要三种上法。', why: '家长最关心“适不适合我家孩子”，分类内容天然好懂好转发。' },
+    { title: '别急着报长期班', hook: '先做完这一个小测试，再决定花不花这个钱。', why: '反常识角度利于停留，收尾可自然引导体验课。' },
+  ].map((item) => ({ ...item, demo: true, ...(clean(goal) ? { note: `方向：${clean(goal)}` } : {}) }));
+}
+
+export function demoViralRewrites(profile, sourceText, strength) {
+  const subject = subjectOf(profile);
+  const audience = audienceOf(profile);
+  const base = [
+    { title: '换个行业同样成立', content: `这条视频的机制其实很简单：先抛一个大家都有的焦虑，再给一个反常识判断，最后落到一个低门槛动作。我把同样的机制搬到${subject}上：很多${audience}的焦虑是“现在开始晚不晚”，反常识判断是“晚不晚取决于怎么开始”，低门槛动作就是先来一次体验，用真实课堂代替想象做决定。` },
+    { title: '同一个结构，换一组证据', content: `它的节奏是三段式：现象、冲突、办法。换成我们的场景——现象是家长群里的攀比式报班；冲突是“报得多的孩子未必学得好”；办法是按孩子的专注时长选班型，先体验再决定。整套逻辑与原视频相同，但案例、数据和表达全部换成我们自己的。` },
+    { title: '留节奏，换血肉', content: `保留它“提问—否定—再提问”的推进节奏，内容完全重建：开头问“你给孩子报班前做功课吗”，中段否定“看价格做功课”这个惯性，结尾问“那该看什么”，答案是对话一次、旁听一节、对比一周再决定。` },
+  ];
+  return base.map((item) => ({ ...item, demo: true, strength: strength || '' }));
+}
+
+export function demoHotspotCopies(profile, hotspot, angle, style) {
+  const subject = subjectOf(profile);
+  const audience = audienceOf(profile);
+  const title = clean(hotspot?.title) || '近期热点';
+  const fact = clean(hotspot?.fact) || '（机构提供的热点事实）';
+  return [
+    { title: `从${title}聊起`, content: `最近大家都在讨论「${title}」。${fact} 这件事对${audience}的启发是：信息越多的时代，越需要有人帮你做判断。选${subject}也一样——不看谁声音大，看谁把方法讲清楚。我平时怎么帮家长判断，评论区聊。`, angle, style },
+    { title: `${title}背后的选择逻辑`, content: `「${title}」刷屏的时候，我想提醒${audience}一件事：热闹是别人的，决策是自己的。把它当成一面镜子——你会怎么给孩子选${subject}？我给三个不花钱的判断动作，看完再用。`, angle, style },
+    { title: `别只看${title}的热闹`, content: `${fact} 很多人看完就划走了，但${audience}可以多想一层：这类事情发生时，最该守住的是自己的节奏。报班、续费、换机构，都一样——先确认自己的目标没被带偏。守住节奏的具体做法，这条讲清楚。`, angle, style },
+  ].map((item) => ({ ...item, demo: true }));
 }
