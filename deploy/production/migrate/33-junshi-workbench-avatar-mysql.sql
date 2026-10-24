@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_avatar_runs (
   KEY idx_junshi_wb_avatar_owner (owner_key, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- MySQL 的 TEXT 列不能有字面量默认值（32/33 两期都踩到）：stats 允许 NULL，应用层读取已兼容。
 ALTER TABLE junshi_workbench_copy_drafts
-  ADD COLUMN stats TEXT NOT NULL DEFAULT '';
+  ADD COLUMN stats TEXT NULL;
 
 -- 复查：SHOW TABLES LIKE 'junshi_workbench_avatar_runs'; SHOW COLUMNS FROM junshi_workbench_copy_drafts LIKE 'stats';
