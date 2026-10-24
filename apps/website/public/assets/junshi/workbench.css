@@ -341,3 +341,6 @@
 #js-app .wb-dy-works { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; margin-top: 8px; }
 #js-app .wb-dy-video { border: 1px solid var(--hairline); border-radius: var(--r-card); padding: 10px 12px; margin-top: 10px; }
 #js-app .wb-dy-profile { border: 1px solid var(--hairline); border-radius: var(--r-card); padding: 10px 12px; margin-top: 10px; }
+
+/* ── 五期：数字人口播 ── */
+#js-app .wb-render .wb-tag { margin-left: 8px; }

@@ -27,6 +27,15 @@ import {
   seedanceAsrConfig,
   transcribeMedia,
 } from '../services/junshiDouyin.js';
+import {
+  seedanceChannelConfig,
+  uploadToSeedance,
+  submitAudioTask,
+  pollAudioTask,
+  submitVideoTask,
+  pollVideoTask,
+  parseFaceSession,
+} from '../services/junshiAvatar.js';
 import { maxUploadBytes, parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
 import { ossRedirectUrl, removeObject, rowStorageBackend } from '../services/fileStorage.js';
 import {
@@ -540,6 +549,7 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
       items: rows.map((row) => ({
         id: row.id, topic: row.topic, style: row.style, content: row.content,
         accountId: row.account_id || 'default', createdAt: row.created_at,
+        stats: (() => { try { return row.stats ? JSON.parse(row.stats) : null; } catch { return null; } })(),
       })),
     };
   }
@@ -779,6 +789,18 @@ function parseLooseJsonArray(text) {
   } catch { return null; }
 }
 
+/** 同上，但取第一个 JSON 对象。 */
+function parseLooseJsonObject(text) {
+  const raw = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '');
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch { return null; }
+}
+
 function wfOut(row) {
   let input = {}; let state = {};
   try { input = JSON.parse(row.input || '{}'); } catch { /* ignore */ }
@@ -817,7 +839,95 @@ async function generateOptions(ctx, owner, { prompt, demoContent }) {
   return { options: demoContent.map((item, index) => ({ id: `opt${index + 1}`, ...item })), demo: true };
 }
 
-/* ───────────── 视频转写档案（抖音采集 / 手动素材 → whisper 带时间码） ───────────── */
+/* ───────────── 数字人口播（音色克隆 + 对口型）+ 截图回填 ───────────── */
+function voiceOut(row) {
+  return { id: row.id, name: row.name, speakerId: row.speaker_id || '', status: row.status, error: row.error || '', sampleAssetId: row.sample_asset_id || null, accountId: row.account_id || 'default', createdAt: row.created_at, updatedAt: row.updated_at };
+}
+function avatarRunOut(row) {
+  let steps = [];
+  try { steps = JSON.parse(row.steps || '[]'); } catch { /* ignore */ }
+  return {
+    id: row.id, voiceId: row.voice_id || null, speakerId: row.speaker_id || '',
+    imageAssetId: row.image_asset_id || null, text: row.text || '', status: row.status,
+    error: row.error || '', steps, videoAssetId: row.video_asset_id || null,
+    videoUrl: row.video_asset_id ? `/api/junshi/workbench/assets/${encodeURIComponent(row.video_asset_id)}/file` : null,
+    accountId: row.account_id || 'default', createdAt: row.created_at, updatedAt: row.updated_at,
+  };
+}
+async function avatarStepsUpdate(id, ownerKey, steps) {
+  await aq('UPDATE junshi_workbench_avatar_runs SET steps=?, updated_at=? WHERE id=? AND owner_key=?', [JSON.stringify(steps), nowIso(), id, ownerKey]).catch(() => {});
+}
+
+/** 后台克隆音色：样本直链上传 → doubao-voice-clone → speaker_id。 */
+async function runCloneVoice(owner, { voiceId, assetRow, auditionText }) {
+  const fail = async (message) => {
+    await aq('UPDATE junshi_workbench_voices SET status=?, error=?, updated_at=? WHERE id=? AND owner_key=?', ['failed', String(message).slice(0, 1000), nowIso(), voiceId, owner.key]).catch(() => {});
+  };
+  try {
+    const policy = await getAiProviderPolicy();
+    const config = await seedanceChannelConfig(policy?.channels);
+    if (!config) throw Object.assign(new Error('数字人渠道未配置（需要 seedance.nz 渠道 Key）'), { code: 'WORKBENCH_AVATAR_NOT_CONFIGURED' });
+    const sampleBuffer = await assetBytes(assetRow);
+    if (sampleBuffer.length > 10 * 1024 * 1024) throw Object.assign(new Error('音色样本超过 10MB，请剪短一些（10-30 秒清晰人声即可）'), { code: 'WORKBENCH_VOICE_SAMPLE_TOO_LARGE' });
+    const sampleUrl = await uploadToSeedance({ ...config, buffer: sampleBuffer, fileName: assetRow.file_name || 'voice-sample.mp3', mimeType: assetRow.mime_type || 'audio/mpeg' });
+    const taskId = await submitAudioTask({ ...config, model: 'doubao-voice-clone', prompt: auditionText, metadata: { audio_url: sampleUrl, enable_audio_denoise: true } });
+    const result = await pollAudioTask({ ...config, taskId, timeoutMs: 600000 });
+    const speakerId = result.resultText;
+    if (!speakerId) throw Object.assign(new Error('克隆完成但没有返回音色 ID'), { code: 'WORKBENCH_VOICE_NO_SPEAKER' });
+    await aq('UPDATE junshi_workbench_voices SET status=?, speaker_id=?, error="", updated_at=? WHERE id=? AND owner_key=?', ['ready', String(speakerId).slice(0, 200), nowIso(), voiceId, owner.key]);
+  } catch (error) {
+    await fail(error?.message || '克隆失败');
+  }
+}
+
+/** 后台数字人合成：TTS → 人脸分析 → 对口型 → 存素材库。 */
+async function runTalkingHead(owner, { runId, text, speakerId, imageAssetRow }) {
+  const steps = [
+    { key: 'tts', label: '口播语音合成', status: 'running' },
+    { key: 'face', label: '形象照人脸分析', status: 'pending' },
+    { key: 'lipsync', label: '对口型合成视频', status: 'pending' },
+    { key: 'save', label: '存入素材库', status: 'pending' },
+  ];
+  const fail = async (message) => {
+    await aq('UPDATE junshi_workbench_avatar_runs SET status=?, error=?, updated_at=? WHERE id=? AND owner_key=?', ['failed', String(message).slice(0, 1000), nowIso(), runId, owner.key]).catch(() => {});
+  };
+  const mark = (key, status) => { const step = steps.find((s) => s.key === key); if (step) step.status = status; return avatarStepsUpdate(runId, owner.key, steps); };
+  try {
+    const policy = await getAiProviderPolicy();
+    const config = await seedanceChannelConfig(policy?.channels);
+    if (!config) throw Object.assign(new Error('数字人渠道未配置（需要 seedance.nz 渠道 Key）'), { code: 'WORKBENCH_AVATAR_NOT_CONFIGURED' });
+    // ① TTS（用克隆音色）
+    const ttsTask = await submitAudioTask({ ...config, model: 'doubao-seed-icl-2.0', prompt: text, metadata: { speaker: speakerId, voice_model: 'seed-tts-2.0-standard', format: 'mp3' } });
+    const tts = await pollAudioTask({ ...config, taskId: ttsTask, timeoutMs: 600000 });
+    if (!tts.url) throw Object.assign(new Error('语音合成没有返回音频地址'), { code: 'WORKBENCH_TTS_NO_URL' });
+    await mark('tts', 'done'); await mark('face', 'running');
+    // ② 人脸分析（形象照直链）
+    const imageBuffer = await assetBytes(imageAssetRow);
+    if (imageBuffer.length > 10 * 1024 * 1024) throw Object.assign(new Error('形象照超过 10MB，请压缩后重传'), { code: 'WORKBENCH_AVATAR_IMAGE_TOO_LARGE' });
+    const imageUrl = await uploadToSeedance({ ...config, buffer: imageBuffer, fileName: imageAssetRow.file_name || 'face.jpg', mimeType: imageAssetRow.mime_type || 'image/jpeg' });
+    const faceTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-identify-face', metadata: { video_url: imageUrl } });
+    const face = await pollVideoTask({ ...config, taskId: faceTask, timeoutMs: 600000 });
+    const { sessionId, faceId } = parseFaceSession(face.resultText);
+    await mark('face', 'done'); await mark('lipsync', 'running');
+    // ③ 对口型合成
+    const syncTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-video', metadata: { sessionId, faceId, audio_url: tts.url, soundStartTime: 0, soundEndTime: 600000, soundVolume: 1, originalAudioVolume: 0 } });
+    const synced = await pollVideoTask({ ...config, taskId: syncTask, timeoutMs: 900000 });
+    if (!synced.url) throw Object.assign(new Error('对口型完成但没有返回视频地址'), { code: 'WORKBENCH_LIPSYNC_NO_URL' });
+    await mark('lipsync', 'done'); await mark('save', 'running');
+    // ④ 转存素材库（上游地址 24h 过期）
+    const videoResponse = await fetch(synced.url, { signal: AbortSignal.timeout(300000) });
+    if (!videoResponse.ok) throw Object.assign(new Error(`成片下载失败（HTTP ${videoResponse.status}）`), { status: 502 });
+    const buffer = Buffer.from(await videoResponse.arrayBuffer());
+    const stored = await persistSecureUpload({ fileName: `${runId}.mp4`, mimeType: 'video/mp4', buffer });
+    const assetId = id('jwa');
+    await aq('INSERT INTO junshi_workbench_assets (id,owner_key,org_id,account_id,file_name,storage_key,storage_backend,mime_type,kind,file_size,folder,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+      [assetId, owner.key, owner.orgId, 'default', stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || 'video/mp4', 'video', stored.fileSize || buffer.length, '数字人', nowIso()]);
+    await aq('UPDATE junshi_workbench_avatar_runs SET status=?, video_asset_id=?, error="", updated_at=? WHERE id=? AND owner_key=?', ['succeeded', assetId, nowIso(), runId, owner.key]);
+    await mark('save', 'done');
+  } catch (error) {
+    await fail(error?.message || '数字人合成失败');
+  }
+}
 function transcriptOut(row, { withSegments = false } = {}) {
   let segments = [];
   try { segments = JSON.parse(row.segments || '[]'); } catch { /* ignore */ }
@@ -1464,6 +1574,105 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
       sourceUrl: '', nickname: '', accountId,
     });
     return { transcriptId };
+  }
+
+  /* ── 数字人口播 ── */
+  if (rest === '/voices' && method === 'GET') {
+    const rows = await arows('SELECT * FROM junshi_workbench_voices WHERE owner_key=? ORDER BY created_at DESC LIMIT 50', [owner.key]);
+    return { items: rows.map(voiceOut) };
+  }
+  if (rest === '/voices' && method === 'POST') {
+    renderRateLimit(owner.key);
+    const assetId = text(ctx.body?.assetId);
+    const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, owner.key]);
+    if (!assetRow) throw errors.notFound('音色样本素材不存在', 'NOT_FOUND');
+    if (!/^audio\//.test(String(assetRow.mime_type || ''))) throw errors.badRequest('音色样本需要是音频素材（先上传到素材库）', 'VALIDATION_ERROR');
+    const name = text(ctx.body?.name) || assetRow.file_name || '我的音色';
+    const auditionText = (text(ctx.body?.auditionText) || '大家好，欢迎关注我们的账号。').slice(0, 300);
+    const policy = await getAiProviderPolicy();
+    const config = await seedanceChannelConfig(policy?.channels);
+    if (!config) throw errors.badRequest('数字人渠道未配置（需要 seedance.nz 渠道 Key）', 'WORKBENCH_AVATAR_NOT_CONFIGURED');
+    const voiceId = id('jwv2');
+    const at = nowIso();
+    await aq('INSERT INTO junshi_workbench_voices (id,owner_key,org_id,account_id,name,speaker_id,status,error,sample_asset_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+      [voiceId, owner.key, owner.orgId, await resolveAccountId(owner.key, ctx.body?.accountId), name.slice(0, 60), '', 'training', '', assetId, at, at]);
+    void runCloneVoice(owner, { voiceId, assetRow, auditionText });
+    return { voice: voiceOut(await arow('SELECT * FROM junshi_workbench_voices WHERE id=?', [voiceId])) };
+  }
+  if (rest.startsWith('/voices/') && method === 'DELETE') {
+    const voiceId = decodeURIComponent(rest.slice('/voices/'.length));
+    await aq('DELETE FROM junshi_workbench_voices WHERE id=? AND owner_key=?', [voiceId, owner.key]);
+    return { ok: true };
+  }
+  if (rest === '/avatar/runs' && method === 'GET') {
+    const accountIdFilter = text(search.get('accountId'));
+    const rows = accountIdFilter
+      ? await arows('SELECT * FROM junshi_workbench_avatar_runs WHERE owner_key=? AND account_id=? ORDER BY created_at DESC LIMIT 20', [owner.key, accountIdFilter])
+      : await arows('SELECT * FROM junshi_workbench_avatar_runs WHERE owner_key=? ORDER BY created_at DESC LIMIT 20', [owner.key]);
+    return { items: rows.map(avatarRunOut) };
+  }
+  if (rest === '/avatar/run' && method === 'POST') {
+    renderRateLimit(owner.key);
+    const speech = text(ctx.body?.text);
+    if (!speech) throw errors.badRequest('请填写口播文案', 'VALIDATION_ERROR', { field: 'text' });
+    if (speech.length > 3000) throw errors.badRequest('口播文案最多 3000 字', 'VALIDATION_ERROR', { field: 'text' });
+    const voiceId = text(ctx.body?.voiceId);
+    const voiceRow = await arow('SELECT * FROM junshi_workbench_voices WHERE id=? AND owner_key=?', [voiceId, owner.key]);
+    if (!voiceRow) throw errors.notFound('音色不存在', 'NOT_FOUND');
+    if (voiceRow.status !== 'ready' || !voiceRow.speaker_id) throw errors.badRequest('这个音色还没克隆完成（或克隆失败）', 'WORKBENCH_VOICE_NOT_READY');
+    const imageAssetId = text(ctx.body?.imageAssetId);
+    const imageAssetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [imageAssetId, owner.key]);
+    if (!imageAssetRow) throw errors.notFound('形象照素材不存在', 'NOT_FOUND');
+    if (!/^image\//.test(String(imageAssetRow.mime_type || ''))) throw errors.badRequest('形象照需要是图片素材（人脸清晰、正面）', 'VALIDATION_ERROR');
+    const policy = await getAiProviderPolicy();
+    const config = await seedanceChannelConfig(policy?.channels);
+    if (!config) throw errors.badRequest('数字人渠道未配置（需要 seedance.nz 渠道 Key）', 'WORKBENCH_AVATAR_NOT_CONFIGURED');
+    const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
+    const runId = id('jwav');
+    const at = nowIso();
+    await aq('INSERT INTO junshi_workbench_avatar_runs (id,owner_key,org_id,account_id,voice_id,speaker_id,image_asset_id,text,status,error,steps,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [runId, owner.key, owner.orgId, accountId, voiceId, voiceRow.speaker_id, imageAssetId, speech, 'running', '', '[]', at, at]);
+    const job = jobStart(owner, '数字人口播', speech.slice(0, 60));
+    void runTalkingHead(owner, { runId, text: speech, speakerId: voiceRow.speaker_id, imageAssetRow })
+      .finally(() => jobDone(job, 'succeeded', '数字人口播完成').catch(() => {}));
+    return { run: avatarRunOut(await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=?', [runId])) };
+  }
+
+  /* ── 文案发布数据回填（截图 → 多模态识别） ── */
+  const statsMatch = rest.match(/^\/copy\/([^/]+)\/stats$/);
+  if (statsMatch && method === 'POST') {
+    const draftId = decodeURIComponent(statsMatch[1]);
+    const draft = await arow('SELECT * FROM junshi_workbench_copy_drafts WHERE id=? AND owner_key=?', [draftId, owner.key]);
+    if (!draft) throw errors.notFound('文案不存在', 'NOT_FOUND');
+    const assetId = text(ctx.body?.assetId);
+    const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, owner.key]);
+    if (!assetRow) throw errors.notFound('截图素材不存在（请先上传到素材库）', 'NOT_FOUND');
+    if (!/^image\//.test(String(assetRow.mime_type || ''))) throw errors.badRequest('请上传图片截图', 'VALIDATION_ERROR');
+    rateLimit(owner.key);
+    const buffer = await assetBytes(assetRow);
+    if (buffer.length > 8 * 1024 * 1024) throw errors.badRequest('截图超过 8MB，请压缩后重传', 'VALIDATION_ERROR');
+    const dataUrl = `data:${assetRow.mime_type};base64,${buffer.toString('base64')}`;
+    const messages = [{ role: 'user', content: [
+      { type: 'text', text: '这是一张抖音作者端的作品数据截图。只依据图中可见的数字提取：{"plays":播放,"likes":点赞,"comments":评论,"shares":分享,"saves":收藏,"publishedAt":"发布时间原文","note":"一句备注"}。数字看不清或没有的字段填 null。只输出这个 JSON，不要其他文字。' },
+      { type: 'image_url', image_url: { url: dataUrl } },
+    ] }];
+    let stats = null;
+    try {
+      const result = await collectText(ctx, { system: WORKBENCH_SYSTEM, messages });
+      const parsed = parseLooseJsonObject(result.text);
+      if (parsed) stats = parsed;
+    } catch (error) { /* 落到下面的失败分支 */ }
+    if (!stats) throw errors.badRequest('没能从截图里识别出数据；换一张更清晰的作者端数据截图试试', 'WORKBENCH_STATS_UNRECOGNIZED');
+    const cleaned = {};
+    for (const key of ['plays', 'likes', 'comments', 'shares', 'saves']) {
+      const value = Number(stats[key]);
+      cleaned[key] = Number.isFinite(value) && value >= 0 ? Math.round(value) : null;
+    }
+    cleaned.publishedAt = String(stats.publishedAt || '').slice(0, 60);
+    cleaned.note = String(stats.note || '').slice(0, 200);
+    cleaned.backfilledAt = nowIso();
+    await aq('UPDATE junshi_workbench_copy_drafts SET stats=?, created_at=created_at WHERE id=? AND owner_key=?', [JSON.stringify(cleaned), draftId, owner.key]);
+    return { stats: cleaned };
   }
 
   /* ── 引导式创作工作流 + 长期记忆（今日选题/爆款复刻/热点结合/记忆） ── */

@@ -1403,9 +1403,49 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_transcripts (
   updated_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_ts_owner ON junshi_workbench_transcripts(owner_key, created_at DESC);
+
+-- 五期：数字人口播（音色克隆 + 对口型）与文案发布数据回填。
+-- 音色：doubao-voice-clone 训练出的 speaker_id；口播：TTS + kling-lip-sync 对口型成片。
+CREATE TABLE IF NOT EXISTS junshi_workbench_voices (
+  id          TEXT NOT NULL PRIMARY KEY,
+  owner_key   TEXT NOT NULL,
+  org_id      TEXT,
+  account_id  TEXT NOT NULL DEFAULT 'default',
+  name        TEXT NOT NULL DEFAULT '',
+  speaker_id  TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'training',
+  error       TEXT NOT NULL DEFAULT '',
+  sample_asset_id TEXT,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_voice_owner ON junshi_workbench_voices(owner_key, created_at DESC);
+
+-- 一次数字人口播合成：TTS → 人脸识别 → 对口型成片，steps 记录各阶段进度。
+CREATE TABLE IF NOT EXISTS junshi_workbench_avatar_runs (
+  id             TEXT NOT NULL PRIMARY KEY,
+  owner_key      TEXT NOT NULL,
+  org_id         TEXT,
+  account_id     TEXT NOT NULL DEFAULT 'default',
+  voice_id       TEXT,
+  speaker_id     TEXT NOT NULL DEFAULT '',
+  image_asset_id TEXT,
+  text           TEXT NOT NULL DEFAULT '',
+  status         TEXT NOT NULL DEFAULT 'running',
+  error          TEXT NOT NULL DEFAULT '',
+  steps          TEXT NOT NULL DEFAULT '[]',
+  video_asset_id TEXT,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_avatar_owner ON junshi_workbench_avatar_runs(owner_key, created_at DESC);
 `;
 
 db.exec(SCHEMA);
+
+// ── 五期补列：文案草稿的发布数据回填（截图 → 多模态识别 → stats JSON） ──────────
+try { db.exec("ALTER TABLE junshi_workbench_copy_drafts ADD COLUMN stats TEXT NOT NULL DEFAULT ''"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
 // ── 内容工作台二期补列（2026-10-24）──────────────────────────────────────────
 // 文案/视频/素材挂到具体创作账号（默认 'default'，页面显示为「默认账号」），旧数据不动。

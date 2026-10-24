@@ -225,6 +225,9 @@
     transcripts: [],
     tsTimer: null,
     douyinPanel: null,
+    voices: [],
+    avatarRuns: [],
+    avatarTimer: null,
   };
 
   function accountName(accountId) {
@@ -245,7 +248,7 @@
 
   function setTab(tab) {
     state.tab = tab;
-    if (tab !== 'video') stopRenderPolling();
+    if (tab !== 'video') { stopRenderPolling(); stopAvatarPolling(); }
     if (tab !== 'chat') stopWfPolling();
     if (tab !== 'references') stopTsPolling();
     $$('#wb-tabs [data-wb]').forEach(function (button) {
@@ -303,6 +306,8 @@
         call('/workflows').catch(function () { return { items: [], styles: [], angles: [], strengths: [] }; }),
         call('/memories').catch(function () { return { items: [] }; }),
         call('/transcripts').catch(function () { return { items: [] }; }),
+        call('/voices').catch(function () { return { items: [] }; }),
+        call('/avatar/runs').catch(function () { return { items: [] }; }),
       ]);
       state.messages = results[0].messages || [];
       state.copy = results[1].items || [];
@@ -316,6 +321,8 @@
       state.workflowMeta = { styles: wfData.styles || [], angles: wfData.angles || [], strengths: wfData.strengths || [] };
       state.memories = results[7].items || [];
       state.transcripts = results[8].items || [];
+      state.voices = results[9].items || [];
+      state.avatarRuns = results[10].items || [];
       state.loaded = true;
       render();
     } catch (error) {
@@ -802,10 +809,13 @@
       '<label class="wb-field"><span>风格</span><select name="style">' + ['口语化', '专业理性', '故事感', '犀利反常识'].map(function (s) { return '<option' + (formState.style === s ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select></label>' +
       '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">生成文案</button><span class="wb-note">使用平台模型渠道；模型返回空时会给出演示样本。</span></div></form></div>' +
       (state.copy.length ? '<div class="wb-cards wb-copy-grid">' + state.copy.map(function (item) {
+        var stats = item.stats || null;
+        var statsHtml = stats ? '<div class="wb-meta" style="color:var(--text-2)">📊 发布数据：播放 ' + (stats.plays ?? '—') + ' · 赞 ' + (stats.likes ?? '—') + ' · 评 ' + (stats.comments ?? '—') + ' · 藏 ' + (stats.saves ?? '—') + (stats.publishedAt ? ' · ' + esc(stats.publishedAt) : '') + '</div>' : '';
         return '<article class="wb-item"><div class="wb-card-head"><div><h4>' + esc(item.topic) + '</h4><div class="wb-meta">' + esc(item.style) + ' · ' + esc(accountName(item.accountId)) + ' · ' + fmtDate(item.createdAt) + '</div></div></div>' +
-          '<div class="wb-copy-body">' + md(item.content) + '</div>' +
+          '<div class="wb-copy-body">' + md(item.content) + '</div>' + statsHtml +
           '<div class="wb-actions"><button class="btn" type="button" data-copy-content="' + esc(item.id) + '">' + ic('copy', 12) + '复制</button>' +
           '<button class="btn" type="button" data-copy-check="' + esc(item.id) + '">' + ic('shield', 12) + '合规体检</button>' +
+          '<button class="btn" type="button" data-copy-stats="' + esc(item.id) + '">' + ic('chart', 12) + (stats ? '更新数据' : '回填数据') + '</button>' +
           '<button class="btn" type="button" data-copy-del="' + esc(item.id) + '">' + ic('trash', 12) + '</button></div></article>';
       }).join('') + '</div>' : '<div class="wb-card"><p class="wb-muted">这个账号还没有文案。输入一个主题，先生成 5 条。</p></div>') +
       '</div></div>';
@@ -841,6 +851,9 @@
         if (item) checkCompliance(item.content);
       };
     });
+    $$('[data-copy-stats]').forEach(function (button) {
+      button.onclick = function () { backfillStats(button.dataset.copyStats); };
+    });
     $$('[data-copy-del]').forEach(function (button) {
       button.onclick = async function () {
         if (!confirm('删除这条文案？')) return;
@@ -851,6 +864,151 @@
         } catch (error) { toast(error.message, 'error'); }
       };
     });
+  }
+
+  /* ───────────── 数字人口播（音色克隆 + 对口型） ───────────── */
+  function stopAvatarPolling() {
+    if (state.avatarTimer) { clearInterval(state.avatarTimer); state.avatarTimer = null; }
+  }
+  async function refreshAvatarRuns(silent) {
+    try {
+      var data = await call('/avatar/runs?accountId=' + encodeURIComponent(state.accountId));
+      state.avatarRuns = data.items || [];
+      var voiceData = await call('/voices');
+      state.voices = voiceData.items || [];
+    } catch (error) {
+      if (!silent) toast(error.message, 'error');
+      return;
+    }
+    if (state.tab === 'video') renderAvatarList();
+    var busy = state.avatarRuns.some(function (item) { return item.status === 'running'; })
+      || state.voices.some(function (item) { return item.status === 'training'; });
+    if (busy && !state.avatarTimer) {
+      state.avatarTimer = setInterval(function () {
+        if (state.tab !== 'video') { stopAvatarPolling(); return; }
+        refreshAvatarRuns(true);
+      }, 4000);
+    } else if (!busy) {
+      stopAvatarPolling();
+    }
+  }
+  function avatarStepHtml(step) {
+    var icon = step.status === 'done' ? '✓' : step.status === 'running' ? '●' : '○';
+    return '<span class="' + (step.status === 'done' ? 'done' : step.status === 'running' ? 'current' : '') + '">' + icon + ' ' + esc(step.label) + '</span>';
+  }
+  function renderAvatarList() {
+    var box = $('#wb-avatar-list');
+    if (!box) return;
+    box.innerHTML = state.avatarRuns.length ? state.avatarRuns.map(function (run) {
+      var body = '';
+      if (run.status === 'running') body = '<div class="wb-flow-steps">' + (run.steps || []).map(avatarStepHtml).join('') + '</div>';
+      if (run.status === 'failed') body = '<p class="err">' + ic('alert', 13) + '<span>' + esc(run.error || '合成失败') + '</span></p>';
+      if (run.status === 'succeeded' && run.videoAssetId) body = '<video class="wb-render-video" controls preload="metadata" data-avatar-video="' + esc(run.videoAssetId) + '"></video>';
+      return '<div class="wb-render"><div class="wb-card-head"><div><b>' + esc((run.text || '').slice(0, 40)) + '</b>' +
+        '<span class="wb-tag ' + (run.status === 'succeeded' ? 'ok' : run.status === 'failed' ? 'bad' : '') + '">' + esc(run.status === 'running' ? '合成中' : run.status === 'succeeded' ? '完成' : '失败') + '</span>' +
+        '<div class="wb-meta">' + fmtDate(run.createdAt) + '</div></div></div>' + body + '</div>';
+    }).join('') : '<p class="wb-muted">还没有数字人口播记录。</p>';
+    (function () {
+      var videos = $$('[data-avatar-video]');
+      for (var i = 0; i < videos.length; i++) {
+        (function (video) {
+          if (video.dataset.loaded) return;
+          video.dataset.loaded = '1';
+          fetchBlob(API + '/assets/' + encodeURIComponent(video.dataset.avatarVideo) + '/file').then(function (blob) {
+            video.src = URL.createObjectURL(blob);
+          }).catch(function () { /* 播放器外壳保留 */ });
+        })(videos[i]);
+      }
+    })();
+  }
+  function openCloneVoiceDialog() {
+    var audioAssets = state.assets.filter(function (item) { return item.kind === 'audio'; });
+    showDialog('克隆我的音色', '<p class="wb-note">先上传一段 10-30 秒清晰人声到素材库（mp3/wav），再选它克隆。克隆出的音色用于数字人口播。</p>' +
+      (audioAssets.length ? '<label class="wb-field full"><span>音频样本</span><select id="wb-voice-sample">' +
+        audioAssets.map(function (item) { return '<option value="' + esc(item.id) + '">' + esc(item.fileName) + '</option>'; }).join('') + '</select></label>' : '<p class="wb-muted">素材库里还没有音频。先去「素材库」上传一段录音。</p>') +
+      '<label class="wb-field full"><span>音色名称</span><input id="wb-voice-name" placeholder="例如：校长本人" maxlength="30"></label>' +
+      '<label class="wb-field full"><span>试听文本（克隆完会生成一段试听）</span><input id="wb-voice-audition" value="大家好，欢迎关注我们的账号。" maxlength="120"></label>' +
+      '<div class="wb-actions"><button class="btn primary" type="button" id="wb-voice-clone-go"' + (audioAssets.length ? '' : ' disabled') + '>开始克隆</button></div>');
+    var go = $('#wb-voice-clone-go');
+    if (!go || go.disabled) return;
+    go.onclick = async function () {
+      go.disabled = true; go.innerHTML = ic('loader', 12) + '提交中…';
+      try {
+        await call('/voices', { method: 'POST', body: { assetId: $('#wb-voice-sample').value, name: ($('#wb-voice-name') || {}).value || '', auditionText: ($('#wb-voice-audition') || {}).value || '' } });
+        closeDialog();
+        toast('克隆已开始，通常几分钟；完成后会出现在音色下拉里', 'success');
+        refreshAvatarRuns(true);
+      } catch (error) {
+        toast(error.message, 'error');
+        go.disabled = false; go.innerHTML = '开始克隆';
+      }
+    };
+  }
+  function renderAvatarPanel() {
+    var box = $('#wb-avatar-panel');
+    if (!box) return;
+    var readyVoices = state.voices.filter(function (item) { return item.status === 'ready'; });
+    var training = state.voices.filter(function (item) { return item.status === 'training'; });
+    var imageAssets = state.assets.filter(function (item) { return item.kind === 'image'; });
+    box.innerHTML = '<div class="wb-card-head"><div><h3>数字人口播</h3><p>用自己的音色和形象照，把文案直接变成对口型口播视频（音色克隆 → 语音合成 → 对口型）。成片进素材库「数字人」文件夹。</p></div></div>' +
+      '<form id="wb-avatar-form" class="wb-form">' +
+      '<label class="wb-field"><span>音色</span><select name="voiceId">' + (readyVoices.length ? readyVoices.map(function (v) { return '<option value="' + esc(v.id) + '">' + esc(v.name) + '</option>'; }).join('') : '<option value="">（先克隆一个音色）</option>') + '</select></label>' +
+      '<label class="wb-field"><span>形象照（正面人脸清晰）</span><select name="imageAssetId">' + (imageAssets.length ? imageAssets.slice(0, 30).map(function (a) { return '<option value="' + esc(a.id) + '">' + esc(a.fileName) + '</option>'; }).join('') : '<option value="">（素材库里还没有图片）</option>') + '</select></label>' +
+      '<label class="wb-field full"><span>口播文案</span><textarea name="text" placeholder="把要口播的文案粘进来（建议 200 字内一段）"></textarea></label>' +
+      '<div class="wb-field full wb-actions"><button class="btn primary" type="submit"' + (readyVoices.length && imageAssets.length ? '' : ' disabled') + '>' + ic('video', 13) + '生成口播视频</button>' +
+      '<button class="btn" type="button" id="wb-voice-clone-open">' + ic('plus', 12) + '克隆新音色</button>' +
+      (training.length ? '<span class="wb-note">' + ic('loader', 11) + ' ' + training.length + ' 个音色克隆中…</span>' : '') +
+      '<span class="wb-note">按次计费（克隆/合成/对口型各一步）；20 次/小时。</span></div></form>' +
+      '<div id="wb-avatar-list" style="margin-top:10px"></div>';
+    renderAvatarList();
+    $('#wb-voice-clone-open').onclick = openCloneVoiceDialog;
+    var form = $('#wb-avatar-form');
+    form.onsubmit = async function (event) {
+      event.preventDefault();
+      var button = form.querySelector('[type="submit"]');
+      var original = button.innerHTML;
+      button.disabled = true; button.innerHTML = ic('loader', 12) + '提交中…';
+      try {
+        var data = Object.fromEntries(new FormData(form).entries());
+        data.accountId = state.accountId;
+        await call('/avatar/run', { method: 'POST', body: data });
+        toast('已提交，全流程通常 3-6 分钟；这一页会自动刷新', 'success');
+        refreshAvatarRuns(true);
+      } catch (error) {
+        toast(error.message, 'error');
+        button.disabled = false; button.innerHTML = original;
+      }
+    };
+  }
+  async function backfillStats(draftId) {
+    showDialog('回填发布数据', '<p class="wb-note">上传这条文案发布后的抖音作者端数据截图（播放/点赞/评论等），系统自动识别存档。</p>' +
+      '<label class="btn primary" for="wb-stats-input">选择截图</label>' +
+      '<input id="wb-stats-input" type="file" hidden accept=".jpg,.jpeg,.png,.webp">' +
+      '<p class="wb-note" id="wb-stats-msg" style="margin-top:8px"></p>');
+    var input = $('#wb-stats-input');
+    input.onchange = async function () {
+      var file = (input.files || [])[0];
+      if (!file) return;
+      var msg = $('#wb-stats-msg');
+      msg.textContent = '上传并识别中…';
+      try {
+        var form = new FormData();
+        form.append('file', file);
+        form.append('accountId', state.accountId);
+        var uploaded = await call('/assets', { method: 'POST', body: form });
+        var result = await call('/copy/' + encodeURIComponent(draftId) + '/stats', { method: 'POST', body: { assetId: uploaded.asset.id } });
+        var stats = (result.data || result).stats || {};
+        msg.textContent = '已识别：播放 ' + (stats.plays ?? '—') + ' · 赞 ' + (stats.likes ?? '—') + ' · 评论 ' + (stats.comments ?? '—') + (stats.publishedAt ? ' · ' + stats.publishedAt : '');
+        toast('发布数据已回填', 'success');
+        var refreshed = await call('/copy');
+        state.copy = refreshed.items || state.copy;
+        if (state.tab === 'copy') renderCopy();
+        setTimeout(closeDialog, 1200);
+      } catch (error) {
+        msg.textContent = '';
+        toast(error.message, 'error');
+      }
+    };
   }
 
   /* ───────────── 视频创作（脚本 + 真实渲染） ───────────── */
@@ -928,6 +1086,7 @@
       '<label class="wb-field full"><span>需求说明</span><textarea name="brief" placeholder="课程、人群、想引导的动作，或想保留/替换的部分">' + esc(formState.brief || '') + '</textarea></label>' +
       '<label class="wb-field full"><span>参考内容（复刻模式）</span><textarea name="referenceText" placeholder="粘贴参考视频的口播文字、结构说明或链接">' + esc(formState.referenceText || '') + '</textarea></label>' +
       '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">生成分镜脚本</button><span class="wb-note">脚本用平台模型渠道；真实成片在下方「AI 生成视频」提交。</span></div></form></div>' +
+      '<div id="wb-avatar-panel"></div>' +
       (state.videos.length ? '<div class="wb-cards">' + state.videos.map(function (item) {
         return '<article class="wb-item click' + (selected && selected.id === item.id ? ' current' : '') + '" data-video-open="' + esc(item.id) + '">' +
           '<div class="wb-card-head"><h4>' + esc(item.title) + '</h4><span class="wb-tag">' + esc(item.mode) + '</span></div>' +
@@ -952,6 +1111,8 @@
         '<div id="wb-render-list" style="margin-top:10px"></div></div>' : '') +
       '</div></div>';
     bindAccountSwitch('#wb-video-account');
+    renderAvatarPanel();
+    refreshAvatarRuns(true);
     $('#wb-video-form').onsubmit = async function (event) {
       event.preventDefault();
       var form = event.currentTarget;
