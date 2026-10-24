@@ -861,8 +861,9 @@ async function assetBytes(row) {
 async function startTranscription(owner, { assetRow, source, title, sourceUrl, nickname, accountId }) {
   const transcriptId = id('jwts');
   const at = nowIso();
-  await aq('INSERT INTO junshi_workbench_transcripts (id,owner_key,org_id,account_id,asset_id,source,title,source_url,nickname,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-    [transcriptId, owner.key, owner.orgId, accountId, assetRow?.id || null, source, String(title || '').slice(0, 300), String(sourceUrl || '').slice(0, 1000), String(nickname || '').slice(0, 200), 'running', at, at]);
+  // MySQL 的 TEXT 列不能有字面量默认值：INSERT 必须显式给全 text/segments/error/duration。
+  await aq('INSERT INTO junshi_workbench_transcripts (id,owner_key,org_id,account_id,asset_id,source,title,source_url,nickname,status,error,text,segments,duration_seconds,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    [transcriptId, owner.key, owner.orgId, accountId, assetRow?.id || null, source, String(title || '').slice(0, 300), String(sourceUrl || '').slice(0, 1000), String(nickname || '').slice(0, 200), 'running', '', '', '[]', 0, at, at]);
   const job = jobStart(owner, '视频转写', String(title || '').slice(0, 60));
   void (async () => {
     try {
