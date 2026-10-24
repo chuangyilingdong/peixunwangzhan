@@ -202,6 +202,7 @@
     copy: [],
     videos: [],
     assets: [],
+    assetFolders: [],
     refs: [],
     jobs: [],
     summary: null,
@@ -210,10 +211,33 @@
     selectedVideo: null,
     videoForm: null,
     copyForm: null,
+    // 多创作账号：当前选中的账号 id（'default' = 默认账号）；文案/视频/素材/档案都跟着它走。
+    accounts: [],
+    accountId: 'default',
+    assetFolder: '',
+    renders: [],
+    renderTimer: null,
   };
+
+  function accountName(accountId) {
+    if (!accountId || accountId === 'default') return '默认账号';
+    var found = state.accounts.filter(function (item) { return item.id === accountId; })[0];
+    return found ? found.name : accountId;
+  }
+  function accountSelectHtml(attrs) {
+    var extra = attrs || '';
+    return '<select ' + extra + '>' + state.accounts.map(function (item) {
+      return '<option value="' + esc(item.id) + '"' + (item.id === state.accountId ? ' selected' : '') + '>' + esc(item.name) + '</option>';
+    }).join('') + '</select>';
+  }
+
+  function stopRenderPolling() {
+    if (state.renderTimer) { clearInterval(state.renderTimer); state.renderTimer = null; }
+  }
 
   function setTab(tab) {
     state.tab = tab;
+    if (tab !== 'video') stopRenderPolling();
     $$('#wb-tabs [data-wb]').forEach(function (button) {
       if (button.dataset.wb === tab) button.setAttribute('aria-current', 'true');
       else button.removeAttribute('aria-current');
@@ -229,6 +253,28 @@
     }
   }
 
+  /** 切换当前创作账号：档案、文案、视频、素材都按账号重新拉一遍。 */
+  async function switchAccount(accountId) {
+    if (!accountId || accountId === state.accountId) return;
+    state.accountId = accountId;
+    state.assetFolder = '';
+    try {
+      var results = await Promise.all([
+        call('/profile?accountId=' + encodeURIComponent(accountId)).catch(function () { return null; }),
+        call('/copy?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [] }; }),
+        call('/videos?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [] }; }),
+        call('/assets?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [], folders: [] }; }),
+      ]);
+      if (results[0]) state.profile = results[0].profile || state.profile;
+      state.copy = results[1].items || [];
+      state.videos = results[2].items || [];
+      state.assets = results[3].items || [];
+      state.assetFolders = results[3].folders || [];
+      if (state.tab === 'video') state.selectedVideo = null;
+    } catch (e) { /* 保持旧数据 */ }
+    render();
+  }
+
   async function loadAll() {
     var view = $('#wb-view');
     if (view) view.innerHTML = '<div class="loading">' + ic('loader', 14) + '正在读取工作台…</div>';
@@ -236,11 +282,12 @@
       var boot = await call('/bootstrap');
       state.profile = boot.profile || null;
       state.summary = boot;
+      state.accounts = boot.accounts || [{ id: 'default', name: '默认账号', platform: '抖音', note: '', createdAt: null }];
       var results = await Promise.all([
         call('/chat').catch(function () { return { messages: [] }; }),
         call('/copy').catch(function () { return { items: [] }; }),
         call('/videos').catch(function () { return { items: [] }; }),
-        call('/assets').catch(function () { return { items: [] }; }),
+        call('/assets').catch(function () { return { items: [], folders: [] }; }),
         call('/refs').catch(function () { return { items: [] }; }),
         call('/jobs').catch(function () { return { items: [] }; }),
       ]);
@@ -248,6 +295,7 @@
       state.copy = results[1].items || [];
       state.videos = results[2].items || [];
       state.assets = results[3].items || [];
+      state.assetFolders = results[3].folders || [];
       state.refs = results[4].items || [];
       state.jobs = results[5].items || [];
       state.loaded = true;
@@ -362,7 +410,7 @@
       if (token) headers.authorization = 'Bearer ' + token;
       var res = await fetch(API + '/chat/stream', {
         method: 'POST', headers: headers, credentials: 'same-origin',
-        body: JSON.stringify({ message: text }), signal: state.abort.signal,
+        body: JSON.stringify({ message: text, accountId: state.accountId }), signal: state.abort.signal,
       });
       if (res.status === 401 && token) sessionLost();
       if (!res.ok || !res.body) throw new Error('生成失败（HTTP ' + res.status + '）');
@@ -408,7 +456,12 @@
     }
   }
 
-  /* ───────────── 账号档案 ───────────── */
+  /* ───────────── 账号档案（多创作账号：每个账号一份档案） ───────────── */
+  function bindAccountSwitch(id) {
+    var select = $(id);
+    if (!select) return;
+    select.onchange = function () { switchAccount(select.value); };
+  }
   function renderAccount() {
     var p = state.profile || {};
     var fields = [
@@ -421,8 +474,19 @@
       ['boundaries', '内容边界', 'input', '不能承诺什么、不能碰什么'],
       ['positioning', '账号定位', 'textarea', '一句话说清：你是谁、帮谁、解决什么问题'],
     ];
-    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll"><div class="wb-card">' +
-      '<div class="wb-card-head"><div><h3>账号档案</h3><p>这些信息会进入每次对话、文案和分镜的上下文。</p></div></div>' +
+    var extra = state.accounts.filter(function (item) { return item.id !== 'default'; });
+    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
+      '<div class="wb-card"><div class="wb-card-head"><div><h3>创作账号</h3><p>一个机构可以管多个号：每个账号一份档案、文案、视频和素材。默认账号继承原有数据。</p></div></div>' +
+      '<div class="wb-account-bar"><label class="wb-inline"><span>当前账号</span>' + accountSelectHtml('id="wb-account-switch"') + '</label>' +
+      '<form id="wb-account-new" class="wb-inline"><input name="name" required placeholder="新账号名称，如：少儿美术主号" maxlength="60">' +
+      '<button class="btn" type="submit">' + ic('plus', 12) + '新增账号</button></form></div>' +
+      (extra.length ? '<table class="wb-table"><thead><tr><th>账号</th><th>平台</th><th>备注</th><th></th></tr></thead><tbody>' +
+        extra.map(function (item) {
+          return '<tr><td><b>' + esc(item.name) + '</b></td><td>' + esc(item.platform || '—') + '</td><td>' + esc(item.note || '—') + '</td>' +
+            '<td><button class="btn" type="button" data-account-del="' + esc(item.id) + '">' + ic('trash', 12) + '</button></td></tr>';
+        }).join('') + '</tbody></table>' : '<p class="wb-muted">目前只有默认账号。要分开管几个抖音号，就在上面新增。</p>') +
+      '</div>' +
+      '<div class="wb-card"><div class="wb-card-head"><div><h3>账号档案 · ' + esc(accountName(state.accountId)) + '</h3><p>这些信息会进入每次对话、文案和分镜的上下文；切换账号后档案各自独立。</p></div></div>' +
       '<form id="wb-account-form" class="wb-form">' +
       fields.map(function (field) {
         var key = field[0], label = field[1], type = field[2], placeholder = field[3];
@@ -440,6 +504,33 @@
       }).join('') +
       '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">保存档案</button><span class="wb-note">保存后，小铃铛会按这份档案回答。</span></div>' +
       '</form></div></div></div>';
+    bindAccountSwitch('#wb-account-switch');
+    $('#wb-account-new').onsubmit = async function (event) {
+      event.preventDefault();
+      var form = event.currentTarget;
+      var name = String(form.name.value || '').trim();
+      if (!name) return;
+      try {
+        var result = await call('/accounts', { method: 'POST', body: { name: name } });
+        state.accounts.push(result.account);
+        toast('已新增账号「' + result.account.name + '」，可开始补它的档案', 'success');
+        await switchAccount(result.account.id);
+        var profileName = $('#wb-account-form [name="name"]');
+        if (profileName) { profileName.value = result.account.name; }
+      } catch (error) { toast(error.message, 'error'); }
+    };
+    $$('[data-account-del]').forEach(function (button) {
+      button.onclick = async function () {
+        if (!confirm('删除这个账号？它名下的文案、视频和素材会并回默认账号，不会丢。')) return;
+        try {
+          await call('/accounts/' + encodeURIComponent(button.dataset.accountDel), { method: 'DELETE' });
+          state.accounts = state.accounts.filter(function (item) { return item.id !== button.dataset.accountDel; });
+          if (state.accountId === button.dataset.accountDel) await switchAccount('default');
+          renderAccount();
+          toast('账号已删除，内容已并回默认账号', 'success');
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    });
     $('#wb-account-form').onsubmit = async function (event) {
       event.preventDefault();
       var form = event.currentTarget;
@@ -447,9 +538,9 @@
       button.disabled = true;
       try {
         var data = Object.fromEntries(new FormData(form).entries());
-        var saved = await call('/profile', { method: 'PUT', body: { profile: data } });
+        var saved = await call('/profile', { method: 'PUT', body: { accountId: state.accountId, profile: data } });
         state.profile = saved.profile;
-        toast('账号档案已保存', 'success');
+        toast('「' + accountName(state.accountId) + '」的档案已保存', 'success');
       } catch (error) { toast(error.message, 'error'); }
       finally { button.disabled = false; }
     };
@@ -501,20 +592,22 @@
   function renderCopy() {
     var formState = state.copyForm || {};
     $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
-      '<div class="wb-card"><div class="wb-card-head"><div><h3>生成新文案</h3><p>围绕一个主题，一次给你多条不同角度的口播。</p></div></div>' +
+      '<div class="wb-card"><div class="wb-card-head"><div><h3>生成新文案</h3><p>围绕一个主题，一次给你多条不同角度的口播。</p></div>' +
+      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-copy-account"') + '</label></div>' +
       '<form id="wb-copy-form" class="wb-form">' +
       '<label class="wb-field full"><span>主题</span><input name="topic" required placeholder="例如：寒假班怎么选、体验课怎么开口" value="' + esc(formState.topic || '') + '"></label>' +
       '<label class="wb-field"><span>条数</span><select name="count">' + [3, 5, 7, 10].map(function (n) { return '<option' + (Number(formState.count || 5) === n ? ' selected' : '') + '>' + n + '</option>'; }).join('') + '</select></label>' +
       '<label class="wb-field"><span>风格</span><select name="style">' + ['口语化', '专业理性', '故事感', '犀利反常识'].map(function (s) { return '<option' + (formState.style === s ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select></label>' +
       '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">生成文案</button><span class="wb-note">使用平台模型渠道；模型返回空时会给出演示样本。</span></div></form></div>' +
       (state.copy.length ? '<div class="wb-cards wb-copy-grid">' + state.copy.map(function (item) {
-        return '<article class="wb-item"><div class="wb-card-head"><div><h4>' + esc(item.topic) + '</h4><div class="wb-meta">' + esc(item.style) + ' · ' + fmtDate(item.createdAt) + '</div></div></div>' +
+        return '<article class="wb-item"><div class="wb-card-head"><div><h4>' + esc(item.topic) + '</h4><div class="wb-meta">' + esc(item.style) + ' · ' + esc(accountName(item.accountId)) + ' · ' + fmtDate(item.createdAt) + '</div></div></div>' +
           '<div class="wb-copy-body">' + md(item.content) + '</div>' +
           '<div class="wb-actions"><button class="btn" type="button" data-copy-content="' + esc(item.id) + '">' + ic('copy', 12) + '复制</button>' +
           '<button class="btn" type="button" data-copy-check="' + esc(item.id) + '">' + ic('shield', 12) + '合规体检</button>' +
           '<button class="btn" type="button" data-copy-del="' + esc(item.id) + '">' + ic('trash', 12) + '</button></div></article>';
-      }).join('') + '</div>' : '<div class="wb-card"><p class="wb-muted">还没有文案。输入一个主题，先生成 5 条。</p></div>') +
+      }).join('') + '</div>' : '<div class="wb-card"><p class="wb-muted">这个账号还没有文案。输入一个主题，先生成 5 条。</p></div>') +
       '</div></div>';
+    bindAccountSwitch('#wb-copy-account');
     $('#wb-copy-form').onsubmit = async function (event) {
       event.preventDefault();
       var form = event.currentTarget;
@@ -524,6 +617,7 @@
       try {
         var data = Object.fromEntries(new FormData(form).entries());
         data.count = Number(data.count || 5);
+        data.accountId = state.accountId;
         state.copyForm = { topic: data.topic, count: data.count, style: data.style };
         var result = await call('/copy', { method: 'POST', body: data });
         state.copy.unshift(result.draft);
@@ -557,31 +651,87 @@
     });
   }
 
-  /* ───────────── 视频创作 ───────────── */
+  /* ───────────── 视频创作（脚本 + 真实渲染） ───────────── */
   function focusDetail() {
     requestAnimationFrame(function () {
       var detail = $('.wb-detail');
       if (detail) detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   }
+  var RENDER_STATUS = { running: '生成中', succeeded: '完成', failed: '失败' };
+  function renderStatusText(value) { return RENDER_STATUS[value] || value || '—'; }
+  async function loadRenders(projectId, silent) {
+    if (!projectId) return;
+    try {
+      var data = await call('/video/renders?projectId=' + encodeURIComponent(projectId));
+      state.renders = data.items || [];
+    } catch (error) {
+      if (!silent) toast(error.message, 'error');
+      return;
+    }
+    if (state.tab === 'video' && state.selectedVideo && state.selectedVideo.id === projectId) renderRenderList();
+    var running = state.renders.some(function (item) { return item.status === 'running'; });
+    if (running && !state.renderTimer) {
+      state.renderTimer = setInterval(function () {
+        if (state.tab !== 'video') { stopRenderPolling(); return; }
+        loadRenders(projectId, true);
+      }, 5000);
+    } else if (!running) {
+      stopRenderPolling();
+    }
+  }
+  function renderStatusChip(item) {
+    return '<span class="wb-tag ' + (item.status === 'succeeded' ? 'ok' : item.status === 'failed' ? 'bad' : '') + '">' + esc(renderStatusText(item.status)) + '</span>';
+  }
+  function renderRenderList() {
+    var box = $('#wb-render-list');
+    if (!box) return;
+    var renders = state.renders;
+    box.innerHTML = renders.length ? renders.map(function (item) {
+      var video = '';
+      if (item.status === 'succeeded' && item.assetId) {
+        video = '<video class="wb-render-video" controls preload="metadata" data-render-video="' + esc(item.assetId) + '"></video>';
+      }
+      return '<div class="wb-render">' +
+        '<div class="wb-card-head"><div><b>' + esc(item.title || '视频渲染') + '</b>' + renderStatusChip(item) +
+        '<div class="wb-meta">' + fmtDate(item.createdAt) + (item.durationSeconds ? ' · ' + item.durationSeconds + ' 秒' : '') + (item.aspectRatio ? ' · ' + esc(item.aspectRatio) : '') + '</div></div></div>' +
+        (item.status === 'failed' ? '<p class="err">' + ic('alert', 13) + '<span>' + esc(item.error || '生成失败') + '</span></p>' : '') +
+        (item.status === 'running' ? '<p class="wb-note">' + ic('loader', 12) + ' 已提交到平台视频渠道，通常要几分钟；这一页会自动刷新，也可以先去做别的。</p>' : '') +
+        video + '</div>';
+    }).join('') : '<p class="wb-muted">还没有渲染记录。把要生成的画面描述或口播填在下面提交。</p>';
+    hydrateRenderVideos();
+  }
+  async function hydrateRenderVideos() {
+    var videos = $$('[data-render-video]');
+    for (var i = 0; i < videos.length; i++) {
+      var video = videos[i];
+      if (video.dataset.loaded) continue;
+      video.dataset.loaded = '1';
+      try {
+        var blob = await fetchBlob(API + '/assets/' + encodeURIComponent(video.dataset.renderVideo) + '/file');
+        video.src = URL.createObjectURL(blob);
+      } catch (e) { /* 视频加载失败时保留播放器外壳，控制台可见 */ }
+    }
+  }
   function renderVideo() {
     var formState = state.videoForm || {};
     var selected = state.selectedVideo;
     $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
-      '<div class="wb-card"><div class="wb-card-head"><div><h3>新建视频项目</h3><p>从需求到分镜、口播和 SRT；复刻模式先拆参考结构，再给替换点。</p></div></div>' +
+      '<div class="wb-card"><div class="wb-card-head"><div><h3>新建视频项目</h3><p>从需求到分镜、口播和 SRT；复刻模式先拆参考结构，再给替换点。</p></div>' +
+      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-video-account"') + '</label></div>' +
       '<form id="wb-video-form" class="wb-form">' +
       '<label class="wb-field full"><span>视频主题</span><input name="title" required placeholder="例如：为什么体验课要这样上" value="' + esc(formState.title || '') + '"></label>' +
       '<label class="wb-field"><span>模式</span><select name="mode">' + ['原创', '复刻'].map(function (m) { return '<option' + (formState.mode === m ? ' selected' : '') + '>' + m + '</option>'; }).join('') + '</select></label>' +
       '<label class="wb-field"><span>目标时长</span><input value="30-60 秒" disabled></label>' +
       '<label class="wb-field full"><span>需求说明</span><textarea name="brief" placeholder="课程、人群、想引导的动作，或想保留/替换的部分">' + esc(formState.brief || '') + '</textarea></label>' +
       '<label class="wb-field full"><span>参考内容（复刻模式）</span><textarea name="referenceText" placeholder="粘贴参考视频的口播文字、结构说明或链接">' + esc(formState.referenceText || '') + '</textarea></label>' +
-      '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">生成分镜脚本</button><span class="wb-note">真实视频生成/数字人需要外部服务；一期先产出可拍脚本和 SRT。</span></div></form></div>' +
+      '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">生成分镜脚本</button><span class="wb-note">脚本用平台模型渠道；真实成片在下方「AI 生成视频」提交。</span></div></form></div>' +
       (state.videos.length ? '<div class="wb-cards">' + state.videos.map(function (item) {
         return '<article class="wb-item click' + (selected && selected.id === item.id ? ' current' : '') + '" data-video-open="' + esc(item.id) + '">' +
           '<div class="wb-card-head"><h4>' + esc(item.title) + '</h4><span class="wb-tag">' + esc(item.mode) + '</span></div>' +
-          '<div class="wb-meta">' + fmtDate(item.createdAt) + ' · ' + esc(videoStatusText(item.status)) + '</div>' +
+          '<div class="wb-meta">' + fmtDate(item.createdAt) + ' · ' + esc(videoStatusText(item.status)) + ' · ' + esc(accountName(item.accountId)) + '</div>' +
           '<p class="wb-preview">' + esc(String(item.script || '').replace(/[#*|>`-]/g, ' ').replace(/\s+/g, ' ').slice(0, 150)) + '</p></article>';
-      }).join('') + '</div>' : '<div class="wb-card"><p class="wb-muted">还没有视频项目。写一个主题和需求，先生成一版分镜。</p></div>') +
+      }).join('') + '</div>' : '<div class="wb-card"><p class="wb-muted">这个账号还没有视频项目。写一个主题和需求，先生成一版分镜。</p></div>') +
       (selected ? '<div class="wb-card wb-detail"><div class="wb-card-head"><div><h3>' + esc(selected.title) + '</h3><p>' + esc(selected.mode) + ' · 创建于 ' + fmtDate(selected.createdAt) + '</p></div>' +
         '<div class="wb-actions"><button class="btn primary" type="button" id="wb-save-video-top">保存修改</button><button class="btn" type="button" id="wb-close-video">收起</button></div></div>' +
         '<label class="wb-field"><span>口播/分镜脚本</span><textarea class="wb-script" id="wb-script-editor">' + esc(selected.script) + '</textarea></label>' +
@@ -590,8 +740,16 @@
         '<button class="btn" type="button" data-export="json">导出 JSON</button>' +
         '<button class="btn primary" type="button" id="wb-save-video">保存修改</button>' +
         '<button class="btn" type="button" id="wb-video-check">' + ic('shield', 12) + '合规体检</button></div>' +
-        '<p class="wb-note" style="margin-top:9px">状态：' + esc(videoStatusText(selected.status)) + ' · 保存后再导出，导出的是最新脚本。</p></div>' : '') +
+        '<p class="wb-note" style="margin-top:9px">状态：' + esc(videoStatusText(selected.status)) + ' · 保存后再导出，导出的是最新脚本。</p></div>' +
+        '<div class="wb-card"><div class="wb-card-head"><div><h3>AI 生成视频</h3><p>把一个分镜的画面描述或口播交给平台的视频渠道，几分钟出片，成片自动进素材库（文件夹「AI 生成」）。</p></div></div>' +
+        '<form id="wb-render-form" class="wb-form">' +
+        '<label class="wb-field full"><span>画面描述 / 口播</span><textarea name="prompt" required placeholder="从左边脚本里复制一个分镜的画面与口播，例如：画室里孩子低头画画，镜头缓推，口播：很多家长问，几岁适合开始学美术……"></textarea></label>' +
+        '<label class="wb-field"><span>时长</span><select name="durationSeconds">' + [5, 10, 15].map(function (n) { return '<option value="' + n + '">' + n + ' 秒</option>'; }).join('') + '</select></label>' +
+        '<label class="wb-field"><span>画幅</span><select name="aspectRatio">' + ['9:16', '16:9', '1:1', 'auto'].map(function (a) { return '<option value="' + a + '"' + (a === '9:16' ? ' selected' : '') + '>' + (a === 'auto' ? '自动（跟首帧/默认）' : a) + '</option>'; }).join('') + '</select></label>' +
+        '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">' + ic('video', 13) + '提交生成</button><span class="wb-note">走平台已有视频渠道，按机构限 20 次/小时；数字人口播与 1:1 复刻仍是二期外。</span></div></form>' +
+        '<div id="wb-render-list" style="margin-top:10px"></div></div>' : '') +
       '</div></div>';
+    bindAccountSwitch('#wb-video-account');
     $('#wb-video-form').onsubmit = async function (event) {
       event.preventDefault();
       var form = event.currentTarget;
@@ -600,6 +758,7 @@
       button.disabled = true; button.innerHTML = ic('loader', 13) + '生成中…';
       try {
         var data = Object.fromEntries(new FormData(form).entries());
+        data.accountId = state.accountId;
         state.videoForm = { title: data.title, mode: data.mode, brief: data.brief, referenceText: data.referenceText };
         var result = await call('/videos', { method: 'POST', body: data });
         state.videos.unshift(result.project);
@@ -619,7 +778,7 @@
       };
     });
     var close = $('#wb-close-video');
-    if (close) close.onclick = function () { state.selectedVideo = null; renderVideo(); };
+    if (close) close.onclick = function () { state.selectedVideo = null; stopRenderPolling(); renderVideo(); };
     var save = async function (button) {
       button.disabled = true;
       try {
@@ -637,35 +796,92 @@
     $$('[data-export]').forEach(function (button) {
       button.onclick = function () { downloadExport(selected.id, button.dataset.export, selected.title); };
     });
+    var renderForm = $('#wb-render-form');
+    if (renderForm) {
+      renderForm.onsubmit = async function (event) {
+        event.preventDefault();
+        var button = renderForm.querySelector('[type="submit"]');
+        var original = button.innerHTML;
+        button.disabled = true; button.innerHTML = ic('loader', 13) + '提交中…';
+        try {
+          var data = Object.fromEntries(new FormData(renderForm).entries());
+          data.projectId = selected.id;
+          data.accountId = state.accountId;
+          var result = await call('/video/render', { method: 'POST', body: data });
+          state.renders.unshift(result.render);
+          renderRenderList();
+          renderForm.prompt.value = '';
+          if (!state.renderTimer) loadRenders(selected.id, true);
+          toast('已提交视频生成，通常几分钟内完成', 'success');
+        } catch (error) {
+          toast(error.message, 'error');
+        } finally { button.disabled = false; button.innerHTML = original; }
+      };
+      renderRenderList();
+      loadRenders(selected.id, true);
+    }
   }
 
-  /* ───────────── 素材库 ───────────── */
+  /* ───────────── 素材库（账号 + 文件夹） ───────────── */
   function renderAssets() {
     var items = state.assets;
+    var folders = [{ folder: '', count: items.length }].concat(
+      (state.assetFolders || []).filter(function (row) { return row.folder; })
+    );
+    var folderChips = folders.map(function (row) {
+      var active = (state.assetFolder || '') === row.folder;
+      return '<button class="chip' + (active ? ' on' : '') + '" type="button" data-folder="' + esc(row.folder) + '">' +
+        (row.folder ? esc(row.folder) : '全部') + '<small> ' + row.count + '</small></button>';
+    }).join('');
     $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
-      '<div class="wb-card"><div class="wb-card-head"><div><h3>素材库</h3><p>图片、视频、音频和文本保存在本机/机构文件存储；不会上传到第三方。</p></div>' +
-      '<label class="btn primary" for="wb-asset-input">' + ic('upload', 13) + '上传素材</label>' +
-      '<input id="wb-asset-input" type="file" multiple hidden accept=".jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.webm,.m4v,.mp3,.m4a,.wav,.aac,.txt,.md"></div>' +
+      '<div class="wb-card"><div class="wb-card-head"><div><h3>素材库</h3><p>图片、视频、音频和文本保存在本机/机构文件存储；不会上传到第三方。AI 生成的视频会自动进「AI 生成」文件夹。</p></div>' +
+      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-asset-account"') + '</label></div>' +
+      '<div class="chips" style="margin:2px 0 10px">' + folderChips + '</div>' +
+      '<div class="wb-account-bar"><label class="btn primary" for="wb-asset-input">' + ic('upload', 13) + '上传素材</label>' +
+      '<input id="wb-asset-input" type="file" multiple hidden accept=".jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.webm,.m4v,.mp3,.m4a,.wav,.aac,.txt,.md">' +
+      '<label class="wb-inline"><span>放入文件夹</span><input id="wb-asset-folder" placeholder="留空=不分组，如：课堂实拍" maxlength="60" style="max-width:200px"></label></div>' +
       (items.length ? '<div class="wb-asset-grid">' + items.map(function (item) {
         var thumb = item.kind === 'image'
           ? '<img data-asset-img="' + esc(item.id) + '" alt="' + esc(item.fileName) + '" loading="lazy">'
           : ic(item.kind === 'video' ? 'video' : item.kind === 'audio' ? 'music' : 'folder', 28);
         return '<article class="wb-asset"><div class="wb-thumb">' + thumb + '</div><div class="wb-asset-info"><b title="' + esc(item.fileName) + '">' + esc(item.fileName) + '</b>' +
-          '<small>' + esc(item.kind) + ' · ' + fmtSize(item.size) + ' · ' + fmtDate(item.createdAt) + '</small>' +
+          '<small>' + esc(item.kind) + ' · ' + fmtSize(item.size) + ' · ' + fmtDate(item.createdAt) +
+          (item.folder ? ' · 📁 ' + esc(item.folder) : '') + ' · ' + esc(accountName(item.accountId)) + '</small>' +
           '<div class="wb-actions"><button class="btn" type="button" data-asset-open="' + esc(item.id) + '">打开</button>' +
           '<button class="btn" type="button" data-asset-del="' + esc(item.id) + '">' + ic('trash', 12) + '</button></div></div></article>';
-      }).join('') + '</div>' : '<p class="wb-muted">素材库是空的。上传课程图、课堂视频、参考音频或口播文本。</p>') +
+      }).join('') + '</div>' : '<p class="wb-muted">这个筛选下还没有素材。上传课程图、课堂视频、参考音频或口播文本。</p>') +
       '</div></div></div>';
+    bindAccountSwitch('#wb-asset-account');
+    $$('[data-folder]').forEach(function (chip) {
+      chip.onclick = async function () {
+        state.assetFolder = chip.dataset.folder;
+        try {
+          var query = '?accountId=' + encodeURIComponent(state.accountId) + (state.assetFolder ? '&folder=' + encodeURIComponent(state.assetFolder) : '');
+          var data = await call('/assets' + query);
+          state.assets = data.items || [];
+          state.assetFolders = data.folders || state.assetFolders;
+        } catch (error) { toast(error.message, 'error'); }
+        renderAssets();
+      };
+    });
     var input = $('#wb-asset-input');
     input.onchange = async function () {
       var files = Array.prototype.slice.call(input.files || []);
       if (!files.length) return;
+      var folder = String(($('#wb-asset-folder') || {}).value || '').trim();
       for (var i = 0; i < files.length; i++) {
         var form = new FormData();
         form.append('file', files[i]);
+        if (folder) form.append('folder', folder);
+        form.append('accountId', state.accountId);
         try {
           var result = await call('/assets', { method: 'POST', body: form });
           state.assets.unshift(result.asset);
+          state.assetFolders = null; // 重新拉文件夹计数
+          try {
+            var fresh = await call('/assets?accountId=' + encodeURIComponent(state.accountId));
+            state.assetFolders = fresh.folders || [];
+          } catch (e) { /* 忽略 */ }
           renderAssets();
           toast(files[i].name + ' 已上传', 'success');
         } catch (error) { toast(files[i].name + '：' + error.message, 'error'); }

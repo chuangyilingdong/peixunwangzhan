@@ -1302,9 +1302,73 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_jobs (
   updated_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_job_owner ON junshi_workbench_jobs(owner_key, created_at DESC);
+
+-- 内容工作台二期（2026-10-24）：多账号 + 素材文件夹 + 真实视频渲染。
+-- 生产 MySQL 手工执行 deploy/production/migrate/30-junshi-workbench-accounts-mysql.sql。
+CREATE TABLE IF NOT EXISTS junshi_workbench_accounts (
+  id         TEXT NOT NULL PRIMARY KEY,
+  owner_key  TEXT NOT NULL,
+  org_id     TEXT,
+  name       TEXT NOT NULL,
+  platform   TEXT NOT NULL DEFAULT '抖音',
+  note       TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_junshi_wb_acc_owner_name ON junshi_workbench_accounts(owner_key, name);
+
+-- 档案按账号各存一份。默认账号 id 固定 'default'（隐式行，不进 accounts 表）；
+-- 旧 junshi_workbench_profiles 的内容在启动时回填到默认账号一次（见下方补列段）。
+CREATE TABLE IF NOT EXISTS junshi_workbench_account_profiles (
+  owner_key   TEXT NOT NULL,
+  account_id  TEXT NOT NULL DEFAULT 'default',
+  org_id      TEXT,
+  content     TEXT NOT NULL DEFAULT '{}',
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  PRIMARY KEY (owner_key, account_id)
+);
+
+-- 分镜/口播提交真实视频渲染的任务记录（走平台既有 VIDEO 渠道，异步轮询）。
+CREATE TABLE IF NOT EXISTS junshi_workbench_video_renders (
+  id               TEXT NOT NULL PRIMARY KEY,
+  owner_key        TEXT NOT NULL,
+  org_id           TEXT,
+  project_id       TEXT,
+  account_id       TEXT NOT NULL DEFAULT 'default',
+  job_id           TEXT NOT NULL DEFAULT '',
+  title            TEXT NOT NULL DEFAULT '',
+  prompt           TEXT NOT NULL DEFAULT '',
+  duration_seconds INTEGER NOT NULL DEFAULT 0,
+  aspect_ratio     TEXT NOT NULL DEFAULT '',
+  status           TEXT NOT NULL DEFAULT 'running',
+  asset_id         TEXT,
+  error            TEXT NOT NULL DEFAULT '',
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_render_owner ON junshi_workbench_video_renders(owner_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_render_project ON junshi_workbench_video_renders(project_id, created_at DESC);
 `;
 
 db.exec(SCHEMA);
+
+// ── 内容工作台二期补列（2026-10-24）──────────────────────────────────────────
+// 文案/视频/素材挂到具体创作账号（默认 'default'，页面显示为「默认账号」），旧数据不动。
+// 档案改存 junshi_workbench_account_profiles（旧表主键只有 owner_key，加不了账号维度），
+// 旧内容回填到默认账号；INSERT OR IGNORE 每次启动跑都幂等。
+try { db.exec("ALTER TABLE junshi_workbench_copy_drafts ADD COLUMN account_id TEXT NOT NULL DEFAULT 'default'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec("ALTER TABLE junshi_workbench_video_projects ADD COLUMN account_id TEXT NOT NULL DEFAULT 'default'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec("ALTER TABLE junshi_workbench_assets ADD COLUMN account_id TEXT NOT NULL DEFAULT 'default'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec("ALTER TABLE junshi_workbench_assets ADD COLUMN folder TEXT NOT NULL DEFAULT ''"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try {
+  db.exec(`INSERT OR IGNORE INTO junshi_workbench_account_profiles (owner_key, account_id, org_id, content, created_at, updated_at)
+           SELECT owner_key, 'default', org_id, content, created_at, updated_at FROM junshi_workbench_profiles`);
+} catch { /* 全新库里旧表为空/不存在时忽略 */ }
 
 // ── 课包/课时的重做字段（2026-09-11，平台侧梳理 P1）────────────────────────────
 // 课时可同时支持多种上课类型（画布 + VibeCoding），学生端两个入口并列。
