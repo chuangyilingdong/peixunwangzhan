@@ -86,6 +86,8 @@ const FAST = [
   'scripts/p139-canvas-incremental-submit.mjs',
   // 2026-10-25 加：采集助手「自己作品」→ 数据复盘（新表 upsert、/reports 合并、洞察样本）。
   'scripts/p149-junshi-published-works.mjs',
+  // 2026-10-25 加：视频工作台复刻分镜原帧（真传视频、真跑 ffmpeg、写回每镜）。
+  'scripts/p150-video-storyboard-frames.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));

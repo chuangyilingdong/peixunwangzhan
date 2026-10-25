@@ -7,7 +7,9 @@
  */
 import { createReadStream } from 'node:fs';
 import fs from 'node:fs';
-import { stat, rm } from 'node:fs/promises';
+import { stat, rm, mkdtemp, writeFile, readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { aq, arow, arows, corsHeaders, errors, id, nowIso, requireAuth, ApiError } from '../lib.js';
@@ -406,6 +408,14 @@ function workOut(row) {
   let script = null;
   try { assetRefs = JSON.parse(row.asset_refs || '[]'); } catch { /* ignore */ }
   try { script = row.director_script ? JSON.parse(row.director_script) : null; } catch { script = null; }
+  if (script && Array.isArray(script.shots)) {
+    script.shots = script.shots.map((shot) => ({
+      ...shot,
+      referenceFrameUrl: shot.referenceFrameAssetId
+        ? `/api/junshi/workbench/assets/${encodeURIComponent(shot.referenceFrameAssetId)}/file`
+        : null,
+    }));
+  }
   return {
     id: row.id,
     accountId: row.account_id || 'default',
@@ -483,6 +493,8 @@ function parseDirectorScript(raw) {
     voiceover: String(shot?.voiceover || '').slice(0, 500),
     overlay: String(shot?.overlay || '').slice(0, 120),
     renderPrompt: String(shot?.renderPrompt || '').slice(0, 1000),
+    referenceFrameAssetId: String(shot?.referenceFrameAssetId || '').slice(0, 64),
+    referenceFrameTime: shot?.referenceFrameTime != null && Number.isFinite(Number(shot.referenceFrameTime)) ? Number(shot.referenceFrameTime) : null,
   })).filter((shot) => shot.scene || shot.voiceover || shot.renderPrompt).slice(0, 12);
   if (!shots.length) return { ok: false, message: '编导稿里没有可用的分镜（需要 shots 数组，每镜含画面/口播）' };
   return {
@@ -546,6 +558,165 @@ async function runDirectorScript(owner, workId, { reference = '' } = {}) {
     if (job) await jobDone(job, 'failed', String(message).slice(0, 1000)).catch(() => {});
   }
 }
+const WORKBENCH_REF_CACHE_TTL_MS = 20 * 60 * 60 * 1000;
+const workbenchRefUploadCache = new Map();
+
+/** 跑一个外部命令（ffmpeg/ffprobe）：超时杀进程，stderr 只留尾部给用户看。 */
+function runCommand(command, args, timeoutMs = 120000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`${command} 超时`));
+    }, timeoutMs);
+    timer.unref?.();
+    child.stdout.on('data', (chunk) => { stdout += chunk; if (stdout.length > 2_000_000) stdout = stdout.slice(-2_000_000); });
+    child.stderr.on('data', (chunk) => { stderr += chunk; if (stderr.length > 2_000_000) stderr = stderr.slice(-2_000_000); });
+    child.on('error', (error) => { clearTimeout(timer); reject(error); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`${command} 退出码 ${code}：${stderr.slice(-400)}`));
+    });
+  });
+}
+
+async function probeVideoDuration(file) {
+  try {
+    const { stdout } = await runCommand('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file], 30000);
+    const seconds = Number(String(stdout || '').trim());
+    return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+  } catch { return 0; }
+}
+
+/** 参考图传到 seedance 拿 24h 直链（按 assetId 缓存 20h，避免每次渲染重复上传）。 */
+async function seedanceReferenceUrl(config, assetRow) {
+  const cacheKey = `${config.endpoint}|${assetRow.id}`;
+  const hit = workbenchRefUploadCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < WORKBENCH_REF_CACHE_TTL_MS) return hit.url;
+  const buffer = await assetBytes(assetRow);
+  if (!buffer.length) throw new Error('参考图是空文件');
+  if (buffer.length > 20 * 1024 * 1024) throw new Error(`参考图「${assetRow.file_name || assetRow.id}」超过 20MB，请压缩后再用`);
+  const url = await uploadToSeedance({
+    ...config, buffer,
+    fileName: assetRow.file_name || `${assetRow.id}.jpg`,
+    mimeType: assetRow.mime_type || 'image/jpeg',
+  });
+  workbenchRefUploadCache.set(cacheKey, { url, at: Date.now() });
+  while (workbenchRefUploadCache.size > 300) workbenchRefUploadCache.delete(workbenchRefUploadCache.keys().next().value);
+  return url;
+}
+
+/**
+ * 本次渲染要带的参考图：
+ *   · 单镜渲染优先用该镜抽出的原帧（storyboard_replication 的核心）；
+ *   · 整片渲染用任务里 @人物/@场景/@道具 的图片（人物优先），最多 3 张。
+ * 返回 firstFrameUrl（给只支持首帧的模型）与 referenceAssets（给支持全能参考的模型）。
+ */
+async function collectWorkReferenceAssets(owner, workRow, shot = null) {
+  let refs = [];
+  try { refs = JSON.parse(workRow.asset_refs || '[]'); } catch { /* ignore */ }
+  const roleRank = { 人物: 0, 场景: 1, 道具: 2 };
+  const workAssetIds = refs
+    .slice()
+    .sort((left, right) => (roleRank[left.role] ?? 5) - (roleRank[right.role] ?? 5))
+    .map((ref) => String(ref.assetId || ''))
+    .filter(Boolean)
+    .slice(0, 3);
+  const preferredFrame = String(shot?.referenceFrameAssetId || '').trim();
+  const candidates = preferredFrame ? [preferredFrame] : workAssetIds;
+  const loadRows = async (ids) => {
+    const rows = [];
+    for (const assetId of ids) {
+      const row = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, owner.key]);
+      if (row && /^image\//.test(String(row.mime_type || ''))) rows.push(row);
+    }
+    return rows;
+  };
+  let assetRows = await loadRows(candidates);
+  // 原帧被删了（或文件丢了）：退回任务本身的参考图，别让整条渲染莫名失败。
+  if (!assetRows.length && preferredFrame) assetRows = await loadRows(workAssetIds);
+  if (!assetRows.length) return { firstFrameUrl: '', referenceAssets: [], count: 0 };
+  const policy = await getAiProviderPolicy();
+  const config = await seedanceChannelConfig(policy?.channels);
+  if (!config) {
+    throw errors.badRequest('参考图需要 seedance 文件上传通道；当前平台没有配置 seedance 渠道，请让管理员检查 AI 渠道设置。', 'WORKBENCH_VIDEO_REF_UPLOAD_NOT_CONFIGURED');
+  }
+  const referenceAssets = [];
+  for (const row of assetRows) {
+    referenceAssets.push({ type: 'IMAGE', url: await seedanceReferenceUrl(config, row) });
+  }
+  return { firstFrameUrl: referenceAssets[0]?.url || '', referenceAssets, count: referenceAssets.length };
+}
+
+/** 从参考视频按分镜起点抽原帧 → 入素材库「分镜原帧」→ 写回每镜 referenceFrameAssetId。 */
+async function extractWorkFrames(owner, work, requestedAssetId = '') {
+  const parsed = parseDirectorScript(work.director_script);
+  if (!parsed.ok) throw errors.badRequest('编导稿还没有准备好，先等脚本生成或保存一份。', 'WORKBENCH_VIDEO_NO_SCRIPT');
+  let videoRow = null;
+  if (requestedAssetId) {
+    videoRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [requestedAssetId, owner.key]);
+  }
+  if (!videoRow) {
+    let refs = [];
+    try { refs = JSON.parse(work.asset_refs || '[]'); } catch { /* ignore */ }
+    for (const ref of refs) {
+      const row = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [String(ref.assetId || ''), owner.key]);
+      if (row && row.kind === 'video') { videoRow = row; break; }
+    }
+  }
+  if (!videoRow || videoRow.kind !== 'video') {
+    throw errors.badRequest('这条任务还没有参考视频：先在「参考素材」里加一个视频（角色选「场景」），再抽帧。', 'WORKBENCH_VIDEO_NO_REFERENCE_VIDEO');
+  }
+  let dir = null;
+  try {
+    const buffer = await assetBytes(videoRow);
+    if (!buffer.length) throw new Error('参考视频是空文件');
+    if (buffer.length > 200 * 1024 * 1024) throw new Error('参考视频超过 200MB，请先压缩');
+    dir = await mkdtemp(path.join(os.tmpdir(), 'jw-frames-'));
+    const ext = path.extname(String(videoRow.file_name || '')).slice(0, 8) || '.mp4';
+    const input = path.join(dir, `source${ext}`);
+    await writeFile(input, buffer);
+    const duration = await probeVideoDuration(input);
+    const shots = parsed.data.shots;
+    const total = shots.reduce((sum, shot) => sum + Number(shot.seconds || 0), 0);
+    const span = duration > 0 ? duration : Math.max(total, 1);
+    let cursor = 0;
+    const frames = [];
+    for (const shot of shots) {
+      const start = cursor;
+      cursor += Number(shot.seconds) || 0;
+      const time = Math.max(0, Math.min(span - 0.15, start + Math.min(1, (Number(shot.seconds) || 3) / 2)));
+      const outPath = path.join(dir, `shot-${shot.index}.jpg`);
+      await runCommand('ffmpeg', ['-y', '-i', input, '-ss', time.toFixed(3), '-frames:v', '1', '-q:v', '3', outPath], 120000);
+      const frameBuffer = await readFile(outPath);
+      if (!frameBuffer.length) throw new Error(`第 ${shot.index} 镜抽帧为空`);
+      const stored = await persistSecureUpload({ fileName: `${work.id}-shot-${shot.index}.jpg`, mimeType: 'image/jpeg', buffer: frameBuffer });
+      const frameAssetId = id('jwa');
+      await aq('INSERT INTO junshi_workbench_assets (id,owner_key,org_id,account_id,file_name,storage_key,storage_backend,mime_type,kind,file_size,folder,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+        [frameAssetId, owner.key, owner.orgId, work.account_id || 'default', stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || 'image/jpeg', 'image', stored.fileSize || frameBuffer.length, '分镜原帧', nowIso()]);
+      frames.push({ shotIndex: shot.index, assetId: frameAssetId, time: Number(time.toFixed(2)) });
+    }
+    const updated = {
+      ...parsed.data,
+      shots: parsed.data.shots.map((shot) => {
+        const frame = frames.find((item) => item.shotIndex === shot.index);
+        return {
+          ...shot,
+          referenceFrameAssetId: frame?.assetId || shot.referenceFrameAssetId || '',
+          referenceFrameTime: frame?.time ?? shot.referenceFrameTime ?? null,
+        };
+      }),
+    };
+    await aq('UPDATE junshi_workbench_video_works SET director_script=?, updated_at=? WHERE id=? AND owner_key=?', [JSON.stringify(updated), nowIso(), work.id, owner.key]);
+    return { frames, work: await arow('SELECT * FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [work.id, owner.key]) };
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 /** 确认渲染（confirm 路由与自动任务共用）：渠道预检 → 建整片渲染行 → 异步跑。 */
 async function startWorkRender(owner, work) {
   const parsed = parseDirectorScript(work.director_script);
@@ -576,15 +747,31 @@ async function runWorkbenchRender(owner, renderId, { job = null } = {}) {
     const row = await arow('SELECT * FROM junshi_workbench_video_renders WHERE id=? AND owner_key=?', [renderId, owner.key]);
     if (!row) return;
     let resolution = '';
+    let workRow = null;
+    let shot = null;
     if (row.work_id) {
-      const workRow = await arow('SELECT resolution FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [row.work_id, owner.key]).catch(() => null);
+      workRow = await arow('SELECT * FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [row.work_id, owner.key]).catch(() => null);
       resolution = String(workRow?.resolution || '');
+      if (workRow && row.kind === 'shot' && Number(row.shot_index) > 0) {
+        const parsed = parseDirectorScript(workRow.director_script);
+        if (parsed.ok) shot = parsed.data.shots.find((item) => Number(item.index) === Number(row.shot_index)) || null;
+      }
     }
     const policy = await getAiProviderPolicy();
     const selection = providerSelectionForModality(policy, 'VIDEO');
     const studentOptions = { aspectRatio: row.aspect_ratio || '9:16', resolution, audio: true };
     if (Number(row.duration_seconds) > 0) studentOptions.durationSeconds = Number(row.duration_seconds);
-    const options = await generationOptionsFor({ context: null, modality: 'VIDEO', policy, selection, box: {}, studentOptions });
+    const refInputs = workRow
+      ? await collectWorkReferenceAssets(owner, workRow, shot)
+      : { firstFrameUrl: '', referenceAssets: [], count: 0 };
+    const options = await generationOptionsFor({
+      context: null, modality: 'VIDEO', policy, selection, box: {}, studentOptions,
+      firstFrameUrl: refInputs.firstFrameUrl,
+      referenceAssets: refInputs.referenceAssets,
+    });
+    if (refInputs.count && !options.firstFrameUrl && !(Array.isArray(options.referenceAssets) && options.referenceAssets.length)) {
+      throw new Error('当前视频模型不支持参考图/首帧，参考素材没有发出去；请换一个支持图生视频的模型，或去掉参考素材再生成。');
+    }
     const provider = getGenerationProvider(selection);
     const generated = await provider.generate({
       modality: 'VIDEO', prompt: row.prompt, title: row.title, options,
@@ -622,12 +809,13 @@ async function runWorkbenchRender(owner, renderId, { job = null } = {}) {
     await aq("UPDATE junshi_workbench_video_renders SET status='succeeded', asset_id=?, error='', updated_at=? WHERE id=?", [assetId, nowIso(), renderId]);
     if (row.work_id) {
       if (row.kind === 'main') {
-        const message = stored ? `视频已完成并保存到素材库（文件夹：成片）${costText}` : note || '视频已完成';
+        const refNote = refInputs.count ? `，含 ${refInputs.count} 张参考图` : '';
+        const message = stored ? `视频已完成并保存到素材库（文件夹：成片）${costText}${refNote}` : note || '视频已完成';
         await aq('UPDATE junshi_workbench_video_works SET status=?, message=?, output_asset_id=?, updated_at=? WHERE id=? AND owner_key=?',
           [stored ? 'succeeded' : 'failed', message, assetId, nowIso(), row.work_id, owner.key]);
       } else {
         await aq('UPDATE junshi_workbench_video_works SET message=?, updated_at=? WHERE id=? AND owner_key=?',
-          [`第 ${row.shot_index} 镜已完成${stored ? '，片段已入素材库' : ''}${costText}`, nowIso(), row.work_id, owner.key]);
+          [`第 ${row.shot_index} 镜已完成${stored ? '，片段已入素材库' : ''}${costText}${refInputs.count ? `，用参考原帧 ${refInputs.count} 张` : ''}`, nowIso(), row.work_id, owner.key]);
       }
     }
     if (job) await jobDone(job, 'succeeded', stored ? `视频已生成并存入素材库（文件夹：成片）${costText}` : note).catch(() => {});
@@ -2784,6 +2972,11 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     if (sub1 === 'confirm' && method === 'POST') {
       const renderId = await startWorkRender(owner, work);
       return { work: workOut(await arow('SELECT * FROM junshi_workbench_video_works WHERE id=?', [workId])), renderId };
+    }
+    if (sub1 === 'extract-frames' && method === 'POST') {
+      rateLimit(owner.key);
+      const result = await extractWorkFrames(owner, work, text(ctx.body?.assetId));
+      return { work: workOut(result.work), frames: result.frames };
     }
     if (sub1 === 'shots' && sub2 && method === 'POST') {
       const shotIndex = clampInt(decodeURIComponent(sub2), 1, 1, 99);

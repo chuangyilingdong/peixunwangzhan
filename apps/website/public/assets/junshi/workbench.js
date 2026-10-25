@@ -219,6 +219,7 @@
     videoWorkTimer: null,
     videoShotEditing: null,
     videoShotEdits: {},
+    shotFrameUrls: {},
     // 八期 · 内容计划/周期日历（对齐原版 content-cycles，作者本人授权复刻）
     cycles: [],
     currentCycle: null,
@@ -1945,6 +1946,22 @@
       } catch (e) { /* 视频加载失败保留外壳 */ }
     }
   }
+  async function hydrateShotFrames() {
+    var frames = $$('[data-shot-frame]');
+    for (var i = 0; i < frames.length; i++) {
+      var img = frames[i];
+      var assetId = img.dataset.shotFrame;
+      if (!assetId || img.dataset.loaded) continue;
+      img.dataset.loaded = '1';
+      if (state.shotFrameUrls[assetId]) { img.src = state.shotFrameUrls[assetId]; continue; }
+      try {
+        var blob = await fetchBlob(API + '/assets/' + encodeURIComponent(assetId) + '/file');
+        var url = URL.createObjectURL(blob);
+        state.shotFrameUrls[assetId] = url;
+        img.src = url;
+      } catch (e) { /* 原帧加载失败保留占位 */ }
+    }
+  }
 
   /* ── 配置卡（生成 / 复刻） ── */
   function wbTypeTabs(draft) {
@@ -2026,7 +2043,10 @@
     var voiceover = editing ? (edits.voiceover !== undefined ? edits.voiceover : shot.voiceover) : shot.voiceover;
     var prompt = editing ? (edits.renderPrompt !== undefined ? edits.renderPrompt : shot.renderPrompt) : shot.renderPrompt;
     var overlay = editing ? (edits.overlay !== undefined ? edits.overlay : shot.overlay) : shot.overlay;
-    var body = editing
+    var frameHtml = shot.referenceFrameAssetId
+      ? '<div class="wb-shot-media"><img data-shot-frame="' + esc(shot.referenceFrameAssetId) + '" alt="第 ' + shot.index + ' 镜参考原帧"><span>参考原帧' + (shot.referenceFrameTime != null ? ' · ' + Number(shot.referenceFrameTime).toFixed(1) + 's' : '') + '</span></div>'
+      : '';
+    var body = frameHtml + (editing
       ? '<label class="wb-field"><span>画面</span><textarea data-wb-v-edit="scene" data-key="' + esc(key) + '">' + esc(scene || '') + '</textarea></label>' +
         '<label class="wb-field"><span>口播</span><textarea data-wb-v-edit="voiceover" data-key="' + esc(key) + '">' + esc(voiceover || '') + '</textarea></label>' +
         '<label class="wb-field"><span>画面提示词（给视频模型）</span><textarea data-wb-v-edit="renderPrompt" data-key="' + esc(key) + '">' + esc(prompt || '') + '</textarea></label>' +
@@ -2036,7 +2056,7 @@
       : '<p class="wb-v-shot-line">' + esc(scene || '（无画面描述）') + '</p>' +
         (voiceover ? '<p class="wb-v-shot-line voice">「' + esc(voiceover) + '」</p>' : '') +
         (overlay ? '<p class="wb-v-shot-line muted">字幕：' + esc(overlay) + '</p>' : '') +
-        (prompt ? '<details class="wb-v-shot-prompt"><summary>画面提示词</summary><p>' + esc(prompt) + '</p></details>' : '');
+        (prompt ? '<details class="wb-v-shot-prompt"><summary>画面提示词</summary><p>' + esc(prompt) + '</p></details>' : ''));
     var actions = editing ? '' : '<div class="wb-actions">' +
       '<button class="btn" type="button" data-wb-v-shot="edit" data-id="' + esc(work.id) + '" data-index="' + shot.index + '">' + ic('pen', 11) + '改这镜</button>' +
       '<button class="btn" type="button" data-wb-v-shot="render" data-id="' + esc(work.id) + '" data-index="' + shot.index + '">单镜试渲染</button></div>';
@@ -2077,6 +2097,10 @@
       if (work.status === 'failed' && !script) actions += '<button class="btn primary" type="button" data-wb-v-work="regenerate" data-id="' + esc(work.id) + '">重新生成脚本</button>';
       else actions += '<button class="btn primary" type="button" data-wb-v-work="confirm" data-id="' + esc(work.id) + '">确认生成视频</button>' +
         '<button class="btn" type="button" data-wb-v-work="regenerate" data-id="' + esc(work.id) + '">换一版</button>';
+    }
+    if (work.mode === 'replicate' && script && !busy) {
+      var hasFrames = (script.shots || []).some(function (shot) { return shot.referenceFrameAssetId; });
+      actions += '<button class="btn" type="button" data-wb-v-work="extract-frames" data-id="' + esc(work.id) + '">' + ic('image', 12) + (hasFrames ? '重新抽取原帧' : '抽取参考原帧') + '</button>';
     }
     if (script && !busy) actions += '<button class="btn" type="button" data-wb-v-work="save-script" data-id="' + esc(work.id) + '">保存编导稿修改</button>';
     actions += '</div>';
@@ -2324,6 +2348,7 @@
     refreshAvatarRuns(true);
     bindLegacyVideoHandlers();
     hydrateWorkVideos();
+    void hydrateShotFrames();
 
     $$('[data-wb-v-launch]').forEach(function (button) {
       button.onclick = function () {
@@ -2388,15 +2413,22 @@
           if (draft.mode === 'replicate' && draft.sourceKind === 'transcript' && !draft.sourceId) {
             toast('先选一条转写档案作为参考', 'error'); button.disabled = false; button.innerHTML = original; return;
           }
-          var reference = draft.sourceKind === 'transcript'
-            ? (state.transcripts.filter(function (item) { return item.id === draft.sourceId; })[0] || {}).text || ''
-            : draft.reference;
+          var transcript = draft.sourceKind === 'transcript'
+            ? (state.transcripts.filter(function (item) { return item.id === draft.sourceId; })[0] || null)
+            : null;
+          var reference = transcript ? (transcript.text || '') : draft.reference;
+          var assetRefs = (draft.assetRefs || []).slice();
+          // 复刻模式：把转写档案对应的视频素材一起带上，后面才能按分镜抽原帧。
+          if (draft.mode === 'replicate' && transcript && transcript.assetId
+            && !assetRefs.some(function (ref) { return ref.assetId === transcript.assetId; })) {
+            assetRefs.push({ assetId: transcript.assetId, role: '场景', label: transcript.title || '参考视频', notes: '复刻参考视频' });
+          }
           var result = await call('/video/works', {
             method: 'POST',
             body: {
               mode: draft.mode, type: draft.type, subtype: draft.subtype, hookStrategy: draft.hookStrategy,
               durationSeconds: draft.durationSeconds, resolution: draft.resolution, ratio: draft.ratio,
-              brief: draft.brief, reference: reference, assetRefs: draft.assetRefs, accountId: state.accountId,
+              brief: draft.brief, reference: reference, assetRefs: assetRefs, accountId: state.accountId,
             },
           });
           state.videoWorks.unshift(result.work);
@@ -2423,6 +2455,10 @@
           } else if (action === 'regenerate') {
             await call('/video/works/' + encodeURIComponent(workId) + '/regenerate', { method: 'POST', body: {} });
             toast('正在换一版编导稿…', 'success');
+          } else if (action === 'extract-frames') {
+            var extracted = await call('/video/works/' + encodeURIComponent(workId) + '/extract-frames', { method: 'POST', body: {} });
+            state.videoWorks = state.videoWorks.map(function (item) { return item.id === workId ? extracted.work : item; });
+            toast('已抽取 ' + ((extracted.frames || []).length) + ' 张参考原帧', 'success');
           } else if (action === 'save-script') {
             var work = state.videoWorks.filter(function (item) { return item.id === workId; })[0];
             if (!work || !work.directorScript) throw new Error('还没有编导稿可保存');
@@ -2459,6 +2495,8 @@
               voiceover: edits.voiceover !== undefined ? edits.voiceover : shot.voiceover,
               overlay: edits.overlay !== undefined ? edits.overlay : shot.overlay,
               renderPrompt: edits.renderPrompt !== undefined ? edits.renderPrompt : shot.renderPrompt,
+              referenceFrameAssetId: shot.referenceFrameAssetId || '',
+              referenceFrameTime: shot.referenceFrameTime == null ? null : shot.referenceFrameTime,
             };
           });
           state.videoShotEditing = null;
