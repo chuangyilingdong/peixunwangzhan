@@ -2800,7 +2800,8 @@
       '<button class="btn" type="button" data-review-action="refresh-reports">刷新</button>' +
       (pending > 0 ? '<button class="btn" type="button" data-review-action="go-copy">' + pending + ' 条还没回填，去文案草稿</button>' : '') +
       '</div>' +
-      (insight ? '<div class="wb-copy-body wb-review-insight">' + md(insight) + '</div>' : '') +
+      (insight ? '<div class="wb-copy-body wb-review-insight">' + md(insight) + '</div>' +
+        '<div class="wb-actions"><button class="btn primary" type="button" data-review-action="next-cycle">' + ic('sparkle', 13) + '用这份复盘生成下个周期计划</button></div>' : '') +
       '</div>';
     var listHtml;
     if (published.length) {
@@ -2843,6 +2844,24 @@
         if (action === 'refresh-reports') {
           button.disabled = true; button.innerHTML = ic('loader', 12) + '刷新中…';
           await loadReports(true);
+          return;
+        }
+        if (action === 'next-cycle') {
+          var originalNext = button.innerHTML;
+          button.disabled = true; button.innerHTML = ic('loader', 12) + '生成中…';
+          var brief = ('基于最近一次数据复盘（' + published.length + ' 条已发布数据，总播放 ' + (totals.plays || 0) + '）生成下个周期计划。' + String(insight || ''))
+            .replace(/[#*`>|]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 450);
+          try {
+            await call('/cycles', { method: 'POST', body: { count: 7, brief, accountId: state.accountId } });
+            state.cycleForm = { count: 7, brief: '' };
+            state.cycles = [];
+            setTab('plan');
+            toast('已开始生成下个周期计划，通常十几秒到一分钟', 'success');
+          } catch (error) {
+            toast(error.message, 'error');
+            button.disabled = false;
+            button.innerHTML = originalNext;
+          }
           return;
         }
         var original = button.innerHTML;
