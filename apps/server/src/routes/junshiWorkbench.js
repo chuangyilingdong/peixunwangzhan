@@ -687,7 +687,8 @@ async function runAssetAnalysis({ ownerKey, analysisId }) {
         { type: 'image_url', image_url: { url: dataUrl } },
       ] }];
       const result = await collectText(null, { system: WORKBENCH_SYSTEM, messages });
-      parsed = parseLooseJsonObject(result.text);
+      // ⚠️ 坑 9：parseLooseJsonObject 嵌在巨型 handler 内，模块级不可见 —— 必须用本文件自带的 firstJsonObject。
+      parsed = firstJsonObject(result.text);
       if (!parsed) parsed = JSON.parse(demoAssetAnalysis({ fileName: assetRow.file_name }));
     }
     const cleaned = {
