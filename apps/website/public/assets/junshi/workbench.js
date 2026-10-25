@@ -219,6 +219,13 @@
     videoWorkTimer: null,
     videoShotEditing: null,
     videoShotEdits: {},
+    // 八期 · 内容计划/周期日历（对齐原版 content-cycles，作者本人授权复刻）
+    cycles: [],
+    currentCycle: null,
+    cycleTimer: null,
+    cycleSlotEditing: null,
+    cycleForm: { count: 7, brief: '' },
+    cycleRequirements: '',
     // 多创作账号：当前选中的账号 id（'default' = 默认账号）；文案/视频/素材/档案都跟着它走。
     accounts: [],
     accountId: 'default',
@@ -262,6 +269,8 @@
     state.tab = tab;
     if (tab !== 'video') { stopRenderPolling(); stopAvatarPolling(); stopVideoWorkPolling(); }
     if (tab !== 'chat') stopWfPolling();
+    if (tab !== 'plan') stopCyclePolling();
+    if (tab === 'plan') void loadCycles();
     if (tab !== 'references') stopTsPolling();
     if (tab !== 'copybrains' && state.brainPollTimer) { clearInterval(state.brainPollTimer); state.brainPollTimer = null; }
     if (tab === 'copybrains') void refreshBrains(true);
@@ -299,6 +308,7 @@
       state.assets = results[3].items || [];
       state.assetFolders = results[3].folders || [];
       if (state.tab === 'video') { state.selectedVideo = null; state.videoShotEditing = null; state.videoShotEdits = {}; void loadVideoData(true); }
+      if (state.tab === 'plan') { state.cycleSlotEditing = null; void loadCycles(true); }
     } catch (e) { /* 保持旧数据 */ }
     render();
   }
@@ -1206,6 +1216,266 @@
       } catch (e) { /* 视频加载失败时保留播放器外壳，控制台可见 */ }
     }
   }
+  /* ───────────── 八期 · 内容计划/周期日历（对齐原版 content-cycles，作者本人授权复刻） ───────────── */
+  var CYCLE_PURPOSES = ['涨粉', '互动', '种草', '转化', '建立信任'];
+  var CYCLE_STATUS = { generating: '生成中', proposed: '待确认', confirmed: '已确认', failed: '生成失败' };
+  var CYCLE_SLOT_STATUS = { planned: '待创作', in_progress: '创作中', done: '已创作', regenerating: '重新生成中' };
+  var cycleSlotEdits = {};
+
+  function stopCyclePolling() {
+    if (state.cycleTimer) { clearInterval(state.cycleTimer); state.cycleTimer = null; }
+  }
+  function cycleBusy(cycle) {
+    if (!cycle) return false;
+    if (cycle.status === 'generating') return true;
+    return (cycle.slots || []).some(function (slot) { return slot.status === 'regenerating'; });
+  }
+  function startCyclePolling() {
+    var busy = state.cycles.some(cycleBusy);
+    if (!busy) { stopCyclePolling(); return; }
+    if (state.cycleTimer) return;
+    state.cycleTimer = setInterval(function () {
+      if (state.tab !== 'plan') { stopCyclePolling(); return; }
+      void loadCycles(true);
+    }, 3000);
+  }
+  async function loadCycles(silent) {
+    var accountId = state.accountId;
+    var data = await call('/cycles?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [], current: null }; });
+    if (state.accountId !== accountId) return;
+    state.cycles = data.items || [];
+    state.currentCycle = data.current || null;
+    if (state.tab === 'plan') renderPlan();
+    startCyclePolling();
+  }
+  function activeCycle() {
+    // 对齐原版规则：只有比当前已确认计划更新的 proposed 才顶到前台，否则展示当前已确认计划。
+    var current = state.currentCycle;
+    var currentCreated = Date.parse((current && current.createdAt) || 0) || 0;
+    var proposed = state.cycles.filter(function (item) {
+      if (item.status !== 'proposed') return false;
+      if (!current) return true;
+      return (Date.parse(item.createdAt || 0) || 0) > currentCreated;
+    })[0] || null;
+    return proposed || current;
+  }
+  function cycleDistributionChips(cycle) {
+    var entries = Object.keys(cycle.distribution || {}).filter(function (key) { return cycle.distribution[key]; });
+    if (!entries.length) return '';
+    return '<div class="wb-chips">' + entries.map(function (key) {
+      return '<span class="chip">' + esc(key) + ' ' + esc(cycle.distribution[key]) + ' 条</span>';
+    }).join('') + '</div>';
+  }
+  function cycleSlotCard(cycle, slot) {
+    var key = cycle.id + ':' + slot.id;
+    var editing = state.cycleSlotEditing === key;
+    if (editing) {
+      var edits = cycleSlotEdits[key] || {};
+      return '<article class="wb-card wb-cycle-slot editing">' +
+        '<div class="wb-v-shot-head"><b>' + esc(slot.day) + ' · 编辑</b></div>' +
+        '<label class="wb-field"><span>内容类型</span><input data-cycle-edit="contentType" data-key="' + esc(key) + '" value="' + esc(edits.contentType !== undefined ? edits.contentType : slot.contentType) + '"></label>' +
+        '<label class="wb-field"><span>选题内容</span><textarea data-cycle-edit="topic" data-key="' + esc(key) + '">' + esc(edits.topic !== undefined ? edits.topic : slot.topic) + '</textarea></label>' +
+        '<label class="wb-field"><span>选题目的</span><select data-cycle-edit="purpose" data-key="' + esc(key) + '">' +
+        CYCLE_PURPOSES.map(function (value) { return '<option value="' + esc(value) + '"' + ((edits.purpose !== undefined ? edits.purpose : slot.purpose) === value ? ' selected' : '') + '>' + esc(value) + '</option>'; }).join('') + '</select></label>' +
+        '<label class="wb-field"><span>推荐原因和依据</span><textarea data-cycle-edit="recommendationReason" data-key="' + esc(key) + '">' + esc(edits.recommendationReason !== undefined ? edits.recommendationReason : slot.recommendationReason) + '</textarea></label>' +
+        '<div class="wb-actions"><button class="btn primary" type="button" data-cycle-action="save-slot" data-cycle="' + esc(cycle.id) + '" data-slot="' + esc(slot.id) + '">保存修改</button>' +
+        '<button class="btn" type="button" data-cycle-action="cancel-slot">取消</button></div></article>';
+    }
+    var regenerating = slot.status === 'regenerating';
+    return '<article class="wb-card wb-cycle-slot" data-cycle-slot="' + esc(key) + '">' +
+      '<div class="wb-v-shot-head"><b>' + esc(slot.day) + ' · ' + esc(slot.contentType || '内容类型') + '</b><span>' + esc(CYCLE_SLOT_STATUS[slot.status] || slot.status) + '</span></div>' +
+      '<p class="wb-cycle-topic">' + esc(slot.topic || '待生成选题') + '</p>' +
+      '<p class="wb-v-shot-line muted">目的：' + esc(slot.purpose || '待确定') + '</p>' +
+      '<p class="wb-v-shot-line"><b>推荐原因：</b>' + esc(slot.recommendationReason || '待补充') + '</p>' +
+      (regenerating ? '<p class="wb-muted">' + ic('loader', 12) + ' 小铃铛正在重新生成这一条…</p>' : '') +
+      '<div class="wb-actions">' +
+      (cycle.status === 'confirmed' ? '<button class="btn primary" type="button" data-cycle-action="start-slot" data-cycle="' + esc(cycle.id) + '" data-slot="' + esc(slot.id) + '" data-version="' + cycle.version + '">从这一项开始创作</button>' : '') +
+      '<button class="btn" type="button" data-cycle-action="regen-slot" data-cycle="' + esc(cycle.id) + '" data-slot="' + esc(slot.id) + '" data-version="' + cycle.version + '"' + (regenerating ? ' disabled' : '') + '>重新生成这一条</button>' +
+      '<button class="btn" type="button" data-cycle-action="edit-slot" data-cycle="' + esc(cycle.id) + '" data-slot="' + esc(slot.id) + '">' + ic('pen', 11) + '编辑</button>' +
+      '<button class="btn" type="button" data-cycle-action="remove-slot" data-cycle="' + esc(cycle.id) + '" data-slot="' + esc(slot.id) + '" data-version="' + cycle.version + '">移除</button>' +
+      '</div></article>';
+  }
+  function renderPlan() {
+    var active = activeCycle();
+    var generating = state.cycles.filter(function (item) { return item.status === 'generating'; })[0] || null;
+    var failed = state.cycles.filter(function (item) { return item.status === 'failed'; })[0] || null;
+    var form = state.cycleForm || {};
+    var head = '<div class="wb-card"><div class="wb-card-head"><div><h3>周期计划</h3><p>一次排好几天的选题节奏：每天发什么、讲什么、为什么这么排；确认后可以逐槽开始创作。</p></div>' +
+      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-plan-account"') + '</label></div>' +
+      '<div class="wb-field full wb-actions">' +
+      '<label class="wb-inline"><span>条数</span><select id="wb-plan-count">' + [4, 5, 6, 7, 10].map(function (n) { return '<option value="' + n + '"' + (Number(form.count) === n ? ' selected' : '') + '>' + n + ' 条</option>'; }).join('') + '</select></label>' +
+      '<input id="wb-plan-brief" placeholder="方向要求（可选）：例如主打暑期班，穿插学员案例" value="' + esc(form.brief || '') + '" maxlength="120">' +
+      '<button class="btn primary" type="button" data-cycle-action="generate"' + (generating ? ' disabled' : '') + '>' + ic('sparkle', 13) + (state.cycles.length ? '重新生成周期计划' : '生成周期计划') + '</button>' +
+      '</div>' +
+      (generating ? '<p class="wb-note">' + ic('loader', 12) + ' 正在排日期、内容类型和选题，通常十几秒到一分钟…</p>' : '') +
+      (failed ? '<p class="wb-v-error">' + esc(failed.error || '这次周期计划没有生成完整，请重新生成。') + '</p>' : '') +
+      '</div>';
+    var current = state.currentCycle && active && state.currentCycle.id !== active.id
+      ? '<div class="wb-card"><div class="wb-card-head"><div><h3>当前已确认计划</h3><p><b>' + esc(state.currentCycle.period) + '</b>　共 ' + (state.currentCycle.contentCount || state.currentCycle.slots.length) + ' 条（第 ' + state.currentCycle.version + ' 版）</p></div></div>' +
+        '<p class="wb-v-message">' + esc(state.currentCycle.notice || '') + '</p></div>'
+      : '';
+    var activeHtml = '';
+    if (active) {
+      var slotCards = active.slots.map(function (slot) { return cycleSlotCard(active, slot); }).join('');
+      var proposedBar = active.status === 'proposed'
+        ? '<div class="wb-field full wb-actions">' +
+          '<button class="btn primary" type="button" data-cycle-action="confirm" data-cycle="' + esc(active.id) + '" data-version="' + active.version + '">确认这份计划</button>' +
+          '<button class="btn" type="button" data-cycle-action="export" data-cycle="' + esc(active.id) + '">' + ic('download', 12) + '导出文稿</button>' +
+          '<button class="btn" type="button" data-cycle-action="delete-cycle" data-cycle="' + esc(active.id) + '">放弃这份</button></div>' +
+          '<div class="wb-field full wb-actions"><input id="wb-cycle-requirements" placeholder="调整要求：例如把促销往后放、多排学员案例" value="' + esc(state.cycleRequirements || '') + '" maxlength="200">' +
+          '<button class="btn" type="button" data-cycle-action="adjust" data-cycle="' + esc(active.id) + '" data-version="' + active.version + '">按要求调整</button></div>'
+        : '<div class="wb-field full wb-actions">' +
+          '<button class="btn" type="button" data-cycle-action="export" data-cycle="' + esc(active.id) + '">' + ic('download', 12) + '导出文稿</button>' +
+          '<button class="btn" type="button" data-cycle-action="regenerate" data-cycle="' + esc(active.id) + '">重新生成周期计划</button></div>';
+      activeHtml = '<div class="wb-card"><div class="wb-card-head"><div><h3>' + (active.status === 'confirmed' ? '本周期计划（已确认）' : '这份计划待确认') + '</h3>' +
+        '<p>' + esc(active.period) + ' · 共 ' + (active.contentCount || active.slots.length) + ' 条 · 第 ' + active.version + ' 版</p></div>' +
+        '<span class="wb-tag">' + esc(CYCLE_STATUS[active.status] || active.status) + '</span></div>' +
+        cycleDistributionChips(active) +
+        (active.notice ? '<p class="wb-v-message">' + esc(active.notice) + '</p>' : '') +
+        (active.error ? '<p class="wb-v-error">' + esc(active.error) + '</p>' : '') +
+        '<div class="wb-cycle-slots">' + slotCards + '</div>' + proposedBar + '</div>';
+    } else if (!generating) {
+      activeHtml = '<div class="wb-card"><p class="wb-muted">还没有周期计划。先确定条数和方向，生成第一份。</p></div>';
+    }
+    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' + head + current + activeHtml + '</div></div>';
+    bindAccountSwitch('#wb-plan-account');
+    $$('[data-cycle-action]').forEach(function (button) {
+      button.onclick = async function () {
+        var action = button.dataset.cycleAction;
+        var cycleId = button.dataset.cycle || '';
+        var slotId = button.dataset.slot || '';
+        var version = Number(button.dataset.version) || undefined;
+        var original = button.innerHTML;
+        if (action === 'generate' || action === 'regenerate' || action === 'adjust') {
+          if (action === 'generate') {
+            state.cycleForm = { count: Number(($('#wb-plan-count') || {}).value || 7), brief: ($('#wb-plan-brief') || {}).value || '' };
+          } else {
+            state.cycleRequirements = ($('#wb-cycle-requirements') || {}).value || '';
+          }
+          button.disabled = true; button.innerHTML = ic('loader', 12) + '提交中…';
+          try {
+            if (action === 'generate') {
+              await call('/cycles', { method: 'POST', body: { count: state.cycleForm.count, brief: state.cycleForm.brief, accountId: state.accountId } });
+            } else if (action === 'adjust') {
+              await call('/cycles/' + encodeURIComponent(cycleId) + '/adjustments', { method: 'POST', body: { requirements: state.cycleRequirements, version: version } });
+            } else {
+              await call('/cycles/' + encodeURIComponent(cycleId) + '/regenerate', { method: 'POST', body: {} });
+            }
+            toast('周期计划生成中，这一页会自动刷新', 'success');
+            startCyclePolling();
+            void loadCycles(true);
+          } catch (error) { toast(error.message, 'error'); button.disabled = false; button.innerHTML = original; }
+          return;
+        }
+        if (action === 'confirm') {
+          button.disabled = true;
+          try {
+            await call('/cycles/' + encodeURIComponent(cycleId) + '/confirm', { method: 'POST', body: { version: version } });
+            toast('计划已确认，可以逐槽开始创作了', 'success');
+          } catch (error) { toast(error.message, 'error'); button.disabled = false; }
+          void loadCycles(true);
+          return;
+        }
+        if (action === 'delete-cycle') {
+          if (!window.confirm('放弃这份待确认的计划？')) return;
+          button.disabled = true;
+          try { await call('/cycles/' + encodeURIComponent(cycleId), { method: 'DELETE' }); } catch (error) { toast(error.message, 'error'); button.disabled = false; }
+          void loadCycles(true);
+          return;
+        }
+        if (action === 'export') {
+          button.disabled = true;
+          try {
+            var blob = await fetchBlob(API + '/cycles/' + encodeURIComponent(cycleId) + '/export');
+            var url = URL.createObjectURL(blob);
+            var link = document.createElement('a');
+            link.href = url;
+            link.download = '周期计划-' + cycleId.slice(0, 12) + '.md';
+            link.click();
+            setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+          } catch (error) { toast(error.message, 'error'); }
+          button.disabled = false;
+          return;
+        }
+        if (action === 'edit-slot') {
+          state.cycleSlotEditing = cycleId + ':' + slotId;
+          renderPlan();
+          return;
+        }
+        if (action === 'cancel-slot') {
+          state.cycleSlotEditing = null;
+          delete cycleSlotEdits[cycleId + ':' + slotId];
+          renderPlan();
+          return;
+        }
+        if (action === 'save-slot') {
+          var key = cycleId + ':' + slotId;
+          var edits = cycleSlotEdits[key] || {};
+          var card = button.closest('.wb-cycle-slot');
+          var collected = {
+            contentType: (card.querySelector('[data-cycle-edit="contentType"]') || {}).value,
+            topic: (card.querySelector('[data-cycle-edit="topic"]') || {}).value,
+            purpose: (card.querySelector('[data-cycle-edit="purpose"]') || {}).value,
+            recommendationReason: (card.querySelector('[data-cycle-edit="recommendationReason"]') || {}).value,
+          };
+          button.disabled = true; button.innerHTML = ic('loader', 12) + '保存中…';
+          try {
+            await call('/cycles/' + encodeURIComponent(cycleId) + '/slots/' + encodeURIComponent(slotId), { method: 'PUT', body: { slot: collected, version: version } });
+            state.cycleSlotEditing = null;
+            delete cycleSlotEdits[key];
+            toast('这一槽已保存', 'success');
+          } catch (error) { toast(error.message, 'error'); button.disabled = false; button.innerHTML = original; }
+          void loadCycles(true);
+          return;
+        }
+        if (action === 'regen-slot') {
+          button.disabled = true; button.innerHTML = ic('loader', 12) + '提交中…';
+          try {
+            await call('/cycles/' + encodeURIComponent(cycleId) + '/slots/' + encodeURIComponent(slotId) + '/regenerate', { method: 'POST', body: { version: version } });
+            toast('正在重新生成这一条…', 'success');
+            startCyclePolling();
+          } catch (error) { toast(error.message, 'error'); button.disabled = false; button.innerHTML = original; }
+          void loadCycles(true);
+          return;
+        }
+        if (action === 'remove-slot') {
+          if (!window.confirm('移除这一天的选题？条数会减一。')) return;
+          button.disabled = true;
+          try {
+            await call('/cycles/' + encodeURIComponent(cycleId) + '/slots/' + encodeURIComponent(slotId), { method: 'DELETE', body: { version: version } });
+          } catch (error) { toast(error.message, 'error'); button.disabled = false; }
+          void loadCycles(true);
+          return;
+        }
+        if (action === 'start-slot') {
+          button.disabled = true; button.innerHTML = ic('loader', 12) + '准备中…';
+          try {
+            var result = await call('/cycles/' + encodeURIComponent(cycleId) + '/slots/' + encodeURIComponent(slotId) + '/start', { method: 'POST', body: { version: version } });
+            toast('已从这条选题创建视频任务，编导稿生成中', 'success');
+            setTab('video');
+            void loadVideoData(true);
+          } catch (error) { toast(error.message, 'error'); button.disabled = false; button.innerHTML = original; }
+          return;
+        }
+      };
+    });
+    $$('[data-cycle-edit]').forEach(function (control) {
+      control.addEventListener('input', function () {
+        var key = control.dataset.key;
+        cycleSlotEdits[key] = cycleSlotEdits[key] || {};
+        cycleSlotEdits[key][control.dataset.cycleEdit] = control.value;
+      });
+    });
+    $$('[data-cycle-slot]').forEach(function (card) {
+      card.ondblclick = function () {
+        var key = card.dataset.cycleSlot;
+        if (state.cycleSlotEditing === key) return;
+        state.cycleSlotEditing = key;
+        renderPlan();
+      };
+    });
+  }
+
   /* ───────────── 七期 · 视频完整工作台（对齐原版 video_workspace / voice_library，作者本人授权复刻） ───────────── */
   var WB_VIDEO_TYPES = {
     ecommerce: { label: '电商带货', subtypes: [['口播带货', '真人推荐，建立购买信任'], ['促销转化', '突出优惠，推动立即下单'], ['场景种草', '植入场景，激发使用需求'], ['痛点解决', '直击痛点，展示解决效果'], ['功能演示', '演示功能，证明产品价值']] },
@@ -2804,6 +3074,7 @@
     else if (state.tab === 'account') renderAccount();
     else if (state.tab === 'references') renderReferences();
     else if (state.tab === 'copy') renderCopy();
+    else if (state.tab === 'plan') renderPlan();
     else if (state.tab === 'video') renderVideo();
     else if (state.tab === 'assets') renderAssets();
     else if (state.tab === 'copybrains') renderBrains();

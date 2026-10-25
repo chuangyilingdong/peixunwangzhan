@@ -55,10 +55,14 @@ import {
   buildVideoPrompt,
   buildViralOnePrompt,
   buildViralRewritePrompt,
+  buildCyclePlanPrompt,
+  buildCycleSlotPrompt,
   buildDirectorScriptPrompt,
   demoBrain,
   demoChat,
   demoCopy,
+  demoCyclePlan,
+  demoCycleSlot,
   demoDirectorScript,
   demoHotspotCopies,
   demoIdeas,
@@ -69,6 +73,7 @@ import {
   demoViralRewrites,
   videoHookLabel,
   videoTypeLabel,
+  CYCLE_PURPOSES,
   VIDEO_HOOKS,
   VIDEO_TYPES,
 } from '../services/junshiWorkbenchContent.js';
@@ -615,6 +620,146 @@ async function runWorkbenchRender(owner, renderId, { job = null } = {}) {
       }
     }
     if (job) await jobDone(job, 'failed', String(message).slice(0, 1000)).catch(() => {});
+  }
+}
+
+/* ───────────── 八期 · 内容计划/周期日历辅助（对齐原版 content-cycles，作者本人授权复刻） ───────────── */
+const CYCLE_SLOT_STATUSES = ['planned', 'in_progress', 'done', 'regenerating'];
+
+function cycleOut(row) {
+  let distribution = {};
+  let slots = [];
+  try { distribution = JSON.parse(row.distribution || '{}'); } catch { /* ignore */ }
+  try { slots = JSON.parse(row.slots || '[]'); } catch { /* ignore */ }
+  return {
+    id: row.id,
+    accountId: row.account_id || 'default',
+    period: row.period || '',
+    status: row.status || 'generating',
+    version: Number(row.version || 1),
+    contentCount: Number(row.content_count || 0),
+    brief: row.brief || '',
+    distribution: distribution && typeof distribution === 'object' && !Array.isArray(distribution) ? distribution : {},
+    notice: row.notice || '',
+    slots: (Array.isArray(slots) ? slots : []).map((slot, index) => ({
+      id: String(slot?.id || `slot${index + 1}`),
+      day: String(slot?.day || `第 ${index + 1} 天`),
+      contentType: String(slot?.content_type || ''),
+      topic: String(slot?.topic || ''),
+      purpose: String(slot?.purpose || ''),
+      recommendationReason: String(slot?.recommendation_reason || ''),
+      status: CYCLE_SLOT_STATUSES.includes(String(slot?.status)) ? String(slot.status) : 'planned',
+    })),
+    error: row.error || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+function sanitizeCycleSlots(slots) {
+  return (Array.isArray(slots) ? slots : []).slice(0, 12).map((slot, index) => ({
+    id: String(slot?.id || `slot${index + 1}`).slice(0, 40),
+    day: String(slot?.day || `第 ${index + 1} 天`).slice(0, 20),
+    content_type: String(slot?.content_type || '').slice(0, 30),
+    topic: String(slot?.topic || '').slice(0, 200),
+    purpose: CYCLE_PURPOSES.includes(String(slot?.purpose)) ? String(slot.purpose) : '种草',
+    recommendation_reason: String(slot?.recommendation_reason || '').slice(0, 300),
+    status: CYCLE_SLOT_STATUSES.includes(String(slot?.status)) ? String(slot.status) : 'planned',
+  }));
+}
+function requireCycleVersion(row, bodyVersion) {
+  const requested = Number(bodyVersion);
+  if (Number.isFinite(requested) && requested !== Number(row.version || 1)) {
+    throw errors.badRequest('这份计划刚被更新过，请刷新页面后再操作。', 'WORKBENCH_CYCLE_VERSION_CONFLICT');
+  }
+}
+async function referenceCycleTopics(ownerKey, excludeCycleId) {
+  const rows = await arows('SELECT slots FROM junshi_workbench_content_cycles WHERE owner_key=? AND id!=? ORDER BY created_at DESC LIMIT 3', [ownerKey, excludeCycleId]).catch(() => []);
+  const topics = [];
+  for (const row of rows) {
+    try { for (const slot of JSON.parse(row.slots || '[]')) if (slot?.topic) topics.push(String(slot.topic)); } catch { /* ignore */ }
+  }
+  return topics.slice(0, 12);
+}
+/** 周期计划异步管线：账号档案 + 已有选题去重 → 模型单 JSON → 解析入库（proposed）。 */
+async function runCycleGenerate(owner, cycleId, { requirements = '' } = {}) {
+  try {
+    const cycle = await arow('SELECT * FROM junshi_workbench_content_cycles WHERE id=? AND owner_key=?', [cycleId, owner.key]);
+    if (!cycle) return;
+    const profile = (await readProfile(owner.key, cycle.account_id)).profile;
+    const orgProfile = await orgProfileText(owner.key);
+    const count = Number(cycle.content_count) || 7;
+    const providerMock = await textProviderIsMock().catch(() => false);
+    let text = '';
+    if (providerMock) {
+      text = demoCyclePlan({ profile, count, brief: cycle.brief });
+    } else {
+      const prompt = buildCyclePlanPrompt({
+        profile, orgProfile, brief: cycle.brief, count, requirements,
+        referenceTopics: await referenceCycleTopics(owner.key, cycleId),
+      });
+      const result = await collectText(null, { system: WORKBENCH_SYSTEM, user: prompt });
+      text = mockOrEmpty(result) ? demoCyclePlan({ profile, count, brief: cycle.brief }) : result.text;
+    }
+    const data = firstJsonObject(text);
+    const slots = sanitizeCycleSlots(data?.slots);
+    if (!data || !slots.length) throw new Error('周期计划解析失败：模型没有返回可用的 slots');
+    await aq("UPDATE junshi_workbench_content_cycles SET period=?, distribution=?, notice=?, slots=?, status='proposed', error='', version=version+1, updated_at=? WHERE id=? AND owner_key=?",
+      [String(data.period || '').slice(0, 120), JSON.stringify(data.distribution && typeof data.distribution === 'object' && !Array.isArray(data.distribution) ? data.distribution : {}), String(data.notice || '').slice(0, 1000), JSON.stringify(slots), nowIso(), cycleId, owner.key]);
+  } catch (error) {
+    const message = error instanceof ApiError ? error.message : String(error?.message || error);
+    await aq("UPDATE junshi_workbench_content_cycles SET status='failed', error=?, updated_at=? WHERE id=? AND owner_key=?",
+      [String(message).slice(0, 1000), nowIso(), cycleId, owner.key]).catch(() => {});
+  }
+}
+/** 单槽位重新生成：day/类型不动，只换选题与理由；失败回 planned 并把原因写在 cycle.error。 */
+async function runCycleSlotRegenerate(owner, cycleId, slotId) {
+  try {
+    const cycle = await arow('SELECT * FROM junshi_workbench_content_cycles WHERE id=? AND owner_key=?', [cycleId, owner.key]);
+    if (!cycle) return;
+    let slots = [];
+    try { slots = JSON.parse(cycle.slots || '[]'); } catch { slots = []; }
+    const index = slots.findIndex((slot) => String(slot?.id) === String(slotId));
+    if (index < 0) return;
+    const profile = (await readProfile(owner.key, cycle.account_id)).profile;
+    const orgProfile = await orgProfileText(owner.key);
+    const slot = slots[index];
+    const providerMock = await textProviderIsMock().catch(() => false);
+    let text = '';
+    if (providerMock) {
+      text = demoCycleSlot({ slot });
+    } else {
+      const prompt = buildCycleSlotPrompt({
+        profile, orgProfile, slot, brief: cycle.brief,
+        siblingTopics: slots.filter((item, i) => i !== index && item?.topic).map((item) => item.topic),
+      });
+      const result = await collectText(null, { system: WORKBENCH_SYSTEM, user: prompt });
+      text = mockOrEmpty(result) ? demoCycleSlot({ slot }) : result.text;
+    }
+    const data = firstJsonObject(text);
+    if (!data || !String(data.topic || '').trim()) throw new Error('重新生成解析失败：模型没有返回可用选题');
+    slots[index] = {
+      ...slot,
+      content_type: String(data.content_type || slot.content_type || '').slice(0, 30),
+      topic: String(data.topic || '').slice(0, 200),
+      purpose: CYCLE_PURPOSES.includes(String(data.purpose)) ? String(data.purpose) : slot.purpose,
+      recommendation_reason: String(data.recommendation_reason || '').slice(0, 300),
+      status: 'planned',
+    };
+    await aq('UPDATE junshi_workbench_content_cycles SET slots=?, version=version+1, updated_at=? WHERE id=? AND owner_key=?',
+      [JSON.stringify(slots), nowIso(), cycleId, owner.key]);
+  } catch (error) {
+    const message = error instanceof ApiError ? error.message : String(error?.message || error);
+    await aq("UPDATE junshi_workbench_content_cycles SET error=?, updated_at=? WHERE id=? AND owner_key=?",
+      [String(message).slice(0, 1000), nowIso(), cycleId, owner.key]).catch(() => {});
+    try {
+      const row = await arow('SELECT slots FROM junshi_workbench_content_cycles WHERE id=? AND owner_key=?', [cycleId, owner.key]);
+      const slots = JSON.parse(row?.slots || '[]');
+      const index = slots.findIndex((slot) => String(slot?.id) === String(slotId));
+      if (index >= 0 && slots[index]?.status === 'regenerating') {
+        slots[index].status = 'planned';
+        await aq('UPDATE junshi_workbench_content_cycles SET slots=? WHERE id=? AND owner_key=?', [JSON.stringify(slots), cycleId, owner.key]).catch(() => {});
+      }
+    } catch { /* ignore */ }
   }
 }
 
@@ -2042,6 +2187,141 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
       await aq('UPDATE junshi_workbench_voice_samples SET use_count=use_count+1, updated_at=? WHERE id=? AND owner_key=?', [nowIso(), sampleId, owner.key]);
       const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [row.asset_id, owner.key]);
       return { sample: voiceSampleOut(await arow('SELECT * FROM junshi_workbench_voice_samples WHERE id=?', [sampleId]), assetRow) };
+    }
+  }
+
+  /* ───────────── 八期 · 内容计划/周期日历（content-cycles，作者本人授权复刻） ───────────── */
+  if (rest === '/cycles' && method === 'GET') {
+    const accountIdFilter = text(search.get('accountId'));
+    const rows = accountIdFilter
+      ? await arows('SELECT * FROM junshi_workbench_content_cycles WHERE owner_key=? AND account_id=? ORDER BY created_at DESC LIMIT 30', [owner.key, accountIdFilter])
+      : await arows('SELECT * FROM junshi_workbench_content_cycles WHERE owner_key=? ORDER BY created_at DESC LIMIT 30', [owner.key]);
+    const current = rows.find((row) => row.status === 'confirmed') || null;
+    return { items: rows.map(cycleOut), current: current ? cycleOut(current) : null };
+  }
+  if (rest === '/cycles' && method === 'POST') {
+    const count = clampInt(ctx.body?.count, 7, 4, 10);
+    const brief = text(ctx.body?.brief).slice(0, 500);
+    const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
+    rateLimit(owner.key);
+    const cycleId = id('jwcy');
+    const at = nowIso();
+    await aq('INSERT INTO junshi_workbench_content_cycles (id,owner_key,org_id,account_id,period,status,version,content_count,brief,distribution,notice,slots,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [cycleId, owner.key, owner.orgId, accountId, '', 'generating', 1, count, brief, '{}', '', '[]', '', at, at]);
+    void runCycleGenerate(owner, cycleId, {});
+    return { cycle: cycleOut(await arow('SELECT * FROM junshi_workbench_content_cycles WHERE id=?', [cycleId])) };
+  }
+  if (rest.startsWith('/cycles/')) {
+    const tail = rest.slice('/cycles/'.length);
+    const [cycleIdRaw, sub1, sub2, sub3] = tail.split('/');
+    const cycleId = decodeURIComponent(cycleIdRaw);
+    const cycle = await arow('SELECT * FROM junshi_workbench_content_cycles WHERE id=? AND owner_key=?', [cycleId, owner.key]);
+    if (!cycle) throw errors.notFound('周期计划不存在', 'NOT_FOUND');
+    if (!sub1 && method === 'GET') return { cycle: cycleOut(cycle) };
+    if (!sub1 && method === 'DELETE') {
+      await aq('DELETE FROM junshi_workbench_content_cycles WHERE id=? AND owner_key=?', [cycleId, owner.key]);
+      return { ok: true };
+    }
+    if (sub1 === 'export' && method === 'GET') {
+      const out = cycleOut(cycle);
+      const lines = [
+        `# 内容周期计划 · ${out.period || cycleId}`,
+        '',
+        `- 状态：${out.status === 'confirmed' ? '已确认' : out.status === 'proposed' ? '待确认' : out.status}（第 ${out.version} 版）`,
+        `- 条数：${out.contentCount}`,
+        out.notice ? `- 整体思路：${out.notice}` : '',
+        '',
+        '| 天 | 内容类型 | 选题 | 目的 | 推荐理由 |',
+        '|---|---|---|---|---|',
+        ...out.slots.map((slot) => `| ${slot.day} | ${slot.contentType} | ${slot.topic} | ${slot.purpose} | ${slot.recommendationReason} |`),
+        '',
+      ];
+      const body = lines.join('\n');
+      const safeId = String(cycleId).replace(/[^A-Za-z0-9_-]/g, '');
+      ctx.res.writeHead(200, corsHeaders(ctx.req, {
+        'content-type': 'text/markdown; charset=utf-8',
+        'content-length': Buffer.byteLength(body),
+        'content-disposition': `attachment; filename="cycle-${safeId}.md"`,
+        'cache-control': 'private, no-store',
+      }));
+      ctx.res.end(body);
+      return { __streamed: true };
+    }
+    if (sub1 === 'confirm' && method === 'POST') {
+      requireCycleVersion(cycle, ctx.body?.version);
+      await aq("UPDATE junshi_workbench_content_cycles SET status='confirmed', version=version+1, updated_at=? WHERE id=? AND owner_key=?", [nowIso(), cycleId, owner.key]);
+      return { cycle: cycleOut(await arow('SELECT * FROM junshi_workbench_content_cycles WHERE id=?', [cycleId])) };
+    }
+    if ((sub1 === 'regenerate' || sub1 === 'adjustments') && method === 'POST') {
+      if (cycle.status === 'generating') throw errors.badRequest('这一版正在生成中，请等它结束。', 'WORKBENCH_CYCLE_BUSY');
+      rateLimit(owner.key);
+      const requirements = sub1 === 'adjustments'
+        ? text(ctx.body?.requirements).slice(0, 1000) || '（未填写具体调整要求，按账号定位整体优化）'
+        : text(ctx.body?.requirements).slice(0, 1000);
+      await aq("UPDATE junshi_workbench_content_cycles SET status='generating', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), cycleId, owner.key]);
+      void runCycleGenerate(owner, cycleId, { requirements });
+      return { cycle: cycleOut(await arow('SELECT * FROM junshi_workbench_content_cycles WHERE id=?', [cycleId])) };
+    }
+    if (sub1 === 'slots' && sub2) {
+      const slotId = decodeURIComponent(sub2);
+      let slots = [];
+      try { slots = JSON.parse(cycle.slots || '[]'); } catch { slots = []; }
+      const slotIndex = slots.findIndex((slot) => String(slot?.id) === String(slotId));
+      if (slotIndex < 0) throw errors.notFound('这个槽位不存在', 'NOT_FOUND');
+      if (method === 'PUT') {
+        requireCycleVersion(cycle, ctx.body?.version);
+        const patch = ctx.body?.slot || {};
+        slots[slotIndex] = {
+          ...slots[slotIndex],
+          content_type: patch.contentType !== undefined ? String(patch.contentType).slice(0, 30) : slots[slotIndex].content_type,
+          topic: patch.topic !== undefined ? String(patch.topic).slice(0, 200) : slots[slotIndex].topic,
+          purpose: CYCLE_PURPOSES.includes(String(patch.purpose)) ? String(patch.purpose) : slots[slotIndex].purpose,
+          recommendation_reason: patch.recommendationReason !== undefined ? String(patch.recommendationReason).slice(0, 300) : slots[slotIndex].recommendation_reason,
+          status: 'planned',
+        };
+        await aq('UPDATE junshi_workbench_content_cycles SET slots=?, version=version+1, updated_at=? WHERE id=? AND owner_key=?',
+          [JSON.stringify(slots), nowIso(), cycleId, owner.key]);
+        return { cycle: cycleOut(await arow('SELECT * FROM junshi_workbench_content_cycles WHERE id=?', [cycleId])) };
+      }
+      if (method === 'DELETE') {
+        requireCycleVersion(cycle, ctx.body?.version);
+        if (slots.length <= 1) throw errors.badRequest('至少要保留一个槽位；整份不要可以直接删掉计划。', 'VALIDATION_ERROR');
+        slots.splice(slotIndex, 1);
+        await aq('UPDATE junshi_workbench_content_cycles SET slots=?, content_count=?, version=version+1, updated_at=? WHERE id=? AND owner_key=?',
+          [JSON.stringify(slots), slots.length, nowIso(), cycleId, owner.key]);
+        return { cycle: cycleOut(await arow('SELECT * FROM junshi_workbench_content_cycles WHERE id=?', [cycleId])) };
+      }
+      if (sub3 === 'regenerate' && method === 'POST') {
+        requireCycleVersion(cycle, ctx.body?.version);
+        if (slots[slotIndex].status === 'regenerating') throw errors.badRequest('这一条正在重新生成。', 'WORKBENCH_CYCLE_BUSY');
+        rateLimit(owner.key);
+        slots[slotIndex] = { ...slots[slotIndex], status: 'regenerating' };
+        await aq("UPDATE junshi_workbench_content_cycles SET slots=?, error='', updated_at=? WHERE id=? AND owner_key=?",
+          [JSON.stringify(slots), nowIso(), cycleId, owner.key]);
+        void runCycleSlotRegenerate(owner, cycleId, slotId);
+        return { cycle: cycleOut(await arow('SELECT * FROM junshi_workbench_content_cycles WHERE id=?', [cycleId])) };
+      }
+      if (sub3 === 'start' && method === 'POST') {
+        requireCycleVersion(cycle, ctx.body?.version);
+        const slot = slots[slotIndex];
+        if (['generating'].includes(cycle.status)) throw errors.badRequest('计划还在生成中。', 'WORKBENCH_CYCLE_BUSY');
+        rateLimit(owner.key);
+        const brief = [
+          `【周期选题】${slot.topic || '（未填选题，结合账号定位安排）'}`,
+          slot.content_type ? `【内容类型】${slot.content_type}` : '',
+          slot.purpose ? `【选题目的】${slot.purpose}` : '',
+          slot.recommendation_reason ? `【推荐理由】${slot.recommendation_reason}` : '',
+        ].filter(Boolean).join('\n');
+        const workId = id('jww');
+        const at = nowIso();
+        await aq('INSERT INTO junshi_workbench_video_works (id,owner_key,org_id,account_id,mode,title,type,subtype,hook_strategy,model,duration_seconds,resolution,ratio,brief,asset_refs,status,message,director_script,script_revision,script_edited,output_asset_id,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+          [workId, owner.key, owner.orgId, cycle.account_id, 'generate', '', 'ecommerce', '口播带货', 'auto', '', 15, '768P', '9:16', brief, '[]', 'planning', '正在写编导稿…', '', 0, 0, null, '', at, at]);
+        slots[slotIndex] = { ...slot, status: 'in_progress' };
+        await aq('UPDATE junshi_workbench_content_cycles SET slots=?, version=version+1, updated_at=? WHERE id=? AND owner_key=?',
+          [JSON.stringify(slots), nowIso(), cycleId, owner.key]);
+        void runDirectorScript(owner, workId, {});
+        return { cycle: cycleOut(await arow('SELECT * FROM junshi_workbench_content_cycles WHERE id=?', [cycleId])), work: workOut(await arow('SELECT * FROM junshi_workbench_video_works WHERE id=?', [workId])) };
+      }
     }
   }
 

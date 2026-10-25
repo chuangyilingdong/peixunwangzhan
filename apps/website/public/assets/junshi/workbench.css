@@ -399,3 +399,9 @@
 #js-app .wb-v-voice-copy b { font-size: 12.5px; display: block; }
 #js-app .wb-v-voice-copy small { color: var(--text-3); font-size: 11px; }
 #js-app .wb-chips .chip.on { background: var(--accent); color: #fff; }
+
+/* ───────────── 八期 · 内容计划/周期日历（对齐原版 content-cycles） ───────────── */
+#js-app .wb-cycle-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 10px; }
+#js-app .wb-cycle-slot { margin: 0; }
+#js-app .wb-cycle-slot.editing { border-color: var(--accent); }
+#js-app .wb-cycle-topic { margin: 6px 0; font-size: 13px; font-weight: 600; line-height: 1.5; }

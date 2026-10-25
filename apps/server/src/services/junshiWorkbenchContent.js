@@ -700,3 +700,107 @@ export function demoDirectorScript({ profile, type, subtype, duration = 15, brie
     notes: '（演示编导稿）模型未返回正文时兜底生成，确认前可逐镜修改。',
   }, null, 2);
 }
+
+/* ───────────── 八期 · 内容计划/周期日历（对齐原版 content-cycles，作者本人授权复刻） ───────────── */
+
+export const CYCLE_PURPOSES = ['涨粉', '互动', '种草', '转化', '建立信任'];
+
+// 周期计划提示词：一次排好 N 天的轻量选题卡（类型/选题/目的/推荐理由）。
+// ⚠️ 只输出一个 JSON 对象（蓝图/编导稿同一条教训）。
+export function buildCyclePlanPrompt({ profile, orgProfile, brief, count, requirements = '', referenceTopics = [] }) {
+  const referenceBlock = (referenceTopics || []).length
+    ? `\n【同账号已有选题（避免重复，可延续系列）】\n${(referenceTopics || []).map((topic, index) => `${index + 1}. ${topic}`).join('\n')}`
+    : '';
+  return `你是内容运营策划。为这家机构排一份周期内容计划：每天发什么、讲什么、为什么这么排。
+
+【机构画像】
+${orgProfile || '未填写'}
+【内容账号档案】
+${workbenchProfileBlock(profile)}
+【计划条数】${count} 条（对应 ${count} 天，每天一条）
+【方向要求】${brief || '结合账号定位自动安排'}
+${requirements ? `【调整要求（用户对上一版计划提出）】\n${requirements}\n` : ''}${referenceBlock}
+输出要求：只输出一个 JSON 对象，不要 markdown 代码块，不要解释。结构：
+{"period":"周期描述（例如：10-25 ～ 10-31 · 7 条）","distribution":{"口播带货":3,"知识科普":2,"剧情短片":2},"notice":"一句话说明这份计划的整体思路","slots":[{"day":"第 1 天","content_type":"口播带货","topic":"选题一句话（具体到能直接开拍）","purpose":"涨粉","recommendation_reason":"为什么这天发这条（结合节奏/节点/账号成长阶段）"}]}
+
+规则：
+- slots 数量必须等于 ${count}；day 按「第 1 天」「第 2 天」…顺序排。
+- content_type 从这些里选：口播带货、知识科普、剧情短片、热点结合、学员案例、幕后日常、促销活动。
+- purpose 只能取：${CYCLE_PURPOSES.join('、')}。
+- 选题要具体（有场景/有冲突/有数字），不要「介绍我们的课程」这种空题。
+- 节奏要有起伏：钩子/痛点类穿插案例与促销，不要连着三天同类。`;
+}
+
+// 演示周期计划：mock/空回执兜底。
+export function demoCyclePlan({ profile, count = 7, brief = '' }) {
+  const subject = subjectOf(profile);
+  const audience = audienceOf(profile);
+  const safeCount = clampCount(count);
+  const typePool = ['口播带货', '知识科普', '剧情短片', '学员案例', '促销活动'];
+  const purposePool = ['涨粉', '互动', '种草', '转化', '建立信任'];
+  const topicPool = [
+    `${audience}最容易踩的 3 个坑，第 2 个几乎人人中招`,
+    `为什么有人学完没效果？差别在第一步`,
+    `一节课的真实课堂记录（无剪辑）`,
+    `学员 30 天前后对比，变化最大的不是成绩`,
+    `${subject}到底适合什么样的孩子？一条视频说清`,
+    `家长问我最多的问题，今天一次答完`,
+    `这周报名的注意事项（名额与时间）`,
+  ];
+  const slots = Array.from({ length: safeCount }, (_, index) => ({
+    day: `第 ${index + 1} 天`,
+    content_type: typePool[index % typePool.length],
+    topic: topicPool[index % topicPool.length],
+    purpose: purposePool[index % purposePool.length],
+    recommendation_reason: `（演示计划）第 ${index + 1} 条用来${purposePool[index % purposePool.length]}，按节奏穿插类型避免连续同质。`,
+  }));
+  return JSON.stringify({
+    period: `本周期 · ${safeCount} 条（演示）`,
+    distribution: slots.reduce((acc, slot) => { acc[slot.content_type] = (acc[slot.content_type] || 0) + 1; return acc; }, {}),
+    notice: `（演示周期计划）围绕「${clean(brief) || subject}」排了 ${safeCount} 条，类型交替保持账号节奏。`,
+    slots,
+  }, null, 2);
+}
+
+function clampCount(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 7;
+  return Math.min(10, Math.max(4, Math.round(n)));
+}
+
+// 单槽位重新生成：保持 day 与内容类型不变（除非明确换类型），只换选题与理由。
+export function buildCycleSlotPrompt({ profile, orgProfile, slot, siblingTopics = [], brief = '' }) {
+  return `你是内容运营策划。为下面这一天重新想一个选题（替换掉原来那条）。
+
+【机构画像】
+${orgProfile || '未填写'}
+【内容账号档案】
+${workbenchProfileBlock(profile)}
+【这一天】${slot?.day || '当天'} · 内容类型：${slot?.content_type || '不限'}
+【同周期其他选题（不要重复）】
+${(siblingTopics || []).map((topic, index) => `${index + 1}. ${topic}`).join('\n') || '无'}
+【计划方向】${brief || '结合账号定位'}
+
+输出要求：只输出一个 JSON 对象，不要 markdown 代码块。结构：
+{"content_type":"${slot?.content_type || '口播带货'}","topic":"选题一句话（具体到能直接开拍）","purpose":"涨粉","recommendation_reason":"为什么这天发这条"}
+
+规则：purpose 只能取 ${CYCLE_PURPOSES.join('、')}；选题要具体（有场景/有冲突/有数字）。`;
+}
+
+export function demoCycleSlot({ slot }) {
+  const seed = String(slot?.day || '').length + String(slot?.content_type || '').length;
+  const topics = [
+    '家长群里吵翻的一个选择，你怎么看？',
+    '同样听课两个月，为什么效果差三倍？',
+    '我们把课堂全程拍了下来，你看完再决定',
+    '报名前一定要问的 3 个问题（不是推销）',
+    '这个细节暴露了孩子适不适合学',
+    '别再问「几岁开始合适」了，先看这件事',
+  ];
+  return JSON.stringify({
+    content_type: slot?.content_type || '口播带货',
+    topic: topics[seed % topics.length],
+    purpose: CYCLE_PURPOSES[seed % CYCLE_PURPOSES.length],
+    recommendation_reason: '（演示）替换后的选题与前文不重复，节奏上承接前一天的类型。',
+  }, null, 2);
+}

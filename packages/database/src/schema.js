@@ -1504,6 +1504,27 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_voice_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_vsample_owner ON junshi_workbench_voice_samples(owner_key, created_at DESC);
 
+-- 八期：内容计划/周期日历（对齐原版 content-cycles，作者本人授权复刻）。
+-- slots 整体存 JSON；状态 generating → proposed → confirmed（version 乐观锁）。
+CREATE TABLE IF NOT EXISTS junshi_workbench_content_cycles (
+  id            TEXT NOT NULL PRIMARY KEY,
+  owner_key     TEXT NOT NULL,
+  org_id        TEXT,
+  account_id    TEXT NOT NULL DEFAULT 'default',
+  period        TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'generating',
+  version       INTEGER NOT NULL DEFAULT 1,
+  content_count INTEGER NOT NULL DEFAULT 0,
+  brief         TEXT NOT NULL DEFAULT '',
+  distribution  TEXT NOT NULL DEFAULT '{}',
+  notice        TEXT NOT NULL DEFAULT '',
+  slots         TEXT NOT NULL DEFAULT '[]',
+  error         TEXT NOT NULL DEFAULT '',
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_cycle_owner ON junshi_workbench_content_cycles(owner_key, created_at DESC);
+
 `;
 
 db.exec(SCHEMA);
