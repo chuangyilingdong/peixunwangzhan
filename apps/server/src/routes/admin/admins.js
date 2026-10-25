@@ -2,7 +2,7 @@
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arow, arows, aq, likeKeyword, likeEscapeClause } from '../../lib.js';
+  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, arow, arows, aq, likeKeyword, likeEscapeClause } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
@@ -112,7 +112,7 @@ export async function handleAdmins(ctx, part, method) {
     if (!displayName || password.length < 6) throw errors.badRequest('姓名不能为空且密码至少6位', 'ADMIN_INPUT_REQUIRED');
     normalizeLogin(login, '登录名');
     await assertLoginAvailable(login);
-    await assertDisplayNameAvailable(displayName, { role: 'SUPER_ADMIN' });
+    // 姓名允许重名（账号唯一性只认登录名，见 lib.js）。
     const permissions = login === 'root' ? [...PLATFORM_ADMIN_PERMISSIONS] : platformAdminPermissions(body.permissions); const adminId = id('user'); const now = nowIso();
     await aq('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [adminId, null, login, displayName, 'SUPER_ADMIN', json(permissions), hashPassword(password), body.status === 'DISABLED' ? 'DISABLED' : 'ACTIVE', now, now]);
     await audit(ctx, 'PLATFORM_ADMIN_CREATE', 'USER', adminId, null, { login, permissions });
@@ -138,7 +138,7 @@ export async function handleAdmins(ctx, part, method) {
     if (body.login !== undefined && String(body.login).trim() !== target.login && await arow('SELECT id FROM users WHERE login=?', [String(body.login).trim()])) throw errors.conflict('登录名已存在', 'LOGIN_EXISTS');
     const displayName = body.displayName === undefined ? target.display_name : String(body.displayName).trim();
     if (!displayName) throw errors.badRequest('姓名不能为空', 'ADMIN_INPUT_REQUIRED');
-    if (displayName !== target.display_name) await assertDisplayNameAvailable(displayName, { role: 'SUPER_ADMIN', excludeUserId: target.id });
+    // 姓名允许重名（账号唯一性只认登录名）。
     const permissions = target.login === 'root' ? [...PLATFORM_ADMIN_PERMISSIONS] : (body.permissions === undefined ? parseJson(target.permissions, []) : platformAdminPermissions(body.permissions));
     if (!Array.isArray(permissions) || permissions.some((item) => !PLATFORM_ADMIN_PERMISSIONS.includes(item))) throw errors.badRequest('包含无效的平台权限码', 'INVALID_ADMIN_PERMISSION');
     if (target.status === 'ACTIVE' && !hasAnyPlatformPermission(permissions)) {

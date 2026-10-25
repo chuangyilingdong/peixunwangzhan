@@ -287,7 +287,7 @@ function Members({ api, user }) {
     >
       <form onSubmit={create}>
         <label>角色<select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="STUDENT">学生</option><option value="TEACHER">老师</option></select></label>
-        <label>{form.role === 'TEACHER' ? '老师姓名' : '学生姓名'}<input value={form.displayName} required onChange={(event) => setForm({ ...form, displayName: event.target.value })} /></label>
+        <label>{form.role === 'TEACHER' ? '老师姓名' : '学生姓名'}<input value={form.displayName} required onChange={(event) => setForm({ ...form, displayName: event.target.value })} /><small className="muted">可以重名（机构里会有同名同姓的学生）；登录账号才是唯一标识。</small></label>
         <label>登录账号<input value={form.login} required pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxLength={50} title="只能用英文和数字（可带 . _ -）" onChange={(event) => setForm({ ...form, login: event.target.value })} /><small className="muted">只能用英文和数字（可带 . _ -）；全平台不能重复。</small></label>
         <label>登录密码<input type="password" minLength="6" value={form.password} required onChange={(event) => setForm({ ...form, password: event.target.value })} /><small className="muted">至少 6 位</small></label>
         <label>手机号（可选）<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>

@@ -1115,26 +1115,15 @@ export async function assertLoginAvailable(login, { excludeUserId = null } = {})
 }
 
 /**
- * 姓名唯一：**同一机构 + 同一角色**内不允许重名（2026-09-16 用户口径）。
- * 为什么按这个范围：不同机构的学生当然可以同名；一个机构里「张老师」和「张三同学」也可以同名。
- * 会出问题的场景是「同一批名单里两个同名的人」—— 老师在学生列表里根本分不出来。
- * orgId 为空（平台管理员）时按全局同名同角色算。
+ * 姓名**不要求唯一**（2026-10-25 用户口径：
+ * 「名字现在也不能同名，但是实际上机构里是可能招到同名的学生的。登录账号是肯定要唯一性的。」）。
+ *
+ * 账号的唯一标识只有 `login`（全局唯一、忽略大小写，见 `assertLoginAvailable`）；
+ * 显示姓名允许同机构/同角色重名 —— 真实机构会有同名同姓的学生，列表与选择器都同时展示登录名。
+ *
+ * ⚠️ 别再恢复"按 display_name 查重"：原来那条 `assertDisplayNameAvailable` 已删除
+ *    （错误码 `DISPLAY_NAME_EXISTS` 一并下线）；需要区分人时看登录名，不是拦创建。
  */
-export async function assertDisplayNameAvailable(displayName, { orgId = null, role = null, excludeUserId = null } = {}) {
-  const name = String(displayName ?? '').trim();
-  if (!name) return;
-  const clash = await arow(
-    `SELECT id,login,display_name FROM users
-      WHERE display_name=? AND deleted_at IS NULL
-        AND (? IS NULL OR org_id IS ?) AND (? IS NULL OR role=?) AND (? IS NULL OR id<>?)
-      LIMIT 1`,
-    [name, orgId, orgId, role, role, excludeUserId, excludeUserId],
-  );
-  if (clash) {
-    const scope = orgId ? '本机构' : '平台';
-    throw errors.conflict(`${scope}已经有同名的${role === 'STUDENT' ? '学生' : role === 'TEACHER' ? '老师' : '账号'}「${name}」（登录名 ${clash.login}），请换个名字或加个区分`, 'DISPLAY_NAME_EXISTS');
-  }
-}
 
 export const SERIES_VISIBILITIES = Object.freeze(['PUBLIC', 'PRIVATE']);
 

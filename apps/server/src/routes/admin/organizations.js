@@ -2,7 +2,7 @@
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, pageParams, pageResult, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arow, arows, aq, atransaction, amap } from '../../lib.js';
+  assignmentActiveSql, pageParams, pageResult, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, arow, arows, aq, atransaction, amap } from '../../lib.js';
 import { syncAssignmentExpiryForOrg } from '../../lib.js';
 import { hashPassword, nextOrgCode } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -236,7 +236,7 @@ export async function handleOrganizations(ctx, part, method) {
     if (password.length < 6) throw errors.badRequest('管理员密码至少6位', 'ORG_ADMIN_INPUT_REQUIRED');
     normalizeLogin(login, '登录名');
     await assertLoginAvailable(login);
-    await assertDisplayNameAvailable(displayName, { orgId: organization.id, role: 'ORG_ADMIN' });
+    // 姓名允许重名（账号唯一性只认登录名，见 lib.js）。
     const userId = id('user');
     await aq('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [userId, organization.id, login, displayName, 'ORG_ADMIN', '[]', hashPassword(password), 'ACTIVE', now, now]);
     const admin = await arow('SELECT * FROM users WHERE id=?', [userId]);
@@ -253,7 +253,7 @@ export async function handleOrganizations(ctx, part, method) {
     const body = ctx.body || {};
     const displayName = body.displayName === undefined ? target.display_name : String(body.displayName || '').trim();
     if (!displayName) throw errors.badRequest('管理员姓名不能为空', 'ORG_ADMIN_INPUT_REQUIRED');
-    if (displayName !== target.display_name) await assertDisplayNameAvailable(displayName, { orgId: organization.id, role: 'ORG_ADMIN', excludeUserId: target.id });
+    // 姓名允许重名（账号唯一性只认登录名）。
     let passwordHash = target.password_hash;
     if (body.password !== undefined) {
       const password = String(body.password || '');

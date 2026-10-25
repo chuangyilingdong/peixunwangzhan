@@ -1,4 +1,4 @@
-import { audit, clearAuthCookies, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arows, arow, aq, acount, atransaction, amap, likeKeyword, likeEscapeClause } from '../lib.js';
+import { audit, clearAuthCookies, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, arows, arow, aq, acount, atransaction, amap, likeKeyword, likeEscapeClause } from '../lib.js';
 import { normalizeLesson, canvasMediaFrom } from '../lib.js';
 import { missingLocalAssets, normalizeSubmission, parseSnapshotArtifacts, shareableArtifactNames, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
 // ⭐ 2026-09-30：作品分享码（与学生端**同一份实现** —— 件的定位与幂等口径两处各写一套，迟早只在一半上生效）
@@ -318,10 +318,9 @@ export async function handleOrg(ctx) {
     const body = ctx.body || {}; const role = String(body.role || '').trim().toUpperCase(); const login = String(body.login || '').trim(); const displayName = String(body.displayName || '').trim();
     if (!ORG_MEMBER_ROLES.has(role) || !displayName || String(body.password || '').length < 6) throw errors.badRequest('账号信息不完整');
     // 登录名：只允许英文数字（可带 . _ -），全局唯一且**忽略大小写**；
-    // 姓名：同机构同角色不允许重名（2026-09-16 用户口径：不同用户可能同登录名或同名字）
+    // 姓名：**允许重名**（2026-10-25 用户口径：真实机构会有同名同姓的学生；登录名才是唯一标识）。
     normalizeLogin(login, '登录名');
     await assertLoginAvailable(login);
-    await assertDisplayNameAvailable(displayName, { orgId: currentOrgId, role });
     const phone = await validateMemberPhone(body.phone);
     const permissions = validateMemberPermissions(body.permissions, role);
     const organization = await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
@@ -357,7 +356,7 @@ export async function handleOrg(ctx) {
     if (nextStatus === 'DISABLED' && target.id === auth.user.id) throw errors.badRequest('不能停用当前登录账号', 'SELF_DISABLE_FORBIDDEN');
     const phone = body.phone === undefined ? target.phone : await validateMemberPhone(body.phone, target.id);
     const displayName = body.displayName === undefined ? target.display_name : String(body.displayName).trim(); if (!displayName) throw errors.badRequest('姓名不能为空', 'DISPLAY_NAME_REQUIRED');
-    if (displayName !== target.display_name) await assertDisplayNameAvailable(displayName, { orgId: currentOrgId, role: target.role, excludeUserId: target.id });
+    // 姓名允许重名（账号唯一性只认登录名，见 lib.js 的 assertLoginAvailable）—— 这里不再查重。
     // 批次 D：`studentUsageScope` 不再接受修改 —— 字段已退役（不再决定任何门禁）。
     // 传了就忽略（不报错），列本身保留历史值。要「能不能用 AI」请看算力池与课堂名单。
     const permissions = body.permissions === undefined ? parseJson(target.permissions, []) : validateMemberPermissions(body.permissions, target.role);

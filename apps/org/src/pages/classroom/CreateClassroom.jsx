@@ -78,7 +78,7 @@ export function CreateClassroom({ api, isAdmin, onCancel, onCreated, parentLabel
               <span className="classroom-mode-readonly">{deliveryModeLabels(selectedLesson).join(' / ') || '—'}</span></label> : null}
 
             {isAdmin ? <label>负责老师<SearchSelect ariaLabel="搜索负责老师" value={form.teacherId} options={teachers.data?.items || []}
-              placeholder="挂在我自己名下" getLabel={(item) => item.displayName || item.login}
+              placeholder="挂在我自己名下" getLabel={(item) => item.displayName ? `${item.displayName}（${item.login}）` : item.login}
               onChange={(teacherId) => setForm({ ...form, teacherId })} /></label> : null}
 
           </form>

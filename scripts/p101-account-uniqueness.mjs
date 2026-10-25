@@ -6,8 +6,9 @@
  *
  * 这条守卫钉住三件事：
  *   ① 登录名只允许英文/数字（可带 . _ -）：中文、空格、@ 一律拒；
- *   ② 登录名**全局唯一且忽略大小写**（Zhang 与 zhang 不能并存）；
- *   ③ 姓名**同机构同角色**不能重名；不同机构、或同机构的老师与学员同名是允许的。
+ *   ② 登录名**全局唯一且忽略大小写**（Zhang 与 zhang 不能并存）—— 账号的唯一标识；
+ *   ③ 姓名**允许重名**（2026-10-25 用户口径：「机构里可能招到同名的学生」）——
+ *      同机构同角色、老师与学生、跨机构都可以同名；列表/选择器都同时展示登录名来区分人。
  *
  * ⚠️ 2026-09-27 用户口径「批量导入要删」：原来这里还有第 ④ 条（导入预览里逐行标错），
  *    功能与接口一起下线后那一节删掉了 —— 唯一性由上面三条按 POST /users 与改名两条路继续钉。
@@ -86,18 +87,29 @@ console.log('\n【二】登录名唯一（忽略大小写）');
 await rejects(() => org(orgA.id, '/users', 'POST', { role: 'STUDENT', login: 'stu01', displayName: '重名登录名', password: 'secret123' }), 'LOGIN_EXISTS', '同机构不能再建同登录名');
 await rejects(() => org(orgB.id, '/users', 'POST', { role: 'STUDENT', login: 'STU01', displayName: '跨机构同登录名', password: 'secret123' }), 'LOGIN_EXISTS', '别的机构也不能用同一登录名（大小写不同也算）');
 
-console.log('\n【三】姓名唯一：同机构同角色');
-await rejects(() => org(orgA.id, '/users', 'POST', { role: 'STUDENT', login: 'stu02', displayName: '合法stu01', password: 'secret123' }), 'DISPLAY_NAME_EXISTS', '同机构同角色重名要被拒');
+console.log('\n【三】姓名可以重名（账号唯一性只认登录名）');
+const sameName = await org(orgA.id, '/users', 'POST', { role: 'STUDENT', login: 'stu02', displayName: '合法stu01', password: 'secret123' });
+check('同机构同角色可以重名（登录名不同即可）', Boolean(sameName?.id), JSON.stringify(sameName).slice(0, 160));
 const teacherSameName = await org(orgA.id, '/users', 'POST', { role: 'TEACHER', login: 'tea01', displayName: '合法stu01', password: 'secret123' });
-check('同机构的老师与学员可以同名（角色不同）', Boolean(teacherSameName?.id));
-const otherOrgSameName = await org(orgB.id, '/users', 'POST', { role: 'STUDENT', login: 'stu02', displayName: '合法stu01', password: 'secret123' });
+check('同机构的老师与学员可以同名（角色不同也允许）', Boolean(teacherSameName?.id));
+const otherOrgSameName = await org(orgB.id, '/users', 'POST', { role: 'STUDENT', login: 'stu03', displayName: '合法stu01', password: 'secret123' });
 check('不同机构可以同名', Boolean(otherOrgSameName?.id));
+// 静态：三处建号/改名入口都不能再按姓名查重（登录取 assertLoginAvailable）
+{
+  const sources = [
+    'apps/server/src/lib.js',
+    'apps/server/src/routes/orgAdmin.js',
+    'apps/server/src/routes/admin/admins.js',
+    'apps/server/src/routes/admin/organizations.js',
+  ].map((file) => fs.readFileSync(path.join(root, file), 'utf8')).join('\n');
+  check('服务端不再有 assertDisplayNameAvailable / DISPLAY_NAME_EXISTS（姓名只做展示，不做唯一键）',
+    !/export async function assertDisplayNameAvailable|await assertDisplayNameAvailable\(|'DISPLAY_NAME_EXISTS'/.test(sources));
+}
 
-console.log('\n【四】改名也要过唯一性');
+console.log('\n【四】改名也可以重名（登录名仍唯一）');
 const target = await arow("SELECT id FROM users WHERE login='stu.01'");
-await rejects(() => org(orgA.id, `/users/${target.id}`, 'PUT', { displayName: '合法stu01' }), 'DISPLAY_NAME_EXISTS', '改名撞上同机构同名要被拒');
-const renamed = await org(orgA.id, `/users/${target.id}`, 'PUT', { displayName: '换了个名字' });
-check('改成不冲突的名字可以', renamed?.displayName === '换了个名字');
+const renamed = await org(orgA.id, `/users/${target.id}`, 'PUT', { displayName: '合法stu01' });
+check('改成同机构已有的名字可以', renamed?.displayName === '合法stu01', JSON.stringify(renamed).slice(0, 160));
 
 // 2026-09-27 用户口径「批量导入要删」：这一节原来验的是导入预览逐行标错
 // （本批次重名 / 中文登录名 / 与库内冲突）。功能与接口一起下线后没有对应入口了 ——
