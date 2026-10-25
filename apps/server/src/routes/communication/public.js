@@ -500,12 +500,14 @@ export async function handlePublicCommunication(ctx) {
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
-    if (link.source === 'VIBECODING') {
-      const mime = String(file.mime_type || '').toLowerCase();
-      if (/^(image|audio|video)\//.test(mime)) {
-        return mime.startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFilePreview(ctx, file);
-      }
-    }
+    // ⚠️ 2026-10-25 用户报「手机端无法保存单个图片/视频」：画布侧原来一律 `prepareFileDownload`
+    //    （`Content-Disposition: attachment`）—— 嵌入 `<img>/<video>` 能显示，但 iOS Safari / 微信的
+    //    长按菜单会变成“下载链接”，拿不到“存储图像 / 保存视频”。改成与 VIBECODING 同一条：
+    //    图片 `prepareWorkImage`（inline；SVG 仍 attachment 防 XSS）、音视频 `prepareFilePreview`
+    //    （inline + Range），长按能正常出系统保存菜单；显式“保存”按钮仍由扫码页提供（走 fetch + 系统分享/下载）。
+    const mime = String(file.mime_type || '').toLowerCase();
+    if (mime.startsWith('image/')) return prepareWorkImage(ctx, file);
+    if (/^(audio|video)\//.test(mime)) return prepareFilePreview(ctx, file);
     return prepareFileDownload(ctx, file);
   }
 
