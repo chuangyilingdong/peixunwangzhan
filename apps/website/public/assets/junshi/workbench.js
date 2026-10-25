@@ -1220,8 +1220,9 @@
   var WB_WORK_STATUS = { planning: '写编导稿中', draft: '待确认', rendering: '渲染中', succeeded: '已完成', failed: '失败' };
   var WB_SHOT_ROLES = { hook: '钩子', pain: '痛点', proof: '证明', turn: '转折', cta: '行动' };
   var WB_REF_ROLES = ['人物', '场景', '道具', '音色'];
-  var WB_DURATIONS = [5, 10, 15, 20, 30, 45, 60];
-  var WB_RESOLUTIONS = ['480p', '720p', '1080p'];
+  // 生产视频渠道（MiniMax-H3 外部适配器）实测：分辨率只认 480P/768P（720p 会被拒），单次成片上限 30 秒。
+  var WB_DURATIONS = [5, 10, 15, 20, 25, 30];
+  var WB_RESOLUTIONS = ['480P', '768P'];
   var WB_RATIOS = ['9:16', '16:9', '1:1'];
 
   function wbWorkStatusText(value) { return WB_WORK_STATUS[value] || value || '—'; }
@@ -1250,7 +1251,7 @@
     var draft = {
       id: 'draft-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6), mode: mode, status: 'configuring',
       type: 'ecommerce', subtype: '口播带货', hookStrategy: 'auto', model: '', durationSeconds: 15,
-      resolution: '720p', ratio: '9:16', brief: '', assetRefs: [], reference: '', sourceKind: 'text',
+      resolution: '768P', ratio: '9:16', brief: '', assetRefs: [], reference: '', sourceKind: 'text',
       sourceId: '', taskName: '', scheduleType: 'daily', intervalDays: 2, runTime: '09:00', count: 1, authorizedFolder: '',
     };
     state.videoDrafts.push(draft);
