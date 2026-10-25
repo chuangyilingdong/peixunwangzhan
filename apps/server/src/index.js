@@ -264,13 +264,6 @@ server.listen(PORT, API_HOST, () => {
   console.log(`AI Kids Platform API listening on http://${API_HOST}:${PORT}`);
 });
 
-// 七期 · 视频自动日更调度（junshi 内容工作台）。只在平台显式开 JUNSHI_VIDEO_AUTO_ENABLED=1
-// 时启动：自动任务会真实调视频渠道计费（约 0.75 元/条），默认关闭防止误触发。
-{
-  const { initJunshiVideoAutoScheduler } = await import('./routes/junshiWorkbench.js');
-  initJunshiVideoAutoScheduler();
-}
-
 let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;

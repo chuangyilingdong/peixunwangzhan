@@ -1482,14 +1482,12 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_video_works (
   director_script  TEXT NOT NULL DEFAULT '',
   script_revision  INTEGER NOT NULL DEFAULT 0,
   script_edited    INTEGER NOT NULL DEFAULT 0,
-  auto_task_id     TEXT,
   output_asset_id  TEXT,
   error            TEXT NOT NULL DEFAULT '',
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_vwork_owner ON junshi_workbench_video_works(owner_key, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_junshi_wb_vwork_auto ON junshi_workbench_video_works(auto_task_id);
 
 -- 七期：音色库（2–15 秒参考音频；与五期数字人克隆音色 junshi_workbench_voices 区分）。
 CREATE TABLE IF NOT EXISTS junshi_workbench_voice_samples (
@@ -1506,35 +1504,6 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_voice_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_vsample_owner ON junshi_workbench_voice_samples(owner_key, created_at DESC);
 
--- 七期：自动日更任务（调度需要平台开 JUNSHI_VIDEO_AUTO_ENABLED=1）。
-CREATE TABLE IF NOT EXISTS junshi_workbench_video_auto_tasks (
-  id                TEXT NOT NULL PRIMARY KEY,
-  owner_key         TEXT NOT NULL,
-  org_id            TEXT,
-  account_id        TEXT NOT NULL DEFAULT 'default',
-  client_id         TEXT,
-  task_name         TEXT NOT NULL DEFAULT '',
-  schedule_type     TEXT NOT NULL DEFAULT 'daily',
-  interval_days     INTEGER NOT NULL DEFAULT 2,
-  run_time          TEXT NOT NULL DEFAULT '09:00',
-  count             INTEGER NOT NULL DEFAULT 1,
-  authorized_folder TEXT NOT NULL DEFAULT '',
-  type              TEXT NOT NULL DEFAULT 'ecommerce',
-  subtype           TEXT NOT NULL DEFAULT '',
-  hook_strategy     TEXT NOT NULL DEFAULT 'auto',
-  model             TEXT NOT NULL DEFAULT '',
-  duration_seconds  INTEGER NOT NULL DEFAULT 15,
-  resolution        TEXT NOT NULL DEFAULT '',
-  ratio             TEXT NOT NULL DEFAULT '9:16',
-  enabled           INTEGER NOT NULL DEFAULT 1,
-  next_run_at       TEXT,
-  last_run_at       TEXT,
-  last_run_status   TEXT,
-  last_message      TEXT,
-  created_at        TEXT NOT NULL,
-  updated_at        TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_junshi_wb_vauto_owner ON junshi_workbench_video_auto_tasks(owner_key, next_run_at);
 `;
 
 db.exec(SCHEMA);

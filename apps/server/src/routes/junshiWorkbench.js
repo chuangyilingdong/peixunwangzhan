@@ -397,7 +397,6 @@ function workOut(row) {
     directorScript: script,
     scriptRevision: Number(row.script_revision || 0),
     scriptEdited: Number(row.script_edited || 0) === 1,
-    autoTaskId: row.auto_task_id || null,
     outputAssetId: row.output_asset_id || null,
     outputUrl: row.output_asset_id ? `/api/junshi/workbench/assets/${encodeURIComponent(row.output_asset_id)}/file` : null,
     error: row.error || '',
@@ -415,34 +414,6 @@ function voiceSampleOut(row, assetRow = null) {
     useCount: Number(row.use_count || 0),
     missing: !assetRow,
     url: `/api/junshi/workbench/assets/${encodeURIComponent(row.asset_id)}/file`,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-function autoTaskOut(row) {
-  return {
-    id: row.id,
-    accountId: row.account_id || 'default',
-    clientId: row.client_id || null,
-    taskName: row.task_name || '',
-    scheduleType: row.schedule_type || 'daily',
-    intervalDays: Number(row.interval_days || 2),
-    runTime: row.run_time || '09:00',
-    count: Number(row.count || 1),
-    authorizedFolder: row.authorized_folder || '',
-    type: row.type || 'ecommerce',
-    typeLabel: videoTypeLabel(row.type),
-    subtype: row.subtype || '',
-    hookStrategy: row.hook_strategy || 'auto',
-    model: row.model || '',
-    durationSeconds: Number(row.duration_seconds || 15),
-    resolution: row.resolution || '',
-    ratio: row.ratio || '9:16',
-    enabled: Number(row.enabled || 0) === 1,
-    nextRunAt: row.next_run_at || null,
-    lastRunAt: row.last_run_at || null,
-    lastRunStatus: row.last_run_status || null,
-    lastMessage: row.last_message || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -504,18 +475,7 @@ function buildWorkRenderPrompt(script) {
     script?.strategy ? `整体策略：${script.strategy}` : '',
   ].filter(Boolean).join('\n').slice(0, 2000);
 }
-function videoAutoEnabled() {
-  return process.env.JUNSHI_VIDEO_AUTO_ENABLED === '1';
-}
-function nextAutoRunAt(scheduleType = 'daily', intervalDays = 2, runTime = '09:00') {
-  const [hourRaw, minuteRaw] = String(runTime || '09:00').split(':');
-  const base = new Date();
-  base.setHours(clampInt(hourRaw, 9, 0, 23), clampInt(minuteRaw, 0, 0, 59), 0, 0);
-  if (scheduleType === 'every_days') base.setDate(base.getDate() + clampInt(intervalDays, 2, 2, 30));
-  else if (base.getTime() <= Date.now()) base.setDate(base.getDate() + 1);
-  return base.toISOString();
-}
-/** 编导稿异步管线：拼档案+素材 → 模型单 JSON → 解析入库；自动任务随后自动确认渲染。 */
+/** 编导稿异步管线：拼档案+素材 → 模型单 JSON → 解析入库。 */
 async function runDirectorScript(owner, workId, { reference = '' } = {}) {
   let job = null;
   try {
@@ -548,7 +508,6 @@ async function runDirectorScript(owner, workId, { reference = '' } = {}) {
     await aq("UPDATE junshi_workbench_video_works SET title=?, director_script=?, status='draft', message='编导稿已生成，确认后开始渲染；分镜可以逐镜修改。', error='', script_revision=script_revision+1, updated_at=? WHERE id=? AND owner_key=?",
       [String(parsed.data.title || '').slice(0, 200), JSON.stringify(parsed.data), nowIso(), workId, owner.key]);
     if (job) await jobDone(job, 'succeeded', '编导稿已生成').catch(() => {});
-    if (work.auto_task_id) await autoConfirmWork(owner, workId);
   } catch (error) {
     console.error('[video work] runDirectorScript failed:', error?.stack || error?.message || error);
     const message = error instanceof ApiError ? error.message : String(error?.message || error);
@@ -580,17 +539,6 @@ async function startWorkRender(owner, work) {
   await aq("UPDATE junshi_workbench_video_works SET status='rendering', message='已提交视频生成，正在排队…', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), work.id, owner.key]);
   void runWorkbenchRender(owner, renderId, { job });
   return { renderId };
-}
-async function autoConfirmWork(owner, workId) {
-  try {
-    const work = await arow('SELECT * FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [workId, owner.key]);
-    if (!work) return;
-    await startWorkRender(owner, work);
-  } catch (error) {
-    const message = String(error?.message || error).slice(0, 1000);
-    await aq("UPDATE junshi_workbench_video_works SET status='failed', error=?, message=?, updated_at=? WHERE id=? AND owner_key=?",
-      [message, `自动渲染提交失败：${message.slice(0, 200)}`, nowIso(), workId, owner.key]).catch(() => {});
-  }
 }
 /** 渲染执行：与一期 /video/render 同一套渠道+转存逻辑，渲染行来自视频工作台（work_id 挂钩）。 */
 async function runWorkbenchRender(owner, renderId, { job = null } = {}) {
@@ -667,57 +615,6 @@ async function runWorkbenchRender(owner, renderId, { job = null } = {}) {
       }
     }
     if (job) await jobDone(job, 'failed', String(message).slice(0, 1000)).catch(() => {});
-  }
-}
-
-/* ───────────── 自动日更调度（需要 JUNSHI_VIDEO_AUTO_ENABLED=1，防止误触发生成费用） ───────────── */
-let videoAutoTimer = null;
-export function initJunshiVideoAutoScheduler() {
-  if (process.env.JUNSHI_VIDEO_AUTO_ENABLED !== '1' || videoAutoTimer) return;
-  videoAutoTimer = setInterval(() => { void tickVideoAutoScheduler(); }, 60 * 1000);
-  videoAutoTimer.unref?.();
-  console.log('junshi video auto scheduler: enabled, checking due tasks every 60s');
-}
-async function ownerForAutoTask(task) {
-  let userId = null;
-  if (String(task.owner_key || '').startsWith('user:')) userId = task.owner_key.slice('user:'.length);
-  else if (task.org_id) {
-    const user = await arow('SELECT id FROM users WHERE org_id=? AND deleted_at IS NULL ORDER BY id LIMIT 1', [task.org_id]).catch(() => null);
-    userId = user?.id || null;
-  }
-  if (!userId) return null;
-  return { auth: { user: { id: userId, orgId: task.org_id || null } }, key: task.owner_key, orgId: task.org_id || null };
-}
-async function tickVideoAutoScheduler() {
-  try {
-    const due = await arows("SELECT * FROM junshi_workbench_video_auto_tasks WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at<=? AND (last_run_status IS NULL OR last_run_status NOT IN ('running'))", [nowIso()]);
-    for (const task of due) {
-      const nextRun = nextAutoRunAt(task.schedule_type, Number(task.interval_days || 2), task.run_time);
-      await aq("UPDATE junshi_workbench_video_auto_tasks SET last_run_at=?, last_run_status='running', last_message='正在按计划生成…', next_run_at=?, updated_at=? WHERE id=?",
-        [nowIso(), nextRun, nowIso(), task.id]).catch(() => {});
-      try {
-        const owner = await ownerForAutoTask(task);
-        if (!owner) throw new Error('无法解析任务归属用户，跳过本次执行');
-        let submitted = 0;
-        for (let index = 0; index < clampInt(task.count, 1, 1, 5); index++) {
-          const workId = id('jww');
-          const at = nowIso();
-          await aq('INSERT INTO junshi_workbench_video_works (id,owner_key,org_id,account_id,mode,title,type,subtype,hook_strategy,model,duration_seconds,resolution,ratio,brief,asset_refs,status,message,director_script,script_revision,script_edited,auto_task_id,output_asset_id,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            [workId, owner.key, task.org_id || null, task.account_id || 'default', 'auto', '', task.type || 'ecommerce', task.subtype || '', task.hook_strategy || 'auto', task.model || '', Number(task.duration_seconds) || 15, task.resolution || '', task.ratio || '9:16',
-              '（自动任务）按授权文件夹与账号档案生成今日内容', '[]', 'planning', '自动任务正在写编导稿…', '', 0, 0, task.id, null, '', at, at]);
-          void runDirectorScript(owner, workId, {});
-          submitted += 1;
-        }
-        await aq("UPDATE junshi_workbench_video_auto_tasks SET last_run_status='succeeded', last_message=?, updated_at=? WHERE id=?",
-          [`已提交 ${submitted} 条生成任务，成片会自动入素材库`, nowIso(), task.id]).catch(() => {});
-      } catch (error) {
-        const message = String(error?.message || error).slice(0, 1000);
-        await aq("UPDATE junshi_workbench_video_auto_tasks SET last_run_status='failed', last_message=?, updated_at=? WHERE id=?",
-          [message, nowIso(), task.id]).catch(() => {});
-      }
-    }
-  } catch (error) {
-    console.error('junshi video auto scheduler:', error?.message || error);
   }
 }
 
@@ -2000,7 +1897,7 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     const rows = accountIdFilter
       ? await arows('SELECT * FROM junshi_workbench_video_works WHERE owner_key=? AND account_id=? ORDER BY created_at DESC LIMIT 50', [owner.key, accountIdFilter])
       : await arows('SELECT * FROM junshi_workbench_video_works WHERE owner_key=? ORDER BY created_at DESC LIMIT 50', [owner.key]);
-    return { items: rows.map(workOut), autoEnabled: videoAutoEnabled() };
+    return { items: rows.map(workOut) };
   }
   if (rest === '/video/works' && method === 'POST') {
     const mode = ['generate', 'replicate'].includes(text(ctx.body?.mode)) ? text(ctx.body?.mode) : 'generate';
@@ -2022,8 +1919,8 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     rateLimit(owner.key);
     const workId = id('jww');
     const at = nowIso();
-    await aq('INSERT INTO junshi_workbench_video_works (id,owner_key,org_id,account_id,mode,title,type,subtype,hook_strategy,model,duration_seconds,resolution,ratio,brief,asset_refs,status,message,director_script,script_revision,script_edited,auto_task_id,output_asset_id,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-      [workId, owner.key, owner.orgId, accountId, mode, '', type, subtype, hookStrategy, model, durationSeconds, resolution, ratio, brief, JSON.stringify(assetRefs), 'planning', '正在写编导稿…', '', 0, 0, null, null, '', at, at]);
+    await aq('INSERT INTO junshi_workbench_video_works (id,owner_key,org_id,account_id,mode,title,type,subtype,hook_strategy,model,duration_seconds,resolution,ratio,brief,asset_refs,status,message,director_script,script_revision,script_edited,output_asset_id,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [workId, owner.key, owner.orgId, accountId, mode, '', type, subtype, hookStrategy, model, durationSeconds, resolution, ratio, brief, JSON.stringify(assetRefs), 'planning', '正在写编导稿…', '', 0, 0, null, '', at, at]);
     void runDirectorScript(owner, workId, { reference });
     return { work: workOut(await arow('SELECT * FROM junshi_workbench_video_works WHERE id=?', [workId])) };
   }
@@ -2145,50 +2042,6 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
       await aq('UPDATE junshi_workbench_voice_samples SET use_count=use_count+1, updated_at=? WHERE id=? AND owner_key=?', [nowIso(), sampleId, owner.key]);
       const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [row.asset_id, owner.key]);
       return { sample: voiceSampleOut(await arow('SELECT * FROM junshi_workbench_voice_samples WHERE id=?', [sampleId]), assetRow) };
-    }
-  }
-
-  /* ── 自动日更任务（调度需要平台开 JUNSHI_VIDEO_AUTO_ENABLED=1，防误触发生成费用） ── */
-  if (rest === '/video/auto-tasks' && method === 'GET') {
-    const rows = await arows('SELECT * FROM junshi_workbench_video_auto_tasks WHERE owner_key=? ORDER BY created_at DESC LIMIT 50', [owner.key]);
-    return { items: rows.map(autoTaskOut), autoEnabled: videoAutoEnabled() };
-  }
-  if (rest === '/video/auto-tasks' && method === 'POST') {
-    const taskName = (text(ctx.body?.taskName) || '自动视频任务').slice(0, 100);
-    const type = VIDEO_TYPES[text(ctx.body?.type)] ? text(ctx.body?.type) : 'ecommerce';
-    const subtypeOk = (VIDEO_TYPES[type].subtypes || []).some(([name]) => name === text(ctx.body?.subtype));
-    const subtype = subtypeOk ? text(ctx.body?.subtype) : (VIDEO_TYPES[type].subtypes?.[0]?.[0] || '');
-    const hookStrategy = VIDEO_HOOKS.some(([value]) => value === text(ctx.body?.hookStrategy)) ? text(ctx.body?.hookStrategy) : 'auto';
-    const scheduleType = text(ctx.body?.scheduleType) === 'every_days' ? 'every_days' : 'daily';
-    const intervalDays = clampInt(ctx.body?.intervalDays, 2, 2, 30);
-    const runTime = /^\d{2}:\d{2}$/.test(text(ctx.body?.runTime)) ? text(ctx.body?.runTime) : '09:00';
-    const count = clampInt(ctx.body?.count, 1, 1, 5);
-    const authorizedFolder = text(ctx.body?.authorizedFolder).slice(0, 200);
-    const taskId = id('jwvt');
-    const at = nowIso();
-    const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
-    await aq('INSERT INTO junshi_workbench_video_auto_tasks (id,owner_key,org_id,account_id,client_id,task_name,schedule_type,interval_days,run_time,count,authorized_folder,type,subtype,hook_strategy,model,duration_seconds,resolution,ratio,enabled,next_run_at,last_run_at,last_run_status,last_message,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-      [taskId, owner.key, owner.orgId, accountId, text(ctx.body?.clientId).slice(0, 64) || null, taskName, scheduleType, intervalDays, runTime, count, authorizedFolder, type, subtype, hookStrategy, text(ctx.body?.model).slice(0, 64), clampInt(ctx.body?.durationSeconds, 5, 5, 120), text(ctx.body?.resolution).slice(0, 16), text(ctx.body?.ratio).slice(0, 16) || '9:16', ctx.body?.enabled === false ? 0 : 1, nextAutoRunAt(scheduleType, intervalDays, runTime), null, null, null, at, at]);
-    return { task: autoTaskOut(await arow('SELECT * FROM junshi_workbench_video_auto_tasks WHERE id=?', [taskId])), autoEnabled: videoAutoEnabled() };
-  }
-  if (rest.startsWith('/video/auto-tasks/')) {
-    const taskId = decodeURIComponent(rest.slice('/video/auto-tasks/'.length));
-    const row = await arow('SELECT * FROM junshi_workbench_video_auto_tasks WHERE id=? AND owner_key=?', [taskId, owner.key]);
-    if (!row) throw errors.notFound('自动任务不存在', 'NOT_FOUND');
-    if (method === 'PUT') {
-      const enabled = ctx.body?.enabled !== undefined ? (ctx.body?.enabled ? 1 : 0) : Number(row.enabled || 0);
-      const taskName = ctx.body?.taskName !== undefined ? text(ctx.body?.taskName).slice(0, 100) || row.task_name : row.task_name;
-      const runTime = ctx.body?.runTime !== undefined && /^\d{2}:\d{2}$/.test(text(ctx.body?.runTime)) ? text(ctx.body?.runTime) : row.run_time;
-      const scheduleType = ctx.body?.scheduleType !== undefined ? (text(ctx.body?.scheduleType) === 'every_days' ? 'every_days' : 'daily') : row.schedule_type;
-      const intervalDays = ctx.body?.intervalDays !== undefined ? clampInt(ctx.body?.intervalDays, 2, 2, 30) : Number(row.interval_days || 2);
-      const nextRun = enabled ? nextAutoRunAt(scheduleType, intervalDays, runTime) : row.next_run_at;
-      await aq('UPDATE junshi_workbench_video_auto_tasks SET enabled=?, task_name=?, run_time=?, schedule_type=?, interval_days=?, next_run_at=?, updated_at=? WHERE id=? AND owner_key=?',
-        [enabled, taskName, runTime, scheduleType, intervalDays, nextRun, nowIso(), taskId, owner.key]);
-      return { task: autoTaskOut(await arow('SELECT * FROM junshi_workbench_video_auto_tasks WHERE id=?', [taskId])) };
-    }
-    if (method === 'DELETE') {
-      await aq('DELETE FROM junshi_workbench_video_auto_tasks WHERE id=? AND owner_key=?', [taskId, owner.key]);
-      return { ok: true };
     }
   }
 
