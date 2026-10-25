@@ -558,6 +558,7 @@ async function runDirectorScript(owner, workId, { reference = '' } = {}) {
     if (job) await jobDone(job, 'failed', String(message).slice(0, 1000)).catch(() => {});
   }
 }
+/* ───────────── 十五期 · 视频参考图 / 分镜原帧（i2v + storyboard_replication 基础） ───────────── */
 const WORKBENCH_REF_CACHE_TTL_MS = 20 * 60 * 60 * 1000;
 const workbenchRefUploadCache = new Map();
 
