@@ -1533,6 +1533,8 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
     await aq("UPDATE junshi_workbench_video_projects SET account_id='default' WHERE owner_key=? AND account_id=?", [owner.key, accountId]);
     await aq("UPDATE junshi_workbench_assets SET account_id='default' WHERE owner_key=? AND account_id=?", [owner.key, accountId]);
     await aq("UPDATE junshi_workbench_video_renders SET account_id='default' WHERE owner_key=? AND account_id=?", [owner.key, accountId]);
+    await aq("UPDATE junshi_workbench_published_works SET account_id='default' WHERE owner_key=? AND account_id=?", [owner.key, accountId]);
+    await aq("UPDATE junshi_workbench_douyin_pairings SET account_id='default' WHERE owner_key=? AND account_id=?", [owner.key, accountId]);
     await aq('DELETE FROM junshi_workbench_account_profiles WHERE owner_key=? AND account_id=?', [owner.key, accountId]);
     await aq('DELETE FROM junshi_workbench_accounts WHERE id=? AND owner_key=?', [accountId, owner.key]);
     return { ok: true };

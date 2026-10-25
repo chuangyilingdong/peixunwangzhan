@@ -187,6 +187,10 @@ try {
   const defaultAfter = await api('/api/junshi/workbench/reports?accountId=default', { token });
   const secondReport = await api('/api/junshi/workbench/reports?accountId=' + encodeURIComponent(accountId), { token });
   check('⑥ 复盘按账号隔离，不串数据', defaultAfter.data?.counts?.own === 3 && secondReport.data?.counts?.own === 1 && secondReport.data?.items?.[0]?.topic === '副号作品：只属于副号', JSON.stringify({ defaultOwn: defaultAfter.data?.counts?.own, secondOwn: secondReport.data?.counts?.own }));
+
+  const deletedAccount = await api('/api/junshi/workbench/accounts/' + encodeURIComponent(accountId), { method: 'DELETE', token });
+  const defaultAfterDelete = await api('/api/junshi/workbench/reports?accountId=default', { token });
+  check('⑥ 删副号后自己作品并回默认账号，不丢数据', deletedAccount.status === 200 && defaultAfterDelete.data?.counts?.own === 4, JSON.stringify({ deleted: deletedAccount.status, own: defaultAfterDelete.data?.counts?.own }));
 } finally {
   server.kill();
   await sleep(800);

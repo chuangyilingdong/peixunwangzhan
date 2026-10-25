@@ -328,6 +328,7 @@
       state.assets = results[3].items || [];
       state.assetFolders = results[3].folders || [];
       state.reports = null;
+      state.reviewInsight = null;
       if (state.tab === 'reports') void loadReports(true);
       if (state.tab === 'video') { state.selectedVideo = null; state.videoShotEditing = null; state.videoShotEdits = {}; void loadVideoData(true); }
       if (state.tab === 'plan') { state.cycleSlotEditing = null; void loadCycles(true); }
