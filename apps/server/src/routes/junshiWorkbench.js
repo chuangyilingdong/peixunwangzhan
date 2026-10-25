@@ -44,6 +44,7 @@ import {
   douyinLoginEnabled,
   douyinSession,
   fetchProfileViaBrowser,
+  fetchVideoViaBrowser,
   markDouyinSessionExpired,
   markDouyinSessionUsed,
   pollDouyinLogin,
@@ -3025,9 +3026,25 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     const awemeId = text(ctx.body?.awemeId);
     if (!/^\d{6,25}$/.test(awemeId)) throw errors.badRequest('作品 ID 无效', 'VALIDATION_ERROR', { field: 'awemeId' });
     const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
-    const video = await fetchDouyinVideo(awemeId).catch((error) => { throw errors.badRequest(error.message, 'DOUYIN_FETCH_FAILED'); });
-    if (!video.playUrl) throw errors.badRequest('这条作品取不到可下载的视频地址（可能已删除）', 'DOUYIN_NO_PLAY_URL');
-    const buffer = await downloadDouyinVideo(video.playUrl).catch((error) => { throw errors.badRequest(error.message, 'DOUYIN_DOWNLOAD_FAILED'); });
+    // 作品详情接口对未登录出口 403（见交接文档「上游故障」）→ 用浏览器旁路从作品页拿播放地址。
+    let video = null;
+    let videoPlayUrl = '';
+    try {
+      video = await fetchDouyinVideo(awemeId);
+      videoPlayUrl = String(video?.playUrl || '');
+    } catch { /* 落到浏览器旁路 */ }
+    if (!videoPlayUrl) {
+      const viaBrowser = await fetchVideoViaBrowser(owner.key, awemeId);
+      if (viaBrowser?.status !== 'read' || !viaBrowser.playUrl) {
+        const reason = viaBrowser?.error === 'login_required' || viaBrowser?.error === 'verification_required'
+          ? '抖音要求登录或验证后才能读取这条作品'
+          : '这条作品取不到可下载的视频地址（可能已删除，或抖音暂时拦截）';
+        throw errors.badRequest(reason, 'DOUYIN_NO_PLAY_URL');
+      }
+      video = { awemeId, desc: viaBrowser.desc, stats: viaBrowser.stats, durationMs: viaBrowser.durationMs };
+      videoPlayUrl = viaBrowser.playUrl;
+    }
+    const buffer = await downloadDouyinVideo(videoPlayUrl).catch((error) => { throw errors.badRequest(error.message, 'DOUYIN_DOWNLOAD_FAILED'); });
     const stored = await persistSecureUpload({ fileName: `${video.awemeId}.mp4`, mimeType: 'video/mp4', buffer });
     const assetId = id('jwa');
     try {

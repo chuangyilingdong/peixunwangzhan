@@ -20,6 +20,7 @@ import { douyinPython } from './junshiDouyin.js';
 const DOUYIN_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'douyin');
 const LOGIN_WORKER = path.join(DOUYIN_DIR, 'douyin_login_worker.py');
 const BROWSER_WORKER = path.join(DOUYIN_DIR, 'douyin_browser_worker.py');
+const VIDEO_WORKER = path.join(DOUYIN_DIR, 'douyin_video_worker.py');
 
 const LOGIN_WINDOW_MS = 5 * 60 * 1000;
 
@@ -242,6 +243,43 @@ export async function fetchProfileViaBrowser(ownerKey, secUserId, { knownIds = [
       cookie: session?.cookie || '',
       user_agent: session?.userAgent || '',
       known_ids: (knownIds || []).slice(0, 400),
+    }));
+    child.stdin.end();
+  });
+}
+
+/**
+ * 单个作品走浏览器旁路（作品页自己发的 detail 响应）。
+ * 游客也能用 —— 签名接口对我们出口 403，但真实浏览器页面正常。
+ */
+export async function fetchVideoViaBrowser(ownerKey, awemeId, { timeoutMs = 90000 } = {}) {
+  const session = await douyinSession(ownerKey);
+  return await new Promise((resolve) => {
+    const child = spawn(douyinPython(), [VIDEO_WORKER], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: workerEnv() });
+    let out = '';
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { child.kill(); } catch { /* ignore */ }
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish({ status: 'unavailable', error: 'browser_timeout' }), timeoutMs);
+    timer.unref?.();
+    child.stdout.on('data', (chunk) => { out += chunk.toString('utf-8'); });
+    child.stderr.on('data', () => { /* 诊断细节不进日志 */ });
+    child.on('error', () => finish({ status: 'unavailable', error: 'browser_spawn_failed' }));
+    child.on('close', () => {
+      const marker = out.lastIndexOf('DYRESULT:');
+      if (marker < 0) { finish({ status: 'unavailable', error: 'browser_no_result' }); return; }
+      const line = out.slice(marker + 'DYRESULT:'.length).split(/\r?\n/, 1)[0];
+      try { finish(JSON.parse(line)); } catch { finish({ status: 'unavailable', error: 'browser_invalid_result' }); }
+    });
+    child.stdin.write(JSON.stringify({
+      target: { kind: 'video', id: String(awemeId) },
+      cookie: session?.cookie || '',
+      user_agent: session?.userAgent || '',
     }));
     child.stdin.end();
   });
