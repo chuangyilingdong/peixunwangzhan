@@ -863,6 +863,268 @@ async function assetBytes(row) {
   return Buffer.from(await readFile(absolute));
 }
 
+/* ───────────── 十一期 · 同行同步队列（筛选下载 + 自动同步；每条下载+转写都计费，串行跑） ───────────── */
+const PEER_SYNC_STAGES = {
+  queued: '排队中',
+  reading: '读取主页作品',
+  filtering: '按条件筛选',
+  downloading: '下载并转写',
+  done: '已完成',
+  failed: '失败',
+};
+
+function peerSyncOut(row) {
+  let filter = {};
+  try { filter = JSON.parse(row.filter || '{}'); } catch { /* ignore */ }
+  return {
+    id: row.id,
+    refId: row.ref_id,
+    status: row.status || 'queued',
+    stage: row.stage || 'queued',
+    stageLabel: PEER_SYNC_STAGES[row.stage] || row.stage || '排队中',
+    targetCount: Number(row.target_count || 0),
+    foundCount: Number(row.found_count || 0),
+    selectedCount: Number(row.selected_count || 0),
+    doneCount: Number(row.done_count || 0),
+    failedCount: Number(row.failed_count || 0),
+    message: row.message || '',
+    filter,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+function sanitizePeerFilter(input) {
+  const source = input && typeof input === 'object' ? input : {};
+  const num = (value, fallback, min, max) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, Math.round(parsed)));
+  };
+  return {
+    targetCount: num(source.targetCount, 5, 1, 20),
+    minLikes: num(source.minLikes, 0, 0, 10_000_000),
+    minComments: num(source.minComments, 0, 0, 1_000_000),
+    minCollects: num(source.minCollects, 0, 0, 1_000_000),
+    minShares: num(source.minShares, 0, 0, 1_000_000),
+  };
+}
+function peerFilterOf(refRow) {
+  try { return sanitizePeerFilter(refRow.download_filter ? JSON.parse(refRow.download_filter) : null); }
+  catch { return sanitizePeerFilter(null); }
+}
+/** 从「主页链接 / 粘贴的分享内容 / 主页 ID」里取 sec_uid：支持完整 URL、MS4wLj… 形式的 ID。 */
+function resolveRefSecUserId(refRow) {
+  const explicit = String(refRow?.sec_user_id || '').trim();
+  if (explicit) return explicit;
+  const textValue = `${refRow?.url || ''} ${refRow?.notes || ''}`;
+  const secMatch = textValue.match(/(MS4wLj[A-Za-z0-9_\-]{8,})/);
+  if (secMatch) return secMatch[1];
+  const urlMatch = textValue.match(/douyin\.com\/user\/([A-Za-z0-9_\-]{6,})/);
+  return urlMatch ? urlMatch[1] : '';
+}
+async function createPeerSync(owner, refRow, filter) {
+  const syncId = id('jwps');
+  const at = nowIso();
+  const clean = sanitizePeerFilter(filter);
+  await aq('INSERT INTO junshi_workbench_peer_syncs (id,owner_key,org_id,ref_id,status,stage,target_count,found_count,selected_count,done_count,failed_count,message,filter,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    [syncId, owner.key, owner.orgId, refRow.id, 'queued', 'queued', clean.targetCount, 0, 0, 0, 0, '', JSON.stringify(clean), at, at]);
+  await aq('UPDATE junshi_workbench_refs SET download_filter=?, last_sync_status=?, last_sync_message=?, created_at=created_at WHERE id=? AND owner_key=?',
+    [JSON.stringify(clean), 'queued', '', refRow.id, owner.key]).catch(() => {});
+  peerSyncQueue.push({ ownerKey: owner.key, orgId: owner.orgId, syncId, refId: refRow.id, accountId: refRow.account_id || 'default' });
+  return await arow('SELECT * FROM junshi_workbench_peer_syncs WHERE id=?', [syncId]);
+}
+const peerSyncQueue = [];
+let peerSyncPumping = false;
+async function pumpPeerSync() {
+  if (peerSyncPumping) return;
+  peerSyncPumping = true;
+  try {
+    while (peerSyncQueue.length) {
+      const job = peerSyncQueue.shift();
+      await runPeerSync(job).catch(() => {});
+    }
+  } finally { peerSyncPumping = false; }
+}
+async function peerSyncStep(syncId, patch) {
+  const sets = [];
+  const params = [];
+  for (const [key, value] of Object.entries(patch)) { sets.push(`${key}=?`); params.push(value); }
+  sets.push('updated_at=?');
+  params.push(nowIso(), syncId);
+  await aq(`UPDATE junshi_workbench_peer_syncs SET ${sets.join(', ')} WHERE id=?`, params).catch(() => {});
+}
+/** 一次同行同步：读主页（按需翻页）→ 筛选 → 逐条下载+转写（复用四期链路）。 */
+async function runPeerSync({ ownerKey, syncId, refId, accountId }) {
+  let refRow = null;
+  const fail = async (message) => {
+    await peerSyncStep(syncId, { status: 'failed', stage: 'failed', message: String(message).slice(0, 1000) });
+    if (refRow) {
+      await aq("UPDATE junshi_workbench_refs SET last_sync_at=?, last_sync_status='failed', last_sync_message=? WHERE id=? AND owner_key=?",
+        [nowIso(), String(message).slice(0, 1000), refId, ownerKey]).catch(() => {});
+    }
+  };
+  try {
+    refRow = await arow('SELECT * FROM junshi_workbench_refs WHERE id=? AND owner_key=?', [refId, ownerKey]);
+    if (!refRow) throw new Error('同行记录已删除');
+    const syncRow = await arow('SELECT * FROM junshi_workbench_peer_syncs WHERE id=?', [syncId]);
+    if (!syncRow) return;
+    let filter = {};
+    try { filter = sanitizePeerFilter(JSON.parse(syncRow.filter || '{}')); } catch { filter = sanitizePeerFilter(null); }
+    const secUserId = resolveRefSecUserId(refRow);
+    if (!secUserId) throw new Error('这条同行没有主页 ID');
+    await peerSyncStep(syncId, { status: 'running', stage: 'reading', message: '正在读取主页作品…' });
+    // 一次只读一页：原版也是「按需再点继续读下一批」，避免一次性拉爆限流。
+    const profile = await fetchDouyinProfile(secUserId, 0).catch((error) => { throw new Error(`读取主页失败：${error.message}`); });
+    const works = Array.isArray(profile.works) ? profile.works : [];
+    await peerSyncStep(syncId, { stage: 'filtering', found_count: works.length, message: `主页读到 ${works.length} 条作品，正在按条件筛选…` });
+    // 先看这个账户已采集过哪些（sourceUrl 里带 aweme id），筛掉重复。
+    const existing = new Set((await arows('SELECT source_url FROM junshi_workbench_transcripts WHERE owner_key=?', [ownerKey]).catch(() => []))
+      .map((row) => String(row.source_url || '')).filter(Boolean));
+    const unique = works.filter((work) => !existing.has(`https://www.douyin.com/video/${work.awemeId}`));
+    const matches = unique.filter((work) => {
+      const stats = work.stats || {};
+      if (Number(stats.digg || 0) < filter.minLikes) return false;
+      if (Number(stats.comment || 0) < filter.minComments) return false;
+      if (Number(stats.collect || 0) < filter.minCollects) return false;
+      if (Number(stats.share || 0) < filter.minShares) return false;
+      return true;
+    }).sort((left, right) => Number(right.stats?.digg || 0) - Number(left.stats?.digg || 0)).slice(0, filter.targetCount);
+    if (!matches.length) {
+      await peerSyncStep(syncId, {
+        status: 'succeeded', stage: 'done',
+        message: unique.length ? `没有符合筛选条件的新作品（读到 ${works.length} 条，已采过的自动跳过）。可以把条件放宽再同步。` : '主页没有新作品（都已采集过）。',
+      });
+      await aq("UPDATE junshi_workbench_refs SET last_sync_at=?, last_sync_status='succeeded', last_sync_message=? WHERE id=? AND owner_key=?",
+        [nowIso(), `无新作品（读到 ${works.length} 条）`, refId, ownerKey]).catch(() => {});
+      return;
+    }
+    await peerSyncStep(syncId, { stage: 'downloading', selected_count: matches.length, message: `筛出 ${matches.length} 条，开始下载并转写…` });
+    let done = 0;
+    let failed = 0;
+    for (const work of matches) {
+      try {
+        await downloadAndTranscribePeerWork({ ownerKey, accountId, awemeId: work.awemeId, desc: work.desc });
+        done += 1;
+      } catch (error) {
+        failed += 1;
+      }
+      await peerSyncStep(syncId, { done_count: done, failed_count: failed, message: `已完成 ${done}/${matches.length}${failed ? `（失败 ${failed}）` : ''}…` });
+    }
+    const summary = `完成 ${done} 条${failed ? `，失败 ${failed} 条` : ''}`;
+    await peerSyncStep(syncId, {
+      status: failed && !done ? 'failed' : 'succeeded',
+      stage: failed && !done ? 'failed' : 'done',
+      done_count: done, failed_count: failed, message: summary,
+    });
+    await aq("UPDATE junshi_workbench_refs SET last_sync_at=?, last_sync_status=?, last_sync_message=? WHERE id=? AND owner_key=?",
+      [nowIso(), failed && !done ? 'failed' : 'succeeded', summary, refId, ownerKey]).catch(() => {});
+  } catch (error) {
+    await fail(error?.message || error);
+  }
+}
+/** 下载一条作品 → 入素材库（抖音采集）→ 起转写；与 /douyin/video 同一套落库口径。 */
+async function downloadAndTranscribePeerWork({ ownerKey, accountId, awemeId, desc }) {
+  const owner = await ownerFor(ownerKey);
+  const video = await fetchDouyinVideo(awemeId);
+  if (!video.playUrl) throw new Error('这条作品取不到视频地址');
+  const buffer = await downloadDouyinVideo(video.playUrl);
+  const stored = await persistSecureUpload({ fileName: `${video.awemeId}.mp4`, mimeType: 'video/mp4', buffer });
+  const assetId = id('jwa');
+  try {
+    await aq('INSERT INTO junshi_workbench_assets (id,owner_key,org_id,account_id,file_name,storage_key,storage_backend,mime_type,kind,file_size,folder,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+      [assetId, owner.key, owner.orgId, accountId, stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || 'video/mp4', 'video', stored.fileSize || buffer.length, '抖音采集', nowIso()]);
+  } catch (error) {
+    if (stored.storagePath) await rm(stored.storagePath, { force: true }).catch(() => {});
+    else await removeObject({ storage_key: stored.storageKey, metadata: JSON.stringify({ storageBackend: stored.storageBackend }) }).catch(() => {});
+    throw error;
+  }
+  const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=?', [assetId]);
+  await startTranscription(owner, {
+    assetRow, source: 'douyin',
+    title: desc || `抖音视频 ${video.awemeId}`,
+    sourceUrl: `https://www.douyin.com/video/${video.awemeId}`,
+    nickname: '',
+    accountId,
+  });
+}
+/** 按 owner_key 还原生成所需的 owner 上下文（后台队列没有请求对象）。 */
+async function ownerFor(ownerKey) {
+  let userId = null;
+  let orgId = null;
+  if (String(ownerKey || '').startsWith('user:')) userId = ownerKey.slice('user:'.length);
+  else if (String(ownerKey || '').startsWith('org:')) {
+    const idValue = ownerKey.slice('org:'.length);
+    orgId = idValue;
+    const user = await arow('SELECT id FROM users WHERE org_id=? AND deleted_at IS NULL ORDER BY id LIMIT 1', [idValue]).catch(() => null);
+    userId = user?.id || null;
+  }
+  if (!userId) throw new Error('无法解析这个机构的管理员账号');
+  return { auth: { user: { id: userId, orgId } }, key: ownerKey, orgId };
+}
+
+/* ───────────── 自动同步调度：每 10 分钟检查一次到期机构（下载+转写计费，默认关闭） ───────────── */
+let peerAutoTimer = null;
+export function initJunshiPeerAutoScheduler() {
+  if (peerAutoTimer) return;
+  peerAutoTimer = setInterval(() => { void tickPeerAutoScheduler(); }, 10 * 60 * 1000);
+  peerAutoTimer.unref?.();
+  console.log('junshi peer auto scheduler: checking due orgs every 10min');
+}
+async function tickPeerAutoScheduler() {
+  try {
+    const due = await arows("SELECT * FROM junshi_workbench_peer_settings WHERE auto_enabled=1 AND next_run_at IS NOT NULL AND next_run_at<=?", [nowIso()]);
+    for (const setting of due) {
+      const intervalHours = Math.min(168, Math.max(6, Number(setting.interval_hours) || 24));
+      const nextRunAt = new Date(Date.now() + intervalHours * 3600 * 1000).toISOString();
+      // 先推进 next_run_at（无论成功与否），避免每轮都重复触发。
+      await aq("UPDATE junshi_workbench_peer_settings SET last_run_at=?, next_run_at=?, updated_at=? WHERE owner_key=?",
+        [nowIso(), nextRunAt, nowIso(), setting.owner_key]).catch(() => {});
+      try {
+        const rows = await arows('SELECT * FROM junshi_workbench_refs WHERE owner_key=? ORDER BY created_at DESC LIMIT 50', [setting.owner_key]);
+        const busy = new Set((await arows("SELECT ref_id FROM junshi_workbench_peer_syncs WHERE owner_key=? AND status IN ('queued','running')", [setting.owner_key])).map((row) => row.ref_id));
+        const owner = await ownerFor(setting.owner_key);
+        for (const row of rows) {
+          if (!resolveRefSecUserId(row) || busy.has(row.id)) continue;
+          await createPeerSync(owner, row, peerFilterOf(row));
+        }
+        void pumpPeerSync();
+      } catch (error) {
+        console.error('peer auto sync:', setting.owner_key, error?.message || error);
+      }
+    }
+  } catch (error) {
+    console.error('junshi peer auto scheduler:', error?.message || error);
+  }
+}
+
+/** 后台转写一条素材：写档案行（running）→ whisper → 回填。返回档案 id。 */
+async function startTranscription(owner, { assetRow, source, title, sourceUrl, nickname, accountId }) {
+  const transcriptId = id('jwts');
+  const at = nowIso();
+  // MySQL 的 TEXT 列不能有字面量默认值：INSERT 必须显式给全 text/segments/error/duration。
+  await aq('INSERT INTO junshi_workbench_transcripts (id,owner_key,org_id,account_id,asset_id,source,title,source_url,nickname,status,error,text,segments,duration_seconds,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    [transcriptId, owner.key, owner.orgId, accountId, assetRow?.id || null, source, String(title || '').slice(0, 300), String(sourceUrl || '').slice(0, 1000), String(nickname || '').slice(0, 200), 'running', '', '', '[]', 0, at, at]);
+  const job = jobStart(owner, '视频转写', String(title || '').slice(0, 60));
+  void (async () => {
+    try {
+      const policy = await getAiProviderPolicy();
+      const asr = await seedanceAsrConfig(policy?.channels);
+      if (!asr) throw Object.assign(new Error('转写渠道未配置（需要 seedance.nz 渠道 Key 或 JUNSHI_ASR_ENDPOINT/KEY）'), { code: 'WORKBENCH_ASR_NOT_CONFIGURED' });
+      const buffer = await assetBytes(assetRow);
+      const result = await transcribeMedia({ endpoint: asr.endpoint, apiKey: asr.apiKey, buffer, fileName: assetRow.file_name || `${transcriptId}.mp4`, mimeType: assetRow.mime_type || 'video/mp4' });
+      if (!result.text.trim()) throw Object.assign(new Error('这条内容没有识别出语音（可能是纯音乐或时长太短）'), { code: 'WORKBENCH_ASR_EMPTY' });
+      await aq('UPDATE junshi_workbench_transcripts SET status=?, text=?, segments=?, duration_seconds=?, error="", updated_at=? WHERE id=?',
+        ['succeeded', result.text.slice(0, 100000), JSON.stringify(result.segments.slice(0, 2000)), Number(result.duration) || 0, nowIso(), transcriptId]);
+      await jobDone(job, 'succeeded', `转写完成：${result.segments.length} 段 / ${Math.round(result.duration)} 秒`);
+    } catch (error) {
+      await aq('UPDATE junshi_workbench_transcripts SET status=?, error=?, updated_at=? WHERE id=?',
+        ['failed', String(error?.message || error).slice(0, 1000), nowIso(), transcriptId]).catch(() => {});
+      await jobDone(job, 'failed', String(error?.message || error).slice(0, 1000)).catch(() => {});
+    }
+  })();
+  return transcriptId;
+}
+
 /* ───────────── 路由 ───────────── */
 export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSearchParams(), method = 'GET') {
   const owner = ownerOf(ctx);
@@ -1584,34 +1846,6 @@ function transcriptOut(row, { withSegments = false } = {}) {
 }
 
 /** 读取素材字节：本地盘直读，OSS 走签名 URL（sign 后取回字节）。 */
-
-/** 后台转写一条素材：写档案行（running）→ whisper → 回填。返回档案 id。 */
-async function startTranscription(owner, { assetRow, source, title, sourceUrl, nickname, accountId }) {
-  const transcriptId = id('jwts');
-  const at = nowIso();
-  // MySQL 的 TEXT 列不能有字面量默认值：INSERT 必须显式给全 text/segments/error/duration。
-  await aq('INSERT INTO junshi_workbench_transcripts (id,owner_key,org_id,account_id,asset_id,source,title,source_url,nickname,status,error,text,segments,duration_seconds,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-    [transcriptId, owner.key, owner.orgId, accountId, assetRow?.id || null, source, String(title || '').slice(0, 300), String(sourceUrl || '').slice(0, 1000), String(nickname || '').slice(0, 200), 'running', '', '', '[]', 0, at, at]);
-  const job = jobStart(owner, '视频转写', String(title || '').slice(0, 60));
-  void (async () => {
-    try {
-      const policy = await getAiProviderPolicy();
-      const asr = await seedanceAsrConfig(policy?.channels);
-      if (!asr) throw Object.assign(new Error('转写渠道未配置（需要 seedance.nz 渠道 Key 或 JUNSHI_ASR_ENDPOINT/KEY）'), { code: 'WORKBENCH_ASR_NOT_CONFIGURED' });
-      const buffer = await assetBytes(assetRow);
-      const result = await transcribeMedia({ endpoint: asr.endpoint, apiKey: asr.apiKey, buffer, fileName: assetRow.file_name || `${transcriptId}.mp4`, mimeType: assetRow.mime_type || 'video/mp4' });
-      if (!result.text.trim()) throw Object.assign(new Error('这条内容没有识别出语音（可能是纯音乐或时长太短）'), { code: 'WORKBENCH_ASR_EMPTY' });
-      await aq('UPDATE junshi_workbench_transcripts SET status=?, text=?, segments=?, duration_seconds=?, error="", updated_at=? WHERE id=?',
-        ['succeeded', result.text.slice(0, 100000), JSON.stringify(result.segments.slice(0, 2000)), Number(result.duration) || 0, nowIso(), transcriptId]);
-      await jobDone(job, 'succeeded', `转写完成：${result.segments.length} 段 / ${Math.round(result.duration)} 秒`);
-    } catch (error) {
-      await aq('UPDATE junshi_workbench_transcripts SET status=?, error=?, updated_at=? WHERE id=?',
-        ['failed', String(error?.message || error).slice(0, 1000), nowIso(), transcriptId]).catch(() => {});
-      await jobDone(job, 'failed', String(error?.message || error).slice(0, 1000)).catch(() => {});
-    }
-  })();
-  return transcriptId;
-}
 
 async function workflowsRoute(ctx, rest, search, method, owner) {
   /* 列表：进行中的排最前，再带最近 10 条 */
@@ -2553,6 +2787,11 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     return {
       items: rows.map((row) => ({
         id: row.id, name: row.name, url: row.url, notes: row.notes, createdAt: row.created_at,
+        secUserId: row.sec_user_id || '',
+        downloadFilter: (() => { try { return row.download_filter ? JSON.parse(row.download_filter) : null; } catch { return null; } })(),
+        lastSyncAt: row.last_sync_at || null,
+        lastSyncStatus: row.last_sync_status || null,
+        lastSyncMessage: row.last_sync_message || null,
       })),
     };
   }
@@ -2562,16 +2801,86 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     if (name.length > 120) throw errors.badRequest('名称最多 120 字', 'VALIDATION_ERROR', { field: 'name' });
     const url = text(ctx.body?.url).slice(0, 2000);
     const notes = text(ctx.body?.notes).slice(0, 4000);
+    const secUserId = text(ctx.body?.secUserId).slice(0, 128);
     const refId = id('jwr');
     const at = nowIso();
-    await aq('INSERT INTO junshi_workbench_refs (id,owner_key,org_id,name,url,notes,created_at) VALUES (?,?,?,?,?,?,?)',
-      [refId, owner.key, owner.orgId, name, url, notes, at]);
-    return { ref: { id: refId, name, url, notes, createdAt: at } };
+    await aq('INSERT INTO junshi_workbench_refs (id,owner_key,org_id,name,url,notes,sec_user_id,created_at) VALUES (?,?,?,?,?,?,?,?)',
+      [refId, owner.key, owner.orgId, name, url, notes, secUserId, at]);
+    return { ref: { id: refId, name, url, notes, secUserId, createdAt: at } };
   }
   if (rest.startsWith('/refs/') && method === 'DELETE') {
     const refId = decodeURIComponent(rest.slice('/refs/'.length));
     await aq('DELETE FROM junshi_workbench_refs WHERE id=? AND owner_key=?', [refId, owner.key]);
     return { ok: true };
+  }
+  /* ── 十一期 · 同行观察管线（筛选下载队列 / 更新全部 / 自动同步） ── */
+  if (rest === '/refs/sync-settings' && method === 'GET') {
+    const row = await arow('SELECT * FROM junshi_workbench_peer_settings WHERE owner_key=?', [owner.key]).catch(() => null);
+    return {
+      settings: {
+        autoEnabled: Number(row?.auto_enabled || 0) === 1,
+        intervalHours: Number(row?.interval_hours || 24),
+        lastRunAt: row?.last_run_at || null,
+        nextRunAt: row?.next_run_at || null,
+      },
+    };
+  }
+  if (rest === '/refs/sync-settings' && method === 'PUT') {
+    const autoEnabled = ctx.body?.autoEnabled === true;
+    const intervalHours = clampInt(ctx.body?.intervalHours, 24, 6, 168);
+    const at = nowIso();
+    const nextRunAt = autoEnabled ? new Date(Date.now() + intervalHours * 3600 * 1000).toISOString() : null;
+    const existing = await arow('SELECT owner_key FROM junshi_workbench_peer_settings WHERE owner_key=?', [owner.key]).catch(() => null);
+    if (existing) {
+      await aq('UPDATE junshi_workbench_peer_settings SET auto_enabled=?, interval_hours=?, next_run_at=?, updated_at=? WHERE owner_key=?',
+        [autoEnabled ? 1 : 0, intervalHours, nextRunAt, at, owner.key]);
+    } else {
+      await aq('INSERT INTO junshi_workbench_peer_settings (owner_key,auto_enabled,interval_hours,last_run_at,next_run_at,updated_at) VALUES (?,?,?,?,?,?)',
+        [owner.key, autoEnabled ? 1 : 0, intervalHours, null, nextRunAt, at]);
+    }
+    return { settings: { autoEnabled, intervalHours, lastRunAt: null, nextRunAt } };
+  }
+  if (rest === '/refs/syncs' && method === 'GET') {
+    const rows = await arows('SELECT * FROM junshi_workbench_peer_syncs WHERE owner_key=? ORDER BY created_at DESC LIMIT 30', [owner.key]);
+    return { items: rows.map(peerSyncOut) };
+  }
+  if (rest === '/refs/sync-all' && method === 'POST') {
+    douyinRateLimit(owner.key);
+    const rows = await arows('SELECT * FROM junshi_workbench_refs WHERE owner_key=? ORDER BY created_at DESC LIMIT 50', [owner.key]);
+    const syncable = rows.filter((row) => resolveRefSecUserId(row));
+    if (!syncable.length) throw errors.badRequest('还没有可同步的同行（先在记录里填主页链接或主页 ID）。', 'WORKBENCH_PEER_NONE_SYNCABLE');
+    const busy = new Set((await arows("SELECT ref_id FROM junshi_workbench_peer_syncs WHERE owner_key=? AND status IN ('queued','running')", [owner.key])).map((row) => row.ref_id));
+    const created = [];
+    for (const row of syncable) {
+      if (busy.has(row.id)) continue;
+      created.push(await createPeerSync(owner, row, peerFilterOf(row)));
+    }
+    if (!created.length) throw errors.badRequest('这些同行都在同步队列里了，稍后再试。', 'WORKBENCH_PEER_ALL_BUSY');
+    void pumpPeerSync();
+    return { queued: created.length, items: created.map(peerSyncOut) };
+  }
+  if (rest.startsWith('/refs/') && rest.endsWith('/sync-settings') && method === 'PUT') {
+    const refId = decodeURIComponent(rest.slice('/refs/'.length, -'/sync-settings'.length));
+    const refRow = await arow('SELECT * FROM junshi_workbench_refs WHERE id=? AND owner_key=?', [refId, owner.key]);
+    if (!refRow) throw errors.notFound('同行记录不存在', 'NOT_FOUND');
+    const filter = sanitizePeerFilter(ctx.body?.filter);
+    const secUserId = text(ctx.body?.secUserId).slice(0, 128) || refRow.sec_user_id || '';
+    await aq('UPDATE junshi_workbench_refs SET download_filter=?, sec_user_id=?, created_at=created_at WHERE id=? AND owner_key=?',
+      [JSON.stringify(filter), secUserId, refId, owner.key]);
+    const row = await arow('SELECT * FROM junshi_workbench_refs WHERE id=?', [refId]);
+    return { ref: { id: row.id, name: row.name, url: row.url, notes: row.notes, secUserId: row.sec_user_id || '', downloadFilter: filter, lastSyncAt: row.last_sync_at || null, lastSyncStatus: row.last_sync_status || null, lastSyncMessage: row.last_sync_message || null, createdAt: row.created_at } };
+  }
+  if (rest.startsWith('/refs/') && rest.endsWith('/sync') && method === 'POST') {
+    const refId = decodeURIComponent(rest.slice('/refs/'.length, -'/sync'.length));
+    const refRow = await arow('SELECT * FROM junshi_workbench_refs WHERE id=? AND owner_key=?', [refId, owner.key]);
+    if (!refRow) throw errors.notFound('同行记录不存在', 'NOT_FOUND');
+    if (!resolveRefSecUserId(refRow)) throw errors.badRequest('这条同行还没有主页 ID：先在卡片里填主页链接或主页 ID。', 'WORKBENCH_PEER_NO_HOME');
+    const busy = await arow("SELECT id FROM junshi_workbench_peer_syncs WHERE owner_key=? AND ref_id=? AND status IN ('queued','running') LIMIT 1", [owner.key, refId]);
+    if (busy) throw errors.badRequest('这个同行正在同步中，请等这一轮结束。', 'WORKBENCH_PEER_BUSY');
+    douyinRateLimit(owner.key);
+    const created = await createPeerSync(owner, refRow, sanitizePeerFilter(ctx.body?.filter));
+    void pumpPeerSync();
+    return { sync: peerSyncOut(created) };
   }
 
   /* ── 任务 ── */

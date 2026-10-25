@@ -1543,6 +1543,37 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_asset_analyses (
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_asa_owner ON junshi_workbench_asset_analyses(owner_key, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_asa_asset ON junshi_workbench_asset_analyses(asset_id);
 
+-- 十一期：同行观察管线（同步任务 + 自动同步设置）。
+-- 自动同步默认关闭：每条下载+转写都按次计费，必须机构显式开启。
+CREATE TABLE IF NOT EXISTS junshi_workbench_peer_syncs (
+  id             TEXT NOT NULL PRIMARY KEY,
+  owner_key      TEXT NOT NULL,
+  org_id         TEXT,
+  ref_id         TEXT NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'queued',
+  stage          TEXT NOT NULL DEFAULT 'queued',
+  target_count   INTEGER NOT NULL DEFAULT 5,
+  found_count    INTEGER NOT NULL DEFAULT 0,
+  selected_count INTEGER NOT NULL DEFAULT 0,
+  done_count     INTEGER NOT NULL DEFAULT 0,
+  failed_count   INTEGER NOT NULL DEFAULT 0,
+  message        TEXT NOT NULL DEFAULT '',
+  filter         TEXT NOT NULL DEFAULT '{}',
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_psync_owner ON junshi_workbench_peer_syncs(owner_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_psync_ref ON junshi_workbench_peer_syncs(ref_id);
+
+CREATE TABLE IF NOT EXISTS junshi_workbench_peer_settings (
+  owner_key      TEXT NOT NULL PRIMARY KEY,
+  auto_enabled   INTEGER NOT NULL DEFAULT 0,
+  interval_hours INTEGER NOT NULL DEFAULT 24,
+  last_run_at    TEXT,
+  next_run_at    TEXT,
+  updated_at     TEXT NOT NULL
+);
+
 `;
 
 db.exec(SCHEMA);
@@ -1554,6 +1585,18 @@ try { db.exec('ALTER TABLE junshi_workbench_video_renders ADD COLUMN shot_index 
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec("ALTER TABLE junshi_workbench_video_renders ADD COLUMN kind TEXT NOT NULL DEFAULT 'single'"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
+// ── 十一期补列：同行观察管线（主页 ID / 筛选条件 / 上次同步结果）──────────
+for (const [column, ddl] of [
+  ['sec_user_id', 'TEXT'],
+  ['download_filter', 'TEXT'],
+  ['last_sync_at', 'TEXT'],
+  ['last_sync_status', 'TEXT'],
+  ['last_sync_message', 'TEXT'],
+]) {
+  try { db.exec(`ALTER TABLE junshi_workbench_refs ADD COLUMN ${column} ${ddl}`); }
+  catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+}
 
 // ── 五期补列：文案草稿的发布数据回填（截图 → 多模态识别 → stats JSON） ──────────
 try { db.exec("ALTER TABLE junshi_workbench_copy_drafts ADD COLUMN stats TEXT NOT NULL DEFAULT ''"); }

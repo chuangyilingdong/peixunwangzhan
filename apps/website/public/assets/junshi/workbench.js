@@ -231,6 +231,9 @@
     assetView: 'grid',
     assetAnalysisFilter: '',
     assetTimer: null,
+    // 十一期 · 同行观察管线（同步队列/自动同步设置）
+    peerSyncs: [],
+    peerSyncSettings: { autoEnabled: false, intervalHours: 24 },
     // 多创作账号：当前选中的账号 id（'default' = 默认账号）；文案/视频/素材/档案都跟着它走。
     accounts: [],
     accountId: 'default',
@@ -277,7 +280,8 @@
     if (tab !== 'plan') stopCyclePolling();
     if (tab !== 'assets') stopAssetPolling();
     if (tab === 'plan') void loadCycles();
-    if (tab !== 'references') stopTsPolling();
+    if (tab !== 'references') { stopTsPolling(); stopPeerSyncPolling(); }
+    if (tab === 'references') void loadPeerSyncs(true);
     if (tab !== 'copybrains' && state.brainPollTimer) { clearInterval(state.brainPollTimer); state.brainPollTimer = null; }
     if (tab === 'copybrains') void refreshBrains(true);
     if (tab === 'settings') void renderSettings();
@@ -868,11 +872,82 @@
       button.disabled = false; button.innerHTML = '下载并转写';
     }
   }
+  /* ───────────── 十一期 · 同行观察管线（筛选下载队列 / 更新全部 / 自动同步） ───────────── */
+  var peerSyncTimer = null;
+  function stopPeerSyncPolling() {
+    if (peerSyncTimer) { clearInterval(peerSyncTimer); peerSyncTimer = null; }
+  }
+  function startPeerSyncPolling() {
+    var busy = (state.peerSyncs || []).some(function (row) { return row.status === 'queued' || row.status === 'running'; });
+    if (!busy) { stopPeerSyncPolling(); return; }
+    if (peerSyncTimer) return;
+    peerSyncTimer = setInterval(function () {
+      if (state.tab !== 'references') { stopPeerSyncPolling(); return; }
+      void loadPeerSyncs(true);
+    }, 3000);
+  }
+  async function loadPeerSyncs(silent) {
+    var results = await Promise.all([
+      call('/refs/syncs').catch(function () { return { items: [] }; }),
+      call('/refs/sync-settings').catch(function () { return { settings: { autoEnabled: false, intervalHours: 24 } }; }),
+    ]);
+    state.peerSyncs = results[0].items || [];
+    state.peerSyncSettings = results[1].settings || { autoEnabled: false, intervalHours: 24 };
+    if (state.tab === 'references') renderReferences();
+    startPeerSyncPolling();
+  }
+  function peerSyncFor(refId) {
+    return (state.peerSyncs || []).filter(function (row) { return row.refId === refId; })[0] || null;
+  }
+  function peerSyncProgressHtml(sync) {
+    if (!sync) return '';
+    var busy = sync.status === 'queued' || sync.status === 'running';
+    var total = Math.max(1, sync.selectedCount || 0);
+    return '<div class="wb-peer-sync">' +
+      '<div class="wb-v-shot-head"><b>' + esc(sync.stageLabel) + '</b><span>' + sync.doneCount + '/' + (sync.selectedCount || 0) + '</span></div>' +
+      (busy ? '<progress max="' + total + '" value="' + Math.min(sync.doneCount, total) + '"></progress>' : '') +
+      '<p class="wb-v-shot-line muted">' + esc(sync.message || (sync.status === 'failed' ? '同步失败' : '已完成')) + '</p>' +
+      (sync.failedCount ? '<p class="wb-v-error">失败 ' + sync.failedCount + ' 条</p>' : '') +
+      '</div>';
+  }
+  function peerFilterInputs(idPrefix, filter) {
+    var f = filter || {};
+    var fields = [
+      ['targetCount', '目标条数', f.targetCount != null ? f.targetCount : 5, 1, 20],
+      ['minLikes', '最低赞', f.minLikes || 0, 0, 10000000],
+      ['minComments', '最低评', f.minComments || 0, 0, 1000000],
+      ['minCollects', '最低藏', f.minCollects || 0, 0, 1000000],
+      ['minShares', '最低转', f.minShares || 0, 0, 1000000],
+    ];
+    return '<div class="wb-peer-filter">' + fields.map(function (row) {
+      return '<label><span>' + row[1] + '</span><input type="number" min="' + row[3] + '" max="' + row[4] +
+        '" data-peer-filter="' + row[0] + '" data-prefix="' + esc(idPrefix) + '" value="' + esc(row[2]) + '"></label>';
+    }).join('') + '</div>';
+  }
+  function peerFilterValues(idPrefix) {
+    var out = {};
+    $$('[data-peer-filter][data-prefix="' + idPrefix + '"]').forEach(function (input) {
+      out[input.dataset.peerFilter] = Number(input.value) || 0;
+    });
+    return out;
+  }
+
   function renderReferences() {
     var items = state.refs;
+    var settings = state.peerSyncSettings || { autoEnabled: false, intervalHours: 24 };
+    var syncableCount = items.filter(function (item) { return item.secUserId || /douyin\.com\/user\//.test(item.url || ''); }).length;
     $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
-      '<div class="wb-card"><div class="wb-card-head"><div><h3>抖音采集</h3><p>粘贴同行的「分享→复制链接」内容或主页链接：读公开主页与作品，下载视频并自动转写带时间码的口播档案。只读公开数据、每机构每小时限 40 次。</p></div>' +
-      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-dy-account"') + '</label></div>' +
+      '<div class="wb-card"><div class="wb-card-head"><div><h3>同行观察</h3><p>记录同行 → 按筛选条件同步作品（下载+转写带时间码）→ 生成研究简报。同步和转写按次计费；只读公开数据、每机构每小时限 40 次。</p></div>' +
+      '<div class="wb-actions"><label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-dy-account"') + '</label>' +
+      '<button class="btn primary" type="button" data-peer-action="sync-all"' + (syncableCount ? '' : ' disabled') + '>' + ic('refresh', 13) + '更新全部同行' + (syncableCount ? '（' + syncableCount + '）' : '') + '</button></div></div>' +
+      '<div class="wb-peer-auto"><label class="wb-inline"><input type="checkbox" id="wb-peer-auto"' + (settings.autoEnabled ? ' checked' : '') + '><span>自动同步</span></label>' +
+      '<label class="wb-inline"><span>间隔</span><select id="wb-peer-auto-interval">' + [6, 12, 24, 48, 72, 168].map(function (h) {
+        return '<option value="' + h + '"' + (Number(settings.intervalHours) === h ? ' selected' : '') + '>' + (h >= 24 ? (h / 24) + ' 天' : h + ' 小时') + '</option>';
+      }).join('') + '</select></label>' +
+      '<span class="wb-note">' + (settings.autoEnabled ? '已开启：每 ' + (Number(settings.intervalHours) >= 24 ? (Number(settings.intervalHours) / 24) + ' 天' : Number(settings.intervalHours) + ' 小时') + ' 自动同步全部同行（' + (settings.nextRunAt ? '下次 ' + fmtDate(settings.nextRunAt) : '待排期') + '）。' : '默认关闭：每个周期会自动下载并转写新作品，按次计费。') + '</span></div>' +
+      '<div class="wb-composer" style="padding:10px 2px 0"><textarea id="wb-dy-input" placeholder="粘贴同行的「分享→复制链接」内容或主页链接，例如：https://www.douyin.com/user/MS4wLj..."></textarea>' +
+      '<button class="btn primary" type="button" id="wb-dy-go">' + ic('search', 13) + '解析</button></div>' +
+      '<div id="wb-dy-result"></div></div>' +
       '<div class="wb-composer" style="padding:0 2px"><textarea id="wb-dy-input" placeholder="例如：8.xx 复制打开抖音 https://v.douyin.com/xxxx/ 或 https://www.douyin.com/user/xxxx"></textarea>' +
       '<button class="btn primary" type="button" id="wb-dy-go">' + ic('search', 13) + '解析</button></div>' +
       '<div id="wb-dy-result"></div></div>' +
@@ -890,13 +965,30 @@
             (item.name && ts.nickname && ts.nickname.indexOf(item.name) >= 0));
         });
         var count = linked.length;
-        var nextStep = count >= 2 ? '已采集 ' + count + ' 条口播，可以生成研究简报' : count ? '已采集 1 条，再采集 1-2 条就可以生成研究简报' : '先粘贴这个同行的作品分享，采集 2-3 条口播';
+        var sync = peerSyncFor(item.id);
+        var homeReady = !!(item.secUserId || /douyin\.com\/user\//.test(item.url || ''));
+        var nextStep = !homeReady ? '补上主页链接或主页 ID，才能按条件同步作品'
+          : sync && (sync.status === 'queued' || sync.status === 'running') ? '正在同步：' + sync.stageLabel
+          : count >= 2 ? '已采集 ' + count + ' 条口播，可以生成研究简报'
+          : count ? '已采集 1 条，再同步或采集 1-2 条就可以生成研究简报'
+          : '按筛选条件同步几条作品，或粘贴单条作品分享';
         var report = (state.brains || []).filter(function (brain) { return brain.kind === 'peer_report' && brain.name === item.name && brain.status === 'ready'; })[0];
-        return '<article class="wb-item"><div class="wb-card-head"><h4>' + esc(item.name) + '</h4><button class="btn" type="button" data-ref-del="' + esc(item.id) + '">' + ic('trash', 12) + '</button></div>' +
+        var busy = sync && (sync.status === 'queued' || sync.status === 'running');
+        return '<article class="wb-item"><div class="wb-card-head"><h4>' + esc(item.name) + '</h4>' +
+          '<div class="wb-actions">' + (item.lastSyncStatus ? '<span class="wb-tag' + (item.lastSyncStatus === 'failed' ? ' warn' : '') + '">' + esc(item.lastSyncStatus === 'failed' ? '上次同步失败' : '已同步') + '</span>' : '') +
+          '<button class="btn" type="button" data-ref-del="' + esc(item.id) + '">' + ic('trash', 12) + '</button></div></div>' +
           (item.url ? '<p><a href="' + esc(item.url) + '" target="_blank" rel="noopener noreferrer">' + esc(item.url) + '</a></p>' : '') +
+          (!homeReady ? '<label class="wb-field"><span>主页 ID / 主页链接（同步需要）</span><input data-ref-home="' + esc(item.id) + '" placeholder="https://www.douyin.com/user/MS4wLj... 或 MS4wLj..." value=""></label>' : '') +
           '<p class="wb-preview" style="-webkit-line-clamp:4">' + esc(item.notes || '还没有观察笔记。') + '</p>' +
-          '<div class="wb-meta">已采集口播 <b>' + count + '</b> 条 · 下一步：' + esc(nextStep) + '</div>' +
-          '<div class="wb-actions">' + (report ? '<button class="btn primary" type="button" data-ref-report="' + esc(report.id) + '">查看研究简报</button>' : '<button class="btn" type="button" data-ref-report-new="' + esc(item.name) + '"' + (count ? '' : ' disabled') + '>生成研究简报</button>') + '</div></article>';
+          '<div class="wb-meta">已采集口播 <b>' + count + '</b> 条' + (item.lastSyncAt ? ' · 上次同步 ' + fmtDate(item.lastSyncAt) : '') + ' · 下一步：' + esc(nextStep) + '</div>' +
+          (item.lastSyncMessage ? '<p class="wb-v-shot-line muted">' + esc(item.lastSyncMessage) + '</p>' : '') +
+          peerSyncProgressHtml(sync && (busy || sync.status === 'failed') ? sync : null) +
+          '<details class="wb-peer-filter-box"><summary>筛选条件（目标条数 / 最低赞评藏转）</summary>' + peerFilterInputs(item.id, item.downloadFilter) + '</details>' +
+          '<div class="wb-actions">' +
+          '<button class="btn primary" type="button" data-peer-sync="' + esc(item.id) + '"' + (homeReady && !busy ? '' : ' disabled') + '>' + ic('refresh', 12) + (busy ? '同步中…' : '同步最新作品') + '</button>' +
+          (homeReady ? '' : '<button class="btn" type="button" data-peer-save-home="' + esc(item.id) + '">保存主页</button>') +
+          (report ? '<button class="btn primary" type="button" data-ref-report="' + esc(report.id) + '">查看研究简报</button>' : '<button class="btn" type="button" data-ref-report-new="' + esc(item.name) + '"' + (count ? '' : ' disabled') + '>生成研究简报</button>') +
+          '</div></article>';
       }).join('') + '</div>' : '<div class="wb-card"><p class="wb-muted">还没有同行记录。</p></div>') +
       '</div></div>';
     bindAccountSwitch('#wb-dy-account');
@@ -944,6 +1036,65 @@
         } catch (error) { toast(error.message, 'error'); }
       };
     });
+    // ── 十一期 · 同步最新作品 / 保存主页 / 更新全部 / 自动同步设置 ──
+    $$('[data-peer-sync]').forEach(function (button) {
+      button.onclick = async function () {
+        var refId = button.dataset.peerSync;
+        var filter = peerFilterValues(refId);
+        button.disabled = true; button.innerHTML = ic('loader', 12) + '排队中…';
+        try {
+          var result = await call('/refs/' + encodeURIComponent(refId) + '/sync', { method: 'POST', body: { filter: filter } });
+          state.peerSyncs.unshift(result.sync);
+          toast('已加入同步队列：读主页 → 按条件筛选 → 下载并转写', 'success');
+          startPeerSyncPolling();
+          void loadPeerSyncs(true);
+        } catch (error) { toast(error.message, 'error'); button.disabled = false; button.innerHTML = ic('refresh', 12) + '同步最新作品'; }
+      };
+    });
+    $$('[data-peer-save-home]').forEach(function (button) {
+      button.onclick = async function () {
+        var refId = button.dataset.peerSaveHome;
+        var input = $('[data-ref-home="' + refId + '"]');
+        var value = String((input || {}).value || '').trim();
+        if (!value) { toast('先填主页链接或主页 ID', 'error'); return; }
+        button.disabled = true;
+        try {
+          await call('/refs/' + encodeURIComponent(refId) + '/sync-settings', { method: 'PUT', body: { secUserId: value, filter: peerFilterValues(refId) } });
+          toast('主页已保存，现在可以同步了', 'success');
+          var refreshed = await call('/refs');
+          state.refs = refreshed.items || state.refs;
+          renderReferences();
+        } catch (error) { toast(error.message, 'error'); button.disabled = false; }
+      };
+    });
+    var syncAll = $('[data-peer-action="sync-all"]');
+    if (syncAll) {
+      syncAll.onclick = async function () {
+        syncAll.disabled = true; syncAll.innerHTML = ic('loader', 12) + '排队中…';
+        try {
+          var result = await call('/refs/sync-all', { method: 'POST', body: {} });
+          toast('已把 ' + result.queued + ' 个同行排进同步队列', 'success');
+          startPeerSyncPolling();
+          void loadPeerSyncs(true);
+        } catch (error) { toast(error.message, 'error'); syncAll.disabled = false; syncAll.innerHTML = ic('refresh', 13) + '更新全部同行'; }
+      };
+    }
+    var autoToggle = $('#wb-peer-auto');
+    var saveAutoSettings = async function () {
+      try {
+        var result = await call('/refs/sync-settings', {
+          method: 'PUT',
+          body: { autoEnabled: !!autoToggle.checked, intervalHours: Number(($('#wb-peer-auto-interval') || {}).value || 24) },
+        });
+        state.peerSyncSettings = result.settings;
+        renderReferences();
+        toast(result.settings.autoEnabled ? '自动同步已开启：会按周期自动下载并转写新作品（按次计费）' : '自动同步已关闭', 'success');
+      } catch (error) { toast(error.message, 'error'); }
+    };
+    if (autoToggle) autoToggle.onchange = saveAutoSettings;
+    var autoInterval = $('#wb-peer-auto-interval');
+    if (autoInterval) autoInterval.onchange = saveAutoSettings;
+    startPeerSyncPolling();
   }
 
   /* ───────────── 文案大脑 ───────────── */

@@ -169,6 +169,8 @@ export async function fetchDouyinProfile(secUserId, cursor = 0) {
       digg: normalizeStat(item.statistics?.digg_count),
       comment: normalizeStat(item.statistics?.comment_count),
       share: normalizeStat(item.statistics?.share_count),
+      // 十一期：同行同步的「最低收藏数」筛选要用到。
+      collect: normalizeStat(item.statistics?.collect_count),
     },
     cover: item?.video?.cover?.url_list?.[0] || '',
   }));

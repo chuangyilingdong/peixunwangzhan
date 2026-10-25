@@ -264,6 +264,13 @@ server.listen(PORT, API_HOST, () => {
   console.log(`AI Kids Platform API listening on http://${API_HOST}:${PORT}`);
 });
 
+// 十一期 · 同行观察自动同步调度（junshi 内容工作台）。每个机构自己开开关，默认关闭：
+// 每次同步都会下载作品并调 whisper 转写（按次计费）。检查间隔固定 10 分钟，到期机构按自己的间隔排期。
+{
+  const { initJunshiPeerAutoScheduler } = await import('./routes/junshiWorkbench.js');
+  initJunshiPeerAutoScheduler();
+}
+
 let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;
