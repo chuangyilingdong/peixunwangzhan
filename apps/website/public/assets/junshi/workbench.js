@@ -220,6 +220,8 @@
     videoShotEditing: null,
     videoShotEdits: {},
     shotFrameUrls: {},
+    // 十六期 · 内容方案卡（对齐原版 renderPlans：聊天产出方案 → 查看/改/确认制作/导出）
+    plans: [],
     // 八期 · 内容计划/周期日历（对齐原版 content-cycles，作者本人授权复刻）
     cycles: [],
     currentCycle: null,
@@ -289,7 +291,7 @@
     if (tab !== 'chat') stopWfPolling();
     if (tab !== 'plan') stopCyclePolling();
     if (tab !== 'assets') stopAssetPolling();
-    if (tab === 'plan') void loadCycles();
+    if (tab === 'plan') { void loadPlans(); void loadCycles(); }
     if (tab !== 'references') { stopTsPolling(); stopPeerSyncPolling(); }
     if (tab === 'references') void loadPeerSyncs(true);
     if (tab !== 'copybrains' && state.brainPollTimer) { clearInterval(state.brainPollTimer); state.brainPollTimer = null; }
@@ -322,12 +324,14 @@
         call('/copy?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [] }; }),
         call('/videos?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [] }; }),
         call('/assets?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [], folders: [] }; }),
+        call('/plans?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [] }; }),
       ]);
       if (results[0]) state.profile = results[0].profile || state.profile;
       state.copy = results[1].items || [];
       state.videos = results[2].items || [];
       state.assets = results[3].items || [];
       state.assetFolders = results[3].folders || [];
+      state.plans = results[4].items || [];
       state.reports = null;
       state.reviewInsight = null;
       if (state.tab === 'reports') void loadReports(true);
@@ -358,6 +362,7 @@
         call('/voices').catch(function () { return { items: [] }; }),
         call('/avatar/runs').catch(function () { return { items: [] }; }),
         call('/brains').catch(function () { return { items: [] }; }),
+        call('/plans?accountId=' + encodeURIComponent(state.accountId)).catch(function () { return { items: [] }; }),
       ]);
       state.messages = results[0].messages || [];
       state.copy = results[1].items || [];
@@ -374,6 +379,7 @@
       state.voices = results[9].items || [];
       state.avatarRuns = results[10].items || [];
       state.brains = results[11].items || [];
+      state.plans = results[12].items || [];
       state.loaded = true;
       render();
       void loadVideoData(true);
@@ -409,8 +415,14 @@
         chunks.map(function (chunk) { return '<p>' + esc(chunk.title) + (chunk.domain && chunk.domain.length ? ' · ' + esc(chunk.domain.join(' / ')) : '') + '</p>'; }).join('') +
         '</details>';
     }
+    var plan = '';
+    if (!me && message.plan) {
+      plan = planInlineHtml(message.plan);
+    } else if (!me && content && !message.pending && message.id && String(content).length > 80) {
+      plan = '<button class="wb-mini-btn" type="button" data-plan-from-chat="' + index + '" title="把这条回答整理成可检查、可修改的内容方案">' + ic('sparkle', 11) + '整理成制作方案</button>';
+    }
     return '<div class="wb-msg' + (me ? ' me' : '') + '"><div class="wb-msg-meta">' + (me ? '你' : '小铃铛') + (message.pending ? ' · 正在写' : '') + '</div>' +
-      '<div class="wb-bubble">' + body + '</div>' + saveMem + sources + '</div>';
+      '<div class="wb-bubble">' + body + '</div>' + saveMem + plan + sources + '</div>';
   }
   function renderMessages(forceBottom) {
     var box = $('#wb-msgs');
@@ -418,6 +430,7 @@
     var near = box.scrollHeight - box.scrollTop - box.clientHeight < 140;
     box.innerHTML = state.messages.length ? state.messages.map(messageHtml).join('') : chatEmpty();
     bindMemSaveButtons();
+    bindPlanMessageButtons();
     // 工作流卡片嵌在消息流末尾（对齐原版 viral/creative 会话卡片）
     if (state.workflow && state.workflow.status === 'active') {
       var card = workflowCardHtml(state.workflow);
@@ -636,8 +649,22 @@
           else if (event === 'error') throw new Error(data.message || '生成失败');
           else if (event === 'done') {
             assistant.pending = false;
-            if (data.message) { assistant.content = data.message.content || assistant.content; assistant.citations = data.message.citations || assistant.citations; }
+            if (data.message) {
+              assistant.id = data.message.id || assistant.id;
+              assistant.content = data.message.content || assistant.content;
+              assistant.citations = data.message.citations || assistant.citations;
+              if (data.message.plan) assistant.plan = data.message.plan;
+            }
             if (!assistant.content) assistant.content = '（这次没有生成内容，请重试。）';
+            renderMessages();
+          } else if (event === 'plan') {
+            var target = state.messages.filter(function (item) { return item.id === data.messageId; })[0] || assistant;
+            if (data.plan) {
+              target.plan = data.plan;
+              if (!state.plans.some(function (item) { return item.id === data.plan.id; })) state.plans.unshift(data.plan);
+              if (state.tab === 'plan') renderPlan();
+              toast('已整理成制作方案，可在「内容计划」查看和修改', 'success');
+            }
             renderMessages();
           } else if (event === 'stopped') {
             assistant.pending = false;
@@ -1557,6 +1584,306 @@
       } catch (e) { /* 视频加载失败时保留播放器外壳，控制台可见 */ }
     }
   }
+  /* ───────────── 十六期 · 内容方案卡（对齐原版 renderPlans：查看 / 改 / 确认制作 / 导出） ───────────── */
+  var PLAN_DURATIONS = [5, 10, 15, 20, 25, 30];
+  var PLAN_RESOLUTIONS = ['480P', '768P'];
+  var PLAN_RATIOS = ['9:16', '16:9', '1:1'];
+  var PLAN_KIND_LABEL = { image: '图片', video: '视频', audio: '音频' };
+
+  async function loadPlans(silent) {
+    var accountId = state.accountId;
+    var data = await call('/plans?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [] }; });
+    if (state.accountId !== accountId) return;
+    state.plans = data.items || [];
+    var byId = {};
+    state.plans.forEach(function (plan) { byId[plan.id] = plan; });
+    (state.messages || []).forEach(function (message) {
+      if (message.plan) message.plan = byId[message.plan.id] || null;
+    });
+    if (state.tab === 'plan') renderPlan();
+  }
+  function planStatusLabel(plan) {
+    if (plan.status === 'submitted') return '已提交制作';
+    return plan.missing && plan.missing.length ? '待补 ' + plan.missing.length + ' 项素材' : '可检查并确认';
+  }
+  function planSourceLabel(plan) {
+    if (plan.source === 'chat') return '聊天提炼';
+    if (plan.source === 'copy') return '复用方案';
+    return '手动创建';
+  }
+  function planInlineHtml(plan) {
+    var submitted = plan.status === 'submitted';
+    return '<div class="wb-msg-plan"><div class="wb-msg-plan-head"><span class="wb-tag ' + (submitted || !(plan.missing || []).length ? 'ok' : 'warn') + '">' + esc(planStatusLabel(plan)) + ' · 第 ' + plan.version + ' 版</span><b>' + esc(plan.title) + '</b></div>' +
+      '<div class="wb-msg-plan-meta">' + plan.duration + ' 秒 · ' + esc(plan.resolution) + ' · ' + esc(plan.ratio) + '</div>' +
+      '<div class="wb-actions"><button class="btn" type="button" data-plan-open="' + esc(plan.id) + '">查看 / 修改</button>' +
+      (submitted
+        ? (plan.videoWorkId ? '<button class="btn primary" type="button" data-plan-work="' + esc(plan.videoWorkId) + '">查看视频任务</button>' : '')
+        : '<button class="btn primary" type="button" data-plan-preflight="' + esc(plan.id) + '"' + ((plan.missing || []).length ? ' disabled' : '') + '>确认制作</button>') +
+      '</div></div>';
+  }
+  function planCardHtml(plan) {
+    var submitted = plan.status === 'submitted';
+    var missing = plan.missing || [];
+    var recommendations = plan.materialRecommendations || [];
+    var rec = recommendations.length
+      ? '<details class="wb-plan-materials"><summary>智能匹配素材 ' + recommendations.length + ' 项</summary>' +
+        recommendations.map(function (item) {
+          return '<p>' + esc(item.name) + '<small>匹配：' + esc((item.matchedTerms || []).join('、')) + '；' + (item.usage && item.usage.submitted ? '近期方案中使用过，已适当降权。' : '可作为候选。') + '</small></p>';
+        }).join('') + '<small>仅是候选，需在「查看 / 修改」中确认后才会用于制作。</small></details>'
+      : '';
+    return '<article class="wb-card wb-plan-card" data-plan-card="' + esc(plan.id) + '">' +
+      '<div class="wb-card-head"><div><span class="wb-tag ' + (submitted || !missing.length ? 'ok' : 'warn') + '">' + esc(planStatusLabel(plan)) + ' · 第 ' + plan.version + ' 版</span><h3>' + esc(plan.title) + '</h3></div>' +
+      '<span class="wb-tag">' + esc(planSourceLabel(plan)) + '</span></div>' +
+      '<div class="wb-plan-meta">' + plan.duration + ' 秒 · ' + esc(plan.resolution) + ' · ' + esc(plan.ratio) + (plan.publishDate ? ' · 计划 ' + esc(plan.publishDate) : '') + ' · ' + esc(accountName(plan.accountId)) + '</div>' +
+      '<p class="wb-plan-excerpt">' + esc(plan.hook || plan.script || plan.objective) + '</p>' + rec +
+      '<div class="wb-actions">' +
+      '<button class="btn" type="button" data-plan-open="' + esc(plan.id) + '">查看 / 修改</button>' +
+      (submitted
+        ? (plan.videoWorkId ? '<button class="btn primary" type="button" data-plan-work="' + esc(plan.videoWorkId) + '">查看视频任务</button>' : '')
+        : '<button class="btn primary" type="button" data-plan-preflight="' + esc(plan.id) + '"' + (missing.length ? ' disabled' : '') + '>确认制作</button>') +
+      '<button class="btn" type="button" data-plan-copy="' + esc(plan.id) + '">复制</button>' +
+      '<button class="btn" type="button" data-plan-export="' + esc(plan.id) + '">' + ic('download', 12) + '导出文稿</button>' +
+      '<button class="btn" type="button" data-plan-delete="' + esc(plan.id) + '">移除</button>' +
+      '</div></article>';
+  }
+  function planSectionHtml() {
+    var cards = (state.plans || []).map(planCardHtml).join('');
+    return '<div class="wb-card wb-plan-head"><div class="wb-card-head"><div><h3>创作方案</h3><p>聊天里说「做一条视频 / 分镜」会自动整理成方案，也可以手动建。确认制作只创建视频任务并生成编导稿，渲染前还会在视频创作里再确认一次。</p></div>' +
+      '<button class="btn primary" type="button" data-plan-new>' + ic('plus', 12) + '手动建方案</button></div></div>' +
+      (cards ? '<div class="wb-plan-grid">' + cards + '</div>' : '<div class="wb-card"><p class="wb-muted">还没有内容方案。去「小铃铛」说一条想做的视频，或手动建一份。</p></div>');
+  }
+  function planAssetRow(asset, checked) {
+    return '<div class="wb-plan-asset" data-plan-asset-row="' + esc(asset.id) + '">' +
+      '<label class="wb-plan-asset-main"><input type="checkbox" name="planAsset" value="' + esc(asset.id) + '"' + (checked ? ' checked' : '') + '>' +
+      '<span class="wb-plan-asset-name">' + esc(asset.fileName || asset.id) + '</span></label>' +
+      '<small>' + esc(PLAN_KIND_LABEL[asset.kind] || asset.kind || '素材') + '</small>' +
+      '<span class="wb-plan-asset-order"><button type="button" class="wb-mini-btn" data-plan-asset-up="' + esc(asset.id) + '" aria-label="上移素材">↑</button>' +
+      '<button type="button" class="wb-mini-btn" data-plan-asset-down="' + esc(asset.id) + '" aria-label="下移素材">↓</button></span></div>';
+  }
+  function planFormHtml(plan, locked) {
+    var assets = (state.assets || []).filter(function (item) { return item.kind !== 'text'; });
+    var selected = plan.assetIds || [];
+    var ordered = [];
+    selected.forEach(function (assetId) { var found = assets.filter(function (a) { return a.id === assetId; })[0]; if (found && ordered.indexOf(found) < 0) ordered.push(found); });
+    assets.forEach(function (asset) { if (ordered.indexOf(asset) < 0) ordered.push(asset); });
+    var readonly = locked ? ' readonly' : '';
+    var disabled = locked ? ' disabled' : '';
+    return '<div class="wb-plan-form"><div class="wb-form-grid">' +
+      '<label class="wb-field full"><span>内容标题</span><input id="wb-plan-title" value="' + esc(plan.title || '') + '" maxlength="200"' + readonly + '></label>' +
+      '<label class="wb-field full"><span>本条内容目标</span><input id="wb-plan-objective" value="' + esc(plan.objective || '') + '" maxlength="500"' + readonly + '></label>' +
+      '<label class="wb-field full"><span>开场 / 前三秒</span><textarea id="wb-plan-hook" maxlength="1000"' + readonly + '>' + esc(plan.hook || '') + '</textarea></label>' +
+      '<label class="wb-field full"><span>完整口播脚本</span><textarea id="wb-plan-script" class="wb-script" maxlength="8000"' + readonly + '>' + esc(plan.script || '') + '</textarea></label>' +
+      '<label class="wb-field full"><span>视频执行提示词（实际提交内容）</span><textarea id="wb-plan-prompt" class="wb-script" maxlength="3000"' + readonly + '>' + esc(plan.prompt || '') + '</textarea></label>' +
+      '<label class="wb-field"><span>视频时长</span><select id="wb-plan-duration"' + disabled + '>' + PLAN_DURATIONS.map(function (value) { return '<option value="' + value + '"' + (Number(plan.duration) === value ? ' selected' : '') + '>' + value + ' 秒</option>'; }).join('') + '</select></label>' +
+      '<label class="wb-field"><span>分辨率</span><select id="wb-plan-resolution"' + disabled + '>' + PLAN_RESOLUTIONS.map(function (value) { return '<option value="' + value + '"' + (plan.resolution === value ? ' selected' : '') + '>' + value + '</option>'; }).join('') + '</select></label>' +
+      '<label class="wb-field"><span>画面比例</span><select id="wb-plan-ratio"' + disabled + '>' + PLAN_RATIOS.map(function (value) { return '<option value="' + value + '"' + (plan.ratio === value ? ' selected' : '') + '>' + value + '</option>'; }).join('') + '</select></label>' +
+      '<div class="wb-field full"><span>参考素材（最多 9 项，勾选顺序决定 @图片 / @视频 编号）</span>' +
+      '<div class="wb-plan-assets" id="wb-plan-assets">' + (ordered.length ? ordered.map(function (asset) { return planAssetRow(asset, selected.indexOf(asset.id) >= 0); }).join('') : '<p class="wb-muted">素材库还没有图片或音视频素材。</p>') + '</div></div>' +
+      '<label class="wb-field full"><span>仍需补充的素材（每行一项；填写后不能提交制作）</span><textarea id="wb-plan-missing"' + readonly + '>' + esc((plan.missing || []).join('\n')) + '</textarea></label>' +
+      '<label class="wb-field full"><span>推荐理由 / 创作依据</span><textarea id="wb-plan-rationale"' + readonly + '>' + esc(plan.rationale || '') + '</textarea></label>' +
+      '<label class="wb-field"><span>计划发布日期（不自动发布）</span><input id="wb-plan-publish-date" type="date" value="' + esc(plan.publishDate || '') + '"' + readonly + '></label>' +
+      '<label class="wb-check"><input id="wb-plan-audio" type="checkbox"' + (plan.generateAudio === false ? '' : ' checked') + disabled + '> 生成音频；台词请写清楚</label>' +
+      '</div>' +
+      (locked ? '<p class="wb-note">这份方案已经提交制作，不能再改；需要调整请先点「复制」。</p>' : '') +
+      '<div class="wb-actions"><button class="btn primary" type="button" id="wb-plan-save"' + (locked ? ' hidden' : '') + '>保存方案</button>' +
+      '<button class="btn" type="button" id="wb-plan-cancel">关闭</button></div></div>';
+  }
+  function openPlanForm(id, copy) {
+    var original = id ? (state.plans || []).filter(function (item) { return item.id === id; })[0] : null;
+    if (id && !original) { toast('这份方案已经变化，请刷新后重试', 'error'); return; }
+    var plan = original ? JSON.parse(JSON.stringify(original)) : {
+      title: '', objective: '', hook: '', script: '', prompt: '', model: '', duration: 15,
+      resolution: '768P', ratio: '9:16', generateAudio: true, assetIds: [], missing: [],
+      rationale: '', publishDate: '', version: 0, status: 'draft',
+    };
+    if (copy) {
+      plan.title = (plan.title || '内容方案') + '（副本）';
+      plan.status = 'draft';
+      plan.videoWorkId = '';
+      plan.renderId = '';
+    }
+    var locked = Boolean(original && original.status === 'submitted' && !copy);
+    showDialog(copy ? '复用内容方案' : locked ? '查看已提交的方案' : id ? '检查并修改方案' : '手动建立内容方案', planFormHtml(plan, locked));
+    if (locked) {
+      $('#wb-plan-cancel').onclick = closeDialog;
+      return;
+    }
+    var assetsBox = $('#wb-plan-assets');
+    function checkedCount() { return $$('[name="planAsset"]:checked').length; }
+    function syncAssetState() {
+      if (assetsBox) {
+        $$('[name="planAsset"]', assetsBox).forEach(function (input) {
+          var row = input.closest('.wb-plan-asset');
+          if (row) row.classList.toggle('on', input.checked);
+        });
+      }
+      var save = $('#wb-plan-save');
+      if (save) save.disabled = checkedCount() > 9;
+    }
+    $$('[name="planAsset"]').forEach(function (input) {
+      input.onchange = function () {
+        if (checkedCount() > 9) { input.checked = false; toast('一份方案最多用 9 个参考素材', 'error'); }
+        syncAssetState();
+      };
+    });
+    function moveAsset(assetId, delta) {
+      var row = assetsBox ? assetsBox.querySelector('[data-plan-asset-row="' + CSS.escape(assetId) + '"]') : null;
+      if (!row) return;
+      if (delta < 0 && row.previousElementSibling) assetsBox.insertBefore(row, row.previousElementSibling);
+      if (delta > 0 && row.nextElementSibling) assetsBox.insertBefore(row.nextElementSibling, row);
+      syncAssetState();
+    }
+    $$('[data-plan-asset-up]').forEach(function (button) {
+      button.onclick = function (event) { event.preventDefault(); moveAsset(button.dataset.planAssetUp, -1); };
+    });
+    $$('[data-plan-asset-down]').forEach(function (button) {
+      button.onclick = function (event) { event.preventDefault(); moveAsset(button.dataset.planAssetDown, 1); };
+    });
+    syncAssetState();
+    $('#wb-plan-cancel').onclick = closeDialog;
+    $('#wb-plan-save').onclick = async function () {
+      var payload = {
+        title: String(($('#wb-plan-title') || {}).value || '').trim(),
+        objective: String(($('#wb-plan-objective') || {}).value || '').trim(),
+        hook: String(($('#wb-plan-hook') || {}).value || '').trim(),
+        script: String(($('#wb-plan-script') || {}).value || '').trim(),
+        prompt: String(($('#wb-plan-prompt') || {}).value || '').trim(),
+        duration: Number(($('#wb-plan-duration') || {}).value || 15),
+        resolution: String(($('#wb-plan-resolution') || {}).value || '768P'),
+        ratio: String(($('#wb-plan-ratio') || {}).value || '9:16'),
+        generateAudio: Boolean(($('#wb-plan-audio') || {}).checked),
+        assetIds: $$('[name="planAsset"]:checked').map(function (item) { return item.value; }),
+        missing: String(($('#wb-plan-missing') || {}).value || '').split('\n').map(function (item) { return item.trim(); }).filter(Boolean),
+        rationale: String(($('#wb-plan-rationale') || {}).value || '').trim(),
+        publishDate: String(($('#wb-plan-publish-date') || {}).value || '').trim(),
+        accountId: state.accountId,
+      };
+      if (!payload.title || !payload.objective || !payload.hook || !payload.script || !payload.prompt) {
+        toast('请填写标题、目标、前三秒、完整口播和视频提示词', 'error');
+        return;
+      }
+      if (payload.assetIds.length > 9) { toast('一份方案最多用 9 个参考素材', 'error'); return; }
+      var button = this;
+      button.disabled = true; button.innerHTML = ic('loader', 12) + '保存中…';
+      try {
+        if (id && !copy) {
+          payload.version = original.version;
+          await call('/plans/' + encodeURIComponent(id), { method: 'PUT', body: payload });
+        } else {
+          await call('/plans', { method: 'POST', body: payload });
+        }
+        closeDialog();
+        toast(copy ? '已复制成新方案' : id ? '方案已保存' : '方案已创建', 'success');
+        await loadPlans(true);
+        renderPlan();
+      } catch (error) {
+        toast(error.message, 'error');
+        button.disabled = false;
+        button.innerHTML = '保存方案';
+      }
+    };
+  }
+  async function openPlanPreflight(id) {
+    var info;
+    try { info = await call('/plans/' + encodeURIComponent(id) + '/preflight'); }
+    catch (error) { toast(error.message, 'error'); return; }
+    var plan = info.plan;
+    var missing = plan.missing || [];
+    var repeats = info.repeatRisks || [];
+    showDialog('确认本次制作', '<p><b>' + esc(plan.title) + '</b> · 第 ' + plan.version + ' 版 · ' + plan.duration + ' 秒 · ' + esc(plan.resolution) + ' · ' + esc(plan.ratio) + '</p>' +
+      '<div class="wb-plan-notice">' + esc(info.notice) + '<br>输出 ' + info.outputSeconds + ' 秒；参考视频按素材实际时长另计（编导稿阶段不扣费）。' +
+      (missing.length ? '<br>尚缺素材：' + esc(missing.join('、')) : '') + '</div>' +
+      (repeats.length ? '<div class="wb-plan-notice warn">素材重复提醒：' + repeats.map(function (item) { return esc(item.name) + '（已用于 ' + item.usage.submitted + ' 个已提交方案）'; }).join('；') + '。这是风险提示，不保证或规避平台判重。</div>' : '') +
+      (info.videoReady ? '' : '<p class="wb-note">当前视频渠道未配置；编导稿仍可先生成，渲染前需要管理员配置视频渠道。</p>') +
+      '<h4>本次提交给编导的提示词</h4><pre class="wb-plan-prompt">' + esc(info.prompt) + '</pre>' +
+      '<label class="wb-check"><input id="wb-plan-confirm" type="checkbox"><span>我已核对方案、时长和素材使用权限，同意创建本次视频任务并生成编导稿。</span></label>' +
+      '<div class="wb-actions"><button class="btn primary" type="button" id="wb-plan-submit"' + (missing.length ? ' disabled' : '') + '>确认并创建视频任务</button>' +
+      '<button class="btn" type="button" id="wb-plan-preflight-cancel">取消</button></div>');
+    $('#wb-plan-preflight-cancel').onclick = closeDialog;
+    $('#wb-plan-submit').onclick = async function () {
+      if (!$('#wb-plan-confirm').checked) { toast('请先勾选确认', 'error'); return; }
+      var button = this;
+      button.disabled = true; button.innerHTML = ic('loader', 12) + '创建中…';
+      try {
+        var result = await call('/plans/' + encodeURIComponent(id) + '/submit', { method: 'POST', body: { version: plan.version, confirm: true } });
+        closeDialog();
+        toast('方案已确认，视频任务正在生成编导稿', 'success');
+        if (result.plan) {
+          var index = state.plans.map(function (item) { return item.id; }).indexOf(result.plan.id);
+          if (index >= 0) state.plans[index] = result.plan; else state.plans.unshift(result.plan);
+        }
+        setTab('video');
+        await loadVideoData(true);
+        renderVideo();
+      } catch (error) {
+        toast(error.message, 'error');
+        button.disabled = false;
+        button.innerHTML = '确认并创建视频任务';
+      }
+    };
+  }
+  async function exportPlan(id) {
+    var plan = (state.plans || []).filter(function (item) { return item.id === id; })[0];
+    try {
+      var blob = await fetchBlob(API + '/plans/' + encodeURIComponent(id) + '/export');
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement('a');
+      link.href = url;
+      link.download = '内容方案-' + String((plan && plan.title) || id).replace(/[\\/:*?"<>|]/g, '-').slice(0, 40) + '.md';
+      link.click();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    } catch (error) { toast(error.message, 'error'); }
+  }
+  async function deletePlan(id) {
+    if (!window.confirm('确认移除这份方案？已经创建的视频任务不会一起删除。')) return;
+    try {
+      await call('/plans/' + encodeURIComponent(id), { method: 'DELETE' });
+      await loadPlans(true);
+      renderPlan();
+      toast('方案已移除');
+    } catch (error) { toast(error.message, 'error'); }
+  }
+  async function planFromChat(index, button) {
+    var message = state.messages[Number(index)];
+    if (!message || !message.id) { toast('这条回答还在提交，稍后再试', 'error'); return; }
+    button.disabled = true;
+    button.innerHTML = ic('loader', 11) + '整理中…';
+    try {
+      var result = await call('/plans/from-chat', { method: 'POST', body: { messageId: message.id, accountId: state.accountId } });
+      message.plan = result.plan;
+      if (!state.plans.some(function (item) { return item.id === result.plan.id; })) state.plans.unshift(result.plan);
+      if (state.tab === 'plan') renderPlan();
+      renderMessages();
+      toast('已整理成制作方案，可在「内容计划」查看和修改', 'success');
+    } catch (error) {
+      toast(error.message, 'error');
+      button.disabled = false;
+      button.innerHTML = ic('sparkle', 11) + '整理成制作方案';
+    }
+  }
+  function bindPlanActions() {
+    $$('[data-plan-new]').forEach(function (button) { button.onclick = function () { openPlanForm(''); }; });
+    $$('[data-plan-open]').forEach(function (button) { button.onclick = function () { openPlanForm(button.dataset.planOpen); }; });
+    $$('[data-plan-copy]').forEach(function (button) { button.onclick = function () { openPlanForm(button.dataset.planCopy, true); }; });
+    $$('[data-plan-preflight]').forEach(function (button) { button.onclick = function () { if (!button.disabled) void openPlanPreflight(button.dataset.planPreflight); }; });
+    $$('[data-plan-export]').forEach(function (button) { button.onclick = function () { void exportPlan(button.dataset.planExport); }; });
+    $$('[data-plan-delete]').forEach(function (button) { button.onclick = function () { void deletePlan(button.dataset.planDelete); }; });
+    $$('[data-plan-work]').forEach(function (button) {
+      button.onclick = function () {
+        setTab('video');
+        void loadVideoData(true);
+        setTimeout(function () {
+          var card = document.querySelector('[data-wb-v-work-card="' + CSS.escape(button.dataset.planWork) + '"]');
+          if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 400);
+      };
+    });
+    $$('[data-plan-from-chat]').forEach(function (button) {
+      button.onclick = function () { void planFromChat(Number(button.dataset.planFromChat), button); };
+    });
+  }
+  function bindPlanMessageButtons() { bindPlanActions(); }
+
   /* ───────────── 八期 · 内容计划/周期日历（对齐原版 content-cycles，作者本人授权复刻） ───────────── */
   var CYCLE_PURPOSES = ['涨粉', '互动', '种草', '转化', '建立信任'];
   var CYCLE_STATUS = { generating: '生成中', proposed: '待确认', confirmed: '已确认', failed: '生成失败' };
@@ -1678,8 +2005,9 @@
     } else if (!generating) {
       activeHtml = '<div class="wb-card"><p class="wb-muted">还没有周期计划。先确定条数和方向，生成第一份。</p></div>';
     }
-    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' + head + current + activeHtml + '</div></div>';
+    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' + planSectionHtml() + '<div class="wb-plan-divider"><span>周期计划</span></div>' + head + current + activeHtml + '</div></div>';
     bindAccountSwitch('#wb-plan-account');
+    bindPlanActions();
     $$('[data-cycle-action]').forEach(function (button) {
       button.onclick = async function () {
         var action = button.dataset.cycleAction;

@@ -1239,6 +1239,8 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_messages (
   created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_msg_owner ON junshi_workbench_messages(owner_key, created_at);
+-- 十六期：聊天消息可以挂一份制作方案（对齐原版 plan_ids → 「查看制作方案」入口）。
+-- plan_id 补列在 SCHEMA 执行之后做（SQLite 的 ALTER 不能写进建表 SQL 字符串）。
 
 CREATE TABLE IF NOT EXISTS junshi_workbench_copy_drafts (
   id          TEXT NOT NULL PRIMARY KEY,
@@ -1494,6 +1496,7 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_video_works (
   owner_key        TEXT NOT NULL,
   org_id           TEXT,
   account_id       TEXT NOT NULL DEFAULT 'default',
+  plan_id          TEXT NOT NULL DEFAULT '',
   mode             TEXT NOT NULL DEFAULT 'generate',
   title            TEXT NOT NULL DEFAULT '',
   type             TEXT NOT NULL DEFAULT 'ecommerce',
@@ -1552,6 +1555,39 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_content_cycles (
   updated_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_cycle_owner ON junshi_workbench_content_cycles(owner_key, created_at DESC);
+
+-- 十六期：内容方案卡（对齐原版 renderPlans / preflight / submit / export）。
+-- 一份方案 = 一条内容的制作说明书；聊天可以自动提炼，也可以手动创建。
+-- 确认制作只创建视频任务并生成编导稿；成片渲染仍在视频工作台二次确认（不在这一步扣费）。
+CREATE TABLE IF NOT EXISTS junshi_workbench_plans (
+  id               TEXT NOT NULL PRIMARY KEY,
+  owner_key        TEXT NOT NULL,
+  org_id           TEXT,
+  account_id       TEXT NOT NULL DEFAULT 'default',
+  title            TEXT NOT NULL DEFAULT '',
+  objective        TEXT NOT NULL DEFAULT '',
+  hook             TEXT NOT NULL DEFAULT '',
+  script           TEXT NOT NULL DEFAULT '',
+  prompt           TEXT NOT NULL DEFAULT '',
+  model            TEXT NOT NULL DEFAULT '',
+  duration_seconds INTEGER NOT NULL DEFAULT 15,
+  resolution       TEXT NOT NULL DEFAULT '768P',
+  ratio            TEXT NOT NULL DEFAULT '9:16',
+  generate_audio   INTEGER NOT NULL DEFAULT 1,
+  asset_ids        TEXT NOT NULL DEFAULT '[]',
+  missing          TEXT NOT NULL DEFAULT '[]',
+  rationale        TEXT NOT NULL DEFAULT '',
+  publish_date     TEXT NOT NULL DEFAULT '',
+  version          INTEGER NOT NULL DEFAULT 1,
+  status           TEXT NOT NULL DEFAULT 'draft',
+  source           TEXT NOT NULL DEFAULT 'manual',
+  chat_message_id  TEXT NOT NULL DEFAULT '',
+  video_work_id    TEXT NOT NULL DEFAULT '',
+  render_id        TEXT NOT NULL DEFAULT '',
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_plan_owner ON junshi_workbench_plans(owner_key, created_at DESC);
 
 -- 十期：素材分析队列（图片视觉分析；音频沿用四期转写档案）。
 -- 队列在服务进程内跑（关页继续，重启丢队由用户重按批量分析兜底）。
@@ -1635,6 +1671,12 @@ CREATE INDEX IF NOT EXISTS idx_junshi_wb_pair_token ON junshi_workbench_douyin_p
 `;
 
 db.exec(SCHEMA);
+
+// ── 十六期补列：聊天消息挂内容方案（对齐原版 plan_ids → 「查看制作方案」）──────────
+try { db.exec("ALTER TABLE junshi_workbench_messages ADD COLUMN plan_id TEXT NOT NULL DEFAULT ''"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec("ALTER TABLE junshi_workbench_video_works ADD COLUMN plan_id TEXT NOT NULL DEFAULT ''"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
 // ── 七期补列：视频渲染行挂到视频工作台任务行（整片/单镜渲染复用同一管道） ──────────
 try { db.exec("ALTER TABLE junshi_workbench_video_renders ADD COLUMN work_id TEXT"); }

@@ -152,6 +152,54 @@ ${chunkBlock(chunks)}
 - 只输出内容，不要解释你的工作过程。`;
 }
 
+/**
+ * 十六期 · 从聊天对话提炼「内容方案」。
+ * 对齐原版：聊天创作流产出方案卡 → 查看/改/确认制作/导出。
+ * 只输出一个 JSON 对象（两个对象会让宽松解析丢数据，见交接坑 6）。
+ */
+export function buildPlanFromChatPrompt({ profile, orgProfile, userMessage, assistantAnswer, recent = '' }) {
+  return `你是短视频制作统筹。把下面这段对话整理成一份可以直接进入制作的「内容方案」。
+只输出一个 JSON 对象，不要 Markdown 代码块，不要解释，不要输出第二个对象。
+
+字段：
+{
+  "title": "内容标题，不超过 40 字",
+  "objective": "本条内容目标，一句话",
+  "hook": "开场前三秒的具体台词或画面",
+  "script": "完整口播脚本，可直接照着说；保留对话里已经写好的逐字话术",
+  "prompt": "给视频生成模型的可执行画面提示词：场景、人物、镜头、动作、光线；不能只写「做一个视频」",
+  "duration": 15,
+  "resolution": "768P",
+  "ratio": "9:16",
+  "generate_audio": true,
+  "missing": ["仍需补充的素材或信息，每项一句话；没有就空数组"],
+  "rationale": "推荐理由 / 创作依据",
+  "publish_date": ""
+}
+
+硬约束：
+- duration 只能是 5 / 10 / 15 / 20 / 25 / 30。
+- resolution 只能是 480P / 768P；ratio 只能是 9:16 / 16:9 / 1:1。
+- script 与 prompt 不能为空；不要把同一段话原样塞进两个字段。
+- 不确定的发布日期留空字符串，不要编造。
+- 不承诺流量、收益、提分；不使用「保证」「第一」「最」等绝对化用语。
+
+【机构画像】
+${orgProfile || '未填写'}
+
+【内容账号档案】
+${workbenchProfileBlock(profile)}
+
+【最近对话（按时间顺序）】
+${recent || '（无）'}
+
+【本次用户需求】
+${userMessage}
+
+【小铃铛刚才的回答】
+${assistantAnswer}`;
+}
+
 const subjectOf = (profile) => clean(profile?.product) || '你的课程/服务';
 const audienceOf = (profile) => clean(profile?.audience) || '目标家长';
 

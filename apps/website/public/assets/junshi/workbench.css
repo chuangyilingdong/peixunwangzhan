@@ -446,3 +446,38 @@
 #js-app .wb-assistant-steps { margin: 8px 0 8px 18px; padding: 0; font-size: 12.5px; line-height: 1.7; color: var(--text-2); }
 #js-app .wb-assistant-steps li { margin-bottom: 4px; }
 #js-app .wb-assistant-steps code { background: var(--bg-2, rgba(0,0,0,0.05)); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+
+/* ───────────── 十六期 · 内容方案卡（renderPlans） ───────────── */
+#js-app .wb-plan-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-bottom: 12px; }
+#js-app .wb-plan-card { display: flex; flex-direction: column; gap: 7px; }
+#js-app .wb-plan-meta { font-size: 11.5px; color: var(--text-3); }
+#js-app .wb-plan-excerpt { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text-2); white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+#js-app .wb-plan-materials { border: 1px solid var(--hairline); border-radius: 10px; padding: 8px 10px; font-size: 12px; }
+#js-app .wb-plan-materials summary { cursor: pointer; color: var(--text-2); }
+#js-app .wb-plan-materials p { margin: 6px 0 0; font-size: 12px; }
+#js-app .wb-plan-materials small { display: block; color: var(--text-3); font-size: 11px; line-height: 1.5; margin-top: 3px; }
+#js-app .wb-plan-divider { display: flex; align-items: center; gap: 10px; margin: 18px 0 10px; color: var(--text-3); font-size: 12px; }
+#js-app .wb-plan-divider::before, #js-app .wb-plan-divider::after { content: ''; height: 1px; background: var(--hairline); flex: 1; }
+#js-app .wb-plan-form { display: flex; flex-direction: column; gap: 10px; max-height: min(72vh, 760px); overflow: auto; padding-right: 2px; }
+#js-app .wb-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+#js-app .wb-plan-form .wb-field input, #js-app .wb-plan-form .wb-field textarea, #js-app .wb-plan-form .wb-field select { width: 100%; }
+#js-app .wb-plan-assets { max-height: 210px; overflow: auto; border: 1px solid var(--hairline); border-radius: 10px; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+#js-app .wb-plan-asset { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 8px; font-size: 12px; }
+#js-app .wb-plan-asset.on { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+#js-app .wb-plan-asset-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; cursor: pointer; }
+#js-app .wb-plan-asset-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#js-app .wb-plan-form textarea.wb-script { min-height: 140px; }
+#js-app .wb-plan-asset small { color: var(--text-3); font-size: 10.5px; }
+#js-app .wb-plan-asset-order { display: inline-flex; gap: 2px; }
+#js-app .wb-plan-asset-order .wb-mini-btn { padding: 0 4px; font-size: 12px; line-height: 18px; }
+#js-app .wb-check { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--text-2); line-height: 1.55; cursor: pointer; }
+#js-app .wb-check input { margin-top: 2px; }
+#js-app .wb-plan-notice { border: 1px solid var(--hairline); border-radius: 10px; padding: 9px 12px; margin: 8px 0; font-size: 12.5px; line-height: 1.6; color: var(--text-2); background: var(--bg-2, rgba(0,0,0,0.02)); }
+#js-app .wb-plan-notice.warn { border-color: rgba(248, 113, 113, 0.35); background: rgba(248, 113, 113, 0.06); }
+#js-app .wb-plan-prompt { max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.55; border: 1px solid var(--hairline); border-radius: 10px; padding: 9px 11px; background: var(--bg-2, rgba(0,0,0,0.03)); }
+#js-app .wb-msg-plan { margin-top: 8px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--hairline)); border-radius: 12px; padding: 9px 11px; max-width: 640px; background: color-mix(in srgb, var(--accent) 4%, transparent); }
+#js-app .wb-msg-plan-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+#js-app .wb-msg-plan-head b { font-weight: 600; }
+#js-app .wb-msg-plan-meta { margin-top: 3px; font-size: 11.5px; color: var(--text-3); }
+#js-app .wb-msg-plan .wb-actions { margin-top: 7px; }
+#js-app .wb-plan-card .btn[disabled] { opacity: .45; cursor: not-allowed; }

@@ -80,6 +80,7 @@ import {
   buildViralRewritePrompt,
   buildCyclePlanPrompt,
   buildCycleSlotPrompt,
+  buildPlanFromChatPrompt,
   buildAssetAnalysisPrompt,
   buildReviewsInsightPrompt,
   buildDirectorScriptPrompt,
@@ -362,7 +363,7 @@ function assetOut(row) {
 function messageOut(row) {
   let citations = null;
   try { citations = row.citations ? JSON.parse(row.citations) : null; } catch { /* ignore */ }
-  return { id: row.id, role: row.role, content: row.content, citations, createdAt: row.created_at };
+  return { id: row.id, role: row.role, content: row.content, citations, planId: row.plan_id || '', createdAt: row.created_at };
 }
 function videoOut(row) {
   return {
@@ -419,6 +420,7 @@ function workOut(row) {
   return {
     id: row.id,
     accountId: row.account_id || 'default',
+    planId: row.plan_id || '',
     mode: row.mode || 'generate',
     title: row.title || '',
     type: row.type || 'ecommerce',
@@ -548,7 +550,7 @@ async function runDirectorScript(owner, workId, { reference = '' } = {}) {
     const parsed = parseDirectorScript(scriptText);
     if (!parsed.ok) throw new Error(`编导稿解析失败：${parsed.message}`);
     await aq("UPDATE junshi_workbench_video_works SET title=?, director_script=?, status='draft', message='编导稿已生成，确认后开始渲染；分镜可以逐镜修改。', error='', script_revision=script_revision+1, updated_at=? WHERE id=? AND owner_key=?",
-      [String(parsed.data.title || '').slice(0, 200), JSON.stringify(parsed.data), nowIso(), workId, owner.key]);
+      [work.plan_id ? text(work.title) : String(parsed.data.title || '').slice(0, 200) || text(work.title), JSON.stringify(parsed.data), nowIso(), workId, owner.key]);
     if (job) await jobDone(job, 'succeeded', '编导稿已生成').catch(() => {});
   } catch (error) {
     console.error('[video work] runDirectorScript failed:', error?.stack || error?.message || error);
@@ -974,6 +976,294 @@ async function referenceCycleTopics(ownerKey, excludeCycleId) {
   }
   return topics.slice(0, 12);
 }
+/* ───────────── 十六期 · 内容方案卡辅助（对齐原版 renderPlans / preflight / export） ───────────── */
+const PLAN_DURATIONS = [5, 10, 15, 20, 25, 30];
+const PLAN_RESOLUTIONS = ['480P', '768P'];
+const PLAN_RATIOS = ['9:16', '16:9', '1:1'];
+const PLAN_MAX_ASSETS = 9;
+const PLAN_STOP_TERMS = new Set(['一个', '我们', '这个', '那个', '可以', '就是', '然后', '因为', '所以', '如果', '没有', '自己', '内容', '视频', '家长', '机构', '课程', '孩子', '老师', '什么', '怎么', '一条', '这份', '进行', '需要', '以及', '还是', '但是', '而且', '你的', '我的', '他们']);
+
+function planOut(row, extras = {}) {
+  let assetIds = [];
+  let missing = [];
+  try { assetIds = JSON.parse(row.asset_ids || '[]'); } catch { /* ignore */ }
+  try { missing = JSON.parse(row.missing || '[]'); } catch { /* ignore */ }
+  return {
+    id: row.id,
+    accountId: row.account_id || 'default',
+    title: row.title || '',
+    objective: row.objective || '',
+    hook: row.hook || '',
+    script: row.script || '',
+    prompt: row.prompt || '',
+    model: row.model || '',
+    duration: Number(row.duration_seconds || 15),
+    resolution: row.resolution || '768P',
+    ratio: row.ratio || '9:16',
+    generateAudio: Number(row.generate_audio ?? 1) !== 0,
+    assetIds: Array.isArray(assetIds) ? assetIds.map(String).filter(Boolean).slice(0, PLAN_MAX_ASSETS) : [],
+    missing: Array.isArray(missing) ? missing.map(String).filter(Boolean).slice(0, 20) : [],
+    rationale: row.rationale || '',
+    publishDate: row.publish_date || '',
+    version: Number(row.version || 1),
+    status: row.status === 'submitted' ? 'submitted' : 'draft',
+    source: ['manual', 'chat', 'copy'].includes(row.source) ? row.source : 'manual',
+    chatMessageId: row.chat_message_id || '',
+    videoWorkId: row.video_work_id || '',
+    renderId: row.render_id || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    materialRecommendations: extras.materialRecommendations || [],
+    repeatRisks: extras.repeatRisks || [],
+  };
+}
+
+function sanitizePlanAssetIds(input) {
+  if (!Array.isArray(input)) return [];
+  return [...new Set(input.map((item) => String(item || '').trim()).filter(Boolean))].slice(0, PLAN_MAX_ASSETS);
+}
+function sanitizePlanMissing(input) {
+  if (!Array.isArray(input)) return [];
+  return input.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 20).map((item) => item.slice(0, 200));
+}
+function sanitizePlanPayload(body = {}, previous = {}) {
+  const value = (bodyKey, prevKey, fallback = '') => {
+    if (body[bodyKey] !== undefined) return text(body[bodyKey]);
+    if (previous[prevKey] !== undefined && previous[prevKey] !== null) return text(previous[prevKey]);
+    return fallback;
+  };
+  const previousAssets = (() => { try { return JSON.parse(previous.asset_ids || '[]'); } catch { return []; } })();
+  const previousMissing = (() => { try { return JSON.parse(previous.missing || '[]'); } catch { return []; } })();
+  const rawDuration = Number(body.duration !== undefined ? body.duration : previous.duration_seconds ?? 15);
+  const duration = PLAN_DURATIONS.includes(rawDuration) ? rawDuration : 15;
+  const rawResolution = value('resolution', 'resolution', '768P');
+  const rawRatio = value('ratio', 'ratio', '9:16');
+  const rawAudio = body.generateAudio !== undefined ? body.generateAudio : Number(previous.generate_audio ?? 1) !== 0;
+  return {
+    title: value('title', 'title').slice(0, 200),
+    objective: value('objective', 'objective').slice(0, 500),
+    hook: value('hook', 'hook').slice(0, 1000),
+    script: value('script', 'script').slice(0, 8000),
+    prompt: value('prompt', 'prompt').slice(0, 3000),
+    model: value('model', 'model').slice(0, 64),
+    duration_seconds: duration,
+    resolution: PLAN_RESOLUTIONS.includes(rawResolution) ? rawResolution : '768P',
+    ratio: PLAN_RATIOS.includes(rawRatio) ? rawRatio : '9:16',
+    generate_audio: rawAudio ? 1 : 0,
+    asset_ids: JSON.stringify(body.assetIds !== undefined ? sanitizePlanAssetIds(body.assetIds) : sanitizePlanAssetIds(previousAssets)),
+    missing: JSON.stringify(body.missing !== undefined ? sanitizePlanMissing(body.missing) : sanitizePlanMissing(previousMissing)),
+    rationale: value('rationale', 'rationale').slice(0, 2000),
+    publish_date: value('publishDate', 'publish_date').slice(0, 32),
+  };
+}
+function requirePlanVersion(row, bodyVersion) {
+  const requested = Number(bodyVersion);
+  if (Number.isFinite(requested) && requested !== Number(row.version || 1)) {
+    throw errors.badRequest('这份方案刚被更新过，请刷新页面后再操作。', 'WORKBENCH_PLAN_VERSION_CONFLICT');
+  }
+}
+function planTextTerms(value) {
+  const raw = String(value || '').toLowerCase().replace(/[^\p{Script=Han}a-z0-9]+/gu, ' ');
+  const terms = new Set();
+  for (const chunk of raw.split(/\s+/)) {
+    if (!chunk) continue;
+    if (/^[a-z0-9]{2,}$/.test(chunk)) terms.add(chunk);
+    const chars = Array.from(chunk);
+    for (let index = 0; index < chars.length - 1; index += 1) {
+      const bigram = chars[index] + chars[index + 1];
+      if (/^[\p{Script=Han}]{2}$/u.test(bigram) && !PLAN_STOP_TERMS.has(bigram)) terms.add(bigram);
+    }
+  }
+  return terms;
+}
+function assetNameTerms(value) {
+  const name = String(value || '').replace(/\.[a-z0-9]{1,8}$/i, '').replace(/[_-]+/g, ' ');
+  return planTextTerms(name);
+}
+async function planContextExtras(ownerKey, rows) {
+  const result = new Map();
+  if (!rows.length) return result;
+  const assets = await arows('SELECT id, file_name, kind FROM junshi_workbench_assets WHERE owner_key=? ORDER BY created_at DESC LIMIT 300', [ownerKey]).catch(() => []);
+  const nameById = new Map(assets.map((asset) => [asset.id, asset]));
+  const usage = new Map();
+  for (const row of rows) {
+    if (row.status !== 'submitted') continue;
+    let ids = [];
+    try { ids = JSON.parse(row.asset_ids || '[]'); } catch { /* ignore */ }
+    for (const assetId of ids) usage.set(String(assetId), (usage.get(String(assetId)) || 0) + 1);
+  }
+  for (const row of rows) {
+    const plan = planOut(row);
+    const terms = planTextTerms([plan.title, plan.objective, plan.hook, plan.script, plan.prompt, plan.rationale].join(' '));
+    const recommendations = [];
+    for (const asset of assets) {
+      if (!['image', 'video', 'audio'].includes(String(asset.kind || ''))) continue;
+      const assetTerms = assetNameTerms(asset.file_name || asset.id);
+      const matchedTerms = [...assetTerms].filter((term) => terms.has(term));
+      if (!matchedTerms.length) continue;
+      const score = matchedTerms.length / Math.sqrt(Math.max(1, assetTerms.size));
+      recommendations.push({
+        assetId: asset.id, name: asset.file_name || asset.id, kind: asset.kind,
+        matchedTerms: matchedTerms.slice(0, 6), score, usage: { submitted: usage.get(asset.id) || 0 },
+      });
+    }
+    recommendations.sort((left, right) => right.score - left.score || left.name.localeCompare(right.name));
+    const selected = plan.assetIds.map((assetId) => {
+      const asset = nameById.get(assetId);
+      return asset ? { assetId, name: asset.file_name || assetId, kind: asset.kind, usage: { submitted: usage.get(assetId) || 0 } } : null;
+    }).filter(Boolean);
+    result.set(row.id, {
+      materialRecommendations: recommendations.slice(0, 5).map(({ score, ...item }) => item),
+      repeatRisks: selected.filter((item) => item.usage.submitted > 0).map((item) => ({
+        ...item,
+        risks: [{ reason: `这条素材已用于 ${item.usage.submitted} 个已提交方案` }],
+      })),
+    });
+  }
+  return result;
+}
+async function planAssetRows(ownerKey, assetIds) {
+  const rows = [];
+  for (const assetId of assetIds.slice(0, PLAN_MAX_ASSETS)) {
+    const row = await arow('SELECT id, file_name, kind, mime_type FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, ownerKey]);
+    if (!row) throw errors.badRequest('参考素材里有已删除的素材，请重新选择', 'WORKBENCH_PLAN_ASSET_MISSING');
+    rows.push(row);
+  }
+  return rows;
+}
+function buildPlanRenderPrompt(plan) {
+  return [
+    plan.prompt ? `画面：${plan.prompt}` : '',
+    plan.script ? `口播：${plan.script}` : '',
+    plan.rationale ? `整体策略：${plan.rationale}` : '',
+  ].filter(Boolean).join('\n').slice(0, 2000);
+}
+function planMarkdown(plan, assetNames = new Map()) {
+  const parameters = [
+    `${plan.duration} 秒`,
+    plan.resolution,
+    plan.ratio,
+    plan.generateAudio ? '生成音频' : '不生成音频',
+  ].join(' · ');
+  return [
+    `# 内容方案 · ${plan.title}`,
+    '',
+    `- 状态：${plan.status === 'submitted' ? '已提交制作' : '待确认'}（第 ${plan.version} 版）`,
+    `- 来源：${plan.source === 'chat' ? '聊天提炼' : plan.source === 'copy' ? '复用方案' : '手动创建'}`,
+    plan.publishDate ? `- 计划发布日期：${plan.publishDate}` : '',
+    '',
+    '## 本条内容目标',
+    plan.objective || '（未填写）',
+    '',
+    '## 开场 / 前三秒',
+    plan.hook || '（未填写）',
+    '',
+    '## 完整口播脚本',
+    plan.script || '（未填写）',
+    '',
+    '## 视频执行提示词',
+    plan.prompt || '（未填写）',
+    '',
+    '## 制作参数',
+    parameters,
+    '',
+    '## 参考素材',
+    plan.assetIds.length ? plan.assetIds.map((assetId) => `- ${assetNames.get(assetId) || assetId}`).join('\n') : '（未选择）',
+    '',
+    '## 仍需补充的素材',
+    plan.missing.length ? plan.missing.map((item) => `- ${item}`).join('\n') : '（无）',
+    '',
+    '## 推荐理由 / 创作依据',
+    plan.rationale || '（未填写）',
+    '',
+  ].filter((line, index, lines) => !(line === '' && lines[index - 1] === '')).join('\n');
+}
+function demoPlanFromChat({ userMessage, assistantAnswer, profile }) {
+  const raw = String(assistantAnswer || '').replace(/\r/g, '').trim();
+  const lines = raw.split('\n').map((line) => line.replace(/^[#*\-\d.、\s]+/, '').trim()).filter(Boolean);
+  const title = (lines[0] || '新内容方案').slice(0, 40);
+  const script = raw.replace(/^#{1,4}\s*/gm, '').slice(0, 3000);
+  const subject = String(profile?.product || '机构课程').slice(0, 40);
+  return {
+    title, objective: String(userMessage || '把这次对话落成一条可拍的视频').slice(0, 200),
+    hook: (lines.find((line) => line.length > 6) || script.slice(0, 120)).slice(0, 200),
+    script,
+    prompt: `竖屏口播短视频，主题「${title}」。场景：${subject}的真实教学/咨询环境，人物自然面对镜头讲述，镜头稳定，光线明亮，字幕跟随口播；不出现绝对化承诺。`,
+    duration: 15, resolution: '768P', ratio: '9:16', generate_audio: true,
+    missing: [], rationale: '根据聊天内容整理；发布前请核对事实、价格与合规边界。', publish_date: '',
+  };
+}
+function looksLikePlanRequest(message) {
+  const value = String(message || '');
+  if (!value) return false;
+  // 「视频号怎么起号」是运营问题，不是要做一条视频，别自动弹方案卡。
+  if (/视频号/.test(value) && !/(做一条|拍一条|分镜|制作方案|内容方案)/.test(value)) return false;
+  // 数字人是独立链路（junshiAvatar），方案卡确认制作只会建普通视频任务，别自动串过去。
+  if (/数字人/.test(value)) return false;
+  // 「帮我做一条视频的选题」要的是选题，不是完整制作方案。
+  if (/选题/.test(value) && !/(口播|脚本|分镜|拍摄|成片|制作方案|内容方案)/.test(value)) return false;
+  const hasVideo = /(视频|分镜|短片|片子|成片)/.test(value);
+  if (!hasVideo && !/(制作|内容|拍摄)方案/.test(value)) return false;
+  if (/(选题|标题|拆解|分析|怎么写|怎么拍|拍摄清单|选题方向)/.test(value) && !/(视频|分镜|成片|制作方案|内容方案)/.test(value)) return false;
+  return /(做|拍|生成|出|来|要).{0,12}(视频|分镜|短片|片子)/.test(value)
+    || /视频(脚本|方案|分镜)/.test(value)
+    || /(制作|内容|拍摄)方案/.test(value)
+    || /复刻.{0,8}(视频|作品|这条|这个)/.test(value);
+}
+const planChatLocks = new Set();
+async function createPlanFromChat(owner, options = {}) {
+  const key = String(options.assistantMessageId || '');
+  if (key) {
+    if (planChatLocks.has(key)) return null;
+    planChatLocks.add(key);
+  }
+  try {
+    return await createPlanFromChatInner(owner, options);
+  } finally {
+    if (key) planChatLocks.delete(key);
+  }
+}
+async function createPlanFromChatInner(owner, { accountId, assistantMessageId = '', userMessage = '', assistantAnswer = '', recent = '' } = {}) {
+  const profile = (await readProfile(owner.key, accountId)).profile;
+  const orgProfile = await orgProfileText(owner.key);
+  const providerMock = await textProviderIsMock().catch(() => false);
+  let payload = null;
+  if (providerMock) {
+    payload = demoPlanFromChat({ userMessage, assistantAnswer, profile });
+  } else {
+    const prompt = buildPlanFromChatPrompt({ profile, orgProfile, userMessage, assistantAnswer, recent });
+    const result = await collectText(null, { system: WORKBENCH_SYSTEM, user: prompt });
+    // 真模型解析失败时不拿「演示方案」冒充结果：宁可不出卡，让用户点「整理成制作方案」重试。
+    payload = mockOrEmpty(result) ? null : firstJsonObject(result.text);
+  }
+  if (!payload || typeof payload !== 'object') return null;
+  const cleaned = sanitizePlanPayload({
+    title: payload.title,
+    objective: payload.objective || userMessage,
+    hook: payload.hook,
+    script: payload.script,
+    prompt: payload.prompt,
+    duration: payload.duration,
+    resolution: payload.resolution,
+    ratio: payload.ratio,
+    generateAudio: payload.generate_audio,
+    missing: payload.missing,
+    rationale: payload.rationale,
+    publishDate: payload.publish_date,
+  });
+  if (!cleaned.title || !cleaned.script || !cleaned.prompt) return null;
+  if (!cleaned.objective) cleaned.objective = String(userMessage || cleaned.title).slice(0, 500);
+  if (!cleaned.hook) cleaned.hook = cleaned.script.slice(0, 200);
+  const planId = id('jwpl');
+  const at = nowIso();
+  await aq('INSERT INTO junshi_workbench_plans (id,owner_key,org_id,account_id,title,objective,hook,script,prompt,model,duration_seconds,resolution,ratio,generate_audio,asset_ids,missing,rationale,publish_date,version,status,source,chat_message_id,video_work_id,render_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    [planId, owner.key, owner.orgId, accountId, cleaned.title, cleaned.objective, cleaned.hook, cleaned.script, cleaned.prompt, cleaned.model, cleaned.duration_seconds, cleaned.resolution, cleaned.ratio, cleaned.generate_audio, cleaned.asset_ids, cleaned.missing, cleaned.rationale, cleaned.publish_date, 1, 'draft', 'chat', assistantMessageId, '', '', at, at]);
+  if (assistantMessageId) {
+    await aq('UPDATE junshi_workbench_messages SET plan_id=? WHERE id=? AND owner_key=?', [planId, assistantMessageId, owner.key]).catch(() => {});
+  }
+  return planOut(await arow('SELECT * FROM junshi_workbench_plans WHERE id=?', [planId]));
+}
+
 /** 周期计划异步管线：账号档案 + 已有选题去重 → 模型单 JSON → 解析入库（proposed）。 */
 async function runCycleGenerate(owner, cycleId, { requirements = '' } = {}) {
   try {
@@ -1753,7 +2043,12 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
   /* ── 对话 ── */
   if (rest === '/chat' && method === 'GET') {
     const rows = await arows('SELECT * FROM junshi_workbench_messages WHERE owner_key=? ORDER BY created_at, id LIMIT 200', [owner.key]);
-    return { messages: rows.map(messageOut) };
+    // 十六期：消息里带方案摘要，刷新后「查看制作方案 →」仍然在。
+    const plans = rows.some((row) => row.plan_id)
+      ? await arows('SELECT * FROM junshi_workbench_plans WHERE owner_key=? ORDER BY created_at DESC LIMIT 100', [owner.key]).catch(() => [])
+      : [];
+    const planById = new Map(plans.map((row) => [row.id, planOut(row)]));
+    return { messages: rows.map((row) => ({ ...messageOut(row), plan: row.plan_id ? planById.get(row.plan_id) || null : null })) };
   }
   if (rest === '/chat' && method === 'DELETE') {
     await aq('DELETE FROM junshi_workbench_messages WHERE owner_key=?', [owner.key]);
@@ -1859,6 +2154,19 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
         provider: result?.provider || '',
         usage: result?.usage || null,
       });
+      // 十六期：只在「明确要做一条视频/分镜/方案」时自动提炼方案卡，别让普通问答悄悄多一次模型调用。
+      if (looksLikePlanRequest(message)) {
+        try {
+          const recent = history.slice(-8).map((item) => `${item.role === 'user' ? '用户' : '小铃铛'}：${String(item.content || '').slice(0, 300)}`).join('\n');
+          const plan = await createPlanFromChat(owner, {
+            accountId: chatAccountId, assistantMessageId: assistantId,
+            userMessage: message, assistantAnswer: answer, recent,
+          });
+          if (plan) sseSend(ctx, 'plan', { messageId: assistantId, plan });
+        } catch (error) {
+          console.error('[workbench plan] auto extract failed:', error?.message || error);
+        }
+      }
     } catch (error) {
       const aborted = controller.signal.aborted;
       if (answer.trim()) {
@@ -3055,6 +3363,157 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
       await aq('UPDATE junshi_workbench_voice_samples SET use_count=use_count+1, updated_at=? WHERE id=? AND owner_key=?', [nowIso(), sampleId, owner.key]);
       const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [row.asset_id, owner.key]);
       return { sample: voiceSampleOut(await arow('SELECT * FROM junshi_workbench_voice_samples WHERE id=?', [sampleId]), assetRow) };
+    }
+  }
+
+  /* ───────────── 十六期 · 内容方案卡（renderPlans / preflight / submit / export） ───────────── */
+  if (rest === '/plans' && method === 'GET') {
+    const accountIdFilter = text(search.get('accountId'));
+    const rows = accountIdFilter
+      ? await arows('SELECT * FROM junshi_workbench_plans WHERE owner_key=? AND account_id=? ORDER BY created_at DESC LIMIT 50', [owner.key, accountIdFilter])
+      : await arows('SELECT * FROM junshi_workbench_plans WHERE owner_key=? ORDER BY created_at DESC LIMIT 50', [owner.key]);
+    const extras = await planContextExtras(owner.key, rows);
+    return { items: rows.map((row) => planOut(row, extras.get(row.id) || {})) };
+  }
+  if (rest === '/plans' && method === 'POST') {
+    const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
+    const payload = sanitizePlanPayload(ctx.body || {});
+    if (!payload.title || !payload.objective || !payload.hook || !payload.script || !payload.prompt) {
+      throw errors.badRequest('请填写标题、目标、前三秒、完整口播和视频提示词', 'VALIDATION_ERROR', { field: 'title' });
+    }
+    const assetIds = JSON.parse(payload.asset_ids || '[]');
+    await planAssetRows(owner.key, assetIds);
+    const planId = id('jwpl');
+    const at = nowIso();
+    await aq('INSERT INTO junshi_workbench_plans (id,owner_key,org_id,account_id,title,objective,hook,script,prompt,model,duration_seconds,resolution,ratio,generate_audio,asset_ids,missing,rationale,publish_date,version,status,source,chat_message_id,video_work_id,render_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [planId, owner.key, owner.orgId, accountId, payload.title, payload.objective, payload.hook, payload.script, payload.prompt, payload.model, payload.duration_seconds, payload.resolution, payload.ratio, payload.generate_audio, payload.asset_ids, payload.missing, payload.rationale, payload.publish_date, 1, 'draft', 'manual', '', '', '', at, at]);
+    return { plan: planOut(await arow('SELECT * FROM junshi_workbench_plans WHERE id=?', [planId])) };
+  }
+  if (rest === '/plans/from-chat' && method === 'POST') {
+    const messageId = text(ctx.body?.messageId);
+    const messageRow = await arow("SELECT * FROM junshi_workbench_messages WHERE id=? AND owner_key=? AND role='assistant'", [messageId, owner.key]);
+    if (!messageRow) throw errors.notFound('这条回答不存在，刷新后再试', 'NOT_FOUND');
+    if (messageRow.plan_id) {
+      const existing = await arow('SELECT * FROM junshi_workbench_plans WHERE id=? AND owner_key=?', [messageRow.plan_id, owner.key]);
+      if (existing) return { plan: planOut(existing) };
+    }
+    rateLimit(owner.key);
+    const previousUser = await arow("SELECT * FROM junshi_workbench_messages WHERE owner_key=? AND role='user' AND (created_at<? OR (created_at=? AND id<?)) ORDER BY created_at DESC, id DESC LIMIT 1",
+      [owner.key, messageRow.created_at, messageRow.created_at, messageRow.id]);
+    const recentRows = await arows("SELECT role, content FROM junshi_workbench_messages WHERE owner_key=? AND (created_at<? OR (created_at=? AND id<?)) ORDER BY created_at DESC, id DESC LIMIT 8",
+      [owner.key, messageRow.created_at, messageRow.created_at, messageRow.id]);
+    const recent = recentRows.reverse().map((item) => `${item.role === 'user' ? '用户' : '小铃铛'}：${String(item.content || '').slice(0, 300)}`).join('\n');
+    const plan = await createPlanFromChat(owner, {
+      accountId: await resolveAccountId(owner.key, ctx.body?.accountId),
+      assistantMessageId: messageRow.id,
+      userMessage: previousUser?.content || '',
+      assistantAnswer: messageRow.content || '',
+      recent,
+    });
+    if (!plan) throw errors.badRequest('这条回答里没有足够的具体内容，先让小铃铛给出口播和画面再整理。', 'WORKBENCH_PLAN_EMPTY');
+    return { plan };
+  }
+  if (rest.startsWith('/plans/')) {
+    const tail = rest.slice('/plans/'.length);
+    const [planIdRaw, sub] = tail.split('/');
+    const planId = decodeURIComponent(planIdRaw);
+    const row = await arow('SELECT * FROM junshi_workbench_plans WHERE id=? AND owner_key=?', [planId, owner.key]);
+    if (!row) throw errors.notFound('方案不存在', 'NOT_FOUND');
+    if (!sub && method === 'GET') {
+      const extras = await planContextExtras(owner.key, [row]);
+      return { plan: planOut(row, extras.get(row.id) || {}) };
+    }
+    if (!sub && method === 'PUT') {
+      requirePlanVersion(row, ctx.body?.version);
+      if (row.status === 'submitted') throw errors.badRequest('已提交制作的方案不能再改；需要调整请先复制一份。', 'WORKBENCH_PLAN_SUBMITTED');
+      const payload = sanitizePlanPayload(ctx.body || {}, row);
+      if (!payload.title || !payload.objective || !payload.hook || !payload.script || !payload.prompt) {
+        throw errors.badRequest('请填写标题、目标、前三秒、完整口播和视频提示词', 'VALIDATION_ERROR', { field: 'title' });
+      }
+      const assetIds = JSON.parse(payload.asset_ids || '[]');
+      await planAssetRows(owner.key, assetIds);
+      await aq('UPDATE junshi_workbench_plans SET title=?,objective=?,hook=?,script=?,prompt=?,model=?,duration_seconds=?,resolution=?,ratio=?,generate_audio=?,asset_ids=?,missing=?,rationale=?,publish_date=?,version=version+1,updated_at=? WHERE id=? AND owner_key=? AND version=?',
+        [payload.title, payload.objective, payload.hook, payload.script, payload.prompt, payload.model, payload.duration_seconds, payload.resolution, payload.ratio, payload.generate_audio, payload.asset_ids, payload.missing, payload.rationale, payload.publish_date, nowIso(), planId, owner.key, Number(row.version || 1)]);
+      return { plan: planOut(await arow('SELECT * FROM junshi_workbench_plans WHERE id=?', [planId])) };
+    }
+    if (!sub && method === 'DELETE') {
+      await aq("UPDATE junshi_workbench_messages SET plan_id='' WHERE owner_key=? AND plan_id=?", [owner.key, planId]).catch(() => {});
+      await aq('DELETE FROM junshi_workbench_plans WHERE id=? AND owner_key=?', [planId, owner.key]);
+      return { ok: true };
+    }
+    if (sub === 'preflight' && method === 'GET') {
+      const extras = await planContextExtras(owner.key, [row]);
+      const plan = planOut(row, extras.get(row.id) || {});
+      const policy = await getAiProviderPolicy();
+      const selection = providerSelectionForModality(policy, 'VIDEO');
+      const info = generationProviderInfo(selection);
+      const videoReady = !isMockProvider(info.provider) && info.mode !== 'mock'
+        && info.configured && info.adapterAvailable && (info.capabilities || []).includes('VIDEO');
+      return {
+        plan,
+        notice: '确认后会创建视频任务并生成编导稿；成片渲染在「视频创作」里再确认一次，不会在这一步直接扣费。',
+        outputSeconds: plan.duration,
+        inputSeconds: 0,
+        billingSeconds: plan.duration,
+        prompt: buildPlanRenderPrompt(plan),
+        missing: plan.missing,
+        repeatRisks: plan.repeatRisks || [],
+        videoReady,
+        provider: info.provider,
+        model: info.model,
+        pricingNote: '编导稿阶段不扣费；渲染费用以平台视频渠道结算为准。',
+      };
+    }
+    if (sub === 'submit' && method === 'POST') {
+      requirePlanVersion(row, ctx.body?.version);
+      if (row.status === 'submitted' && row.video_work_id) {
+        throw errors.badRequest('这份方案已经提交过制作；要再拍一条请先复制方案。', 'WORKBENCH_PLAN_ALREADY_SUBMITTED');
+      }
+      const extras = await planContextExtras(owner.key, [row]);
+      const plan = planOut(row, extras.get(row.id) || {});
+      if (plan.missing.length) {
+        throw errors.badRequest(`方案还缺 ${plan.missing.length} 项素材，补齐后才能提交制作。`, 'WORKBENCH_PLAN_MISSING_MATERIALS');
+      }
+      if (!plan.script || !plan.prompt) throw errors.badRequest('方案缺少口播或视频提示词，先补充完整。', 'VALIDATION_ERROR');
+      const assetRows = await planAssetRows(owner.key, plan.assetIds);
+      const assetRefs = sanitizeAssetRefs(assetRows.map((asset) => ({
+        assetId: asset.id, role: '场景', label: asset.file_name || asset.id, notes: '',
+      })));
+      const brief = [
+        `【内容方案】${plan.title}`,
+        `【本条内容目标】${plan.objective}`,
+        plan.hook ? `【开场 / 前三秒】${plan.hook}` : '',
+        `【完整口播脚本】${plan.script}`,
+        `【视频执行提示词】${plan.prompt}`,
+        plan.rationale ? `【推荐理由 / 创作依据】${plan.rationale}` : '',
+      ].filter(Boolean).join('\n').slice(0, 4000);
+      const workId = id('jww');
+      const at = nowIso();
+      await aq('INSERT INTO junshi_workbench_video_works (id,owner_key,org_id,account_id,plan_id,mode,title,type,subtype,hook_strategy,model,duration_seconds,resolution,ratio,brief,asset_refs,status,message,director_script,script_revision,script_edited,output_asset_id,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [workId, owner.key, owner.orgId, plan.accountId, planId, 'generate', plan.title, 'ecommerce', '口播带货', 'auto', plan.model, plan.duration, plan.resolution, plan.ratio, brief, JSON.stringify(assetRefs), 'planning', '方案已确认，正在写编导稿…', '', 0, 0, null, '', at, at]);
+      await aq("UPDATE junshi_workbench_plans SET status='submitted',video_work_id=?,updated_at=? WHERE id=? AND owner_key=? AND version=?",
+        [workId, nowIso(), planId, owner.key, Number(row.version || 1)]);
+      void runDirectorScript(owner, workId, {});
+      const saved = await arow('SELECT * FROM junshi_workbench_plans WHERE id=?', [planId]);
+      if (!saved) throw errors.conflict('方案刚刚被删除或更新，请刷新后重试。', 'WORKBENCH_PLAN_VERSION_CONFLICT');
+      const savedExtras = await planContextExtras(owner.key, [saved]);
+      return { plan: planOut(saved, savedExtras.get(planId) || {}), work: workOut(await arow('SELECT * FROM junshi_workbench_video_works WHERE id=?', [workId])) };
+    }
+    if (sub === 'export' && method === 'GET') {
+      const extras = await planContextExtras(owner.key, [row]);
+      const plan = planOut(row, extras.get(row.id) || {});
+      const assetRows = await arows('SELECT id, file_name FROM junshi_workbench_assets WHERE owner_key=?', [owner.key]).catch(() => []);
+      const assetNames = new Map(assetRows.map((asset) => [asset.id, asset.file_name]));
+      const body = planMarkdown(plan, assetNames);
+      const safeId = String(planId).replace(/[^A-Za-z0-9_-]/g, '');
+      ctx.res.writeHead(200, corsHeaders(ctx.req, {
+        'content-type': 'text/markdown; charset=utf-8',
+        'content-length': Buffer.byteLength(body),
+        'content-disposition': `attachment; filename="plan-${safeId}.md"`,
+        'cache-control': 'private, no-store',
+      }));
+      ctx.res.end(body);
+      return { __streamed: true };
     }
   }
 

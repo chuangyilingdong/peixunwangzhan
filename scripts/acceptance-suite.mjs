@@ -88,6 +88,8 @@ const FAST = [
   'scripts/p149-junshi-published-works.mjs',
   // 2026-10-25 加：视频工作台复刻分镜原帧（真传视频、真跑 ffmpeg、写回每镜）。
   'scripts/p150-video-storyboard-frames.mjs',
+  // 2026-10-25 加：内容方案卡（聊天提炼、版本锁、预检、确认制作、导出）。
+  'scripts/p152-junshi-plan-cards.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));
