@@ -508,7 +508,7 @@ export async function handlePublicCommunication(ctx) {
     //    ⚠️ 音视频用 `ossOffload: true`：OSS 行直接 302 到签名直链（Range 流式），别把整段视频
     //    拉回这台 5Mbps 的机器再转发；扫码页的 CSP 是站点级 `media-src https:`，嵌入 `<video>` 跟 302 没问题。
     const mime = String(file.mime_type || '').toLowerCase();
-    if (mime.startsWith('image/')) return prepareWorkImage(ctx, file);
+    if (mime.startsWith('image/')) return prepareWorkImage(ctx, file, { inline: true });
     if (/^(audio|video)\//.test(mime)) return prepareFilePreview(ctx, file, { ossOffload: true });
     return prepareFileDownload(ctx, file);
   }

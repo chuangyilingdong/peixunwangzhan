@@ -365,9 +365,14 @@ try {
     check('⑭ 图片点一下开全屏，视频给全屏/保存两颗按钮（原生 controls 不被抢）',
       /is-tappable/.test(pageSource) && /share-piece__tools/.test(pageSource) && /全屏播放/.test(pageSource) && /保存视频/.test(pageSource));
     const publicRoute = fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'communication', 'public.js'), 'utf8');
-    check('⑭ 服务端分享媒体：图片 prepareWorkImage、音视频 prepareFilePreview（inline）',
-      /if \(mime\.startsWith\('image\/'\)\) return prepareWorkImage\(ctx, file\)/.test(publicRoute)
+    check('⑭ 服务端分享媒体：图片 prepareWorkImage(inline)、音视频 prepareFilePreview（inline）',
+      /if \(mime\.startsWith\('image\/'\)\) return prepareWorkImage\(ctx, file, \{ inline: true \}\)/.test(publicRoute)
       && /prepareFilePreview\(ctx, file, \{ ossOffload: true \}\)/.test(publicRoute));
+    const fileAssets = fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'fileAssets.js'), 'utf8');
+    check('⑭ OSS 图片用 response-content-disposition=inline 覆盖对象上的 attachment（长按才出“存储图像”）',
+      /export async function prepareWorkImage\(ctx, file, \{ inline = false \} = \{\}\)/.test(fileAssets)
+      && /: inline \? \{ contentDisposition: 'inline' \} : \{\}/.test(fileAssets)
+      && /svgLike\s*\?\s*\{ contentDisposition:/.test(fileAssets));
   }
 
   /* ── ⑧ 机构/老师端（用户口径：「机构端/老师端也需要有」）────────────────────
