@@ -36,6 +36,7 @@ const baseEnv = {
   ...process.env,
   PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp,
   PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath,
+  FILE_UPLOAD_ROOT: path.join(temp, 'uploads'),
   DEPLOYMENT_MODE: 'development',
   AI_PROVIDER: 'local-mock',
   AI_PROVIDER_API_KEY: '',
@@ -187,6 +188,23 @@ try {
         { id: 'n-img', type: 'image', position: { x: 0, y: 0 }, data: { slotType: 'image', assetUrl: '/api/student/file-assets/file_p171_img/download', caption: 'P171 图片' } },
         { id: 'n-vid', type: 'video', position: { x: 0, y: 0 }, data: { slotType: 'video', assetUrl: '/api/student/file-assets/file_p171_vid/download', caption: 'P171 视频' } },
       ], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }), now, 'PENDING']);
+  // 2026-10-25：画布媒体要落**真字节** —— 分享口现在图片走 prepareWorkImage、音视频走
+  // prepareFilePreview（inline + Range），下面 ⑭ 直接验响应头与长按保存的前提。
+  {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==', 'base64');
+    const mp4 = Buffer.from('00000018667479706d703432000000006d70343269736f6d0000000866726565', 'hex');
+    for (const [fileId, fileName, mime, bytes] of [
+      ['file_p171_img', 'p171.png', 'image/png', png],
+      ['file_p171_vid', 'p171.mp4', 'video/mp4', mp4],
+    ]) {
+      const storageKey = `p171/${fileName}`;
+      const absolute = path.join(temp, 'uploads', storageKey);
+      fs.mkdirSync(path.dirname(absolute), { recursive: true });
+      fs.writeFileSync(absolute, bytes);
+      await aq('INSERT INTO file_assets(id,owner_type,owner_user_id,owner_org_id,storage_kind,storage_key,file_name,mime_type,file_size,category,visibility,status,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [fileId, 'USER', student.id, student.org_id, 'INTERNAL_PROXY', storageKey, fileName, mime, bytes.length, 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', '{}', now, now]);
+    }
+  }
   const imageCode = await api('/api/student/share-links', { method: 'POST', token: studentToken, body: { source: 'CANVAS', workId: canvasWorkId, pieceKey: 'media:file_p171_img' } });
   const videoCode = await api('/api/student/share-links', { method: 'POST', token: studentToken, body: { source: 'CANVAS', workId: canvasWorkId, pieceKey: 'media:file_p171_vid' } });
   const imageCard = await api(`/api/public/share-links/${imageCode.data?.code}`);
@@ -322,6 +340,34 @@ try {
     const sharePageSource = fs.readFileSync(path.join('apps', 'website', 'src', 'pages', 'WorkShare.jsx'), 'utf8');
     check('⑬ 扫码页有「多件顺序铺开」那套结构（allPieces / pieces.map / share-card__pieces）',
       /allPieces/.test(sharePageSource) && /pieces\.map/.test(sharePageSource) && /share-card__pieces/.test(sharePageSource));
+  }
+
+  /* ── ⑭ 手机端保存（2026-10-25 用户报「无法保存单个图片/视频」）─────────────
+     真因：画布分享媒体原来走 `prepareFileDownload`（attachment），长按菜单变成“下载链接”；
+     修法：图片 prepareWorkImage / 音视频 prepareFilePreview（inline）。扫码页再给全屏层 +
+     显式保存按钮（fetch → 系统分享，失败则 <a download> 兜底）。 */
+  console.log('⑭ 手机端保存：媒体 inline（长按可存）+ 扫码页全屏/保存按钮');
+  {
+    const imageMedia = await fetch(`http://127.0.0.1:${PORT}/api/public/share-links/${imageCode.data.code}/media/file_p171_img`, { redirect: 'manual' });
+    check('⑭ 图片媒体是 inline（不再是 attachment —— 长按才会出“存储图像”）',
+      imageMedia.status === 200 && /^inline/i.test(imageMedia.headers.get('content-disposition') || '')
+      && /^image\/png/i.test(imageMedia.headers.get('content-type') || ''),
+      JSON.stringify({ status: imageMedia.status, type: imageMedia.headers.get('content-type'), disposition: imageMedia.headers.get('content-disposition') }));
+    const videoMedia = await fetch(`http://127.0.0.1:${PORT}/api/public/share-links/${videoCode.data.code}/media/file_p171_vid`, { redirect: 'manual' });
+    check('⑭ 视频媒体是 inline + 支持 Range（播放/拖动进度都靠它）',
+      videoMedia.status === 200 && /^inline/i.test(videoMedia.headers.get('content-disposition') || '')
+      && /^video\/mp4/i.test(videoMedia.headers.get('content-type') || '') && /bytes/i.test(videoMedia.headers.get('accept-ranges') || ''),
+      JSON.stringify({ status: videoMedia.status, type: videoMedia.headers.get('content-type'), disposition: videoMedia.headers.get('content-disposition'), ranges: videoMedia.headers.get('accept-ranges') }));
+    const pageSource = fs.readFileSync(path.join('apps', 'website', 'src', 'pages', 'WorkShare.jsx'), 'utf8');
+    check('⑭ 扫码页有全屏层 + 显式保存按钮 + 系统分享/下载兜底',
+      /share-lightbox/.test(pageSource) && /share-lightbox-save/.test(pageSource)
+      && /navigator\.share/.test(pageSource) && /navigator\.canShare/.test(pageSource) && /link\.download = fileName/.test(pageSource));
+    check('⑭ 图片点一下开全屏，视频给全屏/保存两颗按钮（原生 controls 不被抢）',
+      /is-tappable/.test(pageSource) && /share-piece__tools/.test(pageSource) && /全屏播放/.test(pageSource) && /保存视频/.test(pageSource));
+    const publicRoute = fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'communication', 'public.js'), 'utf8');
+    check('⑭ 服务端分享媒体：图片 prepareWorkImage、音视频 prepareFilePreview（inline）',
+      /if \(mime\.startsWith\('image\/'\)\) return prepareWorkImage\(ctx, file\)/.test(publicRoute)
+      && /prepareFilePreview\(ctx, file, \{ ossOffload: true \}\)/.test(publicRoute));
   }
 
   /* ── ⑧ 机构/老师端（用户口径：「机构端/老师端也需要有」）────────────────────

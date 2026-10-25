@@ -505,9 +505,11 @@ export async function handlePublicCommunication(ctx) {
     //    长按菜单会变成“下载链接”，拿不到“存储图像 / 保存视频”。改成与 VIBECODING 同一条：
     //    图片 `prepareWorkImage`（inline；SVG 仍 attachment 防 XSS）、音视频 `prepareFilePreview`
     //    （inline + Range），长按能正常出系统保存菜单；显式“保存”按钮仍由扫码页提供（走 fetch + 系统分享/下载）。
+    //    ⚠️ 音视频用 `ossOffload: true`：OSS 行直接 302 到签名直链（Range 流式），别把整段视频
+    //    拉回这台 5Mbps 的机器再转发；扫码页的 CSP 是站点级 `media-src https:`，嵌入 `<video>` 跟 302 没问题。
     const mime = String(file.mime_type || '').toLowerCase();
     if (mime.startsWith('image/')) return prepareWorkImage(ctx, file);
-    if (/^(audio|video)\//.test(mime)) return prepareFilePreview(ctx, file);
+    if (/^(audio|video)\//.test(mime)) return prepareFilePreview(ctx, file, { ossOffload: true });
     return prepareFileDownload(ctx, file);
   }
 

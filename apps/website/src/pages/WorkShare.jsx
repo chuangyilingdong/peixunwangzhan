@@ -30,10 +30,38 @@ async function sharePiece(url) {
   }
 }
 
+/** 保存到相册/下载时用的文件名（画布件的 name 往往是一整段 caption，截短并去掉非法字符）。 */
+const MEDIA_EXT_BY_MIME = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/svg+xml': 'svg',
+  'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov',
+  'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/wav': 'wav', 'audio/ogg': 'ogg', 'audio/aac': 'aac',
+};
+function mediaFileName(piece, mimeType) {
+  const original = String(piece?.name || '').trim();
+  const namedExt = /\.([a-z0-9]{2,5})$/i.exec(original)?.[1]?.toLowerCase();
+  const ext = namedExt || MEDIA_EXT_BY_MIME[String(mimeType || '').toLowerCase().split(';')[0]] || 'bin';
+  // ⚠️ 文件名清洗**别把引号写进正则字面量**：守卫的 stripComments 不认正则，
+  //    正则里出现 `"` / `'` 会被当成字符串开头，后面的注释就剥不掉了（p171 ⑦b 因此假红过一次）。
+  const base = original
+    .replace(/\.[a-z0-9]{2,5}$/i, '')
+    .replace(/[\\/:*?<>|\r\n\t]/g, ' ')
+    .split('"').join(' ')
+    .split("'").join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 48) || '灵动AI作品';
+  return `${base}.${ext}`;
+}
+
 export function WorkSharePage() {
   const { code } = useParams();
   const [state, setState] = useState({ loading: true, data: null, error: '' });
   const [notice, setNotice] = useState('');
+  // 2026-10-25：图片/视频的“全屏看 + 保存”（手机端长按保存经常被浏览器/微信吃掉，
+  // 所以除了让服务端发 inline（长按能出系统保存菜单），再给一个显式保存按钮）。
+  const [mediaView, setMediaView] = useState(null);
+  const [savingKey, setSavingKey] = useState('');
+  const [saveNotice, setSaveNotice] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -48,7 +76,76 @@ export function WorkSharePage() {
     return () => { cancelled = true; };
   }, [code]);
 
+  // 全屏层：Esc 关闭 + 锁背景滚动（与作品预览弹窗同一套做法）
+  useEffect(() => {
+    if (!mediaView) return undefined;
+    const onKey = (event) => { if (event.key === 'Escape') setMediaView(null); };
+    window.addEventListener('keydown', onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [mediaView]);
+
   const shareUrl = `${window.location.origin}/s/${code}`;
+
+  function openMedia(piece) {
+    if (!piece?.mediaUrl) return;
+    setSaveNotice('');
+    setMediaView(piece);
+  }
+
+  /**
+   * 保存这一件媒体：
+   *   ① 先 fetch 成 Blob（同源；OSS 302 也已在桶上放行 CORS）；
+   *   ② 移动端优先 `navigator.share({ files })` —— iOS/Android 的分享面板里能选「存储图像/保存视频」；
+   *   ③ 不支持/被拒（微信常见）→ `<a download>` 兜底；
+   *   ④ 都不行就提示长按（服务端已把媒体改成 inline，长按会出系统保存菜单）。
+   */
+  async function saveMedia(piece) {
+    const url = String(piece?.mediaUrl || '');
+    if (!url) { setSaveNotice('这一件没有可保存的原始文件'); return; }
+    const key = String(piece.key || url);
+    setSavingKey(key);
+    setSaveNotice('正在准备文件…');
+    try {
+      const response = await fetch(url, { credentials: 'include' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      if (!blob.size) throw new Error('文件是空的');
+      const type = String(blob.type || '').trim()
+        || (piece.render === 'VIDEO' ? 'video/mp4' : piece.render === 'AUDIO' ? 'audio/mpeg' : 'image/jpeg');
+      const fileName = mediaFileName(piece, type);
+      const file = typeof File === 'function' ? new File([blob], fileName, { type }) : null;
+      if (file && typeof navigator !== 'undefined' && typeof navigator.share === 'function'
+        && typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: piece.name || '作品' });
+          setSaveNotice('已打开系统分享，选择「存储图像 / 保存视频」即可');
+          return;
+        } catch (error) {
+          if (error?.name === 'AbortError') { setSaveNotice('已取消'); return; }
+          // 微信/旧浏览器/非用户手势 → 继续走下载兜底
+        }
+      }
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = fileName;
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      setSaveNotice('已开始下载；如果没有反应，请长按图片/视频选择「保存」');
+    } catch (error) {
+      setSaveNotice(`保存没成功：${error?.message || error}。可以长按图片/视频选择「保存」`);
+    } finally {
+      setSavingKey('');
+    }
+  }
 
   if (state.loading) return <main className="inner"><div className="student-page-state">正在打开分享…</div></main>;
   if (state.error || !state.data) {
@@ -98,7 +195,7 @@ export function WorkSharePage() {
               {item.caption || item.name || `第 ${index + 1} 件`}
             </h2>
             <div className="share-card__piece">
-              <PieceView piece={item} document={item.document} />
+              <PieceView piece={item} document={item.document} onOpen={openMedia} onSave={saveMedia} saving={savingKey === String(item.key || item.mediaUrl)} />
               {itemMissing.length ? <Notice tone="warning">
                 这件作品里有 {itemMissing.length} 个本地素材（{itemMissing.slice(0, 3).join('、')}{itemMissing.length > 3 ? ' 等' : ''}）
                 没有随作品一起提交上来 —— 让 ta 用最新版客户端重新提交一次，这里就能看到图和视频了。
@@ -107,7 +204,7 @@ export function WorkSharePage() {
           </section>;
         })}
       </div> : <div className="share-card__piece">
-        <PieceView piece={piece} document={state.data.document || piece?.document || null} />
+        <PieceView piece={piece} document={state.data.document || piece?.document || null} onOpen={openMedia} onSave={saveMedia} saving={savingKey === String(piece?.key || piece?.mediaUrl)} />
         {missingAssets.length ? <Notice tone="warning">
           这件作品里有 {missingAssets.length} 个本地素材（{missingAssets.slice(0, 3).join('、')}{missingAssets.length > 3 ? ' 等' : ''}）
           没有随作品一起提交上来 —— 让 ta 用最新版客户端重新提交一次，这里就能看到图和视频了。
@@ -129,8 +226,38 @@ export function WorkSharePage() {
           这里原来有两行：微信里"点右上角 ···"的引导（没有公众号、也不该教用户点哪里），
           和「看 TA 的主页 · 更多作品」的跳转。**两张卡都不是这一页要干的事**，已删。
           这一页只做三件：看这一件 → 分享这一件 → 回官网。 */}
-    </section>
-  </main>;
+      </section>
+
+      {mediaView ? <div className="share-lightbox" role="dialog" aria-modal="true" aria-label="查看作品"
+        data-testid="share-lightbox" onClick={() => setMediaView(null)}>
+        <button type="button" className="share-lightbox__close" onClick={() => setMediaView(null)} aria-label="关闭">×</button>
+        <div className="share-lightbox__stage" onClick={(event) => event.stopPropagation()}>
+          {mediaView.render === 'IMAGE'
+            ? <img src={mediaView.mediaUrl} alt={mediaView.name || '作品'} />
+            : mediaView.render === 'VIDEO'
+              ? <video src={mediaView.mediaUrl} controls playsInline autoPlay />
+              : <audio src={mediaView.mediaUrl} controls />}
+          <p className="share-lightbox__hint">
+            {mediaView.render === 'IMAGE'
+              ? '长按图片可保存到相册，也可以点下面的「保存图片」'
+              : mediaView.render === 'VIDEO'
+                ? '点下面的「保存视频」；系统分享里可选保存到相册'
+                : '点下面的「保存音频」'}
+          </p>
+        </div>
+        <div className="share-lightbox__actions" onClick={(event) => event.stopPropagation()}>
+          <button type="button" className="share-lightbox__btn is-primary" data-testid="share-lightbox-save"
+            disabled={savingKey === String(mediaView.key || mediaView.mediaUrl)}
+            onClick={() => saveMedia(mediaView)}>
+            {savingKey === String(mediaView.key || mediaView.mediaUrl)
+              ? '正在准备…'
+              : mediaView.render === 'IMAGE' ? '保存图片' : mediaView.render === 'VIDEO' ? '保存视频' : '保存音频'}
+          </button>
+          <a className="share-lightbox__btn" href={mediaView.mediaUrl} target="_blank" rel="noopener noreferrer">新窗口打开</a>
+        </div>
+        {saveNotice ? <p className="share-lightbox__notice" data-testid="share-save-notice">{saveNotice}</p> : null}
+      </div> : null}
+    </main>;
 }
 
 /**
@@ -146,14 +273,35 @@ export function WorkSharePage() {
  *    这里直接跑起来：扫码看到的就是作品本身，随手就能点着玩（沙箱里 localStorage 有替身、脚本能跑）。
  *    扫码页只保留就地体验，不再提供「在完整页面里打开」——手机链路里它会造成二次跳转和视觉重复。
  */
-function PieceView({ piece, document: doc }) {
+function PieceView({ piece, document: doc, onOpen, onSave, saving = false }) {
   if (!piece) return <p className="muted">这一件已经不在最新版本里了。</p>;
   // 全部分享时每一件自带 `document`（各自的入口文件）；单件仍可用顶层那份（老响应）。
   const documentData = piece.document || doc;
   const { render, mediaUrl, coverUrl, openUrl, name } = piece;
-  if (render === 'IMAGE' && mediaUrl) return <img className="share-piece__media" src={mediaUrl} alt={name || '作品'} />;
-  if (render === 'VIDEO' && mediaUrl) return <video className="share-piece__media" src={mediaUrl} controls playsInline />;
-  if (render === 'AUDIO' && mediaUrl) return <audio className="share-piece__audio" src={mediaUrl} controls />;
+  const saveLabel = render === 'IMAGE' ? '保存图片' : render === 'VIDEO' ? '保存视频' : '保存音频';
+  if (render === 'IMAGE' && mediaUrl) return <>
+    {/* ⭐ 2026-10-25：点一下全屏；长按仍然走浏览器自己的“存储图像”（服务端已把图片发成 inline）。
+        显式「保存图片」按钮照给 —— 微信等内置浏览器经常把长按菜单吃掉。 */}
+    <img className="share-piece__media is-tappable" src={mediaUrl} alt={name || '作品'} onClick={() => onOpen?.(piece)} />
+    <div className="share-piece__tools">
+      <button type="button" className="share-piece__tool" data-testid="share-fullscreen" onClick={() => onOpen?.(piece)}>全屏查看</button>
+      <button type="button" className="share-piece__tool" data-testid="share-save" disabled={saving} onClick={() => onSave?.(piece)}>{saving ? '准备中…' : saveLabel}</button>
+    </div>
+  </>;
+  if (render === 'VIDEO' && mediaUrl) return <>
+    {/* 视频保留原生 controls（点视频是播放/暂停，不抢成全屏）；全屏与保存各给一颗按钮 */}
+    <video className="share-piece__media" src={mediaUrl} controls playsInline preload="metadata" />
+    <div className="share-piece__tools">
+      <button type="button" className="share-piece__tool" data-testid="share-fullscreen" onClick={() => onOpen?.(piece)}>全屏播放</button>
+      <button type="button" className="share-piece__tool" data-testid="share-save" disabled={saving} onClick={() => onSave?.(piece)}>{saving ? '准备中…' : saveLabel}</button>
+    </div>
+  </>;
+  if (render === 'AUDIO' && mediaUrl) return <>
+    <audio className="share-piece__audio" src={mediaUrl} controls />
+    <div className="share-piece__tools">
+      <button type="button" className="share-piece__tool" data-testid="share-save" disabled={saving} onClick={() => onSave?.(piece)}>{saving ? '准备中…' : saveLabel}</button>
+    </div>
+  </>;
   if (render === 'HTML') {
     const playable = documentData?.files && documentData?.entry && Object.hasOwn(documentData.files, documentData.entry);
     return <>

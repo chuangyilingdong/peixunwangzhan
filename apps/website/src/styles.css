@@ -1296,6 +1296,24 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 .share-piece-block__label{display:flex;align-items:flex-start;gap:8px;margin:0;font-size:13px;line-height:1.55;color:#5b5078;font-weight:600;word-break:break-word}
 .share-piece-block__index{flex:none;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-top:1px;border-radius:999px;background:#efe9ff;color:#5a3bd6;font-size:11px;line-height:1}
 .share-piece-block .share-card__piece{margin:10px 0 0}
+/* 图片/视频：点开全屏 + 显式保存（2026-10-25 用户报「手机端无法保存单个图片/视频」）。
+   服务端把媒体改成 inline，长按能出系统“存储图像/保存视频”；这里再给一颗按钮兜住微信等
+   把长按菜单吃掉的内置浏览器。 */
+.share-piece__media.is-tappable{cursor:zoom-in}
+.share-piece__tools{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px}
+.share-piece__tool{appearance:none;border:1px solid #ddd6f5;background:#fff;color:#5a3bd6;border-radius:10px;padding:8px 13px;font:inherit;font-size:13px;line-height:1.2;cursor:pointer}
+.share-piece__tool:disabled{opacity:.55;cursor:default}
+.share-lightbox{position:fixed;inset:0;z-index:130;background:rgba(8,6,16,.95);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
+.share-lightbox__stage{flex:1 1 auto;min-height:0;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px}
+.share-lightbox__stage img,.share-lightbox__stage video{max-width:100%;max-height:calc(100vh - 180px);max-height:calc(100dvh - 180px);object-fit:contain;border-radius:8px;background:#000}
+.share-lightbox__stage audio{width:min(100%,420px)}
+.share-lightbox__hint{margin:0;color:#cfc8e6;font-size:12px;line-height:1.5;text-align:center}
+.share-lightbox__actions{display:flex;flex-wrap:wrap;justify-content:center;gap:10px}
+.share-lightbox__btn{min-height:42px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:11px;padding:10px 18px;font:inherit;font-size:14px;line-height:1.2;text-decoration:none;color:#fff;background:rgba(255,255,255,.16);cursor:pointer}
+.share-lightbox__btn.is-primary{background:#3b6cff}
+.share-lightbox__btn:disabled{opacity:.6;cursor:default}
+.share-lightbox__close{position:absolute;top:calc(12px + env(safe-area-inset-top));right:12px;width:38px;height:38px;border:0;border-radius:999px;background:rgba(255,255,255,.18);color:#fff;font-size:24px;line-height:1;cursor:pointer}
+.share-lightbox__notice{margin:0;max-width:560px;color:#fff;font-size:13px;line-height:1.5;text-align:center}
 /* 作品名称（2026-10-05 用户口径：老师在机构端改名后分享页要同步）—— 居中的标题，
    与下面的「作品简介」区分开：这里是**这件作品的名字**，简介那行是这节课的标题。 */
 .share-card__title{margin:16px 0 0;text-align:center;font-size:19px;line-height:1.35;font-weight:700;color:#2a2540;word-break:break-word}
