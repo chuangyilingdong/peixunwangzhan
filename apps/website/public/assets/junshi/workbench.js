@@ -234,6 +234,11 @@
     // 十一期 · 同行观察管线（同步队列/自动同步设置）
     peerSyncs: [],
     peerSyncSettings: { autoEnabled: false, intervalHours: 24 },
+    // 十二期 · 抖音账号连接
+    douyinConnection: { connected: false },
+    douyinEnabled: true,
+    douyinLoginSession: null,
+    douyinPollTimer: null,
     // 多创作账号：当前选中的账号 id（'default' = 默认账号）；文案/视频/素材/档案都跟着它走。
     accounts: [],
     accountId: 'default',
@@ -932,11 +937,125 @@
     return out;
   }
 
+  /* ───────────── 十二期 · 抖音账号连接（扫码登录，登录态共用） ───────────── */
+  async function loadDouyinConnection(silent) {
+    var data = await call('/douyin/connect').catch(function () { return null; });
+    if (!data) return;
+    state.douyinConnection = data.connection || { connected: false };
+    state.douyinEnabled = data.enabled !== false;
+    if (state.tab === 'references' || state.tab === 'settings') render();
+  }
+  function douyinConnectionBarHtml() {
+    var c = state.douyinConnection || { connected: false };
+    var enabled = state.douyinEnabled !== false;
+    if (!enabled) return '';
+    if (c.connected) {
+      return '<div class="wb-douyin-bar connected"><span class="wb-dy-dot"></span>' +
+        '<div><b>抖音已连接' + (c.nickname ? '：' + esc(c.nickname) : '') + '</b>' +
+        '<small>登录态供自己的账号、同行、文案大脑共用 · 连接于 ' + fmtDate(c.connectedAt) + '</small></div>' +
+        '<div class="wb-actions"><button class="btn" type="button" data-douyin-action="reconnect">重新连接</button>' +
+        '<button class="btn" type="button" data-douyin-action="disconnect">断开</button></div></div>';
+    }
+    var expired = c.status === 'expired';
+    return '<div class="wb-douyin-bar' + (expired ? ' warn' : '') + '"><span class="wb-dy-dot"></span>' +
+      '<div><b>' + (expired ? '抖音登录已失效' : '抖音未连接') + '</b>' +
+      '<small>' + (expired
+        ? '抖音要求重新登录才能继续读取作品。点右侧扫码重连，之后采集会自动复用。'
+        : '抖音对未登录访问只开放主页信息，读不到作品列表。扫码连接一次，自己的账号、同行、文案大脑都复用这份登录态。') + '</small></div>' +
+      '<div class="wb-actions"><button class="btn primary" type="button" data-douyin-action="connect">' + ic('link', 13) + '连接抖音</button></div></div>';
+  }
+  function openDouyinConnectDialog() {
+    bindDouyinActions();
+    showDialog('连接抖音', '<div id="wb-dy-connect-body"><p class="wb-muted">' + ic('loader', 13) + ' 正在启动登录窗口并生成二维码（约 10-20 秒）…</p></div>');
+    startDouyinConnectFlow();
+  }
+  async function startDouyinConnectFlow() {
+    var body = $('#wb-dy-connect-body');
+    try {
+      var started = await call('/douyin/connect/start', { method: 'POST', body: {} });
+      state.douyinLoginSession = started.sessionId;
+      state.douyinPollTimer = setInterval(pollDouyinConnect, 2000);
+      pollDouyinConnect();
+    } catch (error) {
+      if (body) body.innerHTML = '<p class="wb-v-error">' + esc(error.message) + '</p>' +
+        '<div class="wb-actions"><button class="btn primary" type="button" data-douyin-action="connect">重试</button></div>';
+    }
+  }
+  async function pollDouyinConnect() {
+    bindDouyinActions();
+    var body = $('#wb-dy-connect-body');
+    if (!body) { stopDouyinConnectPolling(); return; }
+    var result = await call('/douyin/connect/poll', { method: 'POST', body: { sessionId: state.douyinLoginSession || '' } }).catch(function (error) { return { status: 'error', error: error.message }; });
+    if (result.status === 'waiting') {
+      if (result.qr) {
+        if (body.dataset.qrShown !== '1') {
+          body.innerHTML = '<div class="wb-dy-qr-wrap"><img class="wb-dy-qr" alt="抖音登录二维码" src="data:image/png;base64,' + result.qr + '"></div>' +
+            '<p class="wb-note" style="text-align:center">打开手机「抖音」→ 左上角 <b>☰</b> → 扫一扫</p>' +
+            '<div class="wb-actions" style="justify-content:center"><button class="btn" type="button" data-douyin-action="restart">刷新二维码</button>' +
+            '<button class="btn" type="button" data-douyin-action="cancel">取消</button></div>' +
+            '<p class="wb-muted" style="text-align:center">' + ic('loader', 11) + ' 等待扫码…二维码 5 分钟内有效</p>';
+          body.dataset.qrShown = '1';
+        }
+      }
+      return;
+    }
+    if (result.status === 'connected') {
+      stopDouyinConnectPolling();
+      closeDialog();
+      state.douyinConnection = result.connection || { connected: true };
+      var name = (result.connection || {}).nickname || '';
+      toast('抖音已连接' + (name ? '：' + name : '') + '，现在可以读取同行作品了', 'success');
+      render();
+      return;
+    }
+    if (result.status === 'expired' || result.status === 'error') {
+      stopDouyinConnectPolling();
+      var map = { qr_not_found: '没能生成二维码，请重试', login_timeout: '二维码已过期，请刷新', browser_missing: '服务器上没有可用浏览器，请联系平台管理员安装 Chromium', browser_launch_failed: '浏览器启动失败，请重试', xvfb_missing: '服务器缺少虚拟显示组件（xvfb），请联系平台管理员', worker_spawn_failed: '登录进程启动失败，请重试' };
+      body.innerHTML = '<p class="wb-v-error">' + esc(map[result.error] || ('连接失败：' + (result.error || '未知原因'))) + '</p>' +
+        '<div class="wb-actions"><button class="btn primary" type="button" data-douyin-action="connect">重新生成二维码</button></div>';
+      return;
+    }
+  }
+  function stopDouyinConnectPolling() {
+    if (state.douyinPollTimer) { clearInterval(state.douyinPollTimer); state.douyinPollTimer = null; }
+    state.douyinLoginSession = null;
+  }
+  function bindDouyinActions() {
+    // 事件委托：弹窗内容是动态重建的（刷新二维码会替换 innerHTML），逐次绑定会丢。
+    if (root.__douyinActionsBound) return;
+    root.__douyinActionsBound = true;
+    root.addEventListener('click', async function (event) {
+      var button = event.target.closest && event.target.closest('[data-douyin-action]');
+      if (!button) return;
+      var action = button.dataset.douyinAction;
+      if (action === 'connect' || action === 'reconnect') { openDouyinConnectDialog(); return; }
+      if (action === 'restart') { stopDouyinConnectPolling(); openDouyinConnectDialog(); return; }
+      if (action === 'cancel') {
+        stopDouyinConnectPolling();
+        void call('/douyin/connect/cancel', { method: 'POST', body: {} }).catch(function () {});
+        closeDialog();
+        return;
+      }
+      if (action === 'disconnect') {
+        if (!window.confirm('断开抖音连接？断开后 作品读取会退回到游客模式（可能读不全），直到重新扫码。')) return;
+        button.disabled = true;
+        try {
+          await call('/douyin/connect', { method: 'DELETE' });
+          state.douyinConnection = { connected: false };
+          toast('已断开抖音连接', 'success');
+          render();
+        } catch (error) { toast(error.message, 'error'); button.disabled = false; }
+      }
+    });
+  }
+
+
   function renderReferences() {
     var items = state.refs;
     var settings = state.peerSyncSettings || { autoEnabled: false, intervalHours: 24 };
     var syncableCount = items.filter(function (item) { return item.secUserId || /douyin\.com\/user\//.test(item.url || ''); }).length;
     $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
+      douyinConnectionBarHtml() +
       '<div class="wb-card"><div class="wb-card-head"><div><h3>同行观察</h3><p>记录同行 → 按筛选条件同步作品（下载+转写带时间码）→ 生成研究简报。同步和转写按次计费；只读公开数据、每机构每小时限 40 次。</p></div>' +
       '<div class="wb-actions"><label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-dy-account"') + '</label>' +
       '<button class="btn primary" type="button" data-peer-action="sync-all"' + (syncableCount ? '' : ' disabled') + '>' + ic('refresh', 13) + '更新全部同行' + (syncableCount ? '（' + syncableCount + '）' : '') + '</button></div></div>' +
@@ -992,6 +1111,8 @@
       }).join('') + '</div>' : '<div class="wb-card"><p class="wb-muted">还没有同行记录。</p></div>') +
       '</div></div>';
     bindAccountSwitch('#wb-dy-account');
+    bindDouyinActions();
+    if (!state.douyinLoaded) { state.douyinLoaded = true; void loadDouyinConnection(true); }
     var go = $('#wb-dy-go');
     go.onclick = function () {
       var value = String(($('#wb-dy-input') || {}).value || '').trim();
@@ -1039,6 +1160,8 @@
     // ── 十一期 · 同步最新作品 / 保存主页 / 更新全部 / 自动同步设置 ──
     $$('[data-peer-sync]').forEach(function (button) {
       button.onclick = async function () {
+        // 不在这里拦「未连接」：真实浏览器以游客身份也能读公开主页作品（十二期实测 21 条）。
+        // 只有真被抖音要求登录/验证时，服务端才回明确的连接引导。
         var refId = button.dataset.peerSync;
         var filter = peerFilterValues(refId);
         button.disabled = true; button.innerHTML = ic('loader', 12) + '排队中…';

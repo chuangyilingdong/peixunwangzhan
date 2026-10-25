@@ -37,6 +37,18 @@ import {
   pollVideoTask,
   parseFaceSession,
 } from '../services/junshiAvatar.js';
+import {
+  cancelDouyinLogin,
+  disconnectDouyin,
+  douyinConnection,
+  douyinLoginEnabled,
+  douyinSession,
+  fetchProfileViaBrowser,
+  markDouyinSessionExpired,
+  markDouyinSessionUsed,
+  pollDouyinLogin,
+  startDouyinLogin,
+} from '../services/junshiDouyinLogin.js';
 import { maxUploadBytes, parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
 import { ossRedirectUrl, removeObject, rowStorageBackend } from '../services/fileStorage.js';
 import {
@@ -974,14 +986,9 @@ async function runPeerSync({ ownerKey, syncId, refId, accountId }) {
     if (!secUserId) throw new Error('这条同行没有主页 ID');
     await peerSyncStep(syncId, { status: 'running', stage: 'reading', message: '正在读取主页作品…' });
     // 一次只读一页：原版也是「按需再点继续读下一批」，避免一次性拉爆限流。
-    const profile = await fetchDouyinProfile(secUserId, 0).catch((error) => { throw new Error(`读取主页失败：${error.message}`); });
-    // 主页读到了但作品列表被抖音拒（2026-10-25 实测：作品接口风控，f2 最新版也过不去）：
-    // 如实说明「不是链接问题」，并在 refs 上记下粉丝数，避免用户反复重试。
-    if (profile.worksError) {
-      await aq('UPDATE junshi_workbench_refs SET last_sync_at=?, last_sync_status=?, last_sync_message=? WHERE id=? AND owner_key=?',
-        [nowIso(), 'failed', `主页可读（${profile.nickname || '未知'}${profile.followerCount ? `，粉丝 ${profile.followerCount}` : ''}），但抖音拒绝了作品列表接口（${profile.worksError}）——这是抖音侧风控，不是链接问题`, refId, ownerKey]).catch(() => {});
-      throw new Error(`主页可读（${profile.nickname || '未知'}${profile.followerCount ? `，粉丝 ${profile.followerCount}` : ''}），但抖音拒绝了作品列表接口（${profile.worksError}）：这是抖音侧风控，换时间再试或改用单条作品链接采集。`);
-    }
+    // 三层降级（官方接口 → 浏览器旁路 → 明确引导），与 /douyin/profile 同一套逻辑。
+    const owner = await ownerFor(ownerKey);
+    const profile = await readDouyinProfileForOwner(owner, secUserId, 0);
     const works = Array.isArray(profile.works) ? profile.works : [];
     await peerSyncStep(syncId, { stage: 'filtering', found_count: works.length, message: `主页读到 ${works.length} 条作品，正在按条件筛选…` });
     // 先看这个账户已采集过哪些（sourceUrl 里带 aweme id），筛掉重复。
@@ -1008,16 +1015,18 @@ async function runPeerSync({ ownerKey, syncId, refId, accountId }) {
     await peerSyncStep(syncId, { stage: 'downloading', selected_count: matches.length, message: `筛出 ${matches.length} 条，开始下载并转写…` });
     let done = 0;
     let failed = 0;
+    let lastError = '';
     for (const work of matches) {
       try {
-        await downloadAndTranscribePeerWork({ ownerKey, accountId, awemeId: work.awemeId, desc: work.desc });
+        await downloadAndTranscribePeerWork({ ownerKey, accountId, awemeId: work.awemeId, desc: work.desc, playUrl: work.playUrl });
         done += 1;
       } catch (error) {
         failed += 1;
+        lastError = String(error?.message || error).slice(0, 160);
       }
       await peerSyncStep(syncId, { done_count: done, failed_count: failed, message: `已完成 ${done}/${matches.length}${failed ? `（失败 ${failed}）` : ''}…` });
     }
-    const summary = `完成 ${done} 条${failed ? `，失败 ${failed} 条` : ''}`;
+    const summary = `完成 ${done} 条${failed ? `，失败 ${failed} 条${lastError ? `（${lastError}）` : ''}` : ''}`;
     await peerSyncStep(syncId, {
       status: failed && !done ? 'failed' : 'succeeded',
       stage: failed && !done ? 'failed' : 'done',
@@ -1030,12 +1039,17 @@ async function runPeerSync({ ownerKey, syncId, refId, accountId }) {
   }
 }
 /** 下载一条作品 → 入素材库（抖音采集）→ 起转写；与 /douyin/video 同一套落库口径。 */
-async function downloadAndTranscribePeerWork({ ownerKey, accountId, awemeId, desc }) {
+async function downloadAndTranscribePeerWork({ ownerKey, accountId, awemeId, desc, playUrl = '' }) {
   const owner = await ownerFor(ownerKey);
-  const video = await fetchDouyinVideo(awemeId);
-  if (!video.playUrl) throw new Error('这条作品取不到视频地址');
-  const buffer = await downloadDouyinVideo(video.playUrl);
-  const stored = await persistSecureUpload({ fileName: `${video.awemeId}.mp4`, mimeType: 'video/mp4', buffer });
+  // 优先用同步时从浏览器旁路拿到的播放地址（作品详情接口已被抖音 403，见交接文档「上游故障」）。
+  let resolvedUrl = String(playUrl || '');
+  if (!resolvedUrl) {
+    const video = await fetchDouyinVideo(awemeId);
+    resolvedUrl = String(video.playUrl || '');
+  }
+  if (!resolvedUrl) throw new Error('这条作品取不到视频地址');
+  const buffer = await downloadDouyinVideo(resolvedUrl);
+  const stored = await persistSecureUpload({ fileName: `${awemeId}.mp4`, mimeType: 'video/mp4', buffer });
   const assetId = id('jwa');
   try {
     await aq('INSERT INTO junshi_workbench_assets (id,owner_key,org_id,account_id,file_name,storage_key,storage_backend,mime_type,kind,file_size,folder,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -1048,8 +1062,8 @@ async function downloadAndTranscribePeerWork({ ownerKey, accountId, awemeId, des
   const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=?', [assetId]);
   await startTranscription(owner, {
     assetRow, source: 'douyin',
-    title: desc || `抖音视频 ${video.awemeId}`,
-    sourceUrl: `https://www.douyin.com/video/${video.awemeId}`,
+    title: desc || `抖音视频 ${awemeId}`,
+    sourceUrl: `https://www.douyin.com/video/${awemeId}`,
     nickname: '',
     accountId,
   });
@@ -1130,6 +1144,72 @@ async function startTranscription(owner, { assetRow, source, title, sourceUrl, n
     }
   })();
   return transcriptId;
+}
+
+/* ───────────── 十二期 · 抖音主页读取（官方接口 → 浏览器旁路 → 明确引导） ───────────── */
+/**
+ * 三层降级：
+ *   1. 官方接口（fetchDouyinProfile）；
+ *   2. 作品列表被拒时，若本机构已连接抖音，用浏览器旁路（真实浏览器加载主页、旁路抓响应）；
+ *   3. 都没成功：主页信息照常返回，错误信息写清「缺什么、下一步做什么」。
+ */
+async function readDouyinProfileForOwner(owner, secUserId, cursor = 0) {
+  const api = await fetchDouyinProfile(secUserId, cursor).catch((error) => ({ __fatal: error.message }));
+  if (api && !api.__fatal && !api.worksError) return api;
+  const connection = await douyinConnection(owner.key);
+  const browser = await fetchProfileViaBrowser(owner.key, secUserId, { knownIds: [] }).catch(() => null);
+  if (browser && browser.works_status === 'read' && Array.isArray(browser.aweme_list) && browser.aweme_list.length) {
+    await markDouyinSessionUsed(owner.key);
+    const works = browser.aweme_list.filter((item) => item && item.aweme_id).map((item) => ({
+      awemeId: String(item.aweme_id),
+      desc: String(item.desc || '').slice(0, 300),
+      durationMs: Number(item?.video?.duration || 0) || null,
+      createTime: Number(item.create_time) || null,
+      stats: {
+        digg: Number(item?.statistics?.digg_count || 0),
+        comment: Number(item?.statistics?.comment_count || 0),
+        share: Number(item?.statistics?.share_count || 0),
+        collect: Number(item?.statistics?.collect_count || 0),
+      },
+      cover: item?.video?.cover?.url_list?.[0] || '',
+      // 作品详情接口被抖音拒（403），但浏览器旁路拿到的 aweme 对象里就有播放地址 —— 下载直接用它。
+      playUrl: (item?.video?.play_addr?.url_list || item?.video?.playAddr?.url_list || [])[0] || '',
+    }));
+    return {
+      secUserId: String(secUserId),
+      nickname: api?.nickname || '',
+      signature: api?.signature || '',
+      followerCount: api?.followerCount || null,
+      totalFavorited: api?.totalFavorited || null,
+      worksStatus: 'read',
+      worksSource: 'browser_render',
+      worksError: '',
+      nextCursor: browser.next_cursor != null ? Number(browser.next_cursor) : null,
+      hasMore: browser.has_more === true,
+      works,
+    };
+  }
+  // 旁路也没读到：把「为什么」和「下一步」说清楚，不要让用户反复重试。
+  const browserError = String(browser?.error || '').slice(0, 80);
+  if (connection.connected && (browserError === 'login_required' || browserError === 'verification_required')) {
+    await markDouyinSessionExpired(owner.key, browserError);
+  }
+  if (!connection.connected) {
+    throw errors.badRequest(
+      api?.nickname
+        ? `主页可读（${api.nickname}${api.followerCount ? `，粉丝 ${api.followerCount}` : ''}），但这次没能读到作品列表（抖音可能要求登录或验证）。可以稍后重试，或点「连接抖音」扫码登录后再读——登录态会让读取更稳。`
+        : '这次没能读到作品列表（抖音可能要求登录或验证）。可以稍后重试，或点「连接抖音」扫码登录后再读。',
+      'DOUYIN_LOGIN_REQUIRED');
+  }
+  const reasonMap = {
+    login_required: '抖音提示需要重新登录',
+    verification_required: '抖音要求完成安全验证',
+    browser_missing: '服务器上找不到可用浏览器（需要安装 Chrome/Edge 或 Playwright Chromium）',
+    browser_timeout: '浏览器读取超时',
+  };
+  throw errors.badRequest(
+    `已连接抖音，但这次读取作品被平台拦下${reasonMap[browserError] ? `（${reasonMap[browserError]}）` : ''}。稍后重试；若是验证/登录问题，请重新连接抖音。`,
+    browserError === 'login_required' || browserError === 'verification_required' ? 'DOUYIN_LOGIN_REQUIRED' : 'DOUYIN_FETCH_FAILED');
 }
 
 /* ───────────── 路由 ───────────── */
@@ -2907,13 +2987,38 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     const target = await resolveDouyinTarget(ctx.body?.text).catch((error) => { throw errors.badRequest(error.message, 'DOUYIN_RESOLVE_FAILED'); });
     return { target };
   }
-  if (rest === '/douyin/profile' && method === 'POST') {
+  /* ── 十二期 · 抖音账号连接（扫码登录，登录态共用） ── */
+  if (rest === '/douyin/connect' && method === 'GET') {
+    return { connection: await douyinConnection(owner.key), enabled: douyinLoginEnabled() };
+  }
+  if (rest === '/douyin/connect/start' && method === 'POST') {
+    const started = startDouyinLogin(owner.key);
+    return { sessionId: started.sessionId, startedAt: started.startedAt };
+  }
+  if (rest === '/douyin/connect/poll' && method === 'POST') {
+    const result = await pollDouyinLogin(owner.key, text(ctx.body?.sessionId));
+    if (result.status === 'connected') {
+      const connection = await douyinConnection(owner.key);
+      return { status: 'connected', connection };
+    }
+    return result;
+  }
+  if (rest === '/douyin/connect/cancel' && method === 'POST') {
+    cancelDouyinLogin(owner.key);
+    return { ok: true };
+  }
+  if (rest === '/douyin/connect' && method === 'DELETE') {
+    await disconnectDouyin(owner.key);
+    return { ok: true };
+  }
+
+    if (rest === '/douyin/profile' && method === 'POST') {
     douyinRateLimit(owner.key);
     const secUserId = text(ctx.body?.secUserId);
     if (!secUserId) throw errors.badRequest('缺少主页 ID', 'VALIDATION_ERROR', { field: 'secUserId' });
     const cursor = clampInt(ctx.body?.cursor, 0, 0, Number.MAX_SAFE_INTEGER);
-    const profile = await fetchDouyinProfile(secUserId, cursor).catch((error) => { throw errors.badRequest(error.message, 'DOUYIN_FETCH_FAILED'); });
-    return { profile };
+    const profile = await readDouyinProfileForOwner(owner, secUserId, cursor);
+    return { profile, connection: await douyinConnection(owner.key) };
   }
   if (rest === '/douyin/video' && method === 'POST') {
     douyinRateLimit(owner.key);

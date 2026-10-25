@@ -1574,6 +1574,20 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_peer_settings (
   updated_at     TEXT NOT NULL
 );
 
+-- 十二期：抖音账号连接（登录态共用：自己的账号 / 同行 / 文案大脑）。
+-- cookie 用 AUTH_PEPPER 派生的 AES-256-GCM 加密后存 cookie_enc；status: connected / expired。
+CREATE TABLE IF NOT EXISTS junshi_workbench_douyin_sessions (
+  owner_key    TEXT NOT NULL PRIMARY KEY,
+  cookie_enc   TEXT NOT NULL,
+  user_agent   TEXT NOT NULL DEFAULT '',
+  nickname     TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT 'connected',
+  error        TEXT NOT NULL DEFAULT '',
+  connected_at TEXT NOT NULL,
+  last_used_at TEXT,
+  updated_at   TEXT NOT NULL
+);
+
 `;
 
 db.exec(SCHEMA);
