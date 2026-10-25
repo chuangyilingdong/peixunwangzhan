@@ -211,6 +211,16 @@
     selectedVideo: null,
     videoForm: null,
     copyForm: null,
+    // 七期 · 视频完整工作台（对齐原版 video_workspace / voice_library，作者本人授权复刻）
+    videoWorks: [],
+    workRenders: {},
+    videoQueue: [],
+    autoTasks: [],
+    autoEnabled: false,
+    voiceSamples: [],
+    videoWorkTimer: null,
+    videoShotEditing: null,
+    videoShotEdits: {},
     // 多创作账号：当前选中的账号 id（'default' = 默认账号）；文案/视频/素材/档案都跟着它走。
     accounts: [],
     accountId: 'default',
@@ -252,7 +262,7 @@
 
   function setTab(tab) {
     state.tab = tab;
-    if (tab !== 'video') { stopRenderPolling(); stopAvatarPolling(); }
+    if (tab !== 'video') { stopRenderPolling(); stopAvatarPolling(); stopVideoWorkPolling(); }
     if (tab !== 'chat') stopWfPolling();
     if (tab !== 'references') stopTsPolling();
     if (tab !== 'copybrains' && state.brainPollTimer) { clearInterval(state.brainPollTimer); state.brainPollTimer = null; }
@@ -290,7 +300,7 @@
       state.videos = results[2].items || [];
       state.assets = results[3].items || [];
       state.assetFolders = results[3].folders || [];
-      if (state.tab === 'video') state.selectedVideo = null;
+      if (state.tab === 'video') { state.selectedVideo = null; state.videoShotEditing = null; state.videoShotEdits = {}; void loadVideoData(true); }
     } catch (e) { /* 保持旧数据 */ }
     render();
   }
@@ -334,6 +344,7 @@
       state.brains = results[11].items || [];
       state.loaded = true;
       render();
+      void loadVideoData(true);
     } catch (error) {
       if (view) view.innerHTML = '<div class="wb-page"><div class="wb-card"><p class="err">' + ic('alert', 14) + '<span>' + esc(error.message || '工作台加载失败') + '</span></p></div></div>';
     }
@@ -1197,71 +1208,351 @@
       } catch (e) { /* 视频加载失败时保留播放器外壳，控制台可见 */ }
     }
   }
-  function renderVideo() {
-    var formState = state.videoForm || {};
+  /* ───────────── 七期 · 视频完整工作台（对齐原版 video_workspace / voice_library，作者本人授权复刻） ───────────── */
+  var WB_VIDEO_TYPES = {
+    ecommerce: { label: '电商带货', subtypes: [['口播带货', '真人推荐，建立购买信任'], ['促销转化', '突出优惠，推动立即下单'], ['场景种草', '植入场景，激发使用需求'], ['痛点解决', '直击痛点，展示解决效果'], ['功能演示', '演示功能，证明产品价值']] },
+    local_store: { label: '同城到店', subtypes: [['门店发现', '突出特色，制造到店理由'], ['到店实录', '真实体验，建立消费信任'], ['招牌体验', '聚焦招牌，证明门店价值'], ['同城团购', '突出优惠，推动到店核销']] },
+    brand: { label: '品牌广告', subtypes: [['品牌主张', '传递理念，建立价值认同'], ['品牌故事', '讲述故事，强化品牌信任'], ['生活方式', '塑造场景，建立品牌向往'], ['创意概念', '创意表达，强化品牌记忆']] },
+    drama: { label: '剧情短片', subtypes: [['对话短剧', '人物冲突，推动剧情发展'], ['反转短剧', '剧情反转，制造传播记忆'], ['悬念短剧', '设置悬念，持续吸引观看'], ['情绪短片', '情绪共鸣，强化内容感染'], ['产品植入', '融入剧情，自然传递价值']] },
+  };
+  var WB_VIDEO_HOOKS = [['auto', '由素材推荐开场'], ['pain_point', '直击产品核心痛点'], ['novel_scene', '利用新奇场景开场'], ['emotional_reversal', '制造强烈情绪反转'], ['contrarian', '用反常识观点开场'], ['real_need', '真实痛点引出需求'], ['strong_contrast', '强烈对比突出差异']];
+  var WB_VIDEO_MODES = { generate: '生成', replicate: '复刻', auto: '自动' };
+  var WB_WORK_STATUS = { planning: '写编导稿中', draft: '待确认', rendering: '渲染中', succeeded: '已完成', failed: '失败' };
+  var WB_SHOT_ROLES = { hook: '钩子', pain: '痛点', proof: '证明', turn: '转折', cta: '行动' };
+  var WB_REF_ROLES = ['人物', '场景', '道具', '音色'];
+  var WB_DURATIONS = [5, 10, 15, 20, 30, 45, 60];
+  var WB_RESOLUTIONS = ['480p', '720p', '1080p'];
+  var WB_RATIOS = ['9:16', '16:9', '1:1'];
+
+  function wbWorkStatusText(value) { return WB_WORK_STATUS[value] || value || '—'; }
+  function wbTypeMeta(type) { return WB_VIDEO_TYPES[type] || WB_VIDEO_TYPES.ecommerce; }
+  function wbSubtypeName(type, subtype) {
+    var found = (wbTypeMeta(type).subtypes || []).filter(function (row) { return row[0] === subtype; })[0];
+    return found ? found[0] : (subtype || '');
+  }
+  function wbHookLabel(value) {
+    var found = WB_VIDEO_HOOKS.filter(function (row) { return row[0] === value; })[0];
+    return found ? found[1] : '由素材推荐开场';
+  }
+  function wbShotRoleLabel(value) { return WB_SHOT_ROLES[value] || value || '分镜'; }
+
+  function videoDraftKey() { return 'wb-video-drafts:' + state.accountId; }
+  function loadVideoDrafts() {
+    try {
+      var rows = JSON.parse(localStorage.getItem(videoDraftKey()) || '[]');
+      state.videoDrafts = Array.isArray(rows) ? rows : [];
+    } catch (e) { state.videoDrafts = []; }
+  }
+  function saveVideoDrafts() {
+    try { localStorage.setItem(videoDraftKey(), JSON.stringify(state.videoDrafts.slice(-8))); } catch (e) { /* 隐私模式忽略 */ }
+  }
+  function newVideoDraft(mode) {
+    var draft = {
+      id: 'draft-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6), mode: mode, status: 'configuring',
+      type: 'ecommerce', subtype: '口播带货', hookStrategy: 'auto', model: '', durationSeconds: 15,
+      resolution: '720p', ratio: '9:16', brief: '', assetRefs: [], reference: '', sourceKind: 'text',
+      sourceId: '', taskName: '', scheduleType: 'daily', intervalDays: 2, runTime: '09:00', count: 1, authorizedFolder: '',
+    };
+    state.videoDrafts.push(draft);
+    saveVideoDrafts();
+    return draft;
+  }
+  function findVideoDraft(id) { return state.videoDrafts.filter(function (row) { return row.id === id; })[0] || null; }
+  function updateVideoDraft(id, patch) {
+    var draft = findVideoDraft(id);
+    if (!draft) return;
+    Object.keys(patch || {}).forEach(function (key) { draft[key] = patch[key]; });
+    saveVideoDrafts();
+  }
+  function removeVideoDraft(id) {
+    state.videoDrafts = state.videoDrafts.filter(function (row) { return row.id !== id; });
+    saveVideoDrafts();
+  }
+  /** @引用显示序号：同角色按出现顺序编号（@人物1、@人物2…），与后端提示词口径一致。 */
+  function wbRefSeq(refs, index) {
+    var seq = 1;
+    for (var i = 0; i < index; i++) if (refs[i] && refs[i].role === refs[index].role) seq += 1;
+    return seq;
+  }
+  function wbRefChips(refs, removable, draftId) {
+    if (!refs || !refs.length) return '';
+    return '<div class="wb-v-refs">' + refs.map(function (ref, index) {
+      return '<span class="chip">' + esc('@' + ref.role + wbRefSeq(refs, index) + ' ' + (ref.label || '素材')) +
+        (removable ? '<button type="button" class="wb-chip-x" data-wb-v-unref="' + esc(draftId) + '" data-index="' + index + '" aria-label="移除引用">×</button>' : '') + '</span>';
+    }).join('') + '</div>';
+  }
+
+  async function loadVideoData(silent) {
+    var accountId = state.accountId;
+    var results = await Promise.all([
+      call('/video/works?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [], autoEnabled: false }; }),
+      call('/video/renders').catch(function () { return { items: [] }; }),
+      call('/video/auto-tasks').catch(function () { return { items: [], autoEnabled: false }; }),
+      call('/voice-samples?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [] }; }),
+    ]);
+    if (state.accountId !== accountId) return;
+    state.videoWorks = results[0].items || [];
+    state.autoEnabled = !!results[0].autoEnabled || !!results[2].autoEnabled;
+    state.videoQueue = results[1].items || [];
+    state.autoTasks = results[2].items || [];
+    state.voiceSamples = results[3].items || [];
+    var bucket = {};
+    state.videoQueue.forEach(function (item) { if (item.workId) { (bucket[item.workId] = bucket[item.workId] || []).push(item); } });
+    state.workRenders = bucket;
+    if (state.tab === 'video' && !state.videoShotEditing) { renderVideo(); hydrateWorkVideos(); }
+    startVideoWorkPolling();
+  }
+  async function loadVideoWorks() {
+    var results = await Promise.all([
+      call('/video/works?accountId=' + encodeURIComponent(state.accountId)).catch(function () { return { items: [], autoEnabled: false }; }),
+      call('/video/renders').catch(function () { return { items: [] }; }),
+    ]);
+    state.videoWorks = results[0].items || [];
+    state.autoEnabled = !!results[0].autoEnabled || state.autoEnabled;
+    state.videoQueue = results[1].items || [];
+    var bucket = {};
+    state.videoQueue.forEach(function (item) { if (item.workId) { (bucket[item.workId] = bucket[item.workId] || []).push(item); } });
+    state.workRenders = bucket;
+    if (state.tab === 'video' && !state.videoShotEditing) { renderVideo(); hydrateWorkVideos(); }
+    startVideoWorkPolling();
+  }
+  function startVideoWorkPolling() {
+    var busy = state.videoWorks.some(function (item) { return item.status === 'planning' || item.status === 'rendering'; });
+    if (!busy) { stopVideoWorkPolling(); return; }
+    if (state.videoWorkTimer) return;
+    state.videoWorkTimer = setInterval(function () {
+      if (state.tab !== 'video') { stopVideoWorkPolling(); return; }
+      void loadVideoWorks();
+    }, 3000);
+  }
+  function stopVideoWorkPolling() {
+    if (state.videoWorkTimer) { clearInterval(state.videoWorkTimer); state.videoWorkTimer = null; }
+  }
+  async function hydrateWorkVideos() {
+    var videos = $$('[data-work-video]');
+    for (var i = 0; i < videos.length; i++) {
+      var video = videos[i];
+      if (video.dataset.loaded) continue;
+      video.dataset.loaded = '1';
+      try {
+        var blob = await fetchBlob(API + '/assets/' + encodeURIComponent(video.dataset.workVideo) + '/file');
+        video.src = URL.createObjectURL(blob);
+      } catch (e) { /* 视频加载失败保留外壳 */ }
+    }
+  }
+
+  /* ── 配置卡（生成 / 复刻 / 自动日更） ── */
+  function wbTypeTabs(draft) {
+    return Object.keys(WB_VIDEO_TYPES).map(function (value) {
+      return '<button type="button" class="chip' + (draft.type === value ? ' on' : '') + '" data-wb-v-choice="type" data-draft="' + esc(draft.id) + '" data-value="' + esc(value) + '">' + esc(WB_VIDEO_TYPES[value].label) + '</button>';
+    }).join('');
+  }
+  function wbSubtypeChips(draft) {
+    return (wbTypeMeta(draft.type).subtypes || []).map(function (row) {
+      return '<button type="button" class="chip' + (draft.subtype === row[0] ? ' on' : '') + '" data-wb-v-choice="subtype" data-draft="' + esc(draft.id) + '" data-value="' + esc(row[0]) + '" title="' + esc(row[1]) + '">' + esc(row[0]) + '</button>';
+    }).join('');
+  }
+  function wbHookChips(draft) {
+    return WB_VIDEO_HOOKS.map(function (row) {
+      return '<button type="button" class="chip' + (draft.hookStrategy === row[0] ? ' on' : '') + '" data-wb-v-choice="hookStrategy" data-draft="' + esc(draft.id) + '" data-value="' + esc(row[0]) + '" title="' + esc(row[1]) + '">' + esc(row[1]) + '</button>';
+    }).join('');
+  }
+  function wbParamRow(draft, withDuration) {
+    return '<div class="wb-v-params">' +
+      '<label><span>时长</span><select data-wb-v-field="durationSeconds" data-draft="' + esc(draft.id) + '"' + (withDuration ? '' : ' disabled') + '>' +
+      WB_DURATIONS.map(function (n) { return '<option value="' + n + '"' + (Number(draft.durationSeconds) === n ? ' selected' : '') + '>' + n + ' 秒</option>'; }).join('') + '</select></label>' +
+      '<label><span>分辨率</span><select data-wb-v-field="resolution" data-draft="' + esc(draft.id) + '">' +
+      WB_RESOLUTIONS.map(function (r) { return '<option value="' + r + '"' + (draft.resolution === r ? ' selected' : '') + '>' + r + '</option>'; }).join('') + '</select></label>' +
+      '<label><span>画幅</span><select data-wb-v-field="ratio" data-draft="' + esc(draft.id) + '">' +
+      WB_RATIOS.map(function (r) { return '<option value="' + r + '"' + (draft.ratio === r ? ' selected' : '') + '>' + r + '</option>'; }).join('') + '</select></label>' +
+      '</div>';
+  }
+  function renderVideoDraftCard(draft) {
+    var head = '<div class="wb-card-head"><div><h3>' + esc(WB_VIDEO_MODES[draft.mode] || '生成') + '模式 · 新任务</h3><p>内容方向、开场方式和参数一次选完；素材和音色从下方添加。</p></div>' +
+      '<button class="btn" type="button" data-wb-v-draft="discard" data-id="' + esc(draft.id) + '">取消</button></div>';
+    var types = '<div class="wb-field full"><span>内容方向</span><div class="wb-chips">' + wbTypeTabs(draft) + '</div></div>' +
+      '<div class="wb-field full"><span>细分方向</span><div class="wb-chips">' + wbSubtypeChips(draft) + '</div></div>' +
+      '<div class="wb-field full"><span>开场方式（只控制前段切入）</span><div class="wb-chips">' + wbHookChips(draft) + '</div></div>';
+    var body = '';
+    if (draft.mode === 'generate') {
+      body = head + types +
+        '<label class="wb-field full"><span>想做什么（卖点、人物、台词、画面要求）</span><textarea data-wb-v-field="brief" data-draft="' + esc(draft.id) + '" placeholder="例如：主打美术体验课，妈妈带孩子出镜，结尾引导评论区领体验名额">' + esc(draft.brief || '') + '</textarea></label>';
+    } else if (draft.mode === 'replicate') {
+      var transcriptOptions = state.transcripts.map(function (item) {
+        return '<option value="' + esc(item.id) + '"' + (draft.sourceId === item.id ? ' selected' : '') + '>' + esc(item.title || item.nickname || '转写档案') + '（' + esc(fmtDate(item.createdAt)) + '）</option>';
+      }).join('');
+      var sourceBody = draft.sourceKind === 'transcript'
+        ? '<select data-wb-v-field="sourceId" data-draft="' + esc(draft.id) + '">' + (transcriptOptions || '<option value="">（还没有转写档案，先去「素材」采集或上传）</option>') + '</select>'
+        : '<textarea data-wb-v-field="reference" data-draft="' + esc(draft.id) + '" placeholder="粘贴抖音分享内容/作品链接，或参考视频的口播文字与结构说明">' + esc(draft.reference || '') + '</textarea>';
+      body = head + types +
+        '<div class="wb-field full"><span>参考来源</span><div class="wb-chips">' +
+        '<button type="button" class="chip' + (draft.sourceKind === 'transcript' ? ' on' : '') + '" data-wb-v-choice="sourceKind" data-draft="' + esc(draft.id) + '" data-value="transcript">转写档案</button>' +
+        '<button type="button" class="chip' + (draft.sourceKind === 'text' ? ' on' : '') + '" data-wb-v-choice="sourceKind" data-draft="' + esc(draft.id) + '" data-value="text">链接 / 文字</button></div></div>' +
+        '<label class="wb-field full"><span>' + (draft.sourceKind === 'transcript' ? '选择已转写的参考视频' : '参考内容') + '</span>' + sourceBody + '</label>' +
+        '<label class="wb-field full"><span>补充要求（可选：要替换的产品、必须保留的内容）</span><textarea data-wb-v-field="brief" data-draft="' + esc(draft.id) + '" placeholder="把参考里的产品换成我们的体验课；开头钩子保持原样">' + esc(draft.brief || '') + '</textarea></label>';
+    } else {
+      var everyDays = draft.scheduleType === 'every_days';
+      body = head +
+        '<div class="wb-v-grid">' +
+        '<label class="wb-field"><span>任务名称</span><input data-wb-v-field="taskName" data-draft="' + esc(draft.id) + '" maxlength="50" value="' + esc(draft.taskName || '') + '" placeholder="例如：体验课每日带货"></label>' +
+        '<label class="wb-field"><span>周期</span><select data-wb-v-field="scheduleType" data-draft="' + esc(draft.id) + '"><option value="daily"' + (draft.scheduleType === 'daily' ? ' selected' : '') + '>每天</option><option value="every_days"' + (everyDays ? ' selected' : '') + '>每隔几天</option></select></label>' +
+        (everyDays ? '<label class="wb-field"><span>间隔</span><select data-wb-v-field="intervalDays" data-draft="' + esc(draft.id) + '">' + [2, 3, 4, 5, 7].map(function (n) { return '<option value="' + n + '"' + (Number(draft.intervalDays) === n ? ' selected' : '') + '>每 ' + n + ' 天</option>'; }).join('') + '</select></label>' : '') +
+        '<label class="wb-field"><span>执行时间</span><input type="time" data-wb-v-field="runTime" data-draft="' + esc(draft.id) + '" value="' + esc(draft.runTime || '09:00') + '"></label>' +
+        '<label class="wb-field"><span>每次生成</span><select data-wb-v-field="count" data-draft="' + esc(draft.id) + '">' + [1, 2, 3, 5].map(function (n) { return '<option value="' + n + '"' + (Number(draft.count) === n ? ' selected' : '') + '>' + n + ' 条</option>'; }).join('') + '</select></label>' +
+        '<label class="wb-field"><span>授权文件夹（可选，预留给素材圈定）</span><select data-wb-v-field="authorizedFolder" data-draft="' + esc(draft.id) + '"><option value="">不限定</option>' +
+        (state.assetFolders || []).filter(function (row) { return row.folder; }).map(function (row) { return '<option value="' + esc(row.folder) + '"' + (draft.authorizedFolder === row.folder ? ' selected' : '') + '>' + esc(row.folder) + '</option>'; }).join('') + '</select></label>' +
+        '</div>' + types +
+        '<div class="wb-field full"><span>自动任务的选题方向（会结合账号档案自动写题）</span><input data-wb-v-field="brief" data-draft="' + esc(draft.id) + '" maxlength="120" value="' + esc(draft.brief || '') + '" placeholder="留空则由档案自动决定每天讲什么"></div>';
+    }
+    return '<article class="wb-card wb-v-config" data-wb-v-draft-card="' + esc(draft.id) + '">' + body +
+      '<div class="wb-field full"><span>参考素材（@人物/@场景/@道具）与音色</span>' + wbRefChips(draft.assetRefs, true, draft.id) +
+      '<div class="wb-actions"><button class="btn" type="button" data-wb-v-action="pick-assets" data-id="' + esc(draft.id) + '">' + ic('image', 12) + '添加素材</button>' +
+      '<button class="btn" type="button" data-wb-v-action="open-voices" data-id="' + esc(draft.id) + '">' + ic('music', 12) + '音色库</button></div></div>' +
+      (draft.mode === 'auto' ? '' : wbParamRow(draft, draft.mode !== 'replicate')) +
+      '<div class="wb-field full wb-actions">' +
+      (draft.mode === 'auto'
+        ? '<button class="btn primary" type="button" data-wb-v-action="start-auto" data-id="' + esc(draft.id) + '">保存自动任务</button>'
+        : '<button class="btn primary" type="button" data-wb-v-action="start" data-id="' + esc(draft.id) + '">' + (draft.mode === 'replicate' ? '开始复刻' : '开始创作') + '</button>') +
+      '<span class="wb-note">' + (draft.mode === 'auto'
+        ? (state.autoEnabled ? '服务运行时会按计划执行；每条视频按渠道计费（约 0.75 元）。' : '平台未开启调度开关（JUNSHI_VIDEO_AUTO_ENABLED），保存后不会自动执行。')
+        : '先出编导稿（可逐镜修改），确认后再提交视频渲染。') + '</span></div></article>';
+  }
+
+  /* ── 任务行（编导稿分镜 + 渲染队列） ── */
+  function wbRenderRow(item) {
+    var status = { running: '生成中', succeeded: '完成', failed: '失败' }[item.status] || item.status;
+    var chip = '<span class="wb-tag">' + esc(status) + '</span>';
+    var video = item.assetId && item.status === 'succeeded'
+      ? '<video class="wb-render-video" controls preload="metadata" data-work-video="' + esc(item.assetId) + '"></video>' : '';
+    var error = item.status === 'failed' && item.error ? '<p class="wb-v-error">' + esc(item.error) + '</p>' : '';
+    var retry = (item.status === 'failed')
+      ? '<button class="btn" type="button" data-wb-v-retry="' + esc(item.id) + '">重试</button>' : '';
+    var label = item.kind === 'shot' ? '第 ' + item.shotIndex + ' 镜' : (item.kind === 'main' ? '整片' : '单条');
+    return '<div class="wb-v-render"><div class="wb-v-render-head"><b>' + esc(label) + ' · ' + esc(fmtDate(item.createdAt)) + '</b>' + chip + retry + '</div>' + video + error + '</div>';
+  }
+  function wbShotCard(work, shot, shotRender) {
+    var key = work.id + ':' + shot.index;
+    var editing = state.videoShotEditing && state.videoShotEditing === key;
+    var edits = state.videoShotEdits[key] || {};
+    var scene = editing ? (edits.scene !== undefined ? edits.scene : shot.scene) : shot.scene;
+    var voiceover = editing ? (edits.voiceover !== undefined ? edits.voiceover : shot.voiceover) : shot.voiceover;
+    var prompt = editing ? (edits.renderPrompt !== undefined ? edits.renderPrompt : shot.renderPrompt) : shot.renderPrompt;
+    var overlay = editing ? (edits.overlay !== undefined ? edits.overlay : shot.overlay) : shot.overlay;
+    var body = editing
+      ? '<label class="wb-field"><span>画面</span><textarea data-wb-v-edit="scene" data-key="' + esc(key) + '">' + esc(scene || '') + '</textarea></label>' +
+        '<label class="wb-field"><span>口播</span><textarea data-wb-v-edit="voiceover" data-key="' + esc(key) + '">' + esc(voiceover || '') + '</textarea></label>' +
+        '<label class="wb-field"><span>画面提示词（给视频模型）</span><textarea data-wb-v-edit="renderPrompt" data-key="' + esc(key) + '">' + esc(prompt || '') + '</textarea></label>' +
+        '<label class="wb-field"><span>字幕/花字（可空）</span><input data-wb-v-edit="overlay" data-key="' + esc(key) + '" value="' + esc(overlay || '') + '"></label>' +
+        '<div class="wb-actions"><button class="btn primary" type="button" data-wb-v-shot="save-edit" data-id="' + esc(work.id) + '" data-index="' + shot.index + '">保存本镜</button>' +
+        '<button class="btn" type="button" data-wb-v-shot="cancel-edit" data-id="' + esc(work.id) + '">取消</button></div>'
+      : '<p class="wb-v-shot-line">' + esc(scene || '（无画面描述）') + '</p>' +
+        (voiceover ? '<p class="wb-v-shot-line voice">「' + esc(voiceover) + '」</p>' : '') +
+        (overlay ? '<p class="wb-v-shot-line muted">字幕：' + esc(overlay) + '</p>' : '') +
+        (prompt ? '<details class="wb-v-shot-prompt"><summary>画面提示词</summary><p>' + esc(prompt) + '</p></details>' : '');
+    var actions = editing ? '' : '<div class="wb-actions">' +
+      '<button class="btn" type="button" data-wb-v-shot="edit" data-id="' + esc(work.id) + '" data-index="' + shot.index + '">' + ic('pen', 11) + '改这镜</button>' +
+      '<button class="btn" type="button" data-wb-v-shot="render" data-id="' + esc(work.id) + '" data-index="' + shot.index + '">单镜试渲染</button></div>';
+    var renderHtml = shotRender ? wbRenderRow(shotRender) : '';
+    return '<article class="wb-v-shot' + (editing ? ' editing' : '') + '"><div class="wb-v-shot-head"><b>镜 ' + shot.index + ' · ' + esc(wbShotRoleLabel(shot.role)) + '</b><span>' + Number(shot.seconds) + ' 秒</span></div>' + body + actions + renderHtml + '</article>';
+  }
+  function renderVideoWorkCard(work) {
+    var renders = state.workRenders[work.id] || [];
+    var mainRender = renders.filter(function (item) { return item.kind === 'main'; })[0] || null;
+    var busy = work.status === 'planning' || work.status === 'rendering';
+    var script = work.directorScript;
+    var head = '<div class="wb-card-head"><div><h3>' + esc(work.title || '未命名任务') + '</h3><p>' +
+      '<span class="wb-tag">' + esc(WB_VIDEO_MODES[work.mode] || work.mode) + '</span> ' +
+      esc(work.mode === 'replicate' ? '复刻' : (work.typeLabel + ' · ' + wbSubtypeName(work.type, work.subtype))) +
+      ' · ' + esc(wbHookLabel(work.hookStrategy)) + ' · ' + work.durationSeconds + ' 秒 · ' + esc(work.ratio || '9:16') +
+      (work.resolution ? ' · ' + esc(work.resolution) : '') + ' · ' + esc(accountName(work.accountId)) +
+      (work.mode === 'auto' ? ' · 来自自动任务' : '') + '</p></div>' +
+      '<div class="wb-v-headside"><span class="wb-tag' + (work.status === 'failed' ? ' warn' : '') + '">' + esc(wbWorkStatusText(work.status)) + '</span>' +
+      '<button class="btn" type="button" data-wb-v-work="delete" data-id="' + esc(work.id) + '" title="删除任务">×</button></div></div>';
+    var message = work.message ? '<p class="wb-v-message">' + esc(work.message) + '</p>' : '';
+    var error = work.status === 'failed' && work.error ? '<p class="wb-v-error">' + esc(work.error) + '</p>' : '';
+    var refs = wbRefChips(work.assetRefs, false, '');
+    var scriptHtml = '';
+    if (script && Array.isArray(script.shots) && script.shots.length) {
+      var shotRendersByKey = {};
+      renders.forEach(function (item) { if (item.kind === 'shot') shotRendersByKey[item.shotIndex] = shotRendersByKey[item.shotIndex] || item; });
+      scriptHtml = '<div class="wb-v-script"><div class="wb-v-script-head"><b>编导稿' + (work.scriptEdited ? '（已人工修改）' : '') + '</b>' +
+        '<span>' + (script.strategy ? esc(script.strategy) : '') + '</span></div>' +
+        script.shots.map(function (shot) { return wbShotCard(work, shot, shotRendersByKey[shot.index]); }).join('') +
+        (script.notes ? '<p class="wb-v-shot-line muted">' + esc(script.notes) + '</p>' : '') + '</div>';
+    } else if (busy) {
+      scriptHtml = '<p class="wb-muted">' + ic('loader', 12) + ' 编导稿生成中，通常十几秒到一分钟…</p>';
+    }
+    var rendersHtml = mainRender ? wbRenderRow(mainRender) : '';
+    var output = work.status === 'succeeded' && work.outputUrl
+      ? '<video class="wb-render-video" controls preload="metadata" data-work-video="' + esc(work.outputAssetId) + '"></video>' : '';
+    var actions = '<div class="wb-field full wb-actions">';
+    if (work.status === 'draft' || work.status === 'failed') {
+      if (work.status === 'failed' && !script) actions += '<button class="btn primary" type="button" data-wb-v-work="regenerate" data-id="' + esc(work.id) + '">重新生成脚本</button>';
+      else actions += '<button class="btn primary" type="button" data-wb-v-work="confirm" data-id="' + esc(work.id) + '">确认生成视频</button>' +
+        '<button class="btn" type="button" data-wb-v-work="regenerate" data-id="' + esc(work.id) + '">换一版</button>';
+    }
+    if (script && !busy) actions += '<button class="btn" type="button" data-wb-v-work="save-script" data-id="' + esc(work.id) + '">保存编导稿修改</button>';
+    actions += '</div>';
+    return '<article class="wb-card wb-v-work' + (busy ? ' busy' : '') + '" data-wb-v-work-card="' + esc(work.id) + '">' + head + message + error + refs + scriptHtml + rendersHtml + output + actions + '</article>';
+  }
+  function renderVideoQueue() {
+    var items = state.videoQueue.slice(0, 20);
+    if (!items.length) return '<div class="wb-card"><div class="wb-card-head"><div><h3>渲染队列</h3><p>还没有渲染记录。确认编导稿后，这里会出现整片和单镜的渲染任务。</p></div></div></div>';
+    return '<div class="wb-card"><div class="wb-card-head"><div><h3>渲染队列</h3><p>最近 20 条视频渲染任务；失败的可以重试，不需要重新写稿。</p></div></div>' +
+      items.map(wbRenderRow).join('') + '</div>';
+  }
+  function renderVideoAutoTasks() {
+    if (!state.autoTasks.length) return '';
+    return '<div class="wb-card"><div class="wb-card-head"><div><h3>自动日更任务</h3><p>' +
+      (state.autoEnabled ? '服务运行时按计划自动「写稿 → 渲染 → 入库」；每次执行按渠道计费。' : '平台未开启调度开关（JUNSHI_VIDEO_AUTO_ENABLED=1），任务已保存但不会自动执行。') + '</p></div></div>' +
+      state.autoTasks.map(function (task) {
+        var cycle = task.scheduleType === 'daily' ? '每天' : '每 ' + task.intervalDays + ' 天';
+        var status = { running: '执行中', succeeded: '上次完成', failed: '上次失败' }[task.lastRunStatus] || '';
+        return '<article class="wb-item"><div class="wb-card-head"><div><h4>' + esc(task.taskName || '自动任务') + '</h4></div>' +
+          '<div class="wb-actions"><button class="btn" type="button" data-wb-v-auto="toggle" data-id="' + esc(task.id) + '">' + (task.enabled ? '暂停' : '启用') + '</button>' +
+          '<button class="btn" type="button" data-wb-v-auto="delete" data-id="' + esc(task.id) + '">删除</button></div></div>' +
+          '<div class="wb-meta">' + (task.enabled ? '已启用' : '已暂停') + ' · ' + esc(cycle) + ' ' + esc(task.runTime) + ' · 每次 ' + task.count + ' 条 · ' +
+          esc(task.typeLabel + ' / ' + wbSubtypeName(task.type, task.subtype)) +
+          (task.nextRunAt && task.enabled ? ' · 下次 ' + esc(fmtDate(task.nextRunAt)) : '') +
+          (status ? ' · ' + esc(status) : '') + '</div>' +
+          (task.lastMessage ? '<p class="wb-preview">' + esc(task.lastMessage) + '</p>' : '') + '</article>';
+      }).join('') + '</div>';
+  }
+  function renderLegacyVideoProjects() {
+    if (!state.videos.length) return '';
     var selected = state.selectedVideo;
-    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
-      '<div class="wb-card"><div class="wb-card-head"><div><h3>新建视频项目</h3><p>从需求到分镜、口播和 SRT；复刻模式先拆参考结构，再给替换点。</p></div>' +
-      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-video-account"') + '</label></div>' +
-      '<form id="wb-video-form" class="wb-form">' +
-      '<label class="wb-field full"><span>视频主题</span><input name="title" required placeholder="例如：为什么体验课要这样上" value="' + esc(formState.title || '') + '"></label>' +
-      '<label class="wb-field"><span>模式</span><select name="mode">' + ['原创', '复刻'].map(function (m) { return '<option' + (formState.mode === m ? ' selected' : '') + '>' + m + '</option>'; }).join('') + '</select></label>' +
-      '<label class="wb-field"><span>目标时长</span><input value="30-60 秒" disabled></label>' +
-      '<label class="wb-field full"><span>需求说明</span><textarea name="brief" placeholder="课程、人群、想引导的动作，或想保留/替换的部分">' + esc(formState.brief || '') + '</textarea></label>' +
-      '<label class="wb-field full"><span>参考内容（复刻模式）</span><textarea name="referenceText" placeholder="粘贴参考视频的口播文字、结构说明或链接">' + esc(formState.referenceText || '') + '</textarea></label>' +
-      '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">生成分镜脚本</button><span class="wb-note">脚本用平台模型渠道；真实成片在下方「AI 生成视频」提交。</span></div></form></div>' +
-      '<div id="wb-avatar-panel"></div>' +
-      (state.videos.length ? '<div class="wb-cards">' + state.videos.map(function (item) {
+    var list = '<details class="wb-v-legacy"><summary>历史分镜脚本（一期，' + state.videos.length + ' 条）</summary><div class="wb-cards">' +
+      state.videos.map(function (item) {
         return '<article class="wb-item click' + (selected && selected.id === item.id ? ' current' : '') + '" data-video-open="' + esc(item.id) + '">' +
           '<div class="wb-card-head"><h4>' + esc(item.title) + '</h4><span class="wb-tag">' + esc(item.mode) + '</span></div>' +
-          '<div class="wb-meta">' + fmtDate(item.createdAt) + ' · ' + esc(videoStatusText(item.status)) + ' · ' + esc(accountName(item.accountId)) + '</div>' +
-          '<p class="wb-preview">' + esc(String(item.script || '').replace(/[#*|>`-]/g, ' ').replace(/\s+/g, ' ').slice(0, 150)) + '</p></article>';
-      }).join('') + '</div>' : '<div class="wb-card"><p class="wb-muted">这个账号还没有视频项目。写一个主题和需求，先生成一版分镜。</p></div>') +
-      (selected ? '<div class="wb-card wb-detail"><div class="wb-card-head"><div><h3>' + esc(selected.title) + '</h3><p>' + esc(selected.mode) + ' · 创建于 ' + fmtDate(selected.createdAt) + '</p></div>' +
-        '<div class="wb-actions"><button class="btn primary" type="button" id="wb-save-video-top">保存修改</button><button class="btn" type="button" id="wb-close-video">收起</button></div></div>' +
+          '<div class="wb-meta">' + fmtDate(item.createdAt) + ' · ' + esc(videoStatusText(item.status)) + '</div>' +
+          '<p class="wb-preview">' + esc(String(item.script || '').replace(/[#*|>`-]/g, ' ').replace(/\s+/g, ' ').slice(0, 100)) + '</p></article>';
+      }).join('') + '</div>';
+    if (selected) {
+      list += '<div class="wb-card wb-detail"><div class="wb-card-head"><div><h3>' + esc(selected.title) + '</h3><p>' + esc(selected.mode) + ' · ' + fmtDate(selected.createdAt) + '</p></div>' +
+        '<div class="wb-actions"><button class="btn" type="button" id="wb-close-video">收起</button></div></div>' +
         '<label class="wb-field"><span>口播/分镜脚本</span><textarea class="wb-script" id="wb-script-editor">' + esc(selected.script) + '</textarea></label>' +
         '<div class="wb-export"><button class="btn" type="button" data-export="md">导出 Markdown</button>' +
         '<button class="btn" type="button" data-export="srt">导出 SRT</button>' +
         '<button class="btn" type="button" data-export="json">导出 JSON</button>' +
-        '<button class="btn primary" type="button" id="wb-save-video">保存修改</button>' +
-        '<button class="btn" type="button" id="wb-video-check">' + ic('shield', 12) + '合规体检</button></div>' +
-        '<p class="wb-note" style="margin-top:9px">状态：' + esc(videoStatusText(selected.status)) + ' · 保存后再导出，导出的是最新脚本。</p></div>' +
-        '<div class="wb-card"><div class="wb-card-head"><div><h3>AI 生成视频</h3><p>把一个分镜的画面描述或口播交给平台的视频渠道，几分钟出片，成片自动进素材库（文件夹「AI 生成」）。</p></div></div>' +
+        '<button class="btn primary" type="button" id="wb-save-video">保存修改</button></div>' +
+        '<div class="wb-card"><div class="wb-card-head"><div><h3>单条直出视频（一期）</h3><p>把一段画面描述或口播直接交给视频渠道，几分钟后成片进素材库「AI 生成」。</p></div></div>' +
         '<form id="wb-render-form" class="wb-form">' +
-        '<label class="wb-field full"><span>画面描述 / 口播</span><textarea name="prompt" required placeholder="从左边脚本里复制一个分镜的画面与口播，例如：画室里孩子低头画画，镜头缓推，口播：很多家长问，几岁适合开始学美术……"></textarea></label>' +
+        '<label class="wb-field full"><span>画面描述 / 口播</span><textarea name="prompt" required placeholder="复制脚本里某一段的画面与口播"></textarea></label>' +
         '<label class="wb-field"><span>时长</span><select name="durationSeconds">' + [5, 10, 15].map(function (n) { return '<option value="' + n + '">' + n + ' 秒</option>'; }).join('') + '</select></label>' +
-        '<label class="wb-field"><span>画幅</span><select name="aspectRatio">' + ['9:16', '16:9', '1:1', 'auto'].map(function (a) { return '<option value="' + a + '"' + (a === '9:16' ? ' selected' : '') + '>' + (a === 'auto' ? '自动（跟首帧/默认）' : a) + '</option>'; }).join('') + '</select></label>' +
-        '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">' + ic('video', 13) + '提交生成</button><span class="wb-note">走平台已有视频渠道，按机构限 20 次/小时；数字人口播与 1:1 复刻仍是二期外。</span></div></form>' +
-        '<div id="wb-render-list" style="margin-top:10px"></div></div>' : '') +
-      '</div></div>';
-    bindAccountSwitch('#wb-video-account');
-    renderAvatarPanel();
-    refreshAvatarRuns(true);
-    $('#wb-video-form').onsubmit = async function (event) {
-      event.preventDefault();
-      var form = event.currentTarget;
-      var button = form.querySelector('[type="submit"]');
-      var original = button.innerHTML;
-      button.disabled = true; button.innerHTML = ic('loader', 13) + '生成中…';
-      try {
-        var data = Object.fromEntries(new FormData(form).entries());
-        data.accountId = state.accountId;
-        state.videoForm = { title: data.title, mode: data.mode, brief: data.brief, referenceText: data.referenceText };
-        var result = await call('/videos', { method: 'POST', body: data });
-        state.videos.unshift(result.project);
-        state.selectedVideo = result.project;
-        renderVideo();
-        focusDetail();
-        toast(result.demo ? '已生成演示分镜（模型未返回正文）' : '分镜已生成', 'success');
-      } catch (error) { toast(error.message, 'error'); button.disabled = false; button.innerHTML = original; }
-    };
+        '<label class="wb-field"><span>画幅</span><select name="aspectRatio">' + ['9:16', '16:9', '1:1'].map(function (a) { return '<option value="' + a + '">' + a + '</option>'; }).join('') + '</select></label>' +
+        '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">提交生成</button></div></form>' +
+        '<div id="wb-render-list" style="margin-top:10px"></div></div></div>';
+    }
+    return list + '</details>';
+  }
+  function bindLegacyVideoHandlers() {
     $$('[data-video-open]').forEach(function (card) {
       card.onclick = function () {
         var project = state.videos.filter(function (item) { return item.id === card.dataset.videoOpen; })[0];
         if (!project) return;
         state.selectedVideo = project;
         renderVideo();
-        focusDetail();
       };
     });
     var close = $('#wb-close-video');
@@ -1269,19 +1560,17 @@
     var save = async function (button) {
       button.disabled = true;
       try {
-        var project = await call('/videos/' + encodeURIComponent(selected.id), { method: 'PUT', body: $('#wb-script-editor').value ? { script: $('#wb-script-editor').value } : {} });
+        var editor = $('#wb-script-editor');
+        var project = await call('/videos/' + encodeURIComponent(state.selectedVideo.id), { method: 'PUT', body: editor && editor.value ? { script: editor.value } : {} });
         state.selectedVideo = project.project;
         state.videos = state.videos.map(function (item) { return item.id === project.project.id ? project.project : item; });
         renderVideo();
-        focusDetail();
         toast('脚本已保存', 'success');
       } catch (error) { toast(error.message, 'error'); button.disabled = false; }
     };
     if ($('#wb-save-video')) $('#wb-save-video').onclick = function () { save(this); };
-    if ($('#wb-save-video-top')) $('#wb-save-video-top').onclick = function () { save(this); };
-    if ($('#wb-video-check')) $('#wb-video-check').onclick = function () { checkCompliance($('#wb-script-editor').value); };
     $$('[data-export]').forEach(function (button) {
-      button.onclick = function () { downloadExport(selected.id, button.dataset.export, selected.title); };
+      button.onclick = function () { downloadExport(state.selectedVideo.id, button.dataset.export, state.selectedVideo.title); };
     });
     var renderForm = $('#wb-render-form');
     if (renderForm) {
@@ -1292,21 +1581,394 @@
         button.disabled = true; button.innerHTML = ic('loader', 13) + '提交中…';
         try {
           var data = Object.fromEntries(new FormData(renderForm).entries());
-          data.projectId = selected.id;
+          data.projectId = state.selectedVideo.id;
           data.accountId = state.accountId;
-          var result = await call('/video/render', { method: 'POST', body: data });
-          state.renders.unshift(result.render);
-          renderRenderList();
-          renderForm.prompt.value = '';
-          if (!state.renderTimer) loadRenders(selected.id, true);
+          await call('/video/render', { method: 'POST', body: data });
           toast('已提交视频生成，通常几分钟内完成', 'success');
-        } catch (error) {
-          toast(error.message, 'error');
-        } finally { button.disabled = false; button.innerHTML = original; }
+          loadRenders(state.selectedVideo.id, true);
+          renderForm.prompt.value = '';
+        } catch (error) { toast(error.message, 'error'); } finally { button.disabled = false; button.innerHTML = original; }
       };
       renderRenderList();
-      loadRenders(selected.id, true);
+      loadRenders(state.selectedVideo.id, true);
     }
+  }
+
+  /* ── 弹窗：素材 @引用 选择器 + 音色库 ── */
+  function openVideoAssetPicker(draftId) {
+    var assets = state.assets;
+    var groups = [
+      { kind: 'image', label: '图片（人物/场景/道具）', roles: ['人物', '场景', '道具'] },
+      { kind: 'video', label: '视频（场景参考）', roles: ['场景'] },
+      { kind: 'audio', label: '音频（音色参考）', roles: ['音色'] },
+    ];
+    var rows = groups.map(function (group) {
+      var items = assets.filter(function (item) { return item.kind === group.kind; }).slice(0, 30);
+      if (!items.length) return '';
+      return '<div class="wb-field full"><span>' + esc(group.label) + '</span>' + items.map(function (item) {
+        return '<div class="wb-v-pick-row"><b title="' + esc(item.fileName) + '">' + esc(item.fileName) + '</b>' +
+          '<select data-wb-v-pick-role="' + esc(item.id) + '">' + group.roles.map(function (role) {
+            return '<option value="' + esc(role) + '">' + esc(role) + '</option>';
+          }).join('') + '</select>' +
+          '<button class="btn" type="button" data-wb-v-pick-add="' + esc(item.id) + '" data-draft="' + esc(draftId) + '" data-file="' + esc(item.fileName) + '">添加</button></div>';
+      }).join('') + '</div>';
+    }).join('');
+    showDialog('添加 @引用素材', '<p class="wb-note">素材会以「@人物1 @场景1」写进编导稿；编导稿会按素材内容安排画面。音频选「音色」后进音色参考。</p>' + (rows || '<p class="wb-muted">素材库还是空的，先去「素材」上传。</p>'));
+    $$('[data-wb-v-pick-add]').forEach(function (button) {
+      button.onclick = function () {
+        var draft = findVideoDraft(button.dataset.draft);
+        if (!draft) return;
+        var roleSelect = $('[data-wb-v-pick-role="' + button.dataset.wbVPickAdd + '"]');
+        var role = roleSelect ? roleSelect.value : '场景';
+        if (draft.assetRefs.some(function (ref) { return ref.assetId === button.dataset.wbVPickAdd; })) { toast('这个素材已经加过了', 'error'); return; }
+        draft.assetRefs.push({ assetId: button.dataset.wbVPickAdd, role: role, label: button.dataset.file || '', notes: '' });
+        saveVideoDrafts();
+        closeDialog();
+        renderVideo();
+        toast('已添加 @' + role + ' 引用', 'success');
+      };
+    });
+  }
+  async function openVoiceLibraryDialog(draftId) {
+    var accountId = state.accountId;
+    showDialog('音色库', '<div id="wb-voice-lib-body"><p class="wb-muted">' + ic('loader', 12) + ' 正在读取音色…</p></div>' +
+      '<div class="wb-actions" style="margin-top:10px"><label class="btn primary" for="wb-voice-lib-file">' + ic('plus', 12) + '上传新音色（2–15 秒）</label>' +
+      '<input id="wb-voice-lib-file" type="file" hidden accept=".mp3,.m4a,.wav,audio/*"></div>');
+    var input = $('#wb-voice-lib-file');
+    input.onchange = async function () {
+      var file = (input.files || [])[0];
+      if (!file) return;
+      try {
+        var form = new FormData();
+        form.append('file', file);
+        form.append('accountId', state.accountId);
+        form.append('folder', '音色库');
+        var uploaded = await call('/assets', { method: 'POST', body: form });
+        var duration = await new Promise(function (resolve) {
+          try {
+            var url = URL.createObjectURL(file);
+            var audio = new Audio(url);
+            audio.addEventListener('loadedmetadata', function () { resolve(audio.duration); URL.revokeObjectURL(url); });
+            audio.addEventListener('error', function () { resolve(0); URL.revokeObjectURL(url); });
+            setTimeout(function () { resolve(audio.duration || 0); }, 3000);
+          } catch (e) { resolve(0); }
+        });
+        var name = file.name.replace(/\.[^.]+$/, '');
+        var result = await call('/voice-samples', { method: 'POST', body: { assetId: uploaded.asset.id, name: name, durationSeconds: duration || 0 } });
+        state.voiceSamples.unshift(result.sample);
+        renderVoiceLibRows(draftId);
+        toast('音色已保存', 'success');
+      } catch (error) { toast(error.message, 'error'); }
+    };
+    var refresh = await call('/voice-samples?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [] }; });
+    if (accountId !== state.accountId) return;
+    state.voiceSamples = refresh.items || state.voiceSamples;
+    renderVoiceLibRows(draftId);
+  }
+  function renderVoiceLibRows(draftId) {
+    var box = $('#wb-voice-lib-body');
+    if (!box) return;
+    if (!state.voiceSamples.length) { box.innerHTML = '<p class="wb-muted">还没有保存的音色，上传一段 2–15 秒的人声就能反复使用。</p>'; return; }
+    box.innerHTML = state.voiceSamples.map(function (sample) {
+      return '<div class="wb-v-voice-row"><button class="btn" type="button" data-wb-voice-play="' + esc(sample.assetId) + '" aria-label="试听">' + ic('play', 12) + '</button>' +
+        '<div class="wb-v-voice-copy"><b>' + esc(sample.name) + '</b><small>' + (sample.durationSeconds ? Number(sample.durationSeconds).toFixed(1) + ' 秒' : '时长未知') + ' · 用过 ' + sample.useCount + ' 次' + (sample.missing ? ' · 原文件缺失' : '') + '</small></div>' +
+        '<button class="btn primary" type="button" data-wb-voice-use="' + esc(sample.id) + '" data-draft="' + esc(draftId || '') + '">使用</button>' +
+        '<button class="btn" type="button" data-wb-voice-rename="' + esc(sample.id) + '">改名</button>' +
+        '<button class="btn" type="button" data-wb-voice-del="' + esc(sample.id) + '">删除</button>' +
+        '<audio preload="none" hidden data-wb-voice-audio="' + esc(sample.assetId) + '"></audio></div>';
+    }).join('');
+    $$('[data-wb-voice-play]').forEach(function (button) {
+      button.onclick = async function () {
+        var audio = $('audio[data-wb-voice-audio="' + button.dataset.wbVoicePlay + '"]');
+        if (!audio) return;
+        if (!audio.src) {
+          try {
+            var blob = await fetchBlob(API + '/assets/' + encodeURIComponent(button.dataset.wbVoicePlay) + '/file');
+            audio.src = URL.createObjectURL(blob);
+          } catch (e) { toast('音色暂时无法播放', 'error'); return; }
+        }
+        if (audio.paused) { void audio.play().catch(function () { toast('音色暂时无法播放', 'error'); }); }
+        else audio.pause();
+      };
+    });
+    $$('[data-wb-voice-use]').forEach(function (button) {
+      button.onclick = async function () {
+        var sample = state.voiceSamples.filter(function (item) { return item.id === button.dataset.wbVoiceUse; })[0];
+        if (!sample) return;
+        var draftId = button.dataset.draft;
+        var draft = draftId ? findVideoDraft(draftId) : null;
+        if (!draft) { draft = state.videoDrafts.filter(function (row) { return row.mode !== 'auto'; }).slice(-1)[0] || newVideoDraft('generate'); }
+        if (draft.assetRefs.some(function (ref) { return ref.assetId === sample.assetId; })) { toast('这条音色已经在引用里了', 'error'); return; }
+        draft.assetRefs.push({ assetId: sample.assetId, role: '音色', label: sample.name, notes: '口播音色参考' });
+        saveVideoDrafts();
+        try { await call('/voice-samples/' + encodeURIComponent(sample.id) + '/use', { method: 'POST' }); } catch (e) { /* 计数失败不影响使用 */ }
+        closeDialog();
+        renderVideo();
+        toast('已把「' + sample.name + '」加为 @音色 引用', 'success');
+      };
+    });
+    $$('[data-wb-voice-rename]').forEach(function (button) {
+      button.onclick = async function () {
+        var sample = state.voiceSamples.filter(function (item) { return item.id === button.dataset.wbVoiceRename; })[0];
+        if (!sample) return;
+        var name = window.prompt('新的音色名称', sample.name);
+        if (!name || name === sample.name) return;
+        try {
+          var result = await call('/voice-samples/' + encodeURIComponent(sample.id), { method: 'PUT', body: { name: name } });
+          state.voiceSamples = state.voiceSamples.map(function (item) { return item.id === sample.id ? result.sample : item; });
+          renderVoiceLibRows(draftId);
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    });
+    $$('[data-wb-voice-del]').forEach(function (button) {
+      button.onclick = async function () {
+        if (!window.confirm('从音色库删除这条音色？')) return;
+        try {
+          await call('/voice-samples/' + encodeURIComponent(button.dataset.wbVoiceDel), { method: 'DELETE' });
+          state.voiceSamples = state.voiceSamples.filter(function (item) { return item.id !== button.dataset.wbVoiceDel; });
+          renderVoiceLibRows(draftId);
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    });
+  }
+
+  /* ── 页面组装 ── */
+  function renderVideo() {
+    loadVideoDrafts();
+    var launcher = '<div class="wb-card"><div class="wb-card-head"><div><h3>开始一个视频任务</h3><p>像发消息一样创建任务；生成模式从需求创作，复刻模式参考现有内容，自动模式按周期日更。</p></div>' +
+      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-video-account"') + '</label></div>' +
+      '<div class="wb-actions">' +
+      '<button class="btn primary" type="button" data-wb-v-launch="generate">' + ic('sparkle', 13) + '生成模式</button>' +
+      '<button class="btn primary" type="button" data-wb-v-launch="replicate">' + ic('copy', 13) + '复刻模式</button>' +
+      '<button class="btn" type="button" data-wb-v-launch="auto">' + ic('refresh', 13) + '自动日更</button>' +
+      '<button class="btn" type="button" data-wb-v-action="open-voices" data-id="">' + ic('music', 13) + '音色库</button>' +
+      '</div></div>';
+    var draftCards = state.videoDrafts.map(renderVideoDraftCard).join('');
+    var workCards = state.videoWorks.map(renderVideoWorkCard).join('');
+    var emptyWork = state.videoWorks.length || draftCards ? '' : '<div class="wb-card"><p class="wb-muted">还没有视频任务。选一种模式开始：生成、复刻或自动日更。</p></div>';
+    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
+      launcher + draftCards + renderVideoAutoTasks() + workCards + emptyWork + renderLegacyVideoProjects() + renderVideoQueue() +
+      '<div class="wb-card"><div class="wb-card-head"><div><h3>数字人口播（五期）</h3><p>用自己的音色和形象照，把文案直接变成对口型口播视频；也可以直接在下方继续使用。</p></div></div><div id="wb-avatar-panel"></div></div>' +
+      '</div></div>';
+    bindAccountSwitch('#wb-video-account');
+    renderAvatarPanel();
+    refreshAvatarRuns(true);
+    bindLegacyVideoHandlers();
+    hydrateWorkVideos();
+
+    $$('[data-wb-v-launch]').forEach(function (button) {
+      button.onclick = function () {
+        var draft = newVideoDraft(button.dataset.wbVLaunch);
+        renderVideo();
+        requestAnimationFrame(function () {
+          var card = $('[data-wb-v-draft-card="' + draft.id + '"]');
+          if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      };
+    });
+    $$('[data-wb-v-choice]').forEach(function (button) {
+      button.onclick = function () {
+        var draft = findVideoDraft(button.dataset.draft);
+        if (!draft) return;
+        var field = button.dataset.wbVChoice;
+        var patch = {};
+        patch[field] = button.dataset.value;
+        if (field === 'type') patch.subtype = (wbTypeMeta(button.dataset.value).subtypes[0] || [])[0] || '';
+        updateVideoDraft(draft.id, patch);
+        renderVideo();
+      };
+    });
+    $$('[data-wb-v-field]').forEach(function (control) {
+      var handler = function () {
+        var draft = findVideoDraft(control.dataset.draft);
+        if (!draft) return;
+        var field = control.dataset.wbVField;
+        var value = control.value;
+        if (['durationSeconds', 'intervalDays', 'count'].indexOf(field) >= 0) value = Number(value);
+        updateVideoDraft(draft.id, (function () { var patch = {}; patch[field] = value; return patch; })());
+      };
+      if (control.tagName === 'TEXTAREA' || control.tagName === 'INPUT') control.addEventListener('input', handler);
+      else control.addEventListener('change', handler);
+    });
+    $$('[data-wb-v-unref]').forEach(function (button) {
+      button.onclick = function () {
+        var draft = findVideoDraft(button.dataset.wbVUnref);
+        if (!draft) return;
+        draft.assetRefs.splice(Number(button.dataset.index), 1);
+        saveVideoDrafts();
+        renderVideo();
+      };
+    });
+    $$('[data-wb-v-draft]').forEach(function (button) {
+      button.onclick = function () {
+        if (button.dataset.wbVDraft === 'discard') { removeVideoDraft(button.dataset.id); renderVideo(); }
+      };
+    });
+    $$('[data-wb-v-action]').forEach(function (button) {
+      button.onclick = async function () {
+        var action = button.dataset.wbVAction;
+        var draftId = button.dataset.id;
+        if (action === 'pick-assets') { openVideoAssetPicker(draftId); return; }
+        if (action === 'open-voices') { void openVoiceLibraryDialog(draftId); return; }
+        if (action !== 'start' && action !== 'start-auto') return;
+        var draft = findVideoDraft(draftId);
+        if (!draft) return;
+        var original = button.innerHTML;
+        button.disabled = true; button.innerHTML = ic('loader', 12) + '提交中…';
+        try {
+          if (action === 'start-auto') {
+            var taskResult = await call('/video/auto-tasks', {
+              method: 'POST',
+              body: {
+                clientId: draft.id, taskName: draft.taskName, scheduleType: draft.scheduleType, intervalDays: draft.intervalDays,
+                runTime: draft.runTime, count: draft.count, authorizedFolder: draft.authorizedFolder, type: draft.type,
+                subtype: draft.subtype, hookStrategy: draft.hookStrategy, durationSeconds: draft.durationSeconds,
+                resolution: draft.resolution, ratio: draft.ratio, brief: draft.brief, accountId: state.accountId,
+              },
+            });
+            state.autoTasks.unshift(taskResult.task);
+            state.autoEnabled = state.autoEnabled || !!taskResult.autoEnabled;
+            removeVideoDraft(draft.id);
+            renderVideo();
+            toast(taskResult.autoEnabled ? '自动任务已保存，服务会按计划执行' : '自动任务已保存（平台调度开关未开，暂不自动执行）', 'success');
+            return;
+          }
+          if (draft.mode === 'replicate' && draft.sourceKind === 'transcript' && !draft.sourceId) {
+            toast('先选一条转写档案作为参考', 'error'); button.disabled = false; button.innerHTML = original; return;
+          }
+          var reference = draft.sourceKind === 'transcript'
+            ? (state.transcripts.filter(function (item) { return item.id === draft.sourceId; })[0] || {}).text || ''
+            : draft.reference;
+          var result = await call('/video/works', {
+            method: 'POST',
+            body: {
+              mode: draft.mode, type: draft.type, subtype: draft.subtype, hookStrategy: draft.hookStrategy,
+              durationSeconds: draft.durationSeconds, resolution: draft.resolution, ratio: draft.ratio,
+              brief: draft.brief, reference: reference, assetRefs: draft.assetRefs, accountId: state.accountId,
+            },
+          });
+          state.videoWorks.unshift(result.work);
+          removeVideoDraft(draft.id);
+          renderVideo();
+          startVideoWorkPolling();
+          toast('编导稿生成中，十几秒后刷新', 'success');
+        } catch (error) {
+          toast(error.message, 'error');
+          button.disabled = false; button.innerHTML = original;
+        }
+      };
+    });
+    $$('[data-wb-v-work]').forEach(function (button) {
+      button.onclick = async function () {
+        var action = button.dataset.wbVWork;
+        var workId = button.dataset.id;
+        var original = button.innerHTML;
+        button.disabled = true;
+        try {
+          if (action === 'confirm') {
+            await call('/video/works/' + encodeURIComponent(workId) + '/confirm', { method: 'POST', body: {} });
+            toast('已提交视频渲染，这一页会自动刷新进度', 'success');
+          } else if (action === 'regenerate') {
+            await call('/video/works/' + encodeURIComponent(workId) + '/regenerate', { method: 'POST', body: {} });
+            toast('正在换一版编导稿…', 'success');
+          } else if (action === 'save-script') {
+            var work = state.videoWorks.filter(function (item) { return item.id === workId; })[0];
+            if (!work || !work.directorScript) throw new Error('还没有编导稿可保存');
+            var result = await call('/video/works/' + encodeURIComponent(workId), { method: 'PUT', body: { directorScript: work.directorScript, scriptEdited: true } });
+            state.videoWorks = state.videoWorks.map(function (item) { return item.id === workId ? result.work : item; });
+            toast('编导稿已保存', 'success');
+          } else if (action === 'delete') {
+            if (!window.confirm('删除这条视频任务及其渲染记录？')) { button.disabled = false; return; }
+            await call('/video/works/' + encodeURIComponent(workId), { method: 'DELETE' });
+            state.videoWorks = state.videoWorks.filter(function (item) { return item.id !== workId; });
+          }
+        } catch (error) { toast(error.message, 'error'); }
+        button.disabled = false; button.innerHTML = original;
+        void loadVideoWorks();
+      };
+    });
+    $$('[data-wb-v-shot]').forEach(function (button) {
+      button.onclick = async function () {
+        var action = button.dataset.wbVShot;
+        var workId = button.dataset.id;
+        var index = Number(button.dataset.index);
+        var key = workId + ':' + index;
+        if (action === 'edit') { state.videoShotEditing = key; renderVideo(); return; }
+        if (action === 'cancel-edit') { state.videoShotEditing = null; delete state.videoShotEdits[key]; renderVideo(); return; }
+        if (action === 'save-edit') {
+          var work = state.videoWorks.filter(function (item) { return item.id === workId; })[0];
+          if (!work || !work.directorScript) return;
+          var edits = state.videoShotEdits[key] || {};
+          work.directorScript.shots = work.directorScript.shots.map(function (shot) {
+            if (Number(shot.index) !== index) return shot;
+            return {
+              index: shot.index, seconds: shot.seconds, role: shot.role,
+              scene: edits.scene !== undefined ? edits.scene : shot.scene,
+              voiceover: edits.voiceover !== undefined ? edits.voiceover : shot.voiceover,
+              overlay: edits.overlay !== undefined ? edits.overlay : shot.overlay,
+              renderPrompt: edits.renderPrompt !== undefined ? edits.renderPrompt : shot.renderPrompt,
+            };
+          });
+          state.videoShotEditing = null;
+          delete state.videoShotEdits[key];
+          renderVideo();
+          try {
+            var result = await call('/video/works/' + encodeURIComponent(workId), { method: 'PUT', body: { directorScript: work.directorScript, scriptEdited: true } });
+            state.videoWorks = state.videoWorks.map(function (item) { return item.id === workId ? result.work : item; });
+            renderVideo();
+            toast('本镜已保存', 'success');
+          } catch (error) { toast(error.message, 'error'); }
+          return;
+        }
+        if (action === 'render') {
+          button.disabled = true; button.innerHTML = ic('loader', 11) + '提交中…';
+          try {
+            await call('/video/works/' + encodeURIComponent(workId) + '/shots/' + index + '/render', { method: 'POST', body: {} });
+            toast('单镜渲染已提交，成片会出现在本镜下方和渲染队列', 'success');
+            void loadVideoWorks();
+          } catch (error) { toast(error.message, 'error'); button.disabled = false; button.innerHTML = '单镜试渲染'; }
+        }
+      };
+    });
+    $$('[data-wb-v-edit]').forEach(function (control) {
+      var handler = function () {
+        var key = control.dataset.key;
+        var edits = state.videoShotEdits[key] = state.videoShotEdits[key] || {};
+        edits[control.dataset.wbVEdit] = control.value;
+      };
+      control.addEventListener('input', handler);
+    });
+    $$('[data-wb-v-retry]').forEach(function (button) {
+      button.onclick = async function () {
+        button.disabled = true; button.innerHTML = ic('loader', 11) + '重试中…';
+        try {
+          await call('/video/renders/' + encodeURIComponent(button.dataset.wbVRetry) + '/retry', { method: 'POST', body: {} });
+          toast('已重新提交渲染', 'success');
+          void loadVideoWorks();
+        } catch (error) { toast(error.message, 'error'); button.disabled = false; button.innerHTML = '重试'; }
+      };
+    });
+    $$('[data-wb-v-auto]').forEach(function (button) {
+      button.onclick = async function () {
+        var action = button.dataset.wbVAuto;
+        var id = button.dataset.id;
+        button.disabled = true;
+        try {
+          if (action === 'toggle') {
+            var task = state.autoTasks.filter(function (item) { return item.id === id; })[0];
+            var result = await call('/video/auto-tasks/' + encodeURIComponent(id), { method: 'PUT', body: { enabled: !(task && task.enabled) } });
+            state.autoTasks = state.autoTasks.map(function (item) { return item.id === id ? result.task : item; });
+            toast(result.task.enabled ? '已启用' : '已暂停', 'success');
+          } else if (action === 'delete') {
+            if (!window.confirm('删除这条自动任务？')) { button.disabled = false; return; }
+            await call('/video/auto-tasks/' + encodeURIComponent(id), { method: 'DELETE' });
+            state.autoTasks = state.autoTasks.filter(function (item) { return item.id !== id; });
+          }
+        } catch (error) { toast(error.message, 'error'); }
+        button.disabled = false;
+        renderVideo();
+      };
+    });
   }
 
   /* ───────────── 素材库（账号 + 文件夹） ───────────── */

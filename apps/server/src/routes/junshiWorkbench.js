@@ -55,9 +55,11 @@ import {
   buildVideoPrompt,
   buildViralOnePrompt,
   buildViralRewritePrompt,
+  buildDirectorScriptPrompt,
   demoBrain,
   demoChat,
   demoCopy,
+  demoDirectorScript,
   demoHotspotCopies,
   demoIdeas,
   demoPeerReport,
@@ -65,6 +67,10 @@ import {
   demoVideo,
   demoViralOne,
   demoViralRewrites,
+  videoHookLabel,
+  videoTypeLabel,
+  VIDEO_HOOKS,
+  VIDEO_TYPES,
 } from '../services/junshiWorkbenchContent.js';
 
 const EMPTY_PROFILE = {
@@ -344,6 +350,9 @@ function renderOut(row) {
   return {
     id: row.id,
     projectId: row.project_id,
+    workId: row.work_id || null,
+    shotIndex: Number(row.shot_index || 0),
+    kind: row.kind || 'single',
     accountId: row.account_id || 'default',
     title: row.title,
     prompt: row.prompt,
@@ -356,6 +365,360 @@ function renderOut(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/* ───────────── 七期 · 视频工作台辅助（对齐原版 video_workspace，作者本人授权复刻） ───────────── */
+const VIDEO_REF_ROLES = ['人物', '场景', '道具', '音色'];
+const VIDEO_SHOT_ROLES = ['hook', 'pain', 'proof', 'turn', 'cta'];
+
+function workOut(row) {
+  let assetRefs = [];
+  let script = null;
+  try { assetRefs = JSON.parse(row.asset_refs || '[]'); } catch { /* ignore */ }
+  try { script = row.director_script ? JSON.parse(row.director_script) : null; } catch { script = null; }
+  return {
+    id: row.id,
+    accountId: row.account_id || 'default',
+    mode: row.mode || 'generate',
+    title: row.title || '',
+    type: row.type || 'ecommerce',
+    typeLabel: videoTypeLabel(row.type),
+    subtype: row.subtype || '',
+    hookStrategy: row.hook_strategy || 'auto',
+    hookLabel: videoHookLabel(row.hook_strategy),
+    model: row.model || '',
+    durationSeconds: Number(row.duration_seconds || 15),
+    resolution: row.resolution || '',
+    ratio: row.ratio || '9:16',
+    brief: row.brief || '',
+    assetRefs,
+    status: row.status || 'planning',
+    message: row.message || '',
+    directorScript: script,
+    scriptRevision: Number(row.script_revision || 0),
+    scriptEdited: Number(row.script_edited || 0) === 1,
+    autoTaskId: row.auto_task_id || null,
+    outputAssetId: row.output_asset_id || null,
+    outputUrl: row.output_asset_id ? `/api/junshi/workbench/assets/${encodeURIComponent(row.output_asset_id)}/file` : null,
+    error: row.error || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+function voiceSampleOut(row, assetRow = null) {
+  return {
+    id: row.id,
+    accountId: row.account_id || 'default',
+    name: row.name || '',
+    assetId: row.asset_id || '',
+    durationSeconds: Number(row.duration_seconds || 0),
+    useCount: Number(row.use_count || 0),
+    missing: !assetRow,
+    url: `/api/junshi/workbench/assets/${encodeURIComponent(row.asset_id)}/file`,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+function autoTaskOut(row) {
+  return {
+    id: row.id,
+    accountId: row.account_id || 'default',
+    clientId: row.client_id || null,
+    taskName: row.task_name || '',
+    scheduleType: row.schedule_type || 'daily',
+    intervalDays: Number(row.interval_days || 2),
+    runTime: row.run_time || '09:00',
+    count: Number(row.count || 1),
+    authorizedFolder: row.authorized_folder || '',
+    type: row.type || 'ecommerce',
+    typeLabel: videoTypeLabel(row.type),
+    subtype: row.subtype || '',
+    hookStrategy: row.hook_strategy || 'auto',
+    model: row.model || '',
+    durationSeconds: Number(row.duration_seconds || 15),
+    resolution: row.resolution || '',
+    ratio: row.ratio || '9:16',
+    enabled: Number(row.enabled || 0) === 1,
+    nextRunAt: row.next_run_at || null,
+    lastRunAt: row.last_run_at || null,
+    lastRunStatus: row.last_run_status || null,
+    lastMessage: row.last_message || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+function sanitizeAssetRefs(input) {
+  if (!Array.isArray(input)) return [];
+  return input.slice(0, 12).map((item) => ({
+    assetId: String(item?.assetId || '').slice(0, 64),
+    role: VIDEO_REF_ROLES.includes(String(item?.role)) ? String(item.role) : '场景',
+    label: String(item?.label || '').slice(0, 60),
+    notes: String(item?.notes || '').slice(0, 300),
+  })).filter((item) => item.assetId);
+}
+// 编导稿宽松解析：模型偶尔裹 markdown 代码块；字段统一裁剪到安全长度。
+// ⚠️ 本文件 714 行起整个 handleJunshiWorkbench 是巨型函数，parseLooseJsonObject 嵌在它内部，
+// 模块级代码不可见 —— 这里的 JSON 提取必须自带，不能引用它。
+function firstJsonObject(raw) {
+  const text = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '');
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch { return null; }
+}
+function parseDirectorScript(raw) {
+  const data = typeof raw === 'string'
+    ? firstJsonObject(raw)
+    : (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null);
+  if (!data) return { ok: false, message: '编导稿不是有效的 JSON 对象' };
+  const shots = (Array.isArray(data.shots) ? data.shots : []).map((shot, index) => ({
+    index: clampInt(shot?.index, index + 1, 1, 99),
+    seconds: clampInt(shot?.seconds, 5, 3, 60),
+    role: VIDEO_SHOT_ROLES.includes(String(shot?.role)) ? String(shot.role) : (index === 0 ? 'hook' : 'proof'),
+    scene: String(shot?.scene || '').slice(0, 500),
+    voiceover: String(shot?.voiceover || '').slice(0, 500),
+    overlay: String(shot?.overlay || '').slice(0, 120),
+    renderPrompt: String(shot?.renderPrompt || '').slice(0, 1000),
+  })).filter((shot) => shot.scene || shot.voiceover || shot.renderPrompt).slice(0, 12);
+  if (!shots.length) return { ok: false, message: '编导稿里没有可用的分镜（需要 shots 数组，每镜含画面/口播）' };
+  return {
+    ok: true,
+    data: {
+      title: String(data.title || '').slice(0, 120),
+      strategy: String(data.strategy || '').slice(0, 300),
+      notes: String(data.notes || '').slice(0, 500),
+      shots,
+    },
+  };
+}
+function buildWorkRenderPrompt(script) {
+  const shots = Array.isArray(script?.shots) ? script.shots : [];
+  const scenes = shots.map((shot) => String(shot.renderPrompt || shot.scene || '').trim()).filter(Boolean).join('；');
+  const voiceover = shots.map((shot) => String(shot.voiceover || '').trim()).filter(Boolean).join(' ');
+  return [
+    scenes ? `画面：${scenes}` : '',
+    voiceover ? `口播：${voiceover}` : '',
+    script?.strategy ? `整体策略：${script.strategy}` : '',
+  ].filter(Boolean).join('\n').slice(0, 2000);
+}
+function videoAutoEnabled() {
+  return process.env.JUNSHI_VIDEO_AUTO_ENABLED === '1';
+}
+function nextAutoRunAt(scheduleType = 'daily', intervalDays = 2, runTime = '09:00') {
+  const [hourRaw, minuteRaw] = String(runTime || '09:00').split(':');
+  const base = new Date();
+  base.setHours(clampInt(hourRaw, 9, 0, 23), clampInt(minuteRaw, 0, 0, 59), 0, 0);
+  if (scheduleType === 'every_days') base.setDate(base.getDate() + clampInt(intervalDays, 2, 2, 30));
+  else if (base.getTime() <= Date.now()) base.setDate(base.getDate() + 1);
+  return base.toISOString();
+}
+/** 编导稿异步管线：拼档案+素材 → 模型单 JSON → 解析入库；自动任务随后自动确认渲染。 */
+async function runDirectorScript(owner, workId, { reference = '' } = {}) {
+  let job = null;
+  try {
+    const work = await arow('SELECT * FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [workId, owner.key]);
+    if (!work) return;
+    job = jobStart(owner, work.mode === 'replicate' ? '复刻编导稿' : '编导稿', work.id);
+    const profile = (await readProfile(owner.key, work.account_id)).profile;
+    const orgProfile = await orgProfileText(owner.key);
+    let refs = [];
+    try { refs = JSON.parse(work.asset_refs || '[]'); } catch { /* ignore */ }
+    const assets = [];
+    for (const ref of refs.slice(0, 12)) {
+      const assetRow = await arow('SELECT id, file_name, kind FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [ref.assetId, owner.key]).catch(() => null);
+      if (assetRow) assets.push({ role: ref.role, label: ref.label, fileName: assetRow.file_name, kind: assetRow.kind, notes: ref.notes });
+    }
+    const providerMock = await textProviderIsMock().catch(() => false);
+    let scriptText = '';
+    if (providerMock) {
+      scriptText = demoDirectorScript({ profile, type: work.type, subtype: work.subtype, duration: Number(work.duration_seconds) || 15, brief: work.brief });
+    } else {
+      const prompt = buildDirectorScriptPrompt({
+        profile, orgProfile, mode: work.mode, type: work.type, subtype: work.subtype, hookStrategy: work.hook_strategy,
+        brief: work.brief, assets, duration: Number(work.duration_seconds) || 15, ratio: work.ratio, reference,
+      });
+      const result = await collectText(null, { system: WORKBENCH_SYSTEM, user: prompt });
+      scriptText = mockOrEmpty(result) ? demoDirectorScript({ profile, type: work.type, subtype: work.subtype, duration: Number(work.duration_seconds) || 15, brief: work.brief }) : result.text;
+    }
+    const parsed = parseDirectorScript(scriptText);
+    if (!parsed.ok) throw new Error(`编导稿解析失败：${parsed.message}`);
+    await aq("UPDATE junshi_workbench_video_works SET title=?, director_script=?, status='draft', message='编导稿已生成，确认后开始渲染；分镜可以逐镜修改。', error='', script_revision=script_revision+1, updated_at=? WHERE id=? AND owner_key=?",
+      [String(parsed.data.title || '').slice(0, 200), JSON.stringify(parsed.data), nowIso(), workId, owner.key]);
+    if (job) await jobDone(job, 'succeeded', '编导稿已生成').catch(() => {});
+    if (work.auto_task_id) await autoConfirmWork(owner, workId);
+  } catch (error) {
+    console.error('[video work] runDirectorScript failed:', error?.stack || error?.message || error);
+    const message = error instanceof ApiError ? error.message : String(error?.message || error);
+    await aq("UPDATE junshi_workbench_video_works SET status='failed', error=?, message=?, updated_at=? WHERE id=? AND owner_key=?",
+      [String(message).slice(0, 1000), `编导稿生成失败：${String(message).slice(0, 200)}`, nowIso(), workId, owner.key]).catch(() => {});
+    if (job) await jobDone(job, 'failed', String(message).slice(0, 1000)).catch(() => {});
+  }
+}
+/** 确认渲染（confirm 路由与自动任务共用）：渠道预检 → 建整片渲染行 → 异步跑。 */
+async function startWorkRender(owner, work) {
+  const parsed = parseDirectorScript(work.director_script);
+  if (!parsed.ok) throw errors.badRequest('编导稿还没有准备好，先等脚本生成或手动补一份。', 'WORKBENCH_VIDEO_NO_SCRIPT');
+  if (work.status === 'rendering') throw errors.badRequest('已经在渲染中，请等这一条结束。', 'WORKBENCH_VIDEO_BUSY');
+  renderRateLimit(owner.key);
+  const policy = await getAiProviderPolicy();
+  const selection = providerSelectionForModality(policy, 'VIDEO');
+  const info = generationProviderInfo(selection);
+  if (isMockProvider(info.provider) || info.mode === 'mock') {
+    throw errors.badRequest('当前 AI 渠道是本地模拟，还没接入真实的视频生成服务。请联系平台管理员在后台把「视频」渠道换成真实供应商。', 'WORKBENCH_VIDEO_CHANNEL_NOT_CONFIGURED');
+  }
+  if (!info.configured || !info.adapterAvailable || !(info.capabilities || []).includes('VIDEO')) {
+    throw errors.badRequest('视频生成渠道未配置完整或不支持视频，请联系平台管理员检查后台的 AI 渠道设置。', 'WORKBENCH_VIDEO_CHANNEL_NOT_CONFIGURED');
+  }
+  const renderId = id('jwrd');
+  const at = nowIso();
+  const job = jobStart(owner, '视频渲染', `${work.mode === 'replicate' ? '复刻' : videoTypeLabel(work.type)} · ${parsed.data.title || work.id}`);
+  await aq('INSERT INTO junshi_workbench_video_renders (id,owner_key,org_id,project_id,account_id,job_id,title,prompt,duration_seconds,aspect_ratio,status,asset_id,error,work_id,shot_index,kind,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    [renderId, owner.key, owner.orgId, null, work.account_id, job.id, String(parsed.data.title || '整片').slice(0, 120), buildWorkRenderPrompt(parsed.data), clampInt(work.duration_seconds, 5, 5, 120), work.ratio, 'running', null, '', work.id, 0, 'main', at, at]);
+  await aq("UPDATE junshi_workbench_video_works SET status='rendering', message='已提交视频生成，正在排队…', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), work.id, owner.key]);
+  void runWorkbenchRender(owner, renderId, { job });
+  return { renderId };
+}
+async function autoConfirmWork(owner, workId) {
+  try {
+    const work = await arow('SELECT * FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [workId, owner.key]);
+    if (!work) return;
+    await startWorkRender(owner, work);
+  } catch (error) {
+    const message = String(error?.message || error).slice(0, 1000);
+    await aq("UPDATE junshi_workbench_video_works SET status='failed', error=?, message=?, updated_at=? WHERE id=? AND owner_key=?",
+      [message, `自动渲染提交失败：${message.slice(0, 200)}`, nowIso(), workId, owner.key]).catch(() => {});
+  }
+}
+/** 渲染执行：与一期 /video/render 同一套渠道+转存逻辑，渲染行来自视频工作台（work_id 挂钩）。 */
+async function runWorkbenchRender(owner, renderId, { job = null } = {}) {
+  try {
+    const row = await arow('SELECT * FROM junshi_workbench_video_renders WHERE id=? AND owner_key=?', [renderId, owner.key]);
+    if (!row) return;
+    let resolution = '';
+    if (row.work_id) {
+      const workRow = await arow('SELECT resolution FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [row.work_id, owner.key]).catch(() => null);
+      resolution = String(workRow?.resolution || '');
+    }
+    const policy = await getAiProviderPolicy();
+    const selection = providerSelectionForModality(policy, 'VIDEO');
+    const studentOptions = { aspectRatio: row.aspect_ratio || '9:16', resolution, audio: true };
+    if (Number(row.duration_seconds) > 0) studentOptions.durationSeconds = Number(row.duration_seconds);
+    const options = await generationOptionsFor({ context: null, modality: 'VIDEO', policy, selection, box: {}, studentOptions });
+    const provider = getGenerationProvider(selection);
+    const generated = await provider.generate({
+      modality: 'VIDEO', prompt: row.prompt, title: row.title, options,
+      userId: owner.auth?.user?.id,
+      computeContext: { orgId: owner.orgId, userId: owner.auth?.user?.id, jobId: job?.id || row.job_id },
+    });
+    const assetPayload = (Array.isArray(generated?.assets) ? generated.assets : [])[0] || null;
+    const upstreamUrl = String(assetPayload?.assetUrl || '').trim();
+    if (!upstreamUrl) throw Object.assign(new Error('生成服务没有返回视频'), { code: 'GENERATION_EMPTY_RESULT' });
+    // 上游地址是临时的：转存进素材库（白名单 mp4/webm），失败时把临时地址放进提示。
+    let stored = null;
+    let note = '';
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 180000);
+      timer.unref?.();
+      const response = await fetch(upstreamUrl, { signal: controller.signal }).finally(() => clearTimeout(timer));
+      if (!response?.ok) throw new Error(`下载产物失败（HTTP ${response?.status || 0}）`);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (!buffer.length || buffer.length > 64 * 1024 * 1024) throw new Error('产物为空或超过 64MB');
+      const mime = String(assetPayload.mimeType || response.headers?.get?.('content-type') || 'video/mp4').toLowerCase().split(';', 1)[0].trim();
+      if (mime !== 'video/mp4' && mime !== 'video/webm') throw new Error(`上游产物类型是 ${mime}，不在素材白名单（mp4/webm）`);
+      stored = await persistSecureUpload({ fileName: `${renderId}.${mime === 'video/webm' ? 'webm' : 'mp4'}`, mimeType: mime, buffer });
+    } catch (archiveError) {
+      note = `视频已生成，但转存素材库失败（${String(archiveError?.message || archiveError).slice(0, 120)}）。请尽快手动下载上游临时地址（会过期）：${upstreamUrl.slice(0, 300)}`;
+    }
+    let assetId = null;
+    if (stored) {
+      assetId = id('jwa');
+      await aq('INSERT INTO junshi_workbench_assets (id,owner_key,org_id,account_id,file_name,storage_key,storage_backend,mime_type,kind,file_size,folder,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+        [assetId, owner.key, owner.orgId, row.account_id, stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || 'video/mp4', 'video', stored.fileSize || 0, 'AI 生成', nowIso()]);
+    }
+    const costFen = generated?.compute?.upstreamCostFen;
+    const costText = Number.isFinite(costFen) ? `，上游成本约 ${(costFen / 100).toFixed(2)} 元` : '';
+    await aq("UPDATE junshi_workbench_video_renders SET status='succeeded', asset_id=?, error='', updated_at=? WHERE id=?", [assetId, nowIso(), renderId]);
+    if (row.work_id) {
+      if (row.kind === 'main') {
+        const message = stored ? `视频已完成并保存到素材库（文件夹：AI 生成）${costText}` : note || '视频已完成';
+        await aq('UPDATE junshi_workbench_video_works SET status=?, message=?, output_asset_id=?, updated_at=? WHERE id=? AND owner_key=?',
+          [stored ? 'succeeded' : 'failed', message, assetId, nowIso(), row.work_id, owner.key]);
+      } else {
+        await aq('UPDATE junshi_workbench_video_works SET message=?, updated_at=? WHERE id=? AND owner_key=?',
+          [`第 ${row.shot_index} 镜已完成${stored ? '，片段已入素材库' : ''}${costText}`, nowIso(), row.work_id, owner.key]);
+      }
+    }
+    if (job) await jobDone(job, 'succeeded', stored ? `视频已生成并存入素材库（文件夹：AI 生成）${costText}` : note).catch(() => {});
+  } catch (error) {
+    const message = error instanceof ApiError ? error.message : normalizeProviderError(error).message;
+    await aq("UPDATE junshi_workbench_video_renders SET status='failed', error=?, updated_at=? WHERE id=?", [String(message).slice(0, 1000), nowIso(), renderId]).catch(() => {});
+    const row = await arow('SELECT work_id, kind, shot_index FROM junshi_workbench_video_renders WHERE id=?', [renderId]).catch(() => null);
+    if (row?.work_id) {
+      if (row.kind === 'main') {
+        await aq("UPDATE junshi_workbench_video_works SET status='failed', message=?, error=?, updated_at=? WHERE id=? AND owner_key=?",
+          [`视频生成失败：${String(message).slice(0, 200)}`, String(message).slice(0, 1000), nowIso(), row.work_id, owner.key]).catch(() => {});
+      } else {
+        await aq('UPDATE junshi_workbench_video_works SET message=?, updated_at=? WHERE id=? AND owner_key=?',
+          [`第 ${row.shot_index} 镜生成失败：${String(message).slice(0, 160)}`, nowIso(), row.work_id, owner.key]).catch(() => {});
+      }
+    }
+    if (job) await jobDone(job, 'failed', String(message).slice(0, 1000)).catch(() => {});
+  }
+}
+
+/* ───────────── 自动日更调度（需要 JUNSHI_VIDEO_AUTO_ENABLED=1，防止误触发生成费用） ───────────── */
+let videoAutoTimer = null;
+export function initJunshiVideoAutoScheduler() {
+  if (process.env.JUNSHI_VIDEO_AUTO_ENABLED !== '1' || videoAutoTimer) return;
+  videoAutoTimer = setInterval(() => { void tickVideoAutoScheduler(); }, 60 * 1000);
+  videoAutoTimer.unref?.();
+  console.log('junshi video auto scheduler: enabled, checking due tasks every 60s');
+}
+async function ownerForAutoTask(task) {
+  let userId = null;
+  if (String(task.owner_key || '').startsWith('user:')) userId = task.owner_key.slice('user:'.length);
+  else if (task.org_id) {
+    const user = await arow('SELECT id FROM users WHERE org_id=? AND deleted_at IS NULL ORDER BY id LIMIT 1', [task.org_id]).catch(() => null);
+    userId = user?.id || null;
+  }
+  if (!userId) return null;
+  return { auth: { user: { id: userId, orgId: task.org_id || null } }, key: task.owner_key, orgId: task.org_id || null };
+}
+async function tickVideoAutoScheduler() {
+  try {
+    const due = await arows("SELECT * FROM junshi_workbench_video_auto_tasks WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at<=? AND (last_run_status IS NULL OR last_run_status NOT IN ('running'))", [nowIso()]);
+    for (const task of due) {
+      const nextRun = nextAutoRunAt(task.schedule_type, Number(task.interval_days || 2), task.run_time);
+      await aq("UPDATE junshi_workbench_video_auto_tasks SET last_run_at=?, last_run_status='running', last_message='正在按计划生成…', next_run_at=?, updated_at=? WHERE id=?",
+        [nowIso(), nextRun, nowIso(), task.id]).catch(() => {});
+      try {
+        const owner = await ownerForAutoTask(task);
+        if (!owner) throw new Error('无法解析任务归属用户，跳过本次执行');
+        let submitted = 0;
+        for (let index = 0; index < clampInt(task.count, 1, 1, 5); index++) {
+          const workId = id('jww');
+          const at = nowIso();
+          await aq('INSERT INTO junshi_workbench_video_works (id,owner_key,org_id,account_id,mode,title,type,subtype,hook_strategy,model,duration_seconds,resolution,ratio,brief,asset_refs,status,message,director_script,script_revision,script_edited,auto_task_id,output_asset_id,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            [workId, owner.key, task.org_id || null, task.account_id || 'default', 'auto', '', task.type || 'ecommerce', task.subtype || '', task.hook_strategy || 'auto', task.model || '', Number(task.duration_seconds) || 15, task.resolution || '', task.ratio || '9:16',
+              '（自动任务）按授权文件夹与账号档案生成今日内容', '[]', 'planning', '自动任务正在写编导稿…', '', 0, 0, task.id, null, '', at, at]);
+          void runDirectorScript(owner, workId, {});
+          submitted += 1;
+        }
+        await aq("UPDATE junshi_workbench_video_auto_tasks SET last_run_status='succeeded', last_message=?, updated_at=? WHERE id=?",
+          [`已提交 ${submitted} 条生成任务，成片会自动入素材库`, nowIso(), task.id]).catch(() => {});
+      } catch (error) {
+        const message = String(error?.message || error).slice(0, 1000);
+        await aq("UPDATE junshi_workbench_video_auto_tasks SET last_run_status='failed', last_message=?, updated_at=? WHERE id=?",
+          [message, nowIso(), task.id]).catch(() => {});
+      }
+    }
+  } catch (error) {
+    console.error('junshi video auto scheduler:', error?.message || error);
+  }
 }
 
 /* ───────────── 路由 ───────────── */
@@ -1620,10 +1983,213 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
   if (rest === '/video/renders' && method === 'GET') {
     await reapStale(owner.key);
     const projectId = text(search.get('projectId'));
-    const rows = projectId
-      ? await arows('SELECT * FROM junshi_workbench_video_renders WHERE owner_key=? AND project_id=? ORDER BY created_at DESC LIMIT 50', [owner.key, projectId])
-      : await arows('SELECT * FROM junshi_workbench_video_renders WHERE owner_key=? ORDER BY created_at DESC LIMIT 50', [owner.key]);
+    const workId = text(search.get('workId'));
+    const conditions = ['owner_key=?'];
+    const params = [owner.key];
+    if (projectId) { conditions.push('project_id=?'); params.push(projectId); }
+    if (workId) { conditions.push('work_id=?'); params.push(workId); }
+    const rows = await arows(`SELECT * FROM junshi_workbench_video_renders WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC LIMIT 100`, params);
     return { items: rows.map(renderOut) };
+  }
+
+  /* ───────────── 七期 · 视频完整工作台（任务行 / 编导稿分镜 / 音色库 / 自动日更） ─────────────
+     交互链路对齐原版 XiaoLingDang 的 video_workspace + voice_library（作者本人授权复刻）：
+     配置卡（生成/复刻/自动日更）→ 编导稿分镜（可逐镜改）→ 确认渲染（队列轮询）→ 成片入库。 */
+  if (rest === '/video/works' && method === 'GET') {
+    const accountIdFilter = text(search.get('accountId'));
+    const rows = accountIdFilter
+      ? await arows('SELECT * FROM junshi_workbench_video_works WHERE owner_key=? AND account_id=? ORDER BY created_at DESC LIMIT 50', [owner.key, accountIdFilter])
+      : await arows('SELECT * FROM junshi_workbench_video_works WHERE owner_key=? ORDER BY created_at DESC LIMIT 50', [owner.key]);
+    return { items: rows.map(workOut), autoEnabled: videoAutoEnabled() };
+  }
+  if (rest === '/video/works' && method === 'POST') {
+    const mode = ['generate', 'replicate'].includes(text(ctx.body?.mode)) ? text(ctx.body?.mode) : 'generate';
+    const brief = text(ctx.body?.brief).slice(0, 4000);
+    const type = VIDEO_TYPES[text(ctx.body?.type)] ? text(ctx.body?.type) : 'ecommerce';
+    const subtypeOk = (VIDEO_TYPES[type].subtypes || []).some(([name]) => name === text(ctx.body?.subtype));
+    const subtype = subtypeOk ? text(ctx.body?.subtype) : (VIDEO_TYPES[type].subtypes?.[0]?.[0] || '');
+    const hookStrategy = VIDEO_HOOKS.some(([value]) => value === text(ctx.body?.hookStrategy)) ? text(ctx.body?.hookStrategy) : 'auto';
+    const durationSeconds = clampInt(ctx.body?.durationSeconds, 5, 5, 120);
+    const resolution = text(ctx.body?.resolution).slice(0, 16);
+    const ratio = text(ctx.body?.ratio).slice(0, 16) || '9:16';
+    const model = text(ctx.body?.model).slice(0, 64);
+    const assetRefs = sanitizeAssetRefs(ctx.body?.assetRefs);
+    const reference = text(ctx.body?.reference).slice(0, 4000);
+    const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
+    if (!brief && mode === 'generate') throw errors.badRequest('请先描述想做的视频（卖点、人物、画面要求都可以）', 'VALIDATION_ERROR', { field: 'brief' });
+    if (!brief && !reference && mode === 'replicate') throw errors.badRequest('复刻模式需要参考内容（转写档案/链接/文字）', 'VALIDATION_ERROR', { field: 'reference' });
+    if (assetRefs.length > 12) throw errors.badRequest('一次最多引用 12 个素材', 'VALIDATION_ERROR', { field: 'assetRefs' });
+    rateLimit(owner.key);
+    const workId = id('jww');
+    const at = nowIso();
+    await aq('INSERT INTO junshi_workbench_video_works (id,owner_key,org_id,account_id,mode,title,type,subtype,hook_strategy,model,duration_seconds,resolution,ratio,brief,asset_refs,status,message,director_script,script_revision,script_edited,auto_task_id,output_asset_id,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [workId, owner.key, owner.orgId, accountId, mode, '', type, subtype, hookStrategy, model, durationSeconds, resolution, ratio, brief, JSON.stringify(assetRefs), 'planning', '正在写编导稿…', '', 0, 0, null, null, '', at, at]);
+    void runDirectorScript(owner, workId, { reference });
+    return { work: workOut(await arow('SELECT * FROM junshi_workbench_video_works WHERE id=?', [workId])) };
+  }
+  if (rest.startsWith('/video/works/')) {
+    const tail = rest.slice('/video/works/'.length);
+    const [workIdRaw, sub1, sub2] = tail.split('/');
+    const workId = decodeURIComponent(workIdRaw);
+    const work = await arow('SELECT * FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [workId, owner.key]);
+    if (!work) throw errors.notFound('视频任务不存在', 'NOT_FOUND');
+    if (!sub1 && method === 'GET') {
+      const renders = await arows('SELECT * FROM junshi_workbench_video_renders WHERE owner_key=? AND work_id=? ORDER BY created_at DESC LIMIT 60', [owner.key, workId]);
+      return { work: workOut(work), renders: renders.map(renderOut) };
+    }
+    if (!sub1 && method === 'PUT') {
+      const title = ctx.body?.title !== undefined ? text(ctx.body?.title).slice(0, 200) : work.title;
+      let directorScript = work.director_script;
+      let scriptEdited = Number(work.script_edited || 0);
+      let revision = Number(work.script_revision || 0);
+      if (ctx.body?.directorScript !== undefined) {
+        const parsed = parseDirectorScript(ctx.body?.directorScript);
+        if (!parsed.ok) throw errors.badRequest(parsed.message, 'VALIDATION_ERROR', { field: 'directorScript' });
+        directorScript = JSON.stringify(parsed.data);
+        scriptEdited = ctx.body?.scriptEdited === false ? 0 : 1;
+        revision += 1;
+      }
+      await aq('UPDATE junshi_workbench_video_works SET title=?, director_script=?, script_revision=?, script_edited=?, updated_at=? WHERE id=? AND owner_key=?',
+        [title, directorScript, revision, scriptEdited, nowIso(), workId, owner.key]);
+      return { work: workOut(await arow('SELECT * FROM junshi_workbench_video_works WHERE id=?', [workId])) };
+    }
+    if (!sub1 && method === 'DELETE') {
+      await aq('DELETE FROM junshi_workbench_video_renders WHERE owner_key=? AND work_id=?', [owner.key, workId]);
+      await aq('DELETE FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [workId, owner.key]);
+      return { ok: true };
+    }
+    if (sub1 === 'regenerate' && method === 'POST') {
+      if (['planning', 'rendering'].includes(work.status)) throw errors.badRequest('当前正在生成中，请等这一版结束再换。', 'WORKBENCH_VIDEO_BUSY');
+      rateLimit(owner.key);
+      await aq("UPDATE junshi_workbench_video_works SET status='planning', message='正在换一版编导稿…', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), workId, owner.key]);
+      void runDirectorScript(owner, workId, { reference: text(ctx.body?.reference).slice(0, 4000) });
+      return { work: workOut(await arow('SELECT * FROM junshi_workbench_video_works WHERE id=?', [workId])) };
+    }
+    if (sub1 === 'confirm' && method === 'POST') {
+      const renderId = await startWorkRender(owner, work);
+      return { work: workOut(await arow('SELECT * FROM junshi_workbench_video_works WHERE id=?', [workId])), renderId };
+    }
+    if (sub1 === 'shots' && sub2 && method === 'POST') {
+      const shotIndex = clampInt(decodeURIComponent(sub2), 1, 1, 99);
+      const parsed = parseDirectorScript(work.director_script);
+      if (!parsed.ok) throw errors.badRequest('编导稿还没有准备好。', 'WORKBENCH_VIDEO_NO_SCRIPT');
+      const shot = (parsed.data.shots || []).find((item) => Number(item.index) === shotIndex);
+      if (!shot) throw errors.badRequest('分镜不存在，先保存编导稿再试。', 'NOT_FOUND');
+      renderRateLimit(owner.key);
+      const renderId = id('jwrd');
+      const at = nowIso();
+      const prompt = `${shot.renderPrompt || shot.scene || ''}\n口播：${shot.voiceover || ''}`.trim();
+      const job = jobStart(owner, '单镜渲染', `第 ${shotIndex} 镜 · ${String(parsed.data.title || '').slice(0, 40)}`);
+      await aq('INSERT INTO junshi_workbench_video_renders (id,owner_key,org_id,project_id,account_id,job_id,title,prompt,duration_seconds,aspect_ratio,status,asset_id,error,work_id,shot_index,kind,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [renderId, owner.key, owner.orgId, null, work.account_id, job.id, `第 ${shotIndex} 镜`, prompt, clampInt(shot.seconds, 3, 3, 60), work.ratio, 'running', null, '', workId, shotIndex, 'shot', at, at]);
+      void runWorkbenchRender(owner, renderId, { job });
+      return { render: renderOut(await arow('SELECT * FROM junshi_workbench_video_renders WHERE id=?', [renderId])) };
+    }
+  }
+  if (rest.startsWith('/video/renders/') && rest.endsWith('/retry') && method === 'POST') {
+    const renderId = decodeURIComponent(rest.slice('/video/renders/'.length, -'/retry'.length));
+    const row = await arow('SELECT * FROM junshi_workbench_video_renders WHERE id=? AND owner_key=?', [renderId, owner.key]);
+    if (!row) throw errors.notFound('渲染任务不存在', 'NOT_FOUND');
+    if (['running', 'queued'].includes(row.status)) throw errors.badRequest('这条渲染还在进行中。', 'WORKBENCH_VIDEO_BUSY');
+    renderRateLimit(owner.key);
+    await aq("UPDATE junshi_workbench_video_renders SET status='running', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), renderId, owner.key]);
+    const job = jobStart(owner, row.kind === 'shot' ? '单镜渲染（重试）' : '视频渲染（重试）', String(row.title || '').slice(0, 60));
+    await aq('UPDATE junshi_workbench_video_renders SET job_id=?, updated_at=? WHERE id=? AND owner_key=?', [job.id, nowIso(), renderId, owner.key]);
+    if (row.work_id) await aq("UPDATE junshi_workbench_video_works SET status='rendering', message='正在重试渲染…', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), row.work_id, owner.key]).catch(() => {});
+    void runWorkbenchRender(owner, renderId, { job });
+    return { render: renderOut(await arow('SELECT * FROM junshi_workbench_video_renders WHERE id=?', [renderId])) };
+  }
+
+  /* ── 音色库（2–15 秒参考音频；先传素材库再登记名称，与五期克隆音色互不影响） ── */
+  if (rest === '/voice-samples' && method === 'GET') {
+    const accountIdFilter = text(search.get('accountId'));
+    const rows = accountIdFilter
+      ? await arows('SELECT * FROM junshi_workbench_voice_samples WHERE owner_key=? AND account_id=? ORDER BY created_at DESC LIMIT 100', [owner.key, accountIdFilter])
+      : await arows('SELECT * FROM junshi_workbench_voice_samples WHERE owner_key=? ORDER BY created_at DESC LIMIT 100', [owner.key]);
+    const assets = await arows('SELECT id, file_name, mime_type FROM junshi_workbench_assets WHERE owner_key=?', [owner.key]);
+    const nameById = new Map(assets.map((item) => [item.id, item]));
+    return { items: rows.map((row) => voiceSampleOut(row, nameById.get(row.asset_id))) };
+  }
+  if (rest === '/voice-samples' && method === 'POST') {
+    const assetId = text(ctx.body?.assetId);
+    const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, owner.key]);
+    if (!assetRow) throw errors.notFound('音频素材不存在（先上传到素材库）', 'NOT_FOUND');
+    if (!/^audio\//.test(String(assetRow.mime_type || ''))) throw errors.badRequest('音色参考需要是音频素材', 'VALIDATION_ERROR');
+    const duration = Number(ctx.body?.durationSeconds);
+    if (Number.isFinite(duration) && duration > 0 && (duration < 2 || duration > 15)) {
+      throw errors.badRequest(`音色参考需为 2–15 秒，当前音频 ${duration.toFixed(2)} 秒，请先截取再上传。`, 'VALIDATION_ERROR');
+    }
+    const name = (text(ctx.body?.name) || assetRow.file_name || '我的音色').slice(0, 60);
+    const sampleId = id('jwvs');
+    const at = nowIso();
+    await aq('INSERT INTO junshi_workbench_voice_samples (id,owner_key,org_id,account_id,name,asset_id,duration_seconds,use_count,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      [sampleId, owner.key, owner.orgId, await resolveAccountId(owner.key, ctx.body?.accountId), name, assetId, Number.isFinite(duration) ? duration : 0, 0, at, at]);
+    return { sample: voiceSampleOut(await arow('SELECT * FROM junshi_workbench_voice_samples WHERE id=?', [sampleId]), assetRow) };
+  }
+  if (rest.startsWith('/voice-samples/')) {
+    const tail = rest.slice('/voice-samples/'.length);
+    const [sampleIdRaw, action] = tail.split('/');
+    const sampleId = decodeURIComponent(sampleIdRaw);
+    const row = await arow('SELECT * FROM junshi_workbench_voice_samples WHERE id=? AND owner_key=?', [sampleId, owner.key]);
+    if (!row) throw errors.notFound('音色不存在', 'NOT_FOUND');
+    if (!action && method === 'PUT') {
+      const name = (text(ctx.body?.name) || row.name).slice(0, 60);
+      await aq('UPDATE junshi_workbench_voice_samples SET name=?, updated_at=? WHERE id=? AND owner_key=?', [name, nowIso(), sampleId, owner.key]);
+      return { sample: voiceSampleOut(await arow('SELECT * FROM junshi_workbench_voice_samples WHERE id=?', [sampleId])) };
+    }
+    if (!action && method === 'DELETE') {
+      await aq('DELETE FROM junshi_workbench_voice_samples WHERE id=? AND owner_key=?', [sampleId, owner.key]);
+      return { ok: true };
+    }
+    if (action === 'use' && method === 'POST') {
+      await aq('UPDATE junshi_workbench_voice_samples SET use_count=use_count+1, updated_at=? WHERE id=? AND owner_key=?', [nowIso(), sampleId, owner.key]);
+      const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [row.asset_id, owner.key]);
+      return { sample: voiceSampleOut(await arow('SELECT * FROM junshi_workbench_voice_samples WHERE id=?', [sampleId]), assetRow) };
+    }
+  }
+
+  /* ── 自动日更任务（调度需要平台开 JUNSHI_VIDEO_AUTO_ENABLED=1，防误触发生成费用） ── */
+  if (rest === '/video/auto-tasks' && method === 'GET') {
+    const rows = await arows('SELECT * FROM junshi_workbench_video_auto_tasks WHERE owner_key=? ORDER BY created_at DESC LIMIT 50', [owner.key]);
+    return { items: rows.map(autoTaskOut), autoEnabled: videoAutoEnabled() };
+  }
+  if (rest === '/video/auto-tasks' && method === 'POST') {
+    const taskName = (text(ctx.body?.taskName) || '自动视频任务').slice(0, 100);
+    const type = VIDEO_TYPES[text(ctx.body?.type)] ? text(ctx.body?.type) : 'ecommerce';
+    const subtypeOk = (VIDEO_TYPES[type].subtypes || []).some(([name]) => name === text(ctx.body?.subtype));
+    const subtype = subtypeOk ? text(ctx.body?.subtype) : (VIDEO_TYPES[type].subtypes?.[0]?.[0] || '');
+    const hookStrategy = VIDEO_HOOKS.some(([value]) => value === text(ctx.body?.hookStrategy)) ? text(ctx.body?.hookStrategy) : 'auto';
+    const scheduleType = text(ctx.body?.scheduleType) === 'every_days' ? 'every_days' : 'daily';
+    const intervalDays = clampInt(ctx.body?.intervalDays, 2, 2, 30);
+    const runTime = /^\d{2}:\d{2}$/.test(text(ctx.body?.runTime)) ? text(ctx.body?.runTime) : '09:00';
+    const count = clampInt(ctx.body?.count, 1, 1, 5);
+    const authorizedFolder = text(ctx.body?.authorizedFolder).slice(0, 200);
+    const taskId = id('jwvt');
+    const at = nowIso();
+    const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
+    await aq('INSERT INTO junshi_workbench_video_auto_tasks (id,owner_key,org_id,account_id,client_id,task_name,schedule_type,interval_days,run_time,count,authorized_folder,type,subtype,hook_strategy,model,duration_seconds,resolution,ratio,enabled,next_run_at,last_run_at,last_run_status,last_message,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [taskId, owner.key, owner.orgId, accountId, text(ctx.body?.clientId).slice(0, 64) || null, taskName, scheduleType, intervalDays, runTime, count, authorizedFolder, type, subtype, hookStrategy, text(ctx.body?.model).slice(0, 64), clampInt(ctx.body?.durationSeconds, 5, 5, 120), text(ctx.body?.resolution).slice(0, 16), text(ctx.body?.ratio).slice(0, 16) || '9:16', ctx.body?.enabled === false ? 0 : 1, nextAutoRunAt(scheduleType, intervalDays, runTime), null, null, null, at, at]);
+    return { task: autoTaskOut(await arow('SELECT * FROM junshi_workbench_video_auto_tasks WHERE id=?', [taskId])), autoEnabled: videoAutoEnabled() };
+  }
+  if (rest.startsWith('/video/auto-tasks/')) {
+    const taskId = decodeURIComponent(rest.slice('/video/auto-tasks/'.length));
+    const row = await arow('SELECT * FROM junshi_workbench_video_auto_tasks WHERE id=? AND owner_key=?', [taskId, owner.key]);
+    if (!row) throw errors.notFound('自动任务不存在', 'NOT_FOUND');
+    if (method === 'PUT') {
+      const enabled = ctx.body?.enabled !== undefined ? (ctx.body?.enabled ? 1 : 0) : Number(row.enabled || 0);
+      const taskName = ctx.body?.taskName !== undefined ? text(ctx.body?.taskName).slice(0, 100) || row.task_name : row.task_name;
+      const runTime = ctx.body?.runTime !== undefined && /^\d{2}:\d{2}$/.test(text(ctx.body?.runTime)) ? text(ctx.body?.runTime) : row.run_time;
+      const scheduleType = ctx.body?.scheduleType !== undefined ? (text(ctx.body?.scheduleType) === 'every_days' ? 'every_days' : 'daily') : row.schedule_type;
+      const intervalDays = ctx.body?.intervalDays !== undefined ? clampInt(ctx.body?.intervalDays, 2, 2, 30) : Number(row.interval_days || 2);
+      const nextRun = enabled ? nextAutoRunAt(scheduleType, intervalDays, runTime) : row.next_run_at;
+      await aq('UPDATE junshi_workbench_video_auto_tasks SET enabled=?, task_name=?, run_time=?, schedule_type=?, interval_days=?, next_run_at=?, updated_at=? WHERE id=? AND owner_key=?',
+        [enabled, taskName, runTime, scheduleType, intervalDays, nextRun, nowIso(), taskId, owner.key]);
+      return { task: autoTaskOut(await arow('SELECT * FROM junshi_workbench_video_auto_tasks WHERE id=?', [taskId])) };
+    }
+    if (method === 'DELETE') {
+      await aq('DELETE FROM junshi_workbench_video_auto_tasks WHERE id=? AND owner_key=?', [taskId, owner.key]);
+      return { ok: true };
+    }
   }
 
   /* ── 素材 ── */

@@ -1458,9 +1458,94 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_brains (
   updated_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_brain_owner ON junshi_workbench_brains(owner_key, created_at DESC);
+
+-- 七期：视频完整工作台（生成/复刻/自动日更三模式统一任务行，编导稿分镜 JSON 存 director_script）。
+-- 对齐原版 XiaoLingDang 的 video_workspace（作者本人授权复刻）。
+CREATE TABLE IF NOT EXISTS junshi_workbench_video_works (
+  id               TEXT NOT NULL PRIMARY KEY,
+  owner_key        TEXT NOT NULL,
+  org_id           TEXT,
+  account_id       TEXT NOT NULL DEFAULT 'default',
+  mode             TEXT NOT NULL DEFAULT 'generate',
+  title            TEXT NOT NULL DEFAULT '',
+  type             TEXT NOT NULL DEFAULT 'ecommerce',
+  subtype          TEXT NOT NULL DEFAULT '',
+  hook_strategy    TEXT NOT NULL DEFAULT 'auto',
+  model            TEXT NOT NULL DEFAULT '',
+  duration_seconds INTEGER NOT NULL DEFAULT 15,
+  resolution       TEXT NOT NULL DEFAULT '',
+  ratio            TEXT NOT NULL DEFAULT '9:16',
+  brief            TEXT NOT NULL DEFAULT '',
+  asset_refs       TEXT NOT NULL DEFAULT '[]',
+  status           TEXT NOT NULL DEFAULT 'planning',
+  message          TEXT NOT NULL DEFAULT '',
+  director_script  TEXT NOT NULL DEFAULT '',
+  script_revision  INTEGER NOT NULL DEFAULT 0,
+  script_edited    INTEGER NOT NULL DEFAULT 0,
+  auto_task_id     TEXT,
+  output_asset_id  TEXT,
+  error            TEXT NOT NULL DEFAULT '',
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_vwork_owner ON junshi_workbench_video_works(owner_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_vwork_auto ON junshi_workbench_video_works(auto_task_id);
+
+-- 七期：音色库（2–15 秒参考音频；与五期数字人克隆音色 junshi_workbench_voices 区分）。
+CREATE TABLE IF NOT EXISTS junshi_workbench_voice_samples (
+  id               TEXT NOT NULL PRIMARY KEY,
+  owner_key        TEXT NOT NULL,
+  org_id           TEXT,
+  account_id       TEXT NOT NULL DEFAULT 'default',
+  name             TEXT NOT NULL DEFAULT '',
+  asset_id         TEXT NOT NULL,
+  duration_seconds REAL NOT NULL DEFAULT 0,
+  use_count        INTEGER NOT NULL DEFAULT 0,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_vsample_owner ON junshi_workbench_voice_samples(owner_key, created_at DESC);
+
+-- 七期：自动日更任务（调度需要平台开 JUNSHI_VIDEO_AUTO_ENABLED=1）。
+CREATE TABLE IF NOT EXISTS junshi_workbench_video_auto_tasks (
+  id                TEXT NOT NULL PRIMARY KEY,
+  owner_key         TEXT NOT NULL,
+  org_id            TEXT,
+  account_id        TEXT NOT NULL DEFAULT 'default',
+  client_id         TEXT,
+  task_name         TEXT NOT NULL DEFAULT '',
+  schedule_type     TEXT NOT NULL DEFAULT 'daily',
+  interval_days     INTEGER NOT NULL DEFAULT 2,
+  run_time          TEXT NOT NULL DEFAULT '09:00',
+  count             INTEGER NOT NULL DEFAULT 1,
+  authorized_folder TEXT NOT NULL DEFAULT '',
+  type              TEXT NOT NULL DEFAULT 'ecommerce',
+  subtype           TEXT NOT NULL DEFAULT '',
+  hook_strategy     TEXT NOT NULL DEFAULT 'auto',
+  model             TEXT NOT NULL DEFAULT '',
+  duration_seconds  INTEGER NOT NULL DEFAULT 15,
+  resolution        TEXT NOT NULL DEFAULT '',
+  ratio             TEXT NOT NULL DEFAULT '9:16',
+  enabled           INTEGER NOT NULL DEFAULT 1,
+  next_run_at       TEXT,
+  last_run_at       TEXT,
+  last_run_status   TEXT,
+  last_message      TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_vauto_owner ON junshi_workbench_video_auto_tasks(owner_key, next_run_at);
 `;
 
 db.exec(SCHEMA);
+
+// ── 七期补列：视频渲染行挂到视频工作台任务行（整片/单镜渲染复用同一管道） ──────────
+try { db.exec("ALTER TABLE junshi_workbench_video_renders ADD COLUMN work_id TEXT"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE junshi_workbench_video_renders ADD COLUMN shot_index INTEGER NOT NULL DEFAULT 0'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec("ALTER TABLE junshi_workbench_video_renders ADD COLUMN kind TEXT NOT NULL DEFAULT 'single'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
 // ── 五期补列：文案草稿的发布数据回填（截图 → 多模态识别 → stats JSON） ──────────
 try { db.exec("ALTER TABLE junshi_workbench_copy_drafts ADD COLUMN stats TEXT NOT NULL DEFAULT ''"); }

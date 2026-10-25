@@ -615,3 +615,88 @@ export function demoPeerReport(name) {
     ],
   };
 }
+
+/* ───────────── 七期 · 视频完整工作台（对齐原版 video_workspace，作者本人授权复刻） ───────────── */
+
+// 内容方向目录：与原版一致的四类 + 细分；前端、后端校验和提示词共用这一份。
+export const VIDEO_TYPES = {
+  ecommerce: { label: '电商带货', subtypes: [['口播带货', '真人推荐，建立购买信任'], ['促销转化', '突出优惠，推动立即下单'], ['场景种草', '植入场景，激发使用需求'], ['痛点解决', '直击痛点，展示解决效果'], ['功能演示', '演示功能，证明产品价值']] },
+  local_store: { label: '同城到店', subtypes: [['门店发现', '突出特色，制造到店理由'], ['到店实录', '真实体验，建立消费信任'], ['招牌体验', '聚焦招牌，证明门店价值'], ['同城团购', '突出优惠，推动到店核销']] },
+  brand: { label: '品牌广告', subtypes: [['品牌主张', '传递理念，建立价值认同'], ['品牌故事', '讲述故事，强化品牌信任'], ['生活方式', '塑造场景，建立品牌向往'], ['创意概念', '创意表达，强化品牌记忆']] },
+  drama: { label: '剧情短片', subtypes: [['对话短剧', '人物冲突，推动剧情发展'], ['反转短剧', '剧情反转，制造传播记忆'], ['悬念短剧', '设置悬念，持续吸引观看'], ['情绪短片', '情绪共鸣，强化内容感染'], ['产品植入', '融入剧情，自然传递价值']] },
+};
+
+// 开场方式（钩子策略）：与原版一致的七种。
+export const VIDEO_HOOKS = [
+  ['auto', '由素材推荐开场', '根据素材与类型确定最合适的第一击'],
+  ['pain_point', '直击产品核心痛点', '先让观众看到问题，再给出解法'],
+  ['novel_scene', '利用新奇场景开场', '先用反常或新鲜画面建立好奇'],
+  ['emotional_reversal', '制造强烈情绪反转', '先建立预期，再给出反差'],
+  ['contrarian', '用反常识观点开场', '用一句不同判断抓住注意力'],
+  ['real_need', '真实痛点引出需求', '从真实生活困扰自然带出产品'],
+  ['strong_contrast', '强烈对比突出差异', '用前后或新旧对比证明价值'],
+];
+
+export function videoTypeLabel(type) {
+  return VIDEO_TYPES[type]?.label || '视频生成';
+}
+export function videoHookLabel(value) {
+  const found = VIDEO_HOOKS.find(([key]) => key === value);
+  return found ? found[1] : '由素材推荐开场';
+}
+function videoSubtypeName(type, subtype) {
+  const found = (VIDEO_TYPES[type]?.subtypes || []).find(([name]) => name === subtype);
+  return found ? found[0] : subtype;
+}
+
+// 编导稿（director spec）：结构化分镜 JSON，可逐镜编辑后确认渲染。
+// ⚠️ 提示词要求 JSON 时只许一个对象（蓝图那次的教训：两个 JSON 会被宽松解析丢数据）。
+export function buildDirectorScriptPrompt({ profile, orgProfile, mode, type, subtype, hookStrategy, brief, assets, duration, ratio, reference }) {
+  const assetBlock = (assets || []).length
+    ? (assets || []).map((item, index) => `- @${item.role}${index + 1}（${item.label || item.fileName || item.assetId}）：${item.notes || item.summary || '按素材内容使用'}`).join('\n')
+    : '无（纯口播/生成画面）';
+  return `你是短视频编导。根据机构档案、素材和需求，输出一份结构化编导稿（JSON），用于逐镜生成视频。
+
+【创作模式】${mode === 'replicate' ? '复刻模式（参考既有内容结构，替换为本机构产品）' : '生成模式（从需求开始创作）'}
+【内容方向】${videoTypeLabel(type)} · ${videoSubtypeName(type, subtype)}
+【开场方式】${videoHookLabel(hookStrategy)}
+【成片时长】约 ${duration} 秒，画幅 ${ratio || '9:16'}
+【补充需求】${brief || '无'}
+【参考内容】${reference || '无'}
+【可用素材（引用格式 @角色N）】
+${assetBlock}
+【机构画像】
+${orgProfile || '未填写'}
+【内容账号档案】
+${workbenchProfileBlock(profile)}
+
+输出要求：只输出一个 JSON 对象，不要 markdown 代码块，不要解释。结构：
+{"title":"视频标题（20字内）","strategy":"一句话策略","shots":[{"index":1,"seconds":5,"role":"hook","scene":"画面描述（人物/场景/镜头运动）","voiceover":"口播台词（口语短句）","overlay":"字幕或花字（可空）","renderPrompt":"给视频模型的画面提示词，包含场景、人物、动作、镜头语言，不含口播文字"}],"notes":"拍摄备注（可空）"}
+
+规则：
+- shots 总秒数必须等于 ${duration}；每镜 3-15 秒；整条 3-6 镜。
+- role 只能取：hook（开场钩子）、pain（痛点）、proof（证明/展示）、turn（转折）、cta（行动引导）。
+- 第一镜必须执行「${videoHookLabel(hookStrategy)}」。
+- 引用了素材就在对应镜的 scene/renderPrompt 里用 @人物1/@场景1/@音色1 指明用途；没引用的素材不要编造。
+- renderPrompt 要具体到可直接生成画面；voiceover 总字数与总秒数匹配（每秒约 4 字）。
+- 不承诺效果，不使用绝对化用语。`;
+}
+
+// 演示编导稿：模型未接入/返回空时兜底，保证链路可走通。
+export function demoDirectorScript({ profile, type, subtype, duration = 15, brief = '' }) {
+  const subject = subjectOf(profile);
+  const audience = audienceOf(profile);
+  const safeDuration = Number(duration) || 15;
+  const per = Math.max(3, Math.round(safeDuration / 3));
+  const topic = clean(brief).slice(0, 40) || `${videoTypeLabel(type)} · ${subtype || '口播带货'}`;
+  return JSON.stringify({
+    title: `${subject}：${topic}`,
+    strategy: `用一个具体误区开场，让${audience}对号入座，再给一个今天就能做的动作。`,
+    shots: [
+      { index: 1, seconds: per, role: 'hook', scene: '人物近景看镜头，教室背景，镜头缓推。', voiceover: `很多${audience}在选${subject}时，第一步就做反了。`, overlay: '先别急着做决定', renderPrompt: `竖屏近景，一位温和的老师在明亮的教室里直视镜头说话，镜头缓慢推近，光线柔和，${topic}氛围。` },
+      { index: 2, seconds: per, role: 'pain', scene: '切到家长纠结翻资料的画面，再切回老师。', voiceover: `不是看得越多越好，而是先搞清楚孩子现在缺什么。`, overlay: '', renderPrompt: `竖屏中景，书桌上摊着资料，一只手在犹豫地翻页，随后切回教室老师讲话，节奏平稳。` },
+      { index: 3, seconds: Math.max(3, safeDuration - per * 2), role: 'cta', scene: '老师拿起一页示例讲解，字幕出现行动引导。', voiceover: `先做一次现状评估，再决定要不要报，评论区可以领评估表。`, overlay: '评论区领评估表', renderPrompt: `竖屏近景，老师拿起一页打印的评估表对着镜头展示，微笑，结尾定格，画面干净。` },
+    ],
+    notes: '（演示编导稿）模型未返回正文时兜底生成，确认前可逐镜修改。',
+  }, null, 2);
+}
