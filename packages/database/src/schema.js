@@ -1525,6 +1525,24 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_content_cycles (
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_cycle_owner ON junshi_workbench_content_cycles(owner_key, created_at DESC);
 
+-- 十期：素材分析队列（图片视觉分析；音频沿用四期转写档案）。
+-- 队列在服务进程内跑（关页继续，重启丢队由用户重按批量分析兜底）。
+CREATE TABLE IF NOT EXISTS junshi_workbench_asset_analyses (
+  id          TEXT NOT NULL PRIMARY KEY,
+  owner_key   TEXT NOT NULL,
+  org_id      TEXT,
+  account_id  TEXT NOT NULL DEFAULT 'default',
+  asset_id    TEXT NOT NULL,
+  kind        TEXT NOT NULL DEFAULT 'visual',
+  status      TEXT NOT NULL DEFAULT 'queued',
+  result      TEXT NOT NULL DEFAULT '{}',
+  error       TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_asa_owner ON junshi_workbench_asset_analyses(owner_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_asa_asset ON junshi_workbench_asset_analyses(asset_id);
+
 `;
 
 db.exec(SCHEMA);

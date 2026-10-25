@@ -227,6 +227,10 @@
     cycleForm: { count: 7, brief: '' },
     cycleRequirements: '',
     reviewInsight: null,
+    // 十期 · 素材库（树形/分析队列/成片画廊）
+    assetView: 'grid',
+    assetAnalysisFilter: '',
+    assetTimer: null,
     // 多创作账号：当前选中的账号 id（'default' = 默认账号）；文案/视频/素材/档案都跟着它走。
     accounts: [],
     accountId: 'default',
@@ -271,6 +275,7 @@
     if (tab !== 'video') { stopRenderPolling(); stopAvatarPolling(); stopVideoWorkPolling(); }
     if (tab !== 'chat') stopWfPolling();
     if (tab !== 'plan') stopCyclePolling();
+    if (tab !== 'assets') stopAssetPolling();
     if (tab === 'plan') void loadCycles();
     if (tab !== 'references') stopTsPolling();
     if (tab !== 'copybrains' && state.brainPollTimer) { clearInterval(state.brainPollTimer); state.brainPollTimer = null; }
@@ -2164,45 +2169,179 @@
   }
 
   /* ───────────── 素材库（账号 + 文件夹） ───────────── */
+  /* ───────────── 十期 · 素材库（树形文件夹 + 分析队列 + 成片画廊，对齐原版 assets） ───────────── */
+  function stopAssetPolling() {
+    if (state.assetTimer) { clearInterval(state.assetTimer); state.assetTimer = null; }
+  }
+  async function loadAssets(silent) {
+    var accountId = state.accountId;
+    var query = '?accountId=' + encodeURIComponent(accountId) + (state.assetFolder ? '&folder=' + encodeURIComponent(state.assetFolder) : '');
+    var data = await call('/assets' + query).catch(function () { return { items: [], folders: [] }; });
+    if (state.accountId !== accountId) return;
+    state.assets = data.items || [];
+    state.assetFolders = data.folders || [];
+    if (state.tab === 'assets') renderAssets();
+    startAssetPolling();
+  }
+  function startAssetPolling() {
+    var busy = state.assets.some(function (item) { return item.analysis && (item.analysis.status === 'queued' || item.analysis.status === 'running'); });
+    if (!busy) { stopAssetPolling(); return; }
+    if (state.assetTimer) return;
+    state.assetTimer = setInterval(function () {
+      if (state.tab !== 'assets') { stopAssetPolling(); return; }
+      void loadAssets(true);
+    }, 3000);
+  }
+  function assetFolderChildren() {
+    var prefix = state.assetFolder ? state.assetFolder + '/' : '';
+    var seen = {};
+    (state.assetFolders || []).forEach(function (row) {
+      var path = row.folder || '';
+      if (!prefix) {
+        if (!path) return;
+        seen[path.split('/')[0]] = (seen[path.split('/')[0]] || 0) + row.count;
+      } else if (path.indexOf(prefix) === 0) {
+        var next = path.slice(prefix.length).split('/')[0];
+        if (next) seen[next] = (seen[next] || 0) + row.count;
+      }
+    });
+    return Object.keys(seen).sort().map(function (name) {
+      return { name: name, path: prefix + name, count: seen[name] };
+    });
+  }
+  function assetBreadcrumb() {
+    if (!state.assetFolder) return '<button class="chip on" type="button" data-asset-folder="">全部</button>' +
+      '<button class="chip" type="button" data-asset-folder="__none__">未分类</button>';
+    var parts = state.assetFolder.split('/');
+    var crumbs = ['<button class="chip" type="button" data-asset-folder="">全部</button>'];
+    for (var i = 0; i < parts.length; i++) {
+      var path = parts.slice(0, i + 1).join('/');
+      crumbs.push('<button class="chip' + (i === parts.length - 1 ? ' on' : '') + '" type="button" data-asset-folder="' + esc(path) + '">' + esc(parts[i]) + '</button>');
+    }
+    crumbs.push('<button class="chip" type="button" data-asset-folder="__none__">未分类</button>');
+    return crumbs.join('<span class="wb-crumb-sep">›</span>');
+  }
+  var GALLERY_FOLDERS = ['成片', 'AI 生成', '数字人'];
+  function assetAnalysisChip(item) {
+    var a = item.analysis;
+    if (!a) return item.kind === 'image' ? '<span class="wb-tag">待分析</span>' : '';
+    var map = { queued: '排队中', running: '分析中', succeeded: a.reusable ? '可复用' : '已分析', failed: '分析失败' };
+    return '<span class="wb-tag' + (a.status === 'failed' ? ' warn' : a.reusable ? ' ok' : '') + '">' + esc(map[a.status] || a.status) + '</span>';
+  }
+  function openAssetMoveDialog(asset) {
+    var paths = (state.assetFolders || []).filter(function (row) { return row.folder; }).map(function (row) { return row.folder; });
+    var options = ['<option value=""' + (!asset.folder ? ' selected' : '') + '>不分组（未分类）</option>']
+      .concat(paths.map(function (path) {
+        return '<option value="' + esc(path) + '"' + (asset.folder === path ? ' selected' : '') + '>' + esc(path) + '</option>';
+      }));
+    showDialog('移动素材', '<p class="wb-note">「' + esc(asset.fileName) + '」移到哪个文件夹？也可以输入新文件夹名（用 / 建层级）。</p>' +
+      '<label class="wb-field full"><span>目标文件夹</span><input id="wb-asset-move-target" list="wb-asset-move-paths" value="' + esc(asset.folder || '') + '" maxlength="120" placeholder="如：课堂实拍/体验课"></label>' +
+      '<datalist id="wb-asset-move-paths">' + paths.map(function (path) { return '<option value="' + esc(path) + '">'; }).join('') + '</datalist>' +
+      '<div class="wb-actions"><button class="btn primary" type="button" id="wb-asset-move-go">移动</button></div>');
+    $('#wb-asset-move-go').onclick = async function () {
+      var target = String(($('#wb-asset-move-target') || {}).value || '').trim();
+      this.disabled = true; this.innerHTML = ic('loader', 12) + '移动中…';
+      try {
+        await call('/assets/' + encodeURIComponent(asset.id), { method: 'PUT', body: { folder: target } });
+        closeDialog();
+        toast('已移动到「' + (target || '未分类') + '」', 'success');
+        void loadAssets(true);
+      } catch (error) {
+        toast(error.message, 'error');
+        this.disabled = false; this.innerHTML = '移动';
+      }
+    };
+  }
   function renderAssets() {
-    var items = state.assets;
-    var folders = [{ folder: '', count: items.length }].concat(
-      (state.assetFolders || []).filter(function (row) { return row.folder; })
-    );
-    var folderChips = folders.map(function (row) {
-      var active = (state.assetFolder || '') === row.folder;
-      return '<button class="chip' + (active ? ' on' : '') + '" type="button" data-folder="' + esc(row.folder) + '">' +
-        (row.folder ? esc(row.folder) : '全部') + '<small> ' + row.count + '</small></button>';
+    var galleryView = state.assetView === 'gallery';
+    var filter = state.assetAnalysisFilter || '';
+    var allItems = state.assets;
+    var items = allItems;
+    if (galleryView) {
+      items = allItems.filter(function (item) { return item.kind === 'video' && GALLERY_FOLDERS.indexOf(item.folder || '') >= 0; });
+    } else if (filter === 'pending') {
+      items = allItems.filter(function (item) { return item.kind === 'image' && (!item.analysis || item.analysis.status === 'queued' || item.analysis.status === 'running'); });
+    } else if (filter === 'failed') {
+      items = allItems.filter(function (item) { return item.analysis && item.analysis.status === 'failed'; });
+    } else if (filter === 'reusable') {
+      items = allItems.filter(function (item) { return item.analysis && item.analysis.reusable; });
+    }
+    var pendingCount = allItems.filter(function (item) { return item.kind === 'image' && (!item.analysis || item.analysis.status !== 'succeeded'); }).length;
+    var filterChips = [
+      ['', '不限'], ['pending', '待分析' + (pendingCount ? ' ' + pendingCount : '')], ['failed', '分析失败'], ['reusable', '可复用'],
+    ].map(function (row) {
+      if (galleryView && row[0]) return '';
+      return '<button class="chip' + (filter === row[0] ? ' on' : '') + '" type="button" data-asset-filter="' + row[0] + '">' + row[1] + '</button>';
     }).join('');
-    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
-      '<div class="wb-card"><div class="wb-card-head"><div><h3>素材库</h3><p>图片、视频、音频和文本保存在本机/机构文件存储；不会上传到第三方。AI 生成的视频会自动进「AI 生成」文件夹。</p></div>' +
-      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-asset-account"') + '</label></div>' +
-      '<div class="chips" style="margin:2px 0 10px">' + folderChips + '</div>' +
-      '<div class="wb-account-bar"><label class="btn primary" for="wb-asset-input">' + ic('upload', 13) + '上传素材</label>' +
-      '<input id="wb-asset-input" type="file" multiple hidden accept=".jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.webm,.m4v,.mp3,.m4a,.wav,.aac,.txt,.md">' +
-      '<label class="wb-inline"><span>放入文件夹</span><input id="wb-asset-folder" placeholder="留空=不分组，如：课堂实拍" maxlength="60" style="max-width:200px"></label></div>' +
-      (items.length ? '<div class="wb-asset-grid">' + items.map(function (item) {
+    var children = assetFolderChildren();
+    var childChips = galleryView ? '' : children.map(function (child) {
+      return '<button class="chip" type="button" data-asset-folder="' + esc(child.path) + '">' + esc(child.name) + '<small> ' + child.count + '</small></button>';
+    }).join('');
+    var cards;
+    if (galleryView) {
+      cards = items.length ? '<div class="wb-gallery-grid">' + items.map(function (item) {
+        return '<article class="wb-gallery-card"><video class="wb-render-video" controls preload="metadata" data-work-video="' + esc(item.id) + '"></video>' +
+          '<div class="wb-asset-info"><b title="' + esc(item.fileName) + '">' + esc(item.fileName) + '</b>' +
+          '<small>生成于 ' + fmtDate(item.createdAt) + ' · ' + esc(item.folder || '未分组') + ' · ' + esc(accountName(item.accountId)) + '</small>' +
+          '<div class="wb-actions"><button class="btn" type="button" data-asset-open="' + esc(item.id) + '">打开</button>' +
+          '<button class="btn" type="button" data-asset-move="' + esc(item.id) + '">移动</button></div></div></article>';
+      }).join('') + '</div>' : '<p class="wb-muted">还没有成片。视频工作台确认渲染或数字人口播完成后，成片会自动进画廊（历史「AI 生成」文件夹的也算）。</p>';
+    } else {
+      cards = items.length ? '<div class="wb-asset-grid">' + items.map(function (item) {
         var thumb = item.kind === 'image'
           ? '<img data-asset-img="' + esc(item.id) + '" alt="' + esc(item.fileName) + '" loading="lazy">'
           : ic(item.kind === 'video' ? 'video' : item.kind === 'audio' ? 'music' : 'folder', 28);
-        return '<article class="wb-asset"><div class="wb-thumb">' + thumb + '</div><div class="wb-asset-info"><b title="' + esc(item.fileName) + '">' + esc(item.fileName) + '</b>' +
+        var analysis = item.analysis && (item.analysis.description || item.analysis.error)
+          ? '<p class="wb-asset-analysis">' + esc(item.analysis.description || item.analysis.error) +
+            (item.analysis.tags && item.analysis.tags.length ? ' <small>' + esc(item.analysis.tags.join('、')) + '</small>' : '') + '</p>'
+          : '';
+        return '<article class="wb-asset"><div class="wb-thumb">' + thumb + '</div><div class="wb-asset-info">' +
+          '<div class="wb-v-shot-head"><b title="' + esc(item.fileName) + '">' + esc(item.fileName) + '</b>' + assetAnalysisChip(item) + '</div>' +
           '<small>' + esc(item.kind) + ' · ' + fmtSize(item.size) + ' · ' + fmtDate(item.createdAt) +
           (item.folder ? ' · 📁 ' + esc(item.folder) : '') + ' · ' + esc(accountName(item.accountId)) + '</small>' +
-          '<div class="wb-actions"><button class="btn" type="button" data-asset-open="' + esc(item.id) + '">打开</button>' +
+          analysis +
+          '<div class="wb-actions">' +
+          (item.kind === 'image' ? '<button class="btn" type="button" data-asset-analyze="' + esc(item.id) + '">' + (item.analysis && item.analysis.status === 'succeeded' ? '重新分析' : '分析') + '</button>' : '') +
+          '<button class="btn" type="button" data-asset-open="' + esc(item.id) + '">打开</button>' +
           '<button class="btn" type="button" data-asset-move="' + esc(item.id) + '">移动</button>' +
           '<button class="btn" type="button" data-asset-del="' + esc(item.id) + '">' + ic('trash', 12) + '</button></div></div></article>';
-      }).join('') + '</div>' : '<p class="wb-muted">这个筛选下还没有素材。上传课程图、课堂视频、参考音频或口播文本。</p>') +
+      }).join('') + '</div>' : '<p class="wb-muted">这个筛选下还没有素材。上传课程图、课堂视频、参考音频或口播文本。</p>';
+    }
+    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
+      '<div class="wb-card"><div class="wb-card-head"><div><h3>素材库</h3><p>树形文件夹整理素材；图片可进分析队列（画面描述/标签/可复用判定，关页继续跑）；AI 生成的成片自动进「成片」文件夹和画廊。</p></div>' +
+      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-asset-account"') + '</label></div>' +
+      '<div class="chips" style="margin:2px 0 6px">' + assetBreadcrumb() + '</div>' +
+      (childChips ? '<div class="chips" style="margin:0 0 6px">' + childChips + '</div>' : '') +
+      '<div class="chips" style="margin:0 0 10px">' +
+      '<button class="chip' + (!galleryView ? ' on' : '') + '" type="button" data-asset-view="grid">素材网格</button>' +
+      '<button class="chip' + (galleryView ? ' on' : '') + '" type="button" data-asset-view="gallery">成片画廊</button>' +
+      filterChips +
+      (!galleryView && pendingCount ? '<button class="chip" type="button" data-asset-analyze-batch>' + ic('loader', 11) + ' 分析全部待分析图片</button>' : '') +
+      '</div>' +
+      '<div class="wb-account-bar"><label class="btn primary" for="wb-asset-input">' + ic('upload', 13) + '上传素材</label>' +
+      '<input id="wb-asset-input" type="file" multiple hidden accept=".jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.webm,.m4v,.mp3,.m4a,.wav,.aac,.txt,.md">' +
+      '<label class="wb-inline"><span>新建子文件夹（可选）</span><input id="wb-asset-newfolder" placeholder="上传时即创建，如：课堂实拍" maxlength="60" style="max-width:200px"></label>' +
+      '<span class="wb-note">当前：' + (state.assetFolder === '__none__' ? '未分类' : (state.assetFolder || '全部')) + '</span></div>' +
+      cards +
       '</div></div></div>';
     bindAccountSwitch('#wb-asset-account');
-    $$('[data-folder]').forEach(function (chip) {
-      chip.onclick = async function () {
-        state.assetFolder = chip.dataset.folder;
-        try {
-          var query = '?accountId=' + encodeURIComponent(state.accountId) + (state.assetFolder ? '&folder=' + encodeURIComponent(state.assetFolder) : '');
-          var data = await call('/assets' + query);
-          state.assets = data.items || [];
-          state.assetFolders = data.folders || state.assetFolders;
-        } catch (error) { toast(error.message, 'error'); }
+    $$('[data-asset-folder]').forEach(function (chip) {
+      chip.onclick = function () {
+        state.assetFolder = chip.dataset.assetFolder;
+        stopAssetPolling();
+        void loadAssets(true);
+      };
+    });
+    $$('[data-asset-view]').forEach(function (chip) {
+      chip.onclick = function () {
+        state.assetView = chip.dataset.assetView;
+        renderAssets();
+        hydrateWorkVideos();
+      };
+    });
+    $$('[data-asset-filter]').forEach(function (chip) {
+      chip.onclick = function () {
+        state.assetAnalysisFilter = chip.dataset.assetFilter;
         renderAssets();
       };
     });
@@ -2210,41 +2349,52 @@
     input.onchange = async function () {
       var files = Array.prototype.slice.call(input.files || []);
       if (!files.length) return;
-      var folder = String(($('#wb-asset-folder') || {}).value || '').trim();
+      var newFolder = String(($('#wb-asset-newfolder') || {}).value || '').trim();
+      var folder = state.assetFolder === '__none__' ? '' : (state.assetFolder ? (newFolder ? state.assetFolder + '/' + newFolder : state.assetFolder) : newFolder);
       for (var i = 0; i < files.length; i++) {
         var form = new FormData();
         form.append('file', files[i]);
         if (folder) form.append('folder', folder);
         form.append('accountId', state.accountId);
         try {
-          var result = await call('/assets', { method: 'POST', body: form });
-          state.assets.unshift(result.asset);
-          state.assetFolders = null; // 重新拉文件夹计数
-          try {
-            var fresh = await call('/assets?accountId=' + encodeURIComponent(state.accountId));
-            state.assetFolders = fresh.folders || [];
-          } catch (e) { /* 忽略 */ }
-          renderAssets();
+          await call('/assets', { method: 'POST', body: form });
           toast(files[i].name + ' 已上传', 'success');
         } catch (error) { toast(files[i].name + '：' + error.message, 'error'); }
       }
+      void loadAssets(true);
     };
     $$('[data-asset-open]').forEach(function (button) {
       button.onclick = function () { openAsset(button.dataset.assetOpen); };
     });
     $$('[data-asset-move]').forEach(function (button) {
-      button.onclick = async function () {
-        var current = (state.assets.filter(function (item) { return item.id === button.dataset.assetMove; })[0] || {}).folder || '';
-        var folder = prompt('移动到文件夹（留空 = 不分组）：', current);
-        if (folder === null) return;
-        try {
-          var result = await call('/assets/' + encodeURIComponent(button.dataset.assetMove), { method: 'PUT', body: { folder: folder } });
-          state.assets = state.assets.map(function (item) { return item.id === result.asset.id ? result.asset : item; });
-          renderAssets();
-          toast('已移动', 'success');
-        } catch (error) { toast(error.message, 'error'); }
+      button.onclick = function () {
+        var asset = state.assets.filter(function (item) { return item.id === button.dataset.assetMove; })[0];
+        if (asset) openAssetMoveDialog(asset);
       };
     });
+    $$('[data-asset-analyze]').forEach(function (button) {
+      button.onclick = async function () {
+        button.disabled = true; button.innerHTML = ic('loader', 11) + '排队中…';
+        try {
+          await call('/assets/' + encodeURIComponent(button.dataset.assetAnalyze) + '/analyze', { method: 'POST', body: { accountId: state.accountId } });
+          toast('已加入分析队列，关页也会继续跑', 'success');
+          startAssetPolling();
+          void loadAssets(true);
+        } catch (error) { toast(error.message, 'error'); button.disabled = false; }
+      };
+    });
+    var batch = $('[data-asset-analyze-batch]');
+    if (batch) {
+      batch.onclick = async function () {
+        batch.disabled = true; batch.innerHTML = ic('loader', 11) + '排队中…';
+        try {
+          var result = await call('/assets/analyze-batch', { method: 'POST', body: { accountId: state.accountId } });
+          toast('已把 ' + result.queued + ' 张图片排进分析队列', 'success');
+          startAssetPolling();
+          void loadAssets(true);
+        } catch (error) { toast(error.message, 'error'); batch.disabled = false; }
+      };
+    }
     $$('[data-asset-del]').forEach(function (button) {
       button.onclick = async function () {
         if (!confirm('删除这份素材？文件也会一起删除。')) return;
@@ -2256,6 +2406,8 @@
       };
     });
     hydrateAssetThumbs();
+    hydrateWorkVideos();
+    startAssetPolling();
   }
 
   /* ───────────── 报表 / 任务 ───────────── */

@@ -408,3 +408,13 @@
 
 /* ───────────── 九期 · 数据复盘 ───────────── */
 #js-app .wb-review-insight { border: 1px solid var(--hairline); border-radius: 12px; padding: 10px 14px; margin-top: 10px; background: var(--bg-2, rgba(0,0,0,0.02)); }
+
+/* ───────────── 十期 · 素材库（树形/分析/成片画廊） ───────────── */
+#js-app .wb-crumb-sep { color: var(--text-3); font-size: 12px; }
+#js-app .wb-asset-analysis { margin: 6px 0 0; font-size: 11.5px; color: var(--text-2); line-height: 1.5; }
+#js-app .wb-asset-analysis small { color: var(--text-3); }
+#js-app .wb-tag.ok { background: rgba(74, 222, 128, 0.15); color: #16a34a; }
+#js-app .wb-tag.warn { background: rgba(248, 113, 113, 0.15); color: #dc2626; }
+#js-app .wb-gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 10px; }
+#js-app .wb-gallery-card { border: 1px solid var(--hairline); border-radius: 12px; padding: 8px; }
+#js-app .wb-gallery-card video { width: 100%; border-radius: 8px; background: #000; aspect-ratio: 9/16; object-fit: contain; }

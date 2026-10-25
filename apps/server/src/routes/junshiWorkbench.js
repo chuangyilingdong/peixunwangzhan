@@ -57,6 +57,7 @@ import {
   buildViralRewritePrompt,
   buildCyclePlanPrompt,
   buildCycleSlotPrompt,
+  buildAssetAnalysisPrompt,
   buildReviewsInsightPrompt,
   buildDirectorScriptPrompt,
   demoBrain,
@@ -64,6 +65,7 @@ import {
   demoCopy,
   demoCyclePlan,
   demoCycleSlot,
+  demoAssetAnalysis,
   demoReviewsInsight,
   demoDirectorScript,
   demoHotspotCopies,
@@ -592,14 +594,14 @@ async function runWorkbenchRender(owner, renderId, { job = null } = {}) {
     if (stored) {
       assetId = id('jwa');
       await aq('INSERT INTO junshi_workbench_assets (id,owner_key,org_id,account_id,file_name,storage_key,storage_backend,mime_type,kind,file_size,folder,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-        [assetId, owner.key, owner.orgId, row.account_id, stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || 'video/mp4', 'video', stored.fileSize || 0, 'AI 生成', nowIso()]);
+        [assetId, owner.key, owner.orgId, row.account_id, stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || 'video/mp4', 'video', stored.fileSize || 0, '成片', nowIso()]);
     }
     const costFen = generated?.compute?.upstreamCostFen;
     const costText = Number.isFinite(costFen) ? `，上游成本约 ${(costFen / 100).toFixed(2)} 元` : '';
     await aq("UPDATE junshi_workbench_video_renders SET status='succeeded', asset_id=?, error='', updated_at=? WHERE id=?", [assetId, nowIso(), renderId]);
     if (row.work_id) {
       if (row.kind === 'main') {
-        const message = stored ? `视频已完成并保存到素材库（文件夹：AI 生成）${costText}` : note || '视频已完成';
+        const message = stored ? `视频已完成并保存到素材库（文件夹：成片）${costText}` : note || '视频已完成';
         await aq('UPDATE junshi_workbench_video_works SET status=?, message=?, output_asset_id=?, updated_at=? WHERE id=? AND owner_key=?',
           [stored ? 'succeeded' : 'failed', message, assetId, nowIso(), row.work_id, owner.key]);
       } else {
@@ -607,7 +609,7 @@ async function runWorkbenchRender(owner, renderId, { job = null } = {}) {
           [`第 ${row.shot_index} 镜已完成${stored ? '，片段已入素材库' : ''}${costText}`, nowIso(), row.work_id, owner.key]);
       }
     }
-    if (job) await jobDone(job, 'succeeded', stored ? `视频已生成并存入素材库（文件夹：AI 生成）${costText}` : note).catch(() => {});
+    if (job) await jobDone(job, 'succeeded', stored ? `视频已生成并存入素材库（文件夹：成片）${costText}` : note).catch(() => {});
   } catch (error) {
     const message = error instanceof ApiError ? error.message : normalizeProviderError(error).message;
     await aq("UPDATE junshi_workbench_video_renders SET status='failed', error=?, updated_at=? WHERE id=?", [String(message).slice(0, 1000), nowIso(), renderId]).catch(() => {});
@@ -622,6 +624,85 @@ async function runWorkbenchRender(owner, renderId, { job = null } = {}) {
       }
     }
     if (job) await jobDone(job, 'failed', String(message).slice(0, 1000)).catch(() => {});
+  }
+}
+
+/* ───────────── 十期 · 素材分析队列（进程内 FIFO，关页继续跑；重启丢队由「批量分析」兜底） ───────────── */
+function assetAnalysisOut(row) {
+  let result = {};
+  try { result = JSON.parse(row.result || '{}'); } catch { /* ignore */ }
+  return {
+    id: row.id,
+    assetId: row.asset_id,
+    kind: row.kind || 'visual',
+    status: row.status || 'queued',
+    description: String(result.description || ''),
+    tags: Array.isArray(result.tags) ? result.tags.map((tag) => String(tag).slice(0, 20)).slice(0, 6) : [],
+    reusable: result.reusable === true,
+    usableAs: String(result.usableAs || '无'),
+    note: String(result.note || ''),
+    error: row.error || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+const assetAnalysisQueue = [];
+let assetAnalysisPumping = false;
+async function queueAssetAnalysis(owner, assetRow) {
+  const analysisId = id('jwan');
+  const at = nowIso();
+  await aq('INSERT INTO junshi_workbench_asset_analyses (id,owner_key,org_id,account_id,asset_id,kind,status,result,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+    [analysisId, owner.key, owner.orgId, assetRow.account_id || 'default', assetRow.id, 'visual', 'queued', '', '', at, at]);
+  assetAnalysisQueue.push({ ownerKey: owner.key, orgId: owner.orgId, analysisId });
+  void pumpAssetAnalysis();
+  return await arow('SELECT * FROM junshi_workbench_asset_analyses WHERE id=?', [analysisId]);
+}
+async function pumpAssetAnalysis() {
+  if (assetAnalysisPumping) return;
+  assetAnalysisPumping = true;
+  try {
+    while (assetAnalysisQueue.length) {
+      const job = assetAnalysisQueue.shift();
+      await runAssetAnalysis(job).catch(() => {});
+    }
+  } finally { assetAnalysisPumping = false; }
+}
+async function runAssetAnalysis({ ownerKey, analysisId }) {
+  try {
+    const row = await arow('SELECT * FROM junshi_workbench_asset_analyses WHERE id=? AND owner_key=?', [analysisId, ownerKey]);
+    if (!row || row.status !== 'queued') return;
+    const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [row.asset_id, ownerKey]);
+    if (!assetRow) throw new Error('素材已不存在');
+    await aq("UPDATE junshi_workbench_asset_analyses SET status='running', error='', updated_at=? WHERE id=?", [nowIso(), analysisId]);
+    const buffer = await assetBytes(assetRow);
+    if (buffer.length > 8 * 1024 * 1024) throw new Error('图片超过 8MB，压缩后再分析');
+    const dataUrl = `data:${assetRow.mime_type};base64,${buffer.toString('base64')}`;
+    const providerMock = await textProviderIsMock().catch(() => false);
+    let parsed = null;
+    if (providerMock) {
+      parsed = JSON.parse(demoAssetAnalysis({ fileName: assetRow.file_name }));
+    } else {
+      const messages = [{ role: 'user', content: [
+        { type: 'text', text: buildAssetAnalysisPrompt({ fileName: assetRow.file_name, folder: assetRow.folder }) },
+        { type: 'image_url', image_url: { url: dataUrl } },
+      ] }];
+      const result = await collectText(null, { system: WORKBENCH_SYSTEM, messages });
+      parsed = parseLooseJsonObject(result.text);
+      if (!parsed) parsed = JSON.parse(demoAssetAnalysis({ fileName: assetRow.file_name }));
+    }
+    const cleaned = {
+      description: String(parsed.description || '').slice(0, 200),
+      tags: (Array.isArray(parsed.tags) ? parsed.tags : []).map((tag) => String(tag).slice(0, 20)).slice(0, 6),
+      reusable: parsed.reusable === true,
+      usableAs: String(parsed.usableAs || '无').slice(0, 10),
+      note: String(parsed.note || '').slice(0, 200),
+    };
+    await aq("UPDATE junshi_workbench_asset_analyses SET status='succeeded', result=?, error='', updated_at=? WHERE id=?",
+      [JSON.stringify(cleaned), nowIso(), analysisId]);
+  } catch (error) {
+    const message = String(error?.message || error).slice(0, 1000);
+    await aq("UPDATE junshi_workbench_asset_analyses SET status='failed', error=?, updated_at=? WHERE id=?",
+      [message, nowIso(), analysisId]).catch(() => {});
   }
 }
 
@@ -763,6 +844,22 @@ async function runCycleSlotRegenerate(owner, cycleId, slotId) {
       }
     } catch { /* ignore */ }
   }
+}
+
+async function assetBytes(row) {
+  const pseudo = { storage_key: row.storage_key, metadata: JSON.stringify({ storageBackend: row.storage_backend }) };
+  if (rowStorageBackend(pseudo) === 'oss') {
+    const url = ossRedirectUrl(pseudo, { expires: 600 });
+    if (!url) throw Object.assign(new Error('素材签名地址生成失败'), { status: 502 });
+    const response = await fetch(url, { signal: AbortSignal.timeout(180000) });
+    if (!response.ok) throw Object.assign(new Error(`素材读取失败（HTTP ${response.status}）`), { status: 502 });
+    return Buffer.from(await response.arrayBuffer());
+  }
+  const root = uploadRoot();
+  const absolute = path.resolve(root, String(row.storage_key || ''));
+  if (absolute !== root && !absolute.startsWith(root + path.sep)) throw errors.notFound('素材路径不合法', 'NOT_FOUND');
+  const { readFile } = await import('node:fs/promises');
+  return Buffer.from(await readFile(absolute));
 }
 
 /* ───────────── 路由 ───────────── */
@@ -1486,21 +1583,6 @@ function transcriptOut(row, { withSegments = false } = {}) {
 }
 
 /** 读取素材字节：本地盘直读，OSS 走签名 URL（sign 后取回字节）。 */
-async function assetBytes(row) {
-  const pseudo = { storage_key: row.storage_key, metadata: JSON.stringify({ storageBackend: row.storage_backend }) };
-  if (rowStorageBackend(pseudo) === 'oss') {
-    const url = ossRedirectUrl(pseudo, { expires: 600 });
-    if (!url) throw Object.assign(new Error('素材签名地址生成失败'), { status: 502 });
-    const response = await fetch(url, { signal: AbortSignal.timeout(180000) });
-    if (!response.ok) throw Object.assign(new Error(`素材读取失败（HTTP ${response.status}）`), { status: 502 });
-    return Buffer.from(await response.arrayBuffer());
-  }
-  const root = uploadRoot();
-  const absolute = path.resolve(root, String(row.storage_key || ''));
-  if (absolute !== root && !absolute.startsWith(root + path.sep)) throw errors.notFound('素材路径不合法', 'NOT_FOUND');
-  const { readFile } = await import('node:fs/promises');
-  return Buffer.from(await readFile(absolute));
-}
 
 /** 后台转写一条素材：写档案行（running）→ whisper → 回填。返回档案 id。 */
 async function startTranscription(owner, { assetRow, source, title, sourceUrl, nickname, accountId }) {
@@ -2010,12 +2092,12 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
         if (stored) {
           assetId = id('jwa');
           await aq('INSERT INTO junshi_workbench_assets (id,owner_key,org_id,account_id,file_name,storage_key,storage_backend,mime_type,kind,file_size,folder,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-            [assetId, owner.key, owner.orgId, accountId, stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || 'video/mp4', 'video', stored.fileSize || 0, 'AI 生成', nowIso()]);
+            [assetId, owner.key, owner.orgId, accountId, stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || 'video/mp4', 'video', stored.fileSize || 0, '成片', nowIso()]);
         }
         const costFen = generated?.compute?.upstreamCostFen;
         const costText = Number.isFinite(costFen) ? `，上游成本约 ${(costFen / 100).toFixed(2)} 元` : '';
         await aq("UPDATE junshi_workbench_video_renders SET status='succeeded', asset_id=?, error='', updated_at=? WHERE id=?", [assetId, nowIso(), renderId]);
-        await jobDone(job, 'succeeded', stored ? `视频已生成并存入素材库（文件夹：AI 生成）${costText}` : note);
+        await jobDone(job, 'succeeded', stored ? `视频已生成并存入素材库（文件夹：成片）${costText}` : note);
       } catch (error) {
         const message = error instanceof ApiError ? error.message : normalizeProviderError(error).message;
         await aq("UPDATE junshi_workbench_video_renders SET status='failed', error=?, updated_at=? WHERE id=?", [String(message).slice(0, 1000), nowIso(), renderId]).catch(() => {});
@@ -2334,10 +2416,41 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     const conditions = ['owner_key=?'];
     const params = [owner.key];
     if (accountIdFilter) { conditions.push('account_id=?'); params.push(accountIdFilter); }
-    if (folderFilter) { conditions.push('folder=?'); params.push(folderFilter); }
+    if (folderFilter === '__none__') conditions.push("(folder='' OR folder IS NULL)");
+    else if (folderFilter) { conditions.push('folder=?'); params.push(folderFilter); }
     const rows = await arows(`SELECT * FROM junshi_workbench_assets WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC LIMIT 200`, params);
     const folders = await arows('SELECT folder, COUNT(*) AS n FROM junshi_workbench_assets WHERE owner_key=? GROUP BY folder ORDER BY folder', [owner.key]);
-    return { items: rows.map(assetOut), folders: folders.map((row) => ({ folder: row.folder || '', count: Number(row.n || 0) })) };
+    const analysisRows = await arows('SELECT * FROM junshi_workbench_asset_analyses WHERE owner_key=? ORDER BY updated_at DESC LIMIT 400', [owner.key]).catch(() => []);
+    const analysisByAsset = new Map();
+    for (const row of analysisRows) if (!analysisByAsset.has(row.asset_id)) analysisByAsset.set(row.asset_id, assetAnalysisOut(row));
+    return {
+      items: rows.map((row) => ({ ...assetOut(row), analysis: analysisByAsset.get(row.id) || null })),
+      folders: folders.map((row) => ({ folder: row.folder || '', count: Number(row.n || 0) })),
+    };
+  }
+  if (rest === '/assets/analyze-batch' && method === 'POST') {
+    const accountIdFilter = await resolveAccountId(owner.key, ctx.body?.accountId);
+    const rows = await arows("SELECT * FROM junshi_workbench_assets WHERE owner_key=? AND account_id=? AND kind='image' ORDER BY created_at DESC LIMIT 200", [owner.key, accountIdFilter]);
+    const doneAssets = new Set((await arows("SELECT asset_id FROM junshi_workbench_asset_analyses WHERE owner_key=? AND status='succeeded'", [owner.key]).catch(() => [])).map((row) => row.asset_id));
+    const pending = rows.filter((row) => !doneAssets.has(row.id)).slice(0, 20);
+    rateLimit(owner.key);
+    const queued = [];
+    for (const row of pending) queued.push(await queueAssetAnalysis(owner, row));
+    return { queued: queued.length, items: queued.map(assetAnalysisOut) };
+  }
+  if (rest.startsWith('/assets/') && rest.endsWith('/analyze') && method === 'POST') {
+    const assetId = decodeURIComponent(rest.slice('/assets/'.length, -'/analyze'.length));
+    const row = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, owner.key]);
+    if (!row) throw errors.notFound('素材不存在', 'NOT_FOUND');
+    if (row.kind !== 'image') throw errors.badRequest('视觉分析只支持图片素材；音频请走「转写档案」链路', 'VALIDATION_ERROR');
+    rateLimit(owner.key);
+    const analysis = await queueAssetAnalysis(owner, row);
+    return { analysis: assetAnalysisOut(analysis) };
+  }
+  if (rest.startsWith('/assets/') && rest.endsWith('/analysis') && method === 'DELETE') {
+    const assetId = decodeURIComponent(rest.slice('/assets/'.length, -'/analysis'.length));
+    await aq('DELETE FROM junshi_workbench_asset_analyses WHERE owner_key=? AND asset_id=?', [owner.key, assetId]);
+    return { ok: true };
   }
   if (rest === '/assets' && method === 'POST') {
     const contentType = String(ctx.req.headers['content-type'] || '');
@@ -2407,6 +2520,14 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     if (!row) throw errors.notFound('素材不存在', 'NOT_FOUND');
     const folder = text(ctx.body?.folder).slice(0, 120);
     await aq('UPDATE junshi_workbench_assets SET folder=? WHERE id=? AND owner_key=?', [folder, assetId, owner.key]);
+    return { asset: assetOut(await arow('SELECT * FROM junshi_workbench_assets WHERE id=?', [assetId])) };
+  }
+  if (rest.startsWith('/assets/') && method === 'PUT') {
+    const assetId = decodeURIComponent(rest.slice('/assets/'.length));
+    const row = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, owner.key]);
+    if (!row) throw errors.notFound('素材不存在', 'NOT_FOUND');
+    const folder = text(ctx.body?.folder).slice(0, 120);
+    await aq('UPDATE junshi_workbench_assets SET folder=?, created_at=created_at WHERE id=? AND owner_key=?', [folder, assetId, owner.key]);
     return { asset: assetOut(await arow('SELECT * FROM junshi_workbench_assets WHERE id=?', [assetId])) };
   }
   if (rest.startsWith('/assets/') && method === 'DELETE') {

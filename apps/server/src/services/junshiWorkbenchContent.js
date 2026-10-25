@@ -851,3 +851,24 @@ export function demoReviewsInsight({ published = [] } = {}) {
 2. 选题继续「具体冲突 + 真实场景」，避免空泛介绍。
 3. 每条发布后 48 小时内回填截图，让下轮复盘有据可依。`;
 }
+
+/* ───────────── 十期 · 素材视觉分析（素材分析队列） ───────────── */
+
+export function buildAssetAnalysisPrompt({ fileName, folder }) {
+  return `这是一张教培机构素材库里的图片（文件名：${fileName || '未命名'}${folder ? `，文件夹：${folder}` : ''}）。分析它的画面内容与复用价值。
+
+只输出一个 JSON 对象，不要 markdown 代码块：
+{"description":"一句话描述画面（人物/场景/在做什么）","tags":["3-6个中文标签"],"reusable":true或false,"usableAs":"人物/场景/道具/背景/无","note":"复用建议或风险（如含人脸需授权、画面模糊等），一句话"}
+
+规则：reusable=画面清晰、主体明确、可在后续视频制作中作为参考或素材；usableAs 选最合适的一个职责，没有就填"无"。`;
+}
+
+export function demoAssetAnalysis({ fileName = '素材' } = {}) {
+  return JSON.stringify({
+    description: `（演示分析）${fileName}：一张素材图片，画面主体清晰。`,
+    tags: ['演示', '素材', '待人工复核'],
+    reusable: true,
+    usableAs: '场景',
+    note: '（演示分析）模型未接入时的兜底结果，建议人工确认后再用。',
+  }, null, 2);
+}
