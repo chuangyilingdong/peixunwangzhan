@@ -25,11 +25,13 @@ import { plazaCategoryLabelOf, plazaCategoryMap, plazaCategoryOf } from '../../s
 import { WEBSITE_CONTENT_KEYS } from '../../services/websiteContentKeys.js';
 import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from '../fileAssets.js';
 import { kindForName } from '../../services/vibecodingArtifacts.js';
+import { ALL_SHARE_PIECES_KEY } from '../../services/workShare.js';
 import {
   missingLocalAssets,
   publicArtifactCatalog,
   publicSnapshotFiles,
   renderSnapshotDocument,
+  shareableArtifactNames,
   shareCodeSnapshotFiles,
   snapshotArtifactByName,
   snapshotDocumentFileIds,
@@ -375,6 +377,7 @@ export async function handlePublicCommunication(ctx) {
     const mediaUrlFor = (fileId) => (fileId ? `${base}/media/${encodeURIComponent(fileId)}` : null);
     const homeToken = String(owner.home_token || '').trim();
     const openUrl = homeToken ? `/u/${encodeURIComponent(homeToken)}/w/${link.source}/${encodeURIComponent(link.work_id)}` : null;
+    const allPieces = link.piece_key === ALL_SHARE_PIECES_KEY;
     if (link.source === 'CANVAS') {
       const work = await arow(`SELECT work.id, work.title, work.description, work.canvas_snapshot,
              COALESCE(lesson.published_title, lesson.title) AS lesson_title
@@ -382,7 +385,13 @@ export async function handlePublicCommunication(ctx) {
        WHERE work.id=? AND work.student_id=? AND work.org_id=?`, [link.work_id, link.student_id, link.org_id]);
       if (!work) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
       const media = canvasMediaFrom(parseJson(work.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }));
-      const piece = media.find((item) => `media:${item.fileId || item.url}` === link.piece_key) || null;
+      const keyOf = (item) => `media:${item.fileId || item.url}`;
+      // 全部分享：画布侧就是把这件作品里的图/视频/音频**按快照顺序**全给出去（扫码页依次铺开）。
+      const pieces = (allPieces ? media : media.filter((item) => keyOf(item) === link.piece_key)).map((item) => ({
+        // 这一件：画布侧就是一份媒体（图/视频/音频），直接在分享卡里展示
+        key: keyOf(item), render: item.modality, name: item.caption || null, caption: item.caption || null,
+        fileId: item.fileId || null, mediaUrl: mediaUrlFor(item.fileId), openUrl,
+      }));
       return {
         code: link.code, createdAt: link.created_at, source: 'CANVAS',
         student: { name: publicCreatorName(owner), avatarUrl: avatarUrlOf(owner.avatar_asset_id) },
@@ -390,11 +399,11 @@ export async function handlePublicCommunication(ctx) {
         lessonTitle: work.lesson_title || null,
         homeUrl: homeToken ? `/u/${encodeURIComponent(homeToken)}` : null,
         work: { id: work.id, title: work.title || null, description: work.description || null },
-        // 这一件：画布侧就是一份媒体（图/视频/音频），直接在分享卡里展示
-        piece: piece ? {
-          key: link.piece_key, render: piece.modality, name: piece.caption || null, caption: piece.caption || null,
-          fileId: piece.fileId || null, mediaUrl: mediaUrlFor(piece.fileId), openUrl,
-        } : null,
+        allPieces,
+        pieceCount: pieces.length,
+        pieces,
+        // 兼容老前端：`piece` 仍是第一件；新扫码页读 `pieces` 顺序铺开
+        piece: pieces[0] || null,
       };
     }
     const submission = await arow(`SELECT submission.id, submission.title, submission.description, submission.files, submission.artifacts,
@@ -402,41 +411,28 @@ export async function handlePublicCommunication(ctx) {
         FROM vibecoding_submissions submission LEFT JOIN course_lessons lesson ON lesson.id = submission.lesson_id
        WHERE submission.id=? AND submission.student_id=? AND submission.org_id=?`, [link.work_id, link.student_id, link.org_id]);
     if (!submission) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
-    const artifact = parseSnapshotArtifacts(submission).find((item) => `artifact:${item.name}` === link.piece_key) || null;
-    const render = artifact ? shareRenderOf(artifact.name) : null;
-    // ⭐ 2026-09-30 用户口径（原话）：「手机扫码能否……**直接显示作品**，点击后立马可以在线看游玩，
-    //    而不是跳转，跳转又各种无限跳转」。
-    //    → 网页作品这一件，分享页要能**就地把它跑起来**（沙箱 iframe，与作品广场同一套口径），
-    //      所以这里直接把这一份产物文档给出去。文档里的私有素材地址已经换成**这一枚码专属、
-    //      免登录**的分享域代理（`/media/<fileId>`）—— 沙箱是 opaque origin，带不上 cookie，
-    //      不换成免登录地址图与视频都显示不出来。
-    const entryFile = String(submission.entry_file || artifact?.name || '').trim();
-    const files = render === 'HTML' ? shareCodeSnapshotFiles(submission, link.code) : null;
-    // ⭐ 2026-09-30 用户口径：「图3打开体验，应该不能这样展示，应该就**直接展示**」——
-    //    他截的那一件是 `notes.txt`：卡片上只有一颗「打开体验」按钮，内容一个字都看不到。
-    //    这里把**人读得懂**的文本类产物（txt/md/csv/json…）的正文一起给出去，卡片直接铺开显示。
-    //    ⚠️ `.pptx/.docx/.xlsx` 的正文是给渲染器看的规格文本（提纲 JSON / Markdown / CSV），
-    //       对人没意义也不该外发 —— 那三类仍走"封面 + 打开体验"。
-    const artifactKind = artifact ? kindForName(artifact.name) : '';
-    const rawText = artifact && SHARE_TEXT_KINDS.has(artifactKind)
-      ? String(parseJson(submission.files, {})?.[artifact.name] ?? '')
-      : '';
-    const textContent = rawText ? rawText.slice(0, MAX_SHARE_TEXT_CHARS) : '';
-    return {
-      code: link.code, createdAt: link.created_at, source: 'VIBECODING',
-      student: { name: publicCreatorName(owner), avatarUrl: avatarUrlOf(owner.avatar_asset_id) },
-      org: { name: organization?.name || null },
-      lessonTitle: submission.lesson_title || null,
-      homeUrl: homeToken ? `/u/${encodeURIComponent(homeToken)}` : null,
-      work: { id: submission.id, title: submission.title || null, description: submission.description || null },
-      // 网页这一件就地可玩（`document`）；其余类型（图/视频/音频/文档）照旧在卡里给本色
-      document: render === 'HTML' && files ? { files, entry: entryFile || artifact.name } : null,
-      // 这件作品里**还指着本地文件、但没随作品交上来**的引用（客户端旧版本不带素材）——
-      // 卡面据此说一句人话，而不是让学生对着破图猜（见 vibecoding.js 的 missingLocalAssets）。
-      missingAssets: render === 'HTML' && files ? missingLocalAssets(files, entryFile || artifact.name) : [],
-      // 这一件：网页/图片/视频/音频可以在卡里直接给（图片优先封面），文档类给封面 + 「打开体验」走既有作品页
-      piece: artifact ? {
-        key: link.piece_key, render, name: artifact.name, caption: artifact.name,
+    const artifacts = parseSnapshotArtifacts(submission);
+    // 全部分享：按**可独立分享**的清单（零件不算）逐件给；单件仍按码里的键找（含老码指向零件）。
+    const selectedKeys = allPieces
+      ? shareableArtifactNames(submission).map((name) => `artifact:${name}`)
+      : [link.piece_key];
+    const selected = selectedKeys
+      .map((key) => artifacts.find((item) => `artifact:${item.name}` === key))
+      .filter(Boolean);
+    // 只有存在 HTML 件时才需要这份"按码改写过的文件表"（可能不止一个 HTML 件共用同一份）
+    const needsDocuments = selected.some((item) => shareRenderOf(item.name) === 'HTML');
+    const shareFiles = needsDocuments ? shareCodeSnapshotFiles(submission, link.code) : null;
+    const originalFiles = parseJson(submission.files, {});
+    const pieces = selected.map((artifact) => {
+      const render = shareRenderOf(artifact.name);
+      const artifactKind = kindForName(artifact.name);
+      // ⭐ 2026-09-30 用户口径：「图3打开体验，应该不能这样展示，应该就**直接展示**」——
+      //    文本类产物把正文一起给出去，卡片直接铺开；PPT/Word/Excel 的规格文本不外发。
+      const rawText = SHARE_TEXT_KINDS.has(artifactKind) ? String(originalFiles?.[artifact.name] ?? '') : '';
+      const textContent = rawText ? rawText.slice(0, MAX_SHARE_TEXT_CHARS) : '';
+      const playable = render === 'HTML' && Boolean(shareFiles) && Object.hasOwn(shareFiles, artifact.name);
+      return {
+        key: `artifact:${artifact.name}`, render, name: artifact.name, caption: artifact.name,
         fileId: artifact.fileId || artifact.coverFileId || null,
         mediaUrl: mediaUrlFor(artifact.fileId),
         coverUrl: mediaUrlFor(artifact.coverFileId),
@@ -444,10 +440,30 @@ export async function handlePublicCommunication(ctx) {
         // 能直接读的正文（没有就是空串）；`textTruncated` 让卡片如实说明"还有后半截"
         textContent,
         textTruncated: Boolean(rawText && rawText.length > MAX_SHARE_TEXT_CHARS),
-        // 真文件类产物（PPT/Word/Excel）：一条**服务端转 PDF** 的预览地址 —— 分享卡就地 iframe 显示，
-        // 不再只给一颗「打开体验」按钮（用户口径「就直接展示」）。文本/网页件为 null。
+        // 真文件类产物（PPT/Word/Excel）：服务端转 PDF 的预览地址，分享卡就地 iframe 显示。
         previewUrl: artifact.fileId ? `${base}/files/${encodeURIComponent(artifact.name)}/preview` : null,
-      } : null,
+        // 网页这一件就地可玩。⚠️ 入口必须用**这一件自己的文件名**：一件作品可能同时有
+        // pptx 主产物 + 另一个 html 产物，拿 `submission.entry_file` 会渲染成「入口文件不存在」。
+        document: playable ? { files: shareFiles, entry: artifact.name } : null,
+        // 这件作品里**还指着本地文件、但没随作品交上来**的引用（客户端旧版本不带素材）——
+        // 卡面据此说一句人话，而不是让学生对着破图猜（见 vibecoding.js 的 missingLocalAssets）。
+        missingAssets: playable ? missingLocalAssets(shareFiles, artifact.name) : [],
+      };
+    });
+    return {
+      code: link.code, createdAt: link.created_at, source: 'VIBECODING',
+      student: { name: publicCreatorName(owner), avatarUrl: avatarUrlOf(owner.avatar_asset_id) },
+      org: { name: organization?.name || null },
+      lessonTitle: submission.lesson_title || null,
+      homeUrl: homeToken ? `/u/${encodeURIComponent(homeToken)}` : null,
+      work: { id: submission.id, title: submission.title || null, description: submission.description || null },
+      allPieces,
+      pieceCount: pieces.length,
+      pieces,
+      // 兼容老前端（只读 `piece` / `document`）—— ALL 时退回第一件，新扫码页用 `pieces`
+      piece: pieces[0] || null,
+      document: pieces[0]?.document || null,
+      missingAssets: pieces[0]?.missingAssets || [],
     };
   }
 
@@ -467,17 +483,19 @@ export async function handlePublicCommunication(ctx) {
     } else {
       const submission = await arow('SELECT id, files, artifacts FROM vibecoding_submissions WHERE id=? AND student_id=? AND org_id=?', [link.work_id, link.student_id, link.org_id]);
       if (!submission) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
-      // 这一件的本体 + 它的封面 + 它引用的图（HTML 产物里的配图要显示得出来）
+      // 这一件的本体 + 它的封面 + 它引用的图（HTML 产物里的配图要显示得出来）。
+      // 全部分享：准入放宽到**这件作品里所有可分享件**（仍然只认快照里真出现过的 id）。
       allowed = new Set([...snapshotImageFileIds(submission), ...parseSnapshotArtifacts(submission).map((item) => item.coverFileId).filter(Boolean)]);
+      const allPieces = link.piece_key === ALL_SHARE_PIECES_KEY;
       for (const item of parseSnapshotArtifacts(submission)) {
-        if (`artifact:${item.name}` !== link.piece_key) continue;
+        if (!allPieces && `artifact:${item.name}` !== link.piece_key) continue;
         if (item.fileId) allowed.add(item.fileId);
         for (const image of [...(item.generatedImages || []), ...(item.embeddedImages || []), ...(item.attachmentImages || [])]) {
           if (image?.fileId) allowed.add(image.fileId);
         }
       }
     }
-    if (!allowed.has(fileId)) throw errors.notFound('这一件里没有这个文件', 'PUBLIC_SHARE_MEDIA_NOT_FOUND');
+    if (!allowed.has(fileId)) throw errors.notFound('这份作品里没有这个文件', 'PUBLIC_SHARE_MEDIA_NOT_FOUND');
     const file = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');

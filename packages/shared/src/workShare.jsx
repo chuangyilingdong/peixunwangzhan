@@ -30,6 +30,16 @@ export function qrSvgText(text, { cell = 4, margin = 2 } = {}) {
 }
 
 /**
+ * 「全部分享」的 piece_key（2026-10-23 用户口径：
+ * 「现在分享是必须选择分享哪个，我理解是可以直接全部分享，在手机端可以依次排列展示。也可以单个分享」）。
+ *
+ * 服务端同一条常量在 `apps/server/src/services/workShare.js` —— **两边必须逐字一致**
+ * （服务端不依赖 shared 包；p171 有一条静态断言钉住）。
+ * 单件分享仍是 `media:` / `artifact:` 键；这个是"这件作品的全部"，扫码页按顺序铺开。
+ */
+export const ALL_SHARE_PIECES_KEY = '__all__';
+
+/**
  * @param title 面板标题里的作品名（例如「我的网页 · 图片」）
  * @param pieces `[{ pieceKey, label }]`（**服务端算好的键**，来自作品详情里的 media / artifacts）
  * @param createShare `async (pieceKey) => ({ code })` —— 由调用方按自己的作用域调接口
@@ -50,10 +60,12 @@ export function WorkSharePanel({ title, pieces = [], createShare, onClose }) {
     }
   }
 
-  // 打开面板就把第一件发出来（用户点「分享」时最想要的就是"马上有个码"）
-  useEffect(() => { void pick(pieces[0]?.pieceKey || ''); /* eslint-disable-line react-hooks/exhaustive-deps */ }, []);
+  // 打开面板就把"全部分享"发出来（用户点「分享」时最想要的是"马上有个码"；
+  // 2026-10-23 口径：可以直接全部分享，单件仍可选）。只有一件时就是那一件，等价。
+  useEffect(() => { void pick(pieces.length > 1 ? ALL_SHARE_PIECES_KEY : (pieces[0]?.pieceKey || '')); /* eslint-disable-line react-hooks/exhaustive-deps */ }, []);
 
   const current = pieces.find((piece) => piece.pieceKey === state.pieceKey) || null;
+  const allSelected = state.pieceKey === ALL_SHARE_PIECES_KEY;
 
   return <div className="share-modal" role="dialog" aria-modal="true" data-testid="share-modal" onClick={(event) => event.stopPropagation()}>
     <div className="share-modal__panel">
@@ -63,11 +75,12 @@ export function WorkSharePanel({ title, pieces = [], createShare, onClose }) {
       </div>
       {/* ⚠️ 只有**一件**时不再后缀那一件名（此前网页作品会显示成「index.html · index.html」——
           作品名本来就是入口文件名，重复一遍既丑、又像"还有别的可挑"）。 */}
-      <p className="share-modal__title">{title}{pieces.length > 1 && current?.label ? ` · ${current.label}` : ''}</p>
-      {/* 这件作品有好几件产出物时，让用户**选哪一件**（一节课的 1 张图 + 1 段视频就是两个选项）。
+      <p className="share-modal__title">{title}{allSelected ? ` · 全部 ${pieces.length} 件` : (pieces.length > 1 && current?.label ? ` · ${current.label}` : '')}</p>
+      {/* 这件作品有好几件产出物时，让用户**选哪一件**；第一项是「全部分享」（扫码页依次铺开）。
           ⚠️ 网页作品（入口 + 它引用的 css/js/图）是**一个整体**，不会再出现这个下拉（2026-10-02 用户口径）。 */}
       {pieces.length > 1 ? <label className="share-modal__pick">选哪一件
         <select value={state.pieceKey} onChange={(event) => pick(event.target.value)} data-testid="share-piece-select">
+          <option value={ALL_SHARE_PIECES_KEY} data-testid="share-piece-all">全部分享（{pieces.length} 件）</option>
           {pieces.map((piece) => <option key={piece.pieceKey} value={piece.pieceKey}>{piece.label}</option>)}
         </select>
       </label> : null}

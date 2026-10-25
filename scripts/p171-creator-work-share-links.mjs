@@ -258,6 +258,72 @@ try {
   check('⑦ 画布侧主页清单也带 pieceKey（1 图 + 1 视频两件）',
     canvasKeys.includes('media:file_p171_img') && canvasKeys.includes('media:file_p171_vid'), JSON.stringify(canvasKeys));
 
+  /* ── ⑬ 全部分享（2026-10-23 用户口径）────────────────────────────────────
+     用户原话：「现在分享是必须选择分享哪个，我理解是可以直接全部分享，在手机端可以依次排列展示。
+               也可以单个分享」。
+     钉四件事：① 一枚 `__all__` 码解析出**全部可分享件**（零件不算）；② 每件自带各自的
+     `document`（HTML 入口用**这一件自己的文件名**，不是 submission.entry_file）；
+     ③ 媒体准入按整件放开（单件码仍然只认那一件）；④ 画布侧同样按快照顺序全给。 */
+  console.log('⑬ 全部分享：一枚码 → 手机端依次铺开全部产出物（单件码不受影响）');
+  {
+    const { ALL_SHARE_PIECES_KEY } = await import('../apps/server/src/services/workShare.js');
+    const panelSource = fs.readFileSync(path.join('packages', 'shared', 'src', 'workShare.jsx'), 'utf8');
+    check('⑬ ⭐ 前后端「全部分享」的键逐字一致（服务端 `__all__` + 面板同名常量）',
+      ALL_SHARE_PIECES_KEY === '__all__' && /ALL_SHARE_PIECES_KEY = '__all__'/.test(panelSource));
+    check('⑬ 分享面板有「全部分享（N 件）」选项，且默认就发这一枚',
+      /全部分享（\{pieces\.length\} 件）/.test(panelSource) && /share-piece-all/.test(panelSource)
+      && /pieces\.length > 1 \? ALL_SHARE_PIECES_KEY/.test(panelSource));
+
+    const all = await api('/api/student/share-links', { method: 'POST', token: studentToken, body: { source: 'VIBECODING', workId, pieceKey: ALL_SHARE_PIECES_KEY } });
+    check('⑬ ⭐ 全部分享能发码（与单件码不同）',
+      all.status === 200 && Boolean(all.data?.code) && all.data.code !== deckCode && all.data.code !== html.data.code,
+      JSON.stringify(all.data || all.raw).slice(0, 200));
+    const againAll = await api('/api/student/share-links', { method: 'POST', token: studentToken, body: { source: 'VIBECODING', workId, pieceKey: ALL_SHARE_PIECES_KEY } });
+    check('⑬ 全部分享也幂等（同一件重复点 → 同一枚码、created=false）',
+      againAll.data?.code === all.data?.code && againAll.data?.created === false,
+      JSON.stringify(againAll.data).slice(0, 160));
+
+    const allCard = await api(`/api/public/share-links/${encodeURIComponent(all.data.code)}`);
+    const allPieces = allCard.data?.pieces || [];
+    const keys = allPieces.map((item) => item.key);
+    check('⑬ ⭐ 扫码卡解析出**全部 3 件**（pptx / index.html / notes.txt），不是只给第一件',
+      allCard.status === 200 && allCard.data?.allPieces === true && allCard.data?.pieceCount === 3
+      && keys.includes('artifact:deck.pptx') && keys.includes('artifact:index.html') && keys.includes('artifact:notes.txt'),
+      JSON.stringify({ count: allCard.data?.pieceCount, keys }).slice(0, 260));
+    const htmlPiece = allPieces.find((item) => item.render === 'HTML');
+    check('⑬ ⭐ HTML 件的 document 入口是**它自己的文件名**（不是 submission.entry_file=deck.pptx）',
+      htmlPiece?.document?.entry === 'index.html' && Boolean(htmlPiece?.document?.files?.['index.html']),
+      JSON.stringify(htmlPiece?.document?.entry || null));
+    const notesPiece = allPieces.find((item) => item.key === 'artifact:notes.txt');
+    check('⑬ 文本件在合集里照样直接铺正文', notesPiece?.textContent === 'P171 说明文本', JSON.stringify(notesPiece?.textContent));
+    const deckPiece = allPieces.find((item) => item.key === 'artifact:deck.pptx');
+    check('⑬ 真文件件在合集里带各自的 PDF 预览地址（走这枚 ALL 码的专属口）',
+      String(deckPiece?.previewUrl || '').startsWith(`/api/public/share-links/${all.data.code}/files/`),
+      String(deckPiece?.previewUrl || ''));
+
+    // 媒体准入：ALL 码能取到合集里**任意一件**的文件；单件码仍然取不到别件
+    const allMedia = await fetch(`http://127.0.0.1:${PORT}/api/public/share-links/${all.data.code}/media/${deckPiece?.fileId || 'none'}`);
+    const allMediaBytes = Buffer.from(await allMedia.arrayBuffer());
+    check('⑬ ⭐ ALL 码能取到 deck.pptx 的字节（合集里每一件的媒体都放行）',
+      allMedia.status === 200 && allMediaBytes.equals(pptxBytes), `status=${allMedia.status} 字节=${allMediaBytes.length}/${pptxBytes.length}`);
+    check('⑬ 单件 HTML 码仍然取不到 deck.pptx（准入没有因为 ALL 变宽）',
+      (await fetch(`http://127.0.0.1:${PORT}/api/public/share-links/${html.data.code}/media/${deckPiece?.fileId || 'none'}`)).status === 404);
+
+    // 画布侧：一枚 ALL 码 → 1 图 + 1 视频，按快照顺序
+    const allCanvas = await api('/api/student/share-links', { method: 'POST', token: studentToken, body: { source: 'CANVAS', workId: canvasWorkId, pieceKey: ALL_SHARE_PIECES_KEY } });
+    const allCanvasCard = await api(`/api/public/share-links/${encodeURIComponent(allCanvas.data?.code || 'none')}`);
+    const canvasPieces = allCanvasCard.data?.pieces || [];
+    check('⑬ 画布侧全部分享：1 图 + 1 视频都在，顺序与快照一致',
+      allCanvas.status === 200 && allCanvasCard.data?.allPieces === true
+      && canvasPieces.length === 2 && canvasPieces[0]?.render === 'IMAGE' && canvasPieces[1]?.render === 'VIDEO',
+      JSON.stringify(canvasPieces.map((item) => item.render)));
+
+    // 静态：扫码页真的按 pieces 依次铺开（不是只渲染第一件）
+    const sharePageSource = fs.readFileSync(path.join('apps', 'website', 'src', 'pages', 'WorkShare.jsx'), 'utf8');
+    check('⑬ 扫码页有「多件顺序铺开」那套结构（allPieces / pieces.map / share-card__pieces）',
+      /allPieces/.test(sharePageSource) && /pieces\.map/.test(sharePageSource) && /share-card__pieces/.test(sharePageSource));
+  }
+
   /* ── ⑧ 机构/老师端（用户口径：「机构端/老师端也需要有」）────────────────────
      范围要与「学生学习结果与作品」那张表**同一套**：本机构 + （老师）只限自己课堂。
      码归**作品的作者（学生）** → 老师与学生拿到的必须是**同一枚码**（幂等跨端一致）。 */

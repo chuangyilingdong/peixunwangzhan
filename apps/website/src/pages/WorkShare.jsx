@@ -58,7 +58,14 @@ export function WorkSharePage() {
     </div></main>;
   }
 
-  const { student, org, lessonTitle, piece, work } = state.data;
+  const { student, org, lessonTitle, work, allPieces } = state.data;
+  // 全部分享（2026-10-23 用户口径：可以直接全部分享，手机端依次排列；也可以单个分享）：
+  // 服务端给 `pieces` 数组；老响应只有 `piece` 一件，这里统一成数组，单件那套版式不变。
+  const pieces = Array.isArray(state.data.pieces) && state.data.pieces.length
+    ? state.data.pieces
+    : (state.data.piece ? [state.data.piece] : []);
+  const showAll = Boolean(allPieces) && pieces.length > 1;
+  const piece = pieces[0] || null;
   const missingAssets = Array.isArray(state.data.missingAssets) ? state.data.missingAssets : [];
   const glyph = avatarGlyph(student?.avatarKey);
   const initial = String(student?.name || '同学').slice(0, 1);
@@ -82,13 +89,30 @@ export function WorkSharePage() {
           所以这里把作品名称单独显示出来（「作品简介」那一行按老口径仍是这节课的标题）。 */}
       {work?.title ? <h2 className="share-card__title">{work.title}</h2> : null}
 
-      <div className="share-card__piece">
-        <PieceView piece={piece} document={state.data.document} />
+      {showAll ? <div className="share-card__pieces">
+        {pieces.map((item, index) => {
+          const itemMissing = Array.isArray(item.missingAssets) ? item.missingAssets : [];
+          return <section className="share-piece-block" key={item.key || index} data-testid="share-piece-block">
+            <h2 className="share-piece-block__label">
+              <span className="share-piece-block__index">{index + 1}</span>
+              {item.caption || item.name || `第 ${index + 1} 件`}
+            </h2>
+            <div className="share-card__piece">
+              <PieceView piece={item} document={item.document} />
+              {itemMissing.length ? <Notice tone="warning">
+                这件作品里有 {itemMissing.length} 个本地素材（{itemMissing.slice(0, 3).join('、')}{itemMissing.length > 3 ? ' 等' : ''}）
+                没有随作品一起提交上来 —— 让 ta 用最新版客户端重新提交一次，这里就能看到图和视频了。
+              </Notice> : null}
+            </div>
+          </section>;
+        })}
+      </div> : <div className="share-card__piece">
+        <PieceView piece={piece} document={state.data.document || piece?.document || null} />
         {missingAssets.length ? <Notice tone="warning">
           这件作品里有 {missingAssets.length} 个本地素材（{missingAssets.slice(0, 3).join('、')}{missingAssets.length > 3 ? ' 等' : ''}）
           没有随作品一起提交上来 —— 让 ta 用最新版客户端重新提交一次，这里就能看到图和视频了。
         </Notice> : null}
-      </div>
+      </div>}
 
       <h2 className="share-card__label">作品简介</h2>
       <p className="share-card__desc">{lessonTitle || work?.title || '这节课的作品'}</p>
@@ -124,17 +148,19 @@ export function WorkSharePage() {
  */
 function PieceView({ piece, document: doc }) {
   if (!piece) return <p className="muted">这一件已经不在最新版本里了。</p>;
+  // 全部分享时每一件自带 `document`（各自的入口文件）；单件仍可用顶层那份（老响应）。
+  const documentData = piece.document || doc;
   const { render, mediaUrl, coverUrl, openUrl, name } = piece;
   if (render === 'IMAGE' && mediaUrl) return <img className="share-piece__media" src={mediaUrl} alt={name || '作品'} />;
   if (render === 'VIDEO' && mediaUrl) return <video className="share-piece__media" src={mediaUrl} controls playsInline />;
   if (render === 'AUDIO' && mediaUrl) return <audio className="share-piece__audio" src={mediaUrl} controls />;
   if (render === 'HTML') {
-    const playable = doc?.files && doc?.entry && Object.hasOwn(doc.files, doc.entry);
+    const playable = documentData?.files && documentData?.entry && Object.hasOwn(documentData.files, documentData.entry);
     return <>
       {playable
         // ⭐ 与作品页同一个口径（2026-09-30 用户口径「不要固定的小框、要自适应」）：
         //    无面板 + 按容器宽度自适应 —— 手机上就是学生页自己的窄屏版式，电脑上就是宽屏版式。
-        ? <div className="share-piece__stage"><ReplayPreview html={buildPreviewDocument(doc.files, doc.entry)} title={name || '作品'} chrome={false} responsive /></div>
+        ? <div className="share-piece__stage"><ReplayPreview html={buildPreviewDocument(documentData.files, documentData.entry)} title={name || '作品'} chrome={false} responsive /></div>
         : (coverUrl ? <img className="share-piece__media" src={coverUrl} alt={name || '网页作品'} /> : null)}
       {playable ? null : (openUrl
         ? <p className="share-piece__play"><Link className="button" to={openUrl}>打开体验 · 直接玩 <b>↗</b></Link></p>

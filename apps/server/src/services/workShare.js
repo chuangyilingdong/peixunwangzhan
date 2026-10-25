@@ -10,6 +10,16 @@ import { aq, arow, canvasMediaFrom, errors, nowIso, parseJson } from '../lib.js'
 import { shareableArtifactNames } from '../routes/vibecoding.js';
 
 /**
+ * 「全部分享」的 piece_key。**必须与前端 `packages/shared/src/workShare.jsx` 的同名常量逐字一致**
+ * （服务端不依赖 shared 包；p171 有一条静态断言钉住两边）。
+ *
+ * 为什么用哨兵而不是给每件各发一枚码再拼一个"合集页"：分享码的幂等键是
+ * `(学生, 作品, piece_key)`，一枚码指一件是既有口径；加一个"这件作品的全部"键，
+ * 发码/幂等/审计/准入都复用同一条路，也不用改 `work_share_links` 表结构。
+ */
+export const ALL_SHARE_PIECES_KEY = '__all__';
+
+/**
  * 一件作品里**每一件产出物**的稳定标识（分享码就按它定位）：
  *   · 画布作品：快照里的每个图/视频/音频 → `media:<fileId|url>`（优先 fileId：资产 id 跨版本稳定）
  *   · VibeCoding：**可独立分享的**那些产物的 `artifact:<文件名>`（与分享面板同一份清单
@@ -26,9 +36,15 @@ export function sharePieceKeysOf(source, row) {
   return shareableArtifactNames(row).map((name) => `artifact:${name}`);
 }
 
-/** 这件产出物在不在**最新那一版**里（不在就拒 —— 免得发出一枚打不开的码）。 */
+/** 这件产出物在不在**最新那一版**里（不在就拒 —— 免得发出一枚打不开的码）。
+ *  `__all__` 是"这件作品的全部"：作品里至少有一件可分享的产出物才成立（空作品不发码）。 */
 export function assertSharePiece(source, row, pieceKey) {
-  if (!sharePieceKeysOf(source, row).includes(pieceKey)) throw errors.badRequest('这一件不在最新版本里', 'SHARE_PIECE_NOT_FOUND');
+  const keys = sharePieceKeysOf(source, row);
+  if (pieceKey === ALL_SHARE_PIECES_KEY) {
+    if (!keys.length) throw errors.badRequest('这件作品还没有可分享的产出物', 'SHARE_PIECE_NOT_FOUND');
+    return;
+  }
+  if (!keys.includes(pieceKey)) throw errors.badRequest('这一件不在最新版本里', 'SHARE_PIECE_NOT_FOUND');
 }
 
 /**
