@@ -306,15 +306,7 @@ export async function prepareFileDownload(ctx, file) {
   };
 }
 
-/**
- * 作品里的图（`<img>` 用）。
- *
- * @param inline 可选：OSS 行是否用签名 URL 的 `response-content-disposition: inline` **覆盖对象元数据**。
- *   分享页 `/s/<码>` 需要它：素材上传时对象上带的是 `Content-Disposition: attachment`，
- *   手机长按图片不会出“存储图像/保存图片”，只会是“下载链接”。非 SVG 图片内联是安全的
- *   （`Content-Type: image/*` + `nosniff`）；**SVG 永远 attachment，忽略这个参数**（防存储型 XSS）。
- */
-export async function prepareWorkImage(ctx, file, { inline = false } = {}) {
+export async function prepareWorkImage(ctx, file) {
   const mimeType = String(file?.mime_type || '').toLowerCase();
   // ⭐ 2026-10-01：svg 也走这条（它同样是"作品里的图"）—— 它的 XSS 补偿在下面的 svgLike/attachment。
   if (file?.storage_kind !== 'INTERNAL_PROXY' || !/^image\/(png|jpeg|gif|webp|avif|svg\+xml)$/.test(mimeType)) {
@@ -346,12 +338,7 @@ export async function prepareWorkImage(ctx, file, { inline = false } = {}) {
   //    `<img src>` 不受影响（disposition 只作用于顶层导航），所以学生页里的 svg 照常显示。
   const svgLike = /^image\/svg\+xml/i.test(String(file.mime_type || ''));
   if (rowStorageBackend(file) === 'oss') {
-    const signed = ossRedirectUrl(file, {
-      expires: 900,
-      ...(svgLike
-        ? { contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent('image.svg')}` }
-        : inline ? { contentDisposition: 'inline' } : {}),
-    });
+    const signed = ossRedirectUrl(file, { expires: 900, ...(svgLike ? { contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent('image.svg')}` } : {}) });
     if (!signed) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
     await audit(ctx, 'FILE_WORK_IMAGE_PROXY', 'FILE_ASSET', file.id, null, { storageBackend: 'oss', redirected: true, bytes: file.file_size == null ? null : Number(file.file_size) });
     return { __fileResponse: true, status: 302, redirectUrl: signed };

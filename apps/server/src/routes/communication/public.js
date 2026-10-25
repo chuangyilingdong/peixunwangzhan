@@ -502,13 +502,14 @@ export async function handlePublicCommunication(ctx) {
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
     // ⚠️ 2026-10-25 用户报「手机端无法保存单个图片/视频」：画布侧原来一律 `prepareFileDownload`
     //    （`Content-Disposition: attachment`）—— 嵌入 `<img>/<video>` 能显示，但 iOS Safari / 微信的
-    //    长按菜单会变成“下载链接”，拿不到“存储图像 / 保存视频”。改成与 VIBECODING 同一条：
-    //    图片 `prepareWorkImage`（inline；SVG 仍 attachment 防 XSS）、音视频 `prepareFilePreview`
-    //    （inline + Range），长按能正常出系统保存菜单；显式“保存”按钮仍由扫码页提供（走 fetch + 系统分享/下载）。
-    //    ⚠️ 音视频用 `ossOffload: true`：OSS 行直接 302 到签名直链（Range 流式），别把整段视频
-    //    拉回这台 5Mbps 的机器再转发；扫码页的 CSP 是站点级 `media-src https:`，嵌入 `<video>` 跟 302 没问题。
+    //    长按菜单会变成“下载链接”。现在图片 `prepareWorkImage`、音视频 `prepareFilePreview`
+    //    （本地行 inline + Range；视频 OSS 行 302 走 Range 流式）。
+    //    ⚠️ OSS 素材上传时对象上带的是 `Content-Disposition: attachment`，而阿里云**会无视单独的
+    //    `response-content-disposition=inline`**（见 services/objectStorage.js 的实测注释）——
+    //    所以线上 OSS 图片/视频的长按在部分浏览器里仍是“下载链接”。移动端**主路径**是扫码页的
+    //    显式「保存图片/视频」按钮（fetch → 系统分享 → `<a download>` 兜底；全屏层里常驻）。
     const mime = String(file.mime_type || '').toLowerCase();
-    if (mime.startsWith('image/')) return prepareWorkImage(ctx, file, { inline: true });
+    if (mime.startsWith('image/')) return prepareWorkImage(ctx, file);
     if (/^(audio|video)\//.test(mime)) return prepareFilePreview(ctx, file, { ossOffload: true });
     return prepareFileDownload(ctx, file);
   }

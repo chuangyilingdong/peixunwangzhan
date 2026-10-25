@@ -343,18 +343,21 @@ try {
   }
 
   /* ── ⑭ 手机端保存（2026-10-25 用户报「无法保存单个图片/视频」）─────────────
-     真因：画布分享媒体原来走 `prepareFileDownload`（attachment），长按菜单变成“下载链接”；
-     修法：图片 prepareWorkImage / 音视频 prepareFilePreview（inline）。扫码页再给全屏层 +
-     显式保存按钮（fetch → 系统分享，失败则 <a download> 兜底）。 */
-  console.log('⑭ 手机端保存：媒体 inline（长按可存）+ 扫码页全屏/保存按钮');
+     真因：画布分享媒体原来走 `prepareFileDownload`（attachment），长按菜单变成“下载链接”。
+     修法：图片 prepareWorkImage / 音视频 prepareFilePreview（本地行 inline；视频 OSS 行 302 走 Range），
+     扫码页再给全屏层 + 显式保存按钮（fetch → 系统分享，失败则 <a download> 兜底）。
+     ⚠️ OSS 素材上传时对象带 attachment，阿里云**会无视单独的 response-content-disposition=inline**
+     （见 objectStorage.js 的实测注释）——所以线上 OSS 的长按在部分浏览器仍是“下载链接”，
+     移动端主路径是显式保存按钮（生产真实作品已验：2.4MB 图 / 3.3MB 视频下载成功）。 */
+  console.log('⑭ 手机端保存：本地行媒体 inline + 扫码页全屏/保存按钮');
   {
     const imageMedia = await fetch(`http://127.0.0.1:${PORT}/api/public/share-links/${imageCode.data.code}/media/file_p171_img`, { redirect: 'manual' });
-    check('⑭ 图片媒体是 inline（不再是 attachment —— 长按才会出“存储图像”）',
+    check('⑭ 本地行图片媒体是 inline（不再是 attachment）',
       imageMedia.status === 200 && /^inline/i.test(imageMedia.headers.get('content-disposition') || '')
       && /^image\/png/i.test(imageMedia.headers.get('content-type') || ''),
       JSON.stringify({ status: imageMedia.status, type: imageMedia.headers.get('content-type'), disposition: imageMedia.headers.get('content-disposition') }));
     const videoMedia = await fetch(`http://127.0.0.1:${PORT}/api/public/share-links/${videoCode.data.code}/media/file_p171_vid`, { redirect: 'manual' });
-    check('⑭ 视频媒体是 inline + 支持 Range（播放/拖动进度都靠它）',
+    check('⑭ 本地行视频媒体是 inline + 支持 Range（播放/拖动进度都靠它）',
       videoMedia.status === 200 && /^inline/i.test(videoMedia.headers.get('content-disposition') || '')
       && /^video\/mp4/i.test(videoMedia.headers.get('content-type') || '') && /bytes/i.test(videoMedia.headers.get('accept-ranges') || ''),
       JSON.stringify({ status: videoMedia.status, type: videoMedia.headers.get('content-type'), disposition: videoMedia.headers.get('content-disposition'), ranges: videoMedia.headers.get('accept-ranges') }));
@@ -365,14 +368,12 @@ try {
     check('⑭ 图片点一下开全屏，视频给全屏/保存两颗按钮（原生 controls 不被抢）',
       /is-tappable/.test(pageSource) && /share-piece__tools/.test(pageSource) && /全屏播放/.test(pageSource) && /保存视频/.test(pageSource));
     const publicRoute = fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'communication', 'public.js'), 'utf8');
-    check('⑭ 服务端分享媒体：图片 prepareWorkImage(inline)、音视频 prepareFilePreview（inline）',
-      /if \(mime\.startsWith\('image\/'\)\) return prepareWorkImage\(ctx, file, \{ inline: true \}\)/.test(publicRoute)
+    check('⑭ 服务端分享媒体：图片 prepareWorkImage、音视频 prepareFilePreview（视频走 ossOffload）',
+      /if \(mime\.startsWith\('image\/'\)\) return prepareWorkImage\(ctx, file\)/.test(publicRoute)
       && /prepareFilePreview\(ctx, file, \{ ossOffload: true \}\)/.test(publicRoute));
-    const fileAssets = fs.readFileSync(path.join('apps', 'server', 'src', 'routes', 'fileAssets.js'), 'utf8');
-    check('⑭ OSS 图片用 response-content-disposition=inline 覆盖对象上的 attachment（长按才出“存储图像”）',
-      /export async function prepareWorkImage\(ctx, file, \{ inline = false \} = \{\}\)/.test(fileAssets)
-      && /: inline \? \{ contentDisposition: 'inline' \} : \{\}/.test(fileAssets)
-      && /svgLike\s*\?\s*\{ contentDisposition:/.test(fileAssets));
+    const objectStorage = fs.readFileSync(path.join('apps', 'server', 'src', 'services', 'objectStorage.js'), 'utf8');
+    check('⑭ OSS 会无视单独的 inline（已留实测注释）—— 手机保存以扫码页显式按钮为主路径',
+      /`inline` 会被无视/.test(objectStorage));
   }
 
   /* ── ⑧ 机构/老师端（用户口径：「机构端/老师端也需要有」）────────────────────
