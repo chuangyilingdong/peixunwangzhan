@@ -2739,8 +2739,8 @@ async function runTalkingHead(owner, { runId, text, speakerId, voiceRow, imageAs
       const { sessionId, faceId, endTime } = parseFaceSession(face.resultText);
       await mark('face', 'done'); await mark('lipsync', 'running');
       // 上游的「session_id has expired」其实是 soundEndTime 太靠近底片末尾；
-      // 按 identify-face 返回的 end_time 留 700ms 余量，才能真正跑通对口型。
-      const soundEndTime = safeLipSyncEndTime(endTime, 5000);
+      // 统一封顶 4000ms（生产同类型 6 秒底片实测安全），不随底片时长放大。
+      const soundEndTime = safeLipSyncEndTime(endTime, 4000);
       const syncTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-video', metadata: { sessionId, faceId, audio_url: tts.url, soundStartTime: 0, soundEndTime, soundInsertTime: 0, soundVolume: 1, originalAudioVolume: 0 } });
       const synced = await pollVideoTask({ ...config, taskId: syncTask, timeoutMs: 900000 });
       if (!synced.url) throw Object.assign(new Error('对口型完成但没有返回视频地址'), { code: 'WORKBENCH_LIPSYNC_NO_URL' });

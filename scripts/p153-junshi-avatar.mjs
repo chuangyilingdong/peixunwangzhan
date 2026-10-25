@@ -37,9 +37,9 @@ check('① 旧版单对象格式仍兼容', parseFaceSession('{"sessionId":"s1",
 let threw = false;
 try { parseFaceSession('{"results":[]}'); } catch { threw = true; }
 check('① 没有会话字段时明确报错', threw);
-check('① 4700ms 底片留 700ms → 4000', safeLipSyncEndTime(4700) === 4000, safeLipSyncEndTime(4700));
-check('① 5300ms 底片留 700ms → 4600', safeLipSyncEndTime(5300) === 4600, safeLipSyncEndTime(5300));
-check('① 6 秒底片封顶 5000', safeLipSyncEndTime(6300) === 5000, safeLipSyncEndTime(6300));
+check('① 4700ms 底片安全上限 4000', safeLipSyncEndTime(4700) === 4000, safeLipSyncEndTime(4700));
+check('① 5300ms 底片仍封顶 4000', safeLipSyncEndTime(5300) === 4000, safeLipSyncEndTime(5300));
+check('① 6 秒底片仍封顶 4000', safeLipSyncEndTime(6300) === 4000, safeLipSyncEndTime(6300));
 check('① end_time 缺失时回退 4000', safeLipSyncEndTime(0) === 4000, safeLipSyncEndTime(0));
 
 console.log('② Seedance 2.0 i2v 顶层 images');

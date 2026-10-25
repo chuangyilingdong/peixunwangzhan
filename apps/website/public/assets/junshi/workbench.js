@@ -1446,7 +1446,7 @@
       '<form id="wb-avatar-form" class="wb-form">' +
       '<label class="wb-field"><span>音色</span><select name="voiceId">' + (readyVoices.length ? readyVoices.map(function (v) { return '<option value="' + esc(v.id) + '">' + esc(v.name) + (v.mode === 'reference' ? '（参考直出）' : '') + '</option>'; }).join('') : '<option value="">（先克隆一个音色）</option>') + '</select></label>' +
       '<label class="wb-field"><span>形象照（正面人脸清晰）</span><select name="imageAssetId">' + (imageAssets.length ? imageAssets.slice(0, 30).map(function (a) { return '<option value="' + esc(a.id) + '">' + esc(a.fileName) + '</option>'; }).join('') : '<option value="">（素材库里还没有图片）</option>') + '</select></label>' +
-      '<label class="wb-field full"><span>口播文案（底片约 6 秒，建议 20 字内；超出会截断）</span><textarea name="text" placeholder="把要口播的文案粘进来（建议 20 字内，口播更完整）"></textarea></label>' +
+      '<label class="wb-field full"><span>口播文案（按 4 秒合成，建议 15 字内；超出会截断）</span><textarea name="text" placeholder="把要口播的文案粘进来（建议 15 字内，口播更完整）"></textarea></label>' +
       '<div class="wb-field full wb-actions"><button class="btn primary" type="submit"' + (readyVoices.length && imageAssets.length ? '' : ' disabled') + '>' + ic('video', 13) + '生成口播视频</button>' +
       '<button class="btn" type="button" id="wb-voice-clone-open">' + ic('plus', 12) + '克隆新音色</button>' +
       (training.length ? '<span class="wb-note">' + ic('loader', 11) + ' ' + training.length + ' 个音色克隆中…</span>' : '') +

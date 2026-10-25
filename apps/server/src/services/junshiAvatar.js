@@ -19,8 +19,8 @@
  *       outputType=text 的子 JSON 里；parseFaceSession 已递归兼容，并返回 endTime。
  *    2. kling-lip-sync-video 的「session_id has expired」是误导性报错。同一份新会话：
  *       4700ms 底片 + soundEndTime 5000/4700/4600 全部失败，4000 成功；
- *       5300ms 底片 + 4700 成功。真正约束是 soundEndTime 要比 end_time 早约 700ms。
- *       用 safeLipSyncEndTime(endTime) 计算，不要再写死 5000。
+ *       6 秒 i2v 底片 + 4000 成功，但生产 6 秒底片 + 动态算出的 4600/5000 又失败。
+ *       安全值统一封顶 4000ms；用 safeLipSyncEndTime(endTime) 计算，不要写死 5000。
  *    3. 音色克隆仍被上游阻：doubao-voice-clone 503「No available channel」，
  *       minimax-voice-clone「模型响应异常」。但 doubao-seed-audio-1.0 的参考音频直出可用
  *       （audio_url），因此克隆失败时降级为「参考音频直出」（音色相近，非训练克隆）。
@@ -185,10 +185,12 @@ export function parseFaceSession(resultText) {
  * identify-face 会话，在 4700ms 底片上提交 soundEndTime=5000/4700/4600 全部报
  * 「过期」，而 4000 成功；在 5300ms 底片上 4700 成功。真正约束是
  * `soundEndTime` 必须比底片 end_time 早约 700ms。这里统一留 700ms 余量并按
- * 100ms 向下取整，避免最后一帧/音频尾部触发参数校验。
+ * 100ms 向下取整；同时封顶 4000ms —— 生产同类型 6 秒底片 + 4000 已实测成功，
+ * 更长会被截到 4 秒口播，避免再次触发假过期。
  */
-export function safeLipSyncEndTime(endTime, maxMs = 5000) {
+export function safeLipSyncEndTime(endTime, maxMs = 4000) {
   const end = Number(endTime) || 0;
-  if (!(end > 0)) return 4000;
-  return Math.max(1000, Math.min(maxMs, Math.floor((end - 700) / 100) * 100));
+  const cap = Math.min(Number(maxMs) || 4000, 4000);
+  if (!(end > 0)) return cap;
+  return Math.max(1000, Math.min(cap, Math.floor((end - 700) / 100) * 100));
 }
