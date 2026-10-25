@@ -222,6 +222,10 @@
     workflow: null,
     workflowMeta: null,
     memories: [],
+    brains: [],
+    brainPollTimer: null,
+    chatAttachments: [],
+    chatTier: 'fast',
     transcripts: [],
     tsTimer: null,
     douyinPanel: null,
@@ -251,6 +255,9 @@
     if (tab !== 'video') { stopRenderPolling(); stopAvatarPolling(); }
     if (tab !== 'chat') stopWfPolling();
     if (tab !== 'references') stopTsPolling();
+    if (tab !== 'copybrains' && state.brainPollTimer) { clearInterval(state.brainPollTimer); state.brainPollTimer = null; }
+    if (tab === 'copybrains') void refreshBrains(true);
+    if (tab === 'settings') void renderSettings();
     $$('#wb-tabs [data-wb]').forEach(function (button) {
       if (button.dataset.wb === tab) button.setAttribute('aria-current', 'true');
       else button.removeAttribute('aria-current');
@@ -308,6 +315,7 @@
         call('/transcripts').catch(function () { return { items: [] }; }),
         call('/voices').catch(function () { return { items: [] }; }),
         call('/avatar/runs').catch(function () { return { items: [] }; }),
+        call('/brains').catch(function () { return { items: [] }; }),
       ]);
       state.messages = results[0].messages || [];
       state.copy = results[1].items || [];
@@ -323,6 +331,7 @@
       state.transcripts = results[8].items || [];
       state.voices = results[9].items || [];
       state.avatarRuns = results[10].items || [];
+      state.brains = results[11].items || [];
       state.loaded = true;
       render();
     } catch (error) {
@@ -366,6 +375,12 @@
     var near = box.scrollHeight - box.scrollTop - box.clientHeight < 140;
     box.innerHTML = state.messages.length ? state.messages.map(messageHtml).join('') : chatEmpty();
     bindMemSaveButtons();
+    // 工作流卡片嵌在消息流末尾（对齐原版 viral/creative 会话卡片）
+    if (state.workflow && state.workflow.status === 'active') {
+      var card = workflowCardHtml(state.workflow);
+      if (card) box.insertAdjacentHTML('beforeend', '<div data-wb-flow>' + card + '</div>');
+    }
+    bindWorkflowCard();
     if (forceBottom || near) box.scrollTop = box.scrollHeight;
   }
   function bindMemSaveButtons() {
@@ -406,15 +421,21 @@
       '<button class="btn" type="button" id="wb-flow-hotspot">' + ic('sparkle', 12) + '热点结合</button>' +
       '<button class="btn" type="button" id="wb-mem-open">' + ic('quote', 12) + '记忆(' + state.memories.length + ')</button>' +
       '<button class="btn" type="button" id="wb-clear-chat">清空对话</button></div></div>' +
-      '<div id="wb-flow-card">' + workflowCardHtml(state.workflow) + '</div>' +
       '<div class="wb-msgs" id="wb-msgs"></div>' +
       '<div><div class="wb-quick">' +
       '<button class="chip" type="button" data-wb-prompt="给我 3 个今天能拍的选题">今日选题</button>' +
       '<button class="chip" type="button" data-wb-prompt="写 5 条 30 秒口播文案">写口播</button>' +
       '<button class="chip" type="button" data-wb-prompt="帮我按钩子、痛点、证明、转折、行动拆解这个同行内容">拆同行</button>' +
       '<button class="chip" type="button" data-wb-prompt="把今天的热点和我的课程结合起来，给我 3 个选题">热点结合</button>' +
-      '</div><div class="wb-composer"><textarea id="wb-input" placeholder="说说你今天想做什么，或贴一段同行口播…"></textarea>' +
-      '<button class="btn primary" type="button" id="wb-send">' + (state.busy ? ic('stop', 14) + '停止' : ic('arrow-up', 15) + '发送') + '</button></div></div></div></div>';
+      '</div><div class="wb-chat-attach" id="wb-chat-attach"></div>' +
+      '<div class="wb-composer"><textarea id="wb-input" placeholder="说说你今天想做什么，或贴一段同行口播…（可直接粘贴截图）"></textarea>' +
+      '<button class="btn primary" type="button" id="wb-send">' + (state.busy ? ic('stop', 14) + '停止' : ic('arrow-up', 15) + '发送') + '</button></div>' +
+      '<div class="wb-composer-foot"><button class="btn" type="button" id="wb-chat-attach-btn">' + ic('image', 12) + '添加图片</button>' +
+      '<input id="wb-chat-file" type="file" accept="image/*" multiple hidden>' +
+      '<span class="wb-note" style="margin-left:auto">模型：</span>' +
+      '<button class="chip' + (state.chatTier === 'fast' ? ' on' : '') + '" type="button" data-tier="fast">标准</button>' +
+      '<button class="chip' + (state.chatTier === 'deep' ? ' on' : '') + '" type="button" data-tier="deep">深度</button>' +
+      '</div></div></div></div>';
     renderMessages(true);
     bindPromptButtons();
     bindWorkflowCard();
@@ -422,6 +443,7 @@
     $('#wb-flow-viral').onclick = function () { openFlowStartDialog('viral'); };
     $('#wb-flow-hotspot').onclick = function () { openFlowStartDialog('hotspot'); };
     $('#wb-mem-open').onclick = openMemoriesDialog;
+    bindChatComposerExtras();
     var input = $('#wb-input');
     var send = $('#wb-send');
     function doSend() {
@@ -447,11 +469,92 @@
       } catch (error) { toast(error.message, 'error'); }
     };
   }
+  function bindChatComposerExtras() {
+    var attachBtn = $('#wb-chat-attach-btn');
+    var fileInput = $('#wb-chat-file');
+    if (attachBtn && fileInput) {
+      attachBtn.onclick = function () { fileInput.click(); };
+      fileInput.onchange = function () { void addChatAttachmentFiles(Array.prototype.slice.call(fileInput.files || [])); fileInput.value = ''; };
+    }
+    $$('[data-tier]').forEach(function (button) {
+      button.onclick = function () {
+        state.chatTier = button.dataset.tier;
+        $$('[data-tier]').forEach(function (item) { item.classList.toggle('on', item.dataset.tier === state.chatTier); });
+      };
+    });
+    renderChatAttachments();
+    var input = $('#wb-input');
+    if (input && !input.dataset.pasteBound) {
+      input.dataset.pasteBound = '1';
+      input.addEventListener('paste', function (event) {
+        var files = Array.prototype.slice.call((event.clipboardData || {}).files || []).filter(function (file) { return file.type.indexOf('image/') === 0; });
+        if (files.length) { event.preventDefault(); void addChatAttachmentFiles(files); }
+      });
+    }
+  }
+  async function addChatAttachmentFiles(files) {
+    for (var i = 0; i < files.length; i++) {
+      if (state.chatAttachments.length >= 4) { toast('一条消息最多带 4 张图片', 'error'); break; }
+      var chip = { id: 'pending' + Date.now() + i, name: files[i].name, status: 'uploading' };
+      state.chatAttachments.push(chip);
+      renderChatAttachments();
+      try {
+        var form = new FormData();
+        form.append('file', files[i]);
+        form.append('accountId', state.accountId);
+        var result = await call('/assets', { method: 'POST', body: form });
+        chip.id = result.asset.id;
+        chip.status = 'ready';
+        state.assets.unshift(result.asset);
+      } catch (error) {
+        chip.status = 'failed';
+        toast(files[i].name + '：' + error.message, 'error');
+      }
+      renderChatAttachments();
+    }
+  }
+  function renderChatAttachments() {
+    var box = $('#wb-chat-attach');
+    if (!box) return;
+    box.innerHTML = state.chatAttachments.map(function (chip, index) {
+      return '<span class="wb-attach-chip">' + ic(chip.status === 'ready' ? 'image' : 'loader', 11) + ' 图片' + (index + 1) +
+        (chip.status === 'failed' ? '（上传失败）' : '') +
+        '<button type="button" data-attach-del="' + index + '" aria-label="移除">×</button></span>';
+    }).join('');
+    $$('[data-attach-del]').forEach(function (button) {
+      button.onclick = function () { state.chatAttachments.splice(Number(button.dataset.attachDel), 1); renderChatAttachments(); };
+    });
+  }
+  function creativeIntentOf(text) {
+    if (/开始今天的选题|开始选题|帮我(想|做|搞|选).{0,8}(选题|文案|口播)|给我(想|做|写).{0,8}(选题|文案|口播)|我想(做|写|开始).{0,8}(选题|文案|口播)/.test(text)) return 'today';
+    return '';
+  }
   async function sendChat(raw) {
     var text = String(raw || '').trim();
     if (!text || state.busy) return;
     var input = $('#wb-input');
     if (input) input.value = '';
+    // 意图识别（对齐原版 isCreativeStartIntent）
+    var intent = creativeIntentOf(text);
+    if (intent && !state.workflow) {
+      showDialog('今天想从哪里开始？', '<p>可以先给一个大致方向，也可以让小铃铛根据账号资料推荐三个选题。</p>' +
+        '<label class="wb-field full"><span>我有大致想法</span><input id="wb-today-idea" placeholder="例如：想讲客户总觉得服务贵"></label>' +
+        '<div class="wb-actions"><button class="btn primary" type="button" id="wb-today-with">按这个想法推荐 3 个选题</button>' +
+        '<button class="btn" type="button" id="wb-today-no">我没头绪，推荐 3 个选题</button></div>');
+      var startToday = function (withIdea) {
+        var idea = String(($('#wb-today-idea') || {}).value || '').trim();
+        if (withIdea && !idea) { toast('先写一句大致想法，或选「我没头绪」', 'error'); return; }
+        closeDialog();
+        launchWorkflow('today', { goal: withIdea ? idea : '' }, '今日选题', 'idea',
+          { goal: withIdea ? idea : '', ideaOptions: [], message: '正在根据账号资料推荐选题…', copyOptions: [] });
+      };
+      $('#wb-today-with').onclick = function () { startToday(true); };
+      $('#wb-today-no').onclick = function () { startToday(false); };
+      return;
+    }
+    var attachmentIds = state.chatAttachments.filter(function (chip) { return chip.status === 'ready'; }).map(function (chip) { return chip.id; });
+    state.chatAttachments = [];
+    renderChatAttachments();
     state.busy = true;
     state.abort = new AbortController();
     state.messages.push({ role: 'user', content: text });
@@ -466,7 +569,7 @@
       if (token) headers.authorization = 'Bearer ' + token;
       var res = await fetch(API + '/chat/stream', {
         method: 'POST', headers: headers, credentials: 'same-origin',
-        body: JSON.stringify({ message: text, accountId: state.accountId }), signal: state.abort.signal,
+        body: JSON.stringify({ message: text, accountId: state.accountId, tier: state.chatTier || 'fast', attachments: attachmentIds }), signal: state.abort.signal,
       });
       if (res.status === 401 && token) sessionLost();
       if (!res.ok || !res.body) throw new Error('生成失败（HTTP ' + res.status + '）');
@@ -756,10 +859,19 @@
       '<label class="wb-field full"><span>观察笔记</span><textarea name="notes" placeholder="钩子、结构、证据、转化方式…"></textarea></label>' +
       '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">加入观察</button></div></form></div>' +
       (items.length ? '<div class="wb-cards">' + items.map(function (item) {
+        var linked = (state.transcripts || []).filter(function (ts) {
+          return ts.status === 'succeeded' && (
+            (item.url && ts.sourceUrl && ts.sourceUrl.indexOf(item.url.replace(/\/user\/.*/, '')) >= 0) ||
+            (item.name && ts.nickname && ts.nickname.indexOf(item.name) >= 0));
+        });
+        var count = linked.length;
+        var nextStep = count >= 2 ? '已采集 ' + count + ' 条口播，可以生成研究简报' : count ? '已采集 1 条，再采集 1-2 条就可以生成研究简报' : '先粘贴这个同行的作品分享，采集 2-3 条口播';
+        var report = (state.brains || []).filter(function (brain) { return brain.kind === 'peer_report' && brain.name === item.name && brain.status === 'ready'; })[0];
         return '<article class="wb-item"><div class="wb-card-head"><h4>' + esc(item.name) + '</h4><button class="btn" type="button" data-ref-del="' + esc(item.id) + '">' + ic('trash', 12) + '</button></div>' +
           (item.url ? '<p><a href="' + esc(item.url) + '" target="_blank" rel="noopener noreferrer">' + esc(item.url) + '</a></p>' : '') +
-          '<p class="wb-preview" style="-webkit-line-clamp:6">' + esc(item.notes || '还没有观察笔记。') + '</p>' +
-          '<div class="wb-meta">' + fmtDate(item.createdAt) + '</div></article>';
+          '<p class="wb-preview" style="-webkit-line-clamp:4">' + esc(item.notes || '还没有观察笔记。') + '</p>' +
+          '<div class="wb-meta">已采集口播 <b>' + count + '</b> 条 · 下一步：' + esc(nextStep) + '</div>' +
+          '<div class="wb-actions">' + (report ? '<button class="btn primary" type="button" data-ref-report="' + esc(report.id) + '">查看研究简报</button>' : '<button class="btn" type="button" data-ref-report-new="' + esc(item.name) + '"' + (count ? '' : ' disabled') + '>生成研究简报</button>') + '</div></article>';
       }).join('') + '</div>' : '<div class="wb-card"><p class="wb-muted">还没有同行记录。</p></div>') +
       '</div></div>';
     bindAccountSwitch('#wb-dy-account');
@@ -772,6 +884,18 @@
     renderDouyinPanel();
     renderTranscriptList();
     refreshTranscripts(true);
+    $$('[data-ref-report]').forEach(function (button) {
+      button.onclick = async function () {
+        try {
+          var data = await call('/brains/' + encodeURIComponent(button.dataset.refReport));
+          var brain = (data.data || data).brain;
+          showDialog(brain.name + ' · 研究简报', brainArchiveHtml(brain));
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    });
+    $$('[data-ref-report-new]').forEach(function (button) {
+      button.onclick = function () { openPeerReportDialog(button.dataset.refReportNew); };
+    });
     $('#wb-ref-form').onsubmit = async function (event) {
       event.preventDefault();
       var form = event.currentTarget;
@@ -1211,6 +1335,7 @@
           '<small>' + esc(item.kind) + ' · ' + fmtSize(item.size) + ' · ' + fmtDate(item.createdAt) +
           (item.folder ? ' · 📁 ' + esc(item.folder) : '') + ' · ' + esc(accountName(item.accountId)) + '</small>' +
           '<div class="wb-actions"><button class="btn" type="button" data-asset-open="' + esc(item.id) + '">打开</button>' +
+          '<button class="btn" type="button" data-asset-move="' + esc(item.id) + '">移动</button>' +
           '<button class="btn" type="button" data-asset-del="' + esc(item.id) + '">' + ic('trash', 12) + '</button></div></div></article>';
       }).join('') + '</div>' : '<p class="wb-muted">这个筛选下还没有素材。上传课程图、课堂视频、参考音频或口播文本。</p>') +
       '</div></div></div>';
@@ -1253,6 +1378,19 @@
     $$('[data-asset-open]').forEach(function (button) {
       button.onclick = function () { openAsset(button.dataset.assetOpen); };
     });
+    $$('[data-asset-move]').forEach(function (button) {
+      button.onclick = async function () {
+        var current = (state.assets.filter(function (item) { return item.id === button.dataset.assetMove; })[0] || {}).folder || '';
+        var folder = prompt('移动到文件夹（留空 = 不分组）：', current);
+        if (folder === null) return;
+        try {
+          var result = await call('/assets/' + encodeURIComponent(button.dataset.assetMove), { method: 'PUT', body: { folder: folder } });
+          state.assets = state.assets.map(function (item) { return item.id === result.asset.id ? result.asset : item; });
+          renderAssets();
+          toast('已移动', 'success');
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    });
     $$('[data-asset-del]').forEach(function (button) {
       button.onclick = async function () {
         if (!confirm('删除这份素材？文件也会一起删除。')) return;
@@ -1288,51 +1426,69 @@
       '</div></div></div>';
   }
 
-  /* ───────────── 引导式创作工作流（今日选题 / 爆款复刻 / 热点结合） ───────────── */
+  /* ───────────── 引导式创作工作流（消息流卡片 · 乐观 UI · 流式预览 · 双击改稿） ───────────── */
   function wfStageSteps(wf) {
-    var steps = { today: ['选题', '表达', '版本', '完成'], viral: ['原文', '强度', '版本', '完成'], hotspot: ['热点', '结合方式', '表达', '版本', '完成'] };
-    var order = { transcript: 0, idea: 0, angle: 0, strength: 1, style: wf.kind === 'hotspot' ? 2 : 1, copy: wf.kind === 'hotspot' ? 3 : 2, done: 99 };
-    var list = steps[wf.kind] || [];
+    var stepsByKind = {
+      today: ['选题', '写作大脑', '改写', '完成'],
+      viral: ['来源', '提取原文', '原文确认', '改写', '完成'],
+      hotspot: ['找热点', '选热点', '结合方式', '写作大脑', '改写', '完成'],
+    };
+    var order = {
+      idea: 0, brain: 1, rewriting: 2, copy: 2, ready: 2,
+      transcript: 2, extracting: 1, extract_failed: 1,
+      searching: 0, hotspots_ready: 1, angle: 2,
+    };
+    var list = stepsByKind[wf.kind] || [];
     var current = order[wf.stage] != null ? order[wf.stage] : 0;
     if (wf.stage === 'done') return list.map(function (label) { return '<span class="done">✓ ' + label + '</span>'; }).join('');
     return list.map(function (label, index) {
       return '<span class="' + (index < current ? 'done' : index === current ? 'current' : '') + '">' + (index < current ? '✓ ' : index === current ? '● ' : '') + label + '</span>';
     }).join('');
   }
-  function wfOptionCard(wf, option, index) {
+  function wfOptionCard(wf, option, index, preview) {
     var isIdea = wf.stage === 'idea';
     var body = isIdea
       ? '<p><b>' + esc(option.title || '') + '</b></p><p>钩子：' + esc(option.hook || '') + '</p><p class="wb-note">为什么今天发：' + esc(option.why || '') + '</p>'
       : '<h4>' + esc(option.title || '版本' + (index + 1)) + '</h4><div class="wb-copy-body">' + md(option.content || '') + '</div>';
     var actions = '<div class="wb-actions">' +
-      '<button class="btn primary" type="button" data-wf-select="' + esc(option.id) + '">' + (isIdea ? '用这个选题' : '选这个版本') + '</button>' +
+      '<button class="btn primary" type="button" data-wf-select="' + esc(option.id) + '">' + (isIdea ? '用这个选题' : '选择这个版本') + '</button>' +
       (isIdea ? '<button class="btn" type="button" data-wf-inspire="' + esc(option.id) + '">存为灵感</button>' : '') +
       (!isIdea ? '<button class="btn" type="button" data-wf-copy-text="' + esc(option.id) + '">' + ic('copy', 12) + '复制</button>' : '') +
       '</div>';
-    return '<article class="wb-item wb-flow-option">' + body + actions + '</article>';
+    var hint = preview ? '<small class="wb-option-hint">已成型，后续版本继续生成中；双击卡片可直接修改</small>' : '<small class="wb-option-hint">双击这张卡片可直接修改后使用</small>';
+    return '<article class="wb-item wb-flow-option" data-wf-option="' + esc(option.id) + '">' + body + hint + actions + '</article>';
+  }
+  function wfBlueprintHtml(blueprint) {
+    if (!blueprint || (!blueprint.hook && !blueprint.turn && !blueprint.closing && !(blueprint.progression || []).length)) return '';
+    return '<details class="wb-blueprint"><summary>查看这条爆款的复刻蓝图</summary><div class="wb-blueprint-grid">' +
+      (blueprint.hook ? '<p><b>开头机制：</b>' + esc(blueprint.hook) + '</p>' : '') +
+      ((blueprint.progression || []).length ? '<p><b>信息推进：</b>' + esc((blueprint.progression || []).join(' → ')) + '</p>' : '') +
+      (blueprint.turn ? '<p><b>转折：</b>' + esc(blueprint.turn) + '</p>' : '') +
+      (blueprint.closing ? '<p><b>收束：</b>' + esc(blueprint.closing) + '</p>' : '') +
+      '</div></details>';
   }
   function workflowCardHtml(wf) {
     if (!wf || wf.status !== 'active') return '';
     var head = '<div class="wb-card-head"><h3>' + esc(wf.kindLabel) + '</h3>' +
       '<button class="btn" type="button" data-wf-cancel="' + esc(wf.id) + '">放弃</button></div>' +
-      '<div class="wb-flow-steps">' + wfStageSteps(wf) + '</div>' +
-      (wf.state.demo ? '<p class="wb-note">当前模型渠道未返回内容，以下是演示样本。</p>' : '');
+      '<div class="wb-flow-steps">' + wfStageSteps(wf) + '</div>';
     var body = '';
-    if (wf.kind === 'viral' && wf.stage === 'transcript') {
-      body = '<p class="wb-note">先确认原文（可直接修改）。只学习传播机制，不复用原钩子、原案例、原画面或原音频。</p>' +
+    if (wf.stage === 'extracting') {
+      body = '<p>' + esc(wf.state.message || '正在提取原视频口播文案…') + '</p><progress></progress>';
+    } else if (wf.stage === 'extract_failed') {
+      body = '<p class="err">' + ic('alert', 13) + '<span>' + esc(wf.state.extractError || '提取没有成功') + '</span></p>' +
+        '<div class="wb-actions"><button class="btn primary" type="button" data-wf-restart-viral>重新选择来源</button></div>';
+    } else if (wf.stage === 'transcript') {
+      body = '<label class="wb-note">提取到的原始文案（可直接修改错字、品牌名或转写错误；确认后才开始结合账号资料改写）</label>' +
         '<textarea id="wb-wf-transcript" class="wb-script" style="min-height:120px">' + esc(wf.state.transcript || '') + '</textarea>' +
-        '<div class="wb-actions"><button class="btn primary" type="button" data-wf-action="confirm_transcript">确认原文，选改造强度</button></div>';
-    } else if (wf.kind === 'viral' && wf.stage === 'strength') {
-      body = '<h4>选择爆款改造强度</h4><div class="wb-choice-grid">' +
-        (state.workflowMeta.strengths || []).map(function (item) {
-          return '<button class="wb-choice" type="button" data-wf-strength="' + esc(item.id) + '"><b>' + esc(item.label) + '</b><small>' + esc(item.detail) + '</small></button>';
-        }).join('') + '</div>';
+        '<div class="wb-actions"><button class="btn primary" type="button" data-wf-action="confirm_transcript">确认原文，开始复刻</button>' +
+        '<button class="btn" type="button" data-wf-copy-transcript>复制原文</button></div>';
     } else if (wf.kind === 'hotspot' && wf.stage === 'searching') {
-      body = '<p class="wb-note">关键词：' + esc(wf.state.keyword || '') + ' · 正在用 DeepSeek 搜索近 3 天新闻并按你的账号挑热点，通常十几秒；这一页会自动刷新。</p><progress></progress>';
+      body = '<p class="wb-note">关键词：' + esc(wf.state.keyword || '') + ' · 正在用 DeepSeek 搜索近 3 天新闻并按你的账号挑热点，通常十几秒。</p><progress></progress>';
     } else if (wf.kind === 'hotspot' && wf.stage === 'hotspots_ready') {
       var found = wf.state.hotspots || [];
       body = '<h4>最值得这个账号结合的 ' + found.length + ' 个热点</h4>' +
-        '<p class="wb-note">来自 DeepSeek 联网搜索（近 3 天），已按账号相关性筛选。只用标题与事实里写明的内容。</p>' +
+        '<p class="wb-note">来自 DeepSeek 联网搜索（近 3 天），已按账号相关性筛选。</p>' +
         '<div class="wb-news-list">' + found.map(function (item) {
           return '<article class="wb-news-card"><div class="wb-news-head"><b>' + esc(item.title || '') + '</b>' +
             (item.recommendedAngle ? '<span class="wb-tag ok">建议：' + esc(item.recommendedAngle) + '</span>' : '') + '</div>' +
@@ -1347,91 +1503,80 @@
       body = '<p class="err">' + ic('alert', 13) + '<span>' + esc(wf.state.searchError || '搜索没有成功') + '</span></p>' +
         '<div class="wb-actions"><button class="btn primary" type="button" data-wf-search-retry>' + ic('refresh', 12) + '重新搜索</button>' +
         '<button class="btn" type="button" data-wf-search-manual>改用手动填写</button></div>';
-    } else if (wf.kind === 'hotspot' && wf.stage === 'angle') {
-      var hotspot = wf.state.hotspot || {};
-      body = '<div class="wb-flow-hotspot"><b>' + esc(hotspot.title || '') + '</b><p>' + esc(hotspot.fact || '') + '</p>' +
-        (hotspot.sourceUrl ? '<a href="' + esc(hotspot.sourceUrl) + '" target="_blank" rel="noopener noreferrer">查看来源 ↗</a>' : '') + '</div>' +
-        '<h4>这个热点准备怎么用？</h4><div class="wb-choice-grid">' +
-        (state.workflowMeta.angles || []).map(function (item) {
-          var recommended = wf.state.recommendedAngle || (state.workflowMeta.angles[0] || [])[0];
-          return '<button class="wb-choice' + (item[0] === recommended ? ' recommended' : '') + '" type="button" data-wf-angle="' + esc(item[0]) + '"><b>' + esc(item[0]) + (item[0] === recommended ? ' · 推荐' : '') + '</b><small>' + esc(item[1]) + '</small></button>';
-        }).join('') + '</div>';
-    } else if (wf.stage === 'style') {
+    } else if (wf.stage === 'brain') {
       var context = wf.kind === 'today'
         ? '选题：<b>' + esc((wf.state.selectedIdea || {}).title || '') + '</b>'
-        : '结合方式：<b>' + esc(wf.state.angle || '') + '</b>';
-      body = '<p class="wb-note">' + context + '</p><h4>用哪种表达写 3 个版本？</h4><div class="wb-choice-grid">' +
+        : wf.kind === 'hotspot'
+          ? '热点：<b>' + esc((wf.state.hotspot || {}).title || '') + '</b> · 结合方式：<b>' + esc(wf.state.angle || '') + '</b>'
+          : '原文已确认';
+      var brains = (state.workflowMeta.brains || []);
+      body = '<p class="wb-note">' + context + '</p><h4>这次怎么写？</h4><p class="wb-note">账号档案负责事实和相关性；写作大脑只负责借方法，不模仿原作者身份。</p><div class="wb-choice-grid">' +
+        '<button class="wb-choice" type="button" data-wf-brain=""><b>系统基础表达</b><small>不套用任何大脑，用自然、清楚、有观点的口播表达。可选表达风格。</small></button>' +
+        brains.map(function (brain) {
+          return '<button class="wb-choice" type="button" data-wf-brain="' + esc(brain.id) + '"><b>' + esc(brain.name) + '</b><small>借用这个大脑的结构、节奏和表达方法' + (brain.kind === 'peer_report' ? '（来自同行研究）' : '') + '。</small></button>';
+        }).join('') + '</div>' +
+        '<details style="margin-top:8px"><summary>不用大脑，选一种表达风格</summary><div class="wb-choice-grid" style="margin-top:8px">' +
         (state.workflowMeta.styles || []).map(function (style) {
           return '<button class="wb-choice" type="button" data-wf-style="' + esc(style) + '"><b>' + esc(style) + '</b></button>';
-        }).join('') + '</div>';
-    } else if (wf.stage === 'idea' || wf.stage === 'copy') {
-      var options = wf.stage === 'idea' ? wf.state.ideaOptions : wf.state.copyOptions;
-      body = (wf.stage === 'idea' ? '<h4>今天最值得拍的 3 个选题</h4>' : '<h4>3 个版本，选一个直接进文案草稿</h4>') +
-        '<div class="wb-cards">' + (options || []).map(function (option, index) { return wfOptionCard(wf, option, index); }).join('') + '</div>' +
+        }).join('') + '</div></details>' +
+        (brains.length ? '' : '<p class="wb-note" style="margin-top:6px">还没有写作大脑？去「文案大脑」页签，用已转写的档案蒸馏一个。</p>');
+    } else if (wf.stage === 'idea') {
+      var options = wf.state.ideaOptions || [];
+      body = '<h4>今天最值得拍的 ' + options.length + ' 个选题</h4>' +
+        '<div class="wb-cards">' + options.map(function (option, index) { return wfOptionCard(wf, option, index, false); }).join('') + '</div>' +
         '<div class="wb-actions"><button class="btn" type="button" data-wf-action="regenerate">' + ic('refresh', 12) + '换一批</button></div>';
+    } else if (wf.stage === 'rewriting' || wf.stage === 'copy' || wf.stage === 'ready') {
+      var copyOptions = wf.state.copyOptions || [];
+      var isReady = wf.stage === 'ready';
+      var previews = copyOptions.filter(function (item) { return item.content || item.title; });
+      body = (isReady
+        ? wfBlueprintHtml(wf.state.blueprint) + '<h4>3 个版本：选择、双击修改或直接复制</h4>'
+        : '<p>' + esc(wf.state.message || '正在拆解结构并结合账号资料改写 3 个版本…') + '</p>' + (previews.length ? '<p class="wb-note">已经完成 ' + previews.length + ' / 3 个版本，先展示写好的：</p>' : '<progress></progress>')) +
+        '<div class="wb-cards">' + previews.map(function (option, index) { return wfOptionCard(wf, option, index, !isReady); }).join('') + '</div>' +
+        (isReady ? '<div class="wb-actions"><button class="btn" type="button" data-wf-action="regenerate">' + ic('refresh', 12) + '换一批</button><small>不会做自动复刻校验；请人工看一遍再发布。</small></div>' : '');
+    } else if (wf.stage === 'failed') {
+      body = '<p class="err">' + ic('alert', 13) + '<span>' + esc(wf.error || '这次没有正常完成。') + '</span></p>';
     }
+    if (!body) return '';
     return '<div class="wb-card wb-flow-card">' + head + body + '</div>';
-  }
-  function refreshWorkflowCard() {
-    var box = $('#wb-flow-card');
-    if (!box) return;
-    box.innerHTML = workflowCardHtml(state.workflow);
-    bindWorkflowCard();
-    // 联网搜索阶段：3 秒轮询直到阶段变化
-    if (state.workflow && state.workflow.status === 'active' && state.workflow.stage === 'searching' && !state.wfPollTimer) {
-      var wfId = state.workflow.id;
-      state.wfPollTimer = setInterval(async function () {
-        if (state.tab !== 'chat' || !state.workflow || state.workflow.id !== wfId) { stopWfPolling(); return; }
-        try {
-          var data = await call('/workflows?accountId=' + encodeURIComponent(state.workflow.accountId || state.accountId));
-          var latest = (data.items || []).filter(function (item) { return item.id === wfId; })[0];
-          if (!latest) { stopWfPolling(); return; }
-          if (latest.stage !== state.workflow.stage || latest.updatedAt !== state.workflow.updatedAt) {
-            state.workflow = latest;
-            if (latest.stage !== 'searching') stopWfPolling();
-            refreshWorkflowCard();
-          }
-        } catch (error) { stopWfPolling(); }
-      }, 3000);
-    } else if (!state.workflow || state.workflow.stage !== 'searching') {
-      stopWfPolling();
-    }
   }
   function stopWfPolling() {
     if (state.wfPollTimer) { clearInterval(state.wfPollTimer); state.wfPollTimer = null; }
   }
+  /** 工作流进行中就快速轮询（对齐原版 320ms 高频；这里 900ms，兼顾服务器压力）。 */
+  function ensureWfPolling() {
+    if (state.wfPollTimer) return;
+    state.wfPollTimer = setInterval(async function () {
+      if (state.tab !== 'chat' || !state.workflow || state.workflow.status !== 'active') { stopWfPolling(); return; }
+      var wfId = state.workflow.id;
+      if (String(wfId).indexOf('optimistic-') === 0) return;
+      try {
+        var data = await call('/workflows?accountId=' + encodeURIComponent(state.workflow.accountId || state.accountId));
+        var latest = (data.items || []).filter(function (item) { return item.id === wfId; })[0];
+        if (!latest) { stopWfPolling(); return; }
+        var before = JSON.stringify([state.workflow.stage, state.workflow.updatedAt, (state.workflow.state || {}).copyOptions]);
+        state.workflow = latest;
+        if (latest.status !== 'active') stopWfPolling();
+        if (before !== JSON.stringify([latest.stage, latest.updatedAt, (latest.state || {}).copyOptions])) renderMessages(true);
+      } catch (error) { /* 轮询失败静默 */ }
+    }, 900);
+    if (state.wfPollTimer.unref) state.wfPollTimer.unref();
+  }
+  function refreshWorkflowCard() {
+    renderMessages(true);
+    ensureWfPolling();
+  }
   function bindWorkflowCard() {
-    var card = $('#wb-flow-card');
-    if (!card) return;
-    $$('[data-wf-hotspot]').forEach(function (button) {
-      button.onclick = function () { wfChoose({ action: 'select_hotspot', hotspotId: button.dataset.wfHotspot }, button); };
-    });
-    var retryButton = $('[data-wf-search-retry]');
-    if (retryButton) {
-      retryButton.onclick = async function () {
-        try {
-          var result = await call('/workflows/' + encodeURIComponent(state.workflow.id) + '/action', { method: 'POST', body: { action: 'search_retry' } });
-          state.workflow = (result.data || result).workflow;
-          refreshWorkflowCard();
-        } catch (error) { toast(error.message, 'error'); }
-      };
-    }
-    var manualButton = $('[data-wf-search-manual]');
-    if (manualButton) {
-      manualButton.onclick = async function () {
-        try { await call('/workflows/' + encodeURIComponent(state.workflow.id) + '/action', { method: 'POST', body: { action: 'search_switch_manual' } }); } catch (error) { /* 忽略 */ }
-        state.workflow = null;
-        refreshWorkflowCard();
-        openFlowStartDialog('hotspot');
-      };
-    }
     $$('[data-wf-cancel]').forEach(function (button) {
       button.onclick = async function () {
         if (!confirm('放弃当前创作流程？')) return;
         try { await call('/workflows/' + encodeURIComponent(button.dataset.wfCancel) + '/action', { method: 'POST', body: { action: 'cancel' } }); } catch (error) { toast(error.message, 'error'); }
         state.workflow = null;
-        refreshWorkflowCard();
+        renderMessages(true);
       };
+    });
+    $$('[data-wf-restart-viral]').forEach(function (button) {
+      button.onclick = function () { state.workflow = null; renderMessages(true); openViralSourceChooser(); };
     });
     var actionButton = $('[data-wf-action]');
     if (actionButton) {
@@ -1444,15 +1589,51 @@
           payload.text = textarea.value;
         }
         var original = actionButton.innerHTML;
-        actionButton.disabled = true; actionButton.innerHTML = ic('loader', 12) + '生成中…';
+        actionButton.disabled = true; actionButton.innerHTML = ic('loader', 12) + '提交中…';
         try {
-          var result = await call('/workflows/' + encodeURIComponent(state.workflow.id) + '/action', { method: 'POST', body: payload });
-          state.workflow = (result.data || result).workflow;
-          refreshWorkflowCard();
+          if (action === 'regenerate' && state.workflow && ['rewriting', 'copy', 'ready'].includes(state.workflow.stage)) {
+            await call('/workflows/' + encodeURIComponent(state.workflow.id) + '/action', { method: 'POST', body: { action: 'regenerate' } });
+            state.workflow.stage = 'rewriting';
+            state.workflow.state.copyOptions = [];
+            state.workflow.state.message = '正在重新生成 3 个版本…';
+            renderMessages(true); ensureWfPolling();
+          } else {
+            var result = await call('/workflows/' + encodeURIComponent(state.workflow.id) + '/action', { method: 'POST', body: payload });
+            state.workflow = (result.data || result).workflow;
+            renderMessages(true); ensureWfPolling();
+          }
         } catch (error) {
           toast(error.message, 'error');
           actionButton.disabled = false; actionButton.innerHTML = original;
         }
+      };
+    }
+    $$('[data-wf-copy-transcript]').forEach(function (button) {
+      button.onclick = function () {
+        var value = (state.workflow && state.workflow.state.transcript) || '';
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(value).then(function () { toast('原文已复制', 'success'); });
+      };
+    });
+    $$('[data-wf-hotspot]').forEach(function (button) {
+      button.onclick = function () { wfChoose({ action: 'select_hotspot', hotspotId: button.dataset.wfHotspot }, button); };
+    });
+    var retryButton = $('[data-wf-search-retry]');
+    if (retryButton) {
+      retryButton.onclick = async function () {
+        try {
+          var result = await call('/workflows/' + encodeURIComponent(state.workflow.id) + '/action', { method: 'POST', body: { action: 'search_retry' } });
+          state.workflow = (result.data || result).workflow;
+          renderMessages(true); ensureWfPolling();
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    }
+    var manualButton = $('[data-wf-search-manual]');
+    if (manualButton) {
+      manualButton.onclick = async function () {
+        try { await call('/workflows/' + encodeURIComponent(state.workflow.id) + '/action', { method: 'POST', body: { action: 'search_switch_manual' } }); } catch (error) { /* 忽略 */ }
+        state.workflow = null;
+        renderMessages(true);
+        openFlowStartDialog('hotspot');
       };
     }
     $$('[data-wf-strength]').forEach(function (button) {
@@ -1461,8 +1642,11 @@
     $$('[data-wf-angle]').forEach(function (button) {
       button.onclick = function () { wfChoose({ action: 'select_angle', angle: button.dataset.wfAngle }, button); };
     });
+    $$('[data-wf-brain]').forEach(function (button) {
+      button.onclick = function () { wfChoose({ action: 'select_brain', brainId: button.dataset.wfBrain }, button); };
+    });
     $$('[data-wf-style]').forEach(function (button) {
-      button.onclick = function () { wfChoose({ action: 'select_style', style: button.dataset.wfStyle }, button); };
+      button.onclick = function () { wfChoose({ action: 'select_brain', brainId: '', style: button.dataset.wfStyle }, button); };
     });
     $$('[data-wf-select]').forEach(function (button) {
       var optionId = button.dataset.wfSelect;
@@ -1473,7 +1657,8 @@
     });
     $$('[data-wf-copy-text]').forEach(function (button) {
       button.onclick = function () {
-        var options = (state.workflow && state.workflow.state.copyOptions) || [];
+        var wfState = (state.workflow && state.workflow.state) || {};
+        var options = wfState.copyOptions || [];
         var option = options.filter(function (item) { return item.id === button.dataset.wfCopyText; })[0];
         if (option && navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(option.content || '').then(function () { toast('已复制', 'success'); });
@@ -1492,6 +1677,28 @@
         } catch (error) { toast(error.message, 'error'); }
       };
     });
+    bindWorkflowOptionEdit();
+  }
+  /** 双击选项卡直接改稿（对齐原版：改稿不调模型，直接成为终稿）。 */
+  function bindWorkflowOptionEdit() {
+    $$('.wb-flow-option[data-wf-option]').forEach(function (card) {
+      card.ondblclick = function (event) {
+        if (event.target.closest('button,textarea,input,a,select')) return;
+        if (!state.workflow || !['ready', 'copy'].includes(state.workflow.stage)) return;
+        var option = (state.workflow.state.copyOptions || []).filter(function (item) { return item.id === card.dataset.wfOption; })[0];
+        if (!option) return;
+        showDialog('修改文案', '<p class="wb-note">修改后点击「确定并使用」，这份修改稿会直接成为最终文案，不会重新调用模型。</p>' +
+          '<textarea id="wb-edit-copy" class="wb-script" style="min-height:180px">' + esc(option.content || '') + '</textarea>' +
+          '<div class="wb-actions"><button class="btn primary" type="button" id="wb-edit-use">确定并使用</button><button class="btn" type="button" id="wb-edit-cancel">退出编辑</button></div>');
+        $('#wb-edit-use').onclick = function () {
+          var edited = String(($('#wb-edit-copy') || {}).value || '').trim();
+          if (!edited) { toast('修改后的文案不能为空', 'error'); return; }
+          closeDialog();
+          wfChoose({ action: 'select_copy', optionId: option.id, editedContent: edited }, null);
+        };
+        $('#wb-edit-cancel').onclick = closeDialog;
+      };
+    });
   }
   async function wfChoose(payload, button) {
     if (button) { button.disabled = true; }
@@ -1501,33 +1708,233 @@
       if (data.workflow) state.workflow = data.workflow;
       if (data.draft) {
         state.copy.unshift(data.draft);
-        toast('已选定，文案已存入「文案大脑」', 'success');
+        toast('已选定，文案已存入「文案草稿」', 'success');
       }
-      refreshWorkflowCard();
+      if (data.switchToManual) {
+        state.workflow = null;
+        renderMessages(true);
+        openFlowStartDialog('hotspot');
+        return;
+      }
+      renderMessages(true);
+      ensureWfPolling();
     } catch (error) {
       toast(error.message, 'error');
       if (button) button.disabled = false;
     }
   }
+  /** 来源选择（爆款复刻，对齐原版 4 来源 + 我们的转写档案入口）。 */
+  function openViralSourceChooser() {
+    if (state.workflow && state.workflow.status === 'active') { toast('先完成或放弃当前的创作流程', 'error'); return; }
+    showDialog('爆款复刻', '<p class="wb-note">选择一种来源。视频类会先提取口播原文；现有文案直接进入原文确认。</p>' +
+      '<div class="wb-viral-grid">' +
+      '<button class="wb-choice" type="button" data-viral-source="peer"><b>◎ 同行爆款</b><small>从「同行观察」的同行账号里选一条作品。</small></button>' +
+      '<button class="wb-choice" type="button" data-viral-source="link"><b>↗ 爆款链接</b><small>直接粘贴抖音分享文字或单条作品链接。</small></button>' +
+      '<button class="wb-choice" type="button" data-viral-source="upload"><b>＋ 上传视频</b><small>从本地选择一个视频，提取口播后作为参考。</small></button>' +
+      '<button class="wb-choice" type="button" data-viral-source="text"><b>¶ 现有文案</b><small>已经有原文时直接粘贴，跳过视频提取。</small></button>' +
+      ((state.transcripts || []).filter(function (item) { return item.status === 'succeeded'; }).length
+        ? '<button class="wb-choice" type="button" data-viral-source="transcript"><b>▤ 从转写档案</b><small>用已采集/已转写的带时间码档案（' + state.transcripts.filter(function (item) { return item.status === 'succeeded'; }).length + ' 条）。</small></button>'
+        : '') +
+      '</div>');
+    $$('[data-viral-source]').forEach(function (button) {
+      button.onclick = function () { openViralSourceInput(button.dataset.viralSource); };
+    });
+  }
+  function openViralSourceInput(source) {
+    if (source === 'peer') return openViralPeerList();
+    if (source === 'transcript') return openViralTranscriptPicker();
+    var titles = { link: '爆款链接', upload: '上传视频', text: '现有文案' };
+    var form = '';
+    if (source === 'link') {
+      form = '<label class="wb-field full"><span>抖音分享内容 / 作品链接</span><textarea id="wb-viral-share" placeholder="例如：复制打开抖音，看看… https://v.douyin.com/xxxx/"></textarea></label>';
+    } else if (source === 'upload') {
+      form = '<label class="btn primary" for="wb-viral-file">选择一个视频</label>' +
+        '<input id="wb-viral-file" type="file" hidden accept=".mp4,.mov,.webm,video/mp4,video/quicktime,video/webm">' +
+        '<p class="wb-note" id="wb-viral-file-name" style="margin-top:8px">支持 MP4 / MOV / WebM；上传后会提取口播原文，先确认再改写。</p>';
+    } else {
+      form = '<label class="wb-field full"><span>爆款原文</span><textarea id="wb-viral-text" placeholder="把原文粘进来…"></textarea></label>';
+    }
+    showDialog(titles[source], '<div class="wb-form">' + form +
+      '<div class="wb-actions"><button class="btn primary" type="button" id="wb-viral-go">' + ic('sparkle', 12) + (source === 'text' ? '使用这段文案' : '读取并提取文案') + '</button></div></div>');
+    var fileInput = $('#wb-viral-file');
+    if (fileInput) {
+      fileInput.onchange = function () {
+        var file = (fileInput.files || [])[0];
+        if (file) $('#wb-viral-file-name').textContent = '已选择：' + file.name + '（' + fmtSize(file.size) + '）';
+      };
+    }
+    $('#wb-viral-go').onclick = async function () {
+      var button = this;
+      button.disabled = true; button.innerHTML = ic('loader', 12) + '提交中…';
+      try {
+        if (source === 'text') {
+          var value = String(($('#wb-viral-text') || {}).value || '').trim();
+          if (!value) { toast('请先粘贴一段现有文案', 'error'); button.disabled = false; button.innerHTML = ic('sparkle', 12) + '使用这段文案'; return; }
+          startViralWorkflow({ sourceType: 'text', sourceText: value }, '现有文案', 'transcript');
+        } else if (source === 'link') {
+          var share = String(($('#wb-viral-share') || {}).value || '').trim();
+          if (!share) { toast('请先粘贴抖音分享内容', 'error'); button.disabled = false; button.innerHTML = ic('sparkle', 12) + '读取并提取文案'; return; }
+          startViralWorkflow({ sourceType: 'link', shareText: share }, '抖音爆款链接', 'extracting');
+        } else if (source === 'upload') {
+          var file = (fileInput.files || [])[0];
+          if (!file) { toast('请先选择一个本地视频', 'error'); button.disabled = false; button.innerHTML = ic('sparkle', 12) + '读取并提取文案'; return; }
+          button.innerHTML = ic('loader', 12) + '上传中…';
+          var form = new FormData();
+          form.append('file', file);
+          form.append('folder', '复刻参考');
+          form.append('accountId', state.accountId);
+          var uploaded = await call('/assets', { method: 'POST', body: form });
+          state.assets.unshift(uploaded.asset);
+          startViralWorkflow({ sourceType: 'upload', assetId: uploaded.asset.id }, file.name || '本地上传视频', 'extracting');
+        }
+      } catch (error) {
+        toast(error.message, 'error');
+        button.disabled = false; button.innerHTML = ic('sparkle', 12) + '读取并提取文案';
+      }
+    };
+  }
+  function openViralPeerList() {
+    var peers = state.refs || [];
+    showDialog('同行爆款', '<p class="wb-note">先选择同行，再进入该同行的作品列表（读公开主页）。</p>' +
+      '<div class="wb-news-list">' + (peers.length ? peers.map(function (ref) {
+        var douyinUser = String(ref.url || '').match(/douyin\.com\/user\/([A-Za-z0-9_-]{20,120})/);
+        return '<article class="wb-news-card"><div class="wb-news-head"><b>' + esc(ref.name) + '</b></div>' +
+          '<small>' + esc(ref.url || '没有链接；编辑这条同行，填上抖音主页链接后可用') + '</small>' +
+          '<div class="wb-actions"><button class="btn primary" type="button" data-viral-peer-url="' + esc(ref.url || '') + '"' + (douyinUser ? '' : ' disabled') + '>查看作品</button></div></article>';
+      }).join('') : '<p class="wb-muted">「同行观察」里还没有同行账号，请先添加（要带抖音主页链接）。</p>') + '</div>');
+    $$('[data-viral-peer-url]').forEach(function (button) {
+      button.onclick = async function () {
+        var url = button.dataset.viralPeerUrl;
+        var match = url.match(/douyin\.com\/user\/([A-Za-z0-9_-]{20,120})/);
+        if (!match) return;
+        button.disabled = true; button.innerHTML = ic('loader', 12) + '读取中…';
+        try {
+          var result = await call('/douyin/profile', { method: 'POST', body: { secUserId: match[1] } });
+          var profile = (result.data || result).profile;
+          openViralPeerWorks((state.refs.filter(function (item) { return item.url === url; })[0] || {}).name || '同行作品', profile);
+        } catch (error) {
+          toast(error.message, 'error');
+          button.disabled = false; button.innerHTML = '查看作品';
+        }
+      };
+    });
+  }
+  function openViralPeerWorks(peerName, profile) {
+    var works = (profile && profile.works) || [];
+    showDialog(peerName || '同行作品', '<p class="wb-note">选择一条作品作为本次爆款复刻来源；选择后自动下载并提取口播。</p>' +
+      '<div class="wb-news-list">' + (works.length ? works.map(function (work) {
+        return '<article class="wb-news-card"><div class="wb-news-head"><b>' + esc(work.desc || work.awemeId) + '</b></div>' +
+          '<small>赞 ' + ((work.stats || {}).digg || 0) + ' · 评 ' + ((work.stats || {}).comment || 0) + ' · ' + fmtDuration((work.durationMs || 0) / 1000) + '</small>' +
+          '<div class="wb-actions"><button class="btn primary" type="button" data-viral-work="' + esc(work.awemeId) + '">选择这条</button></div></article>';
+      }).join('') : '<p class="wb-muted">这个同行当前没有可选择的视频作品。</p>') + '</div>');
+    $$('[data-viral-work]').forEach(function (button) {
+      button.onclick = async function () {
+        button.disabled = true; button.innerHTML = ic('loader', 12) + '下载中…';
+        try {
+          var result = await call('/douyin/video', { method: 'POST', body: { awemeId: button.dataset.viralWork, accountId: state.accountId } });
+          var data = result.data || result;
+          closeDialog();
+          toast('已下载并开始转写，完成后进入原文确认', 'success');
+          startViralWorkflowFromExtracting(data.transcriptId, peerName || '同行爆款');
+        } catch (error) {
+          toast(error.message, 'error');
+          button.disabled = false; button.innerHTML = '选择这条';
+        }
+      };
+    });
+  }
+  function openViralTranscriptPicker() {
+    var done = (state.transcripts || []).filter(function (item) { return item.status === 'succeeded'; });
+    showDialog('从转写档案', '<p class="wb-note">用已采集/已转写的档案作为复刻原文。</p>' +
+      '<div class="wb-news-list">' + (done.length ? done.slice(0, 12).map(function (item) {
+        return '<article class="wb-news-card"><div class="wb-news-head"><b>' + esc(item.title || '档案') + '</b></div>' +
+          '<small>' + esc(item.nickname || '') + ' · ' + fmtDuration(item.durationSeconds) + '</small>' +
+          '<div class="wb-actions"><button class="btn primary" type="button" data-viral-ts="' + esc(item.id) + '">用这条档案</button></div></article>';
+      }).join('') : '<p class="wb-muted">还没有已完成的转写档案。先去「同行观察」采集。</p>') + '</div>');
+    $$('[data-viral-ts]').forEach(function (button) {
+      button.onclick = function () {
+        startViralWorkflow({ sourceType: 'transcript', transcriptId: button.dataset.viralTs }, '转写档案', null);
+      };
+    });
+  }
+  function startViralWorkflow(input, sourceLabel, optimisticStage) {
+    if (state.workflow && state.workflow.status === 'active') { toast('先完成或放弃当前的创作流程', 'error'); return; }
+    closeDialog();
+    // 乐观卡片：立即出现在消息流里（对齐原版 optimistic session）
+    state.workflow = {
+      id: 'optimistic-' + Date.now(), status: 'active', kind: 'viral', kindLabel: '爆款复刻',
+      accountId: state.accountId, stage: optimisticStage || 'transcript',
+      input: input, state: Object.assign({ sourceLabel: sourceLabel, copyOptions: [] },
+        input.sourceType === 'text' ? { transcript: input.sourceText } : { message: '正在建立爆款复刻任务并提取口播文案…' }),
+      error: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    if (state.tab !== 'chat') setTab('chat'); else renderMessages(true);
+    var box = $('#wb-msgs');
+    if (box) box.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    call('/workflows', { method: 'POST', body: { kind: 'viral', accountId: state.accountId, input: input } }).then(function (result) {
+      state.workflow = (result.data || result).workflow;
+      renderMessages(true);
+      ensureWfPolling();
+    }).catch(function (error) {
+      state.workflow = null;
+      renderMessages(true);
+      toast(error.message, 'error');
+    });
+  }
+  /** 走「下载+转写」的来源（同行作品）：先建 optimistic extracting 卡，转写好自动进原文确认。 */
+  async function startViralWorkflowFromExtracting(transcriptId, sourceLabel) {
+    state.workflow = {
+      id: 'optimistic-' + Date.now(), status: 'active', kind: 'viral', kindLabel: '爆款复刻',
+      accountId: state.accountId, stage: 'extracting',
+      input: { sourceType: 'transcript', transcriptId: transcriptId },
+      state: { sourceLabel: sourceLabel, transcriptId: transcriptId, message: '正在提取这条作品的口播文案…', copyOptions: [] },
+      error: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    if (state.tab !== 'chat') setTab('chat'); else renderMessages(true);
+    try {
+      // 转写档案可能还在跑：先轮询档案完成，再建工作流
+      var deadline = Date.now() + 300000;
+      var transcript = null;
+      while (Date.now() < deadline) {
+        var data = await call('/transcripts/' + encodeURIComponent(transcriptId));
+        transcript = (data.data || data).transcript;
+        if (transcript.status !== 'running') break;
+        await new Promise(function (resolve) { setTimeout(resolve, 2500); });
+      }
+      if (!transcript || transcript.status !== 'succeeded') throw new Error(transcript && transcript.error ? transcript.error : '转写没有完成');
+      var result = await call('/workflows', { method: 'POST', body: { kind: 'viral', accountId: state.accountId, input: { sourceType: 'transcript', transcriptId: transcriptId } } });
+      state.workflow = (result.data || result).workflow;
+      renderMessages(true);
+      ensureWfPolling();
+    } catch (error) {
+      state.workflow = null;
+      renderMessages(true);
+      toast(error.message, 'error');
+    }
+  }
   function openFlowStartDialog(kind) {
     if (state.workflow && state.workflow.status === 'active') { toast('先完成或放弃当前的创作流程', 'error'); return; }
-    var titles = { today: '今日选题', viral: '爆款复刻', hotspot: '热点结合' };
+    if (kind === 'viral') return openViralSourceChooser();
+    var titles = { today: '今日选题', hotspot: '热点结合' };
     var form = '';
     if (kind === 'today') {
-      form = '<label class="wb-field full"><span>今天的方向（可留空）</span><input id="wb-flow-goal" placeholder="例如：寒假班 / 续费 / 到店体验"></label>';
-    } else if (kind === 'viral') {
-      var doneTranscripts = state.transcripts.filter(function (item) { return item.status === 'succeeded'; });
-      form = '<div class="wb-choice-grid">' +
-        '<button class="wb-choice recommended" type="button" id="wb-viral-src-text"><b>粘贴文案 · 推荐</b><small>直接把爆款口播/文案粘进来。</small></button>' +
-        '<button class="wb-choice" type="button" id="wb-viral-src-ts"' + (doneTranscripts.length ? '' : ' disabled') + '><b>从转写档案</b><small>' + (doneTranscripts.length ? '用抖音采集/素材转写的带时间码档案（' + doneTranscripts.length + ' 条）。' : '还没有已完成的转写档案（去「同行观察」采集）。') + '</small></button></div>' +
-        '<div id="wb-viral-text-form"><p class="wb-note">粘贴一条爆款原文（口播文字或文案）。系统只学习它的传播机制，产出合规改写，不复用原钩子、原案例、原画面或原音频。</p>' +
-        '<label class="wb-field full"><span>爆款原文</span><textarea id="wb-flow-source" placeholder="把原文粘进来…"></textarea></label></div>' +
-        '<div id="wb-viral-ts-form" hidden><div class="wb-news-list">' + (doneTranscripts.length ? doneTranscripts.slice(0, 10).map(function (item) {
-          return '<article class="wb-news-card"><div class="wb-news-head"><b>' + esc(item.title || '档案') + '</b></div>' +
-            '<p>' + esc((item.text || '').slice(0, 120)) + '…</p><small>' + esc(item.nickname || '') + ' · ' + fmtDuration(item.durationSeconds) + ' · ' + (item.segmentCount || 0) + ' 段</small>' +
-            '<div class="wb-actions"><button class="btn primary" type="button" data-viral-ts="' + esc(item.id) + '">用这条档案</button></div></article>';
-        }).join('') : '') + '</div></div>';
-    } else {
+      // 对齐原版 creativeBrainChoiceDialog：两按钮点击即开始
+      showDialog('今天想从哪里开始？', '<p>可以先给一个大致方向，也可以让小铃铛根据账号资料推荐三个选题。' +
+        (state.workflow && state.workflow.status === 'active' ? '</p>' : '</p><p class="wb-note">开始新创作后，原来的未完成创作仍可在列表中查看。</p>') +
+        '<label class="wb-field full"><span>我有大致想法</span><input id="wb-flow-goal" placeholder="例如：想讲家长总觉得课贵"></label>' +
+        '<div class="wb-actions"><button class="btn primary" type="button" id="wb-today-go">' + ic('bulb', 12) + '按这个想法推荐 3 个选题</button>' +
+        '<button class="btn" type="button" id="wb-today-noidea">我没头绪，推荐 3 个选题</button></div>');
+      var startTodayFlow = function () {
+        var goal = String(($('#wb-flow-goal') || {}).value || '').trim();
+        closeDialog();
+        launchWorkflow('today', { goal: goal }, '今日选题', 'idea',
+          { goal: goal, ideaOptions: [], message: '正在根据账号资料推荐选题…', copyOptions: [] });
+      };
+      $('#wb-today-go').onclick = startTodayFlow;
+      $('#wb-today-noidea').onclick = startTodayFlow;
+      return;
+    }
+    if (false) {
       form = '<div class="wb-choice-grid">' +
         '<button class="wb-choice recommended" type="button" id="wb-flow-hotspot-auto"><b>关键词联网搜索 · 推荐</b><small>输入一个方向，系统用 DeepSeek 搜索近 3 天新闻，挑出 3 条最值得结合的热点。</small></button>' +
         '<button class="wb-choice" type="button" id="wb-flow-hotspot-manual"><b>手动填写热点</b><small>把你刷到的新闻填进来，系统只引用你写的事实。</small></button></div>' +
@@ -1553,43 +1960,11 @@
       autoCard.onclick = function () { paintHotspotMode('keyword'); };
       manualCard.onclick = function () { paintHotspotMode('manual'); };
     }
-    var viralMode = { mode: 'text' };
-    var viralTextCard = $('#wb-viral-src-text');
-    var viralTsCard = $('#wb-viral-src-ts');
-    if (viralTextCard && viralTsCard) {
-      var paintViralMode = function (mode) {
-        viralMode.mode = mode;
-        viralTextCard.classList.toggle('recommended', mode === 'text');
-        viralTsCard.classList.toggle('recommended', mode === 'ts');
-        ($('#wb-viral-text-form') || {}).hidden = mode !== 'text';
-        ($('#wb-viral-ts-form') || {}).hidden = mode !== 'ts';
-      };
-      viralTextCard.onclick = function () { paintViralMode('text'); };
-      if (!viralTsCard.disabled) viralTsCard.onclick = function () { paintViralMode('ts'); };
-    }
-    $$('[data-viral-ts]').forEach(function (card) {
-      card.onclick = async function () {
-        var button = card;
-        button.disabled = true;
-        try {
-          var result = await call('/workflows', { method: 'POST', body: { kind: 'viral', accountId: state.accountId, input: { transcriptId: button.dataset.viralTs } } });
-          state.workflow = (result.data || result).workflow;
-          closeDialog();
-          if (state.tab !== 'chat') setTab('chat'); else refreshWorkflowCard();
-          var box = $('#wb-flow-card');
-          if (box) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        } catch (error) {
-          toast(error.message, 'error');
-          button.disabled = false;
-        }
-      };
-    });
     $('#wb-flow-start').onclick = async function () {
       var button = this;
       button.disabled = true; button.innerHTML = ic('loader', 12) + '生成中…';
       var input = {};
       if (kind === 'today') input.goal = ($('#wb-flow-goal') || {}).value || '';
-      if (kind === 'viral') input.sourceText = ($('#wb-flow-source') || {}).value || '';
       if (kind === 'hotspot') {
         if (hotspotMode.mode === 'keyword') {
           input.mode = 'keyword';
@@ -1601,19 +1976,180 @@
           input.sourceUrl = ($('#wb-flow-url') || {}).value || '';
         }
       }
+      launchWorkflow(kind, input, titles[kind], 'searching',
+        { keyword: input.keyword || '', message: '正在联网搜索今天的热点…', copyOptions: [] });
+    };
+  }
+  /** 统一乐观启动：立即出卡片 → POST → 换成服务端状态（对齐原版 optimistic session）。 */
+  function launchWorkflow(kind, input, kindLabel, optimisticStage, optimisticState) {
+    if (state.workflow && state.workflow.status === 'active') { toast('先完成或放弃当前的创作流程', 'error'); return; }
+    state.workflow = {
+      id: 'optimistic-' + Date.now(), status: 'active', kind: kind, kindLabel: kindLabel,
+      accountId: state.accountId, stage: optimisticStage,
+      input: input, state: Object.assign({ copyOptions: [] }, optimisticState),
+      error: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    if (state.tab !== 'chat') setTab('chat'); else renderMessages(true);
+    call('/workflows', { method: 'POST', body: { kind: kind, accountId: state.accountId, input: input } }).then(function (result) {
+      state.workflow = (result.data || result).workflow;
+      renderMessages(true);
+      ensureWfPolling();
+    }).catch(function (error) {
+      state.workflow = null;
+      renderMessages(true);
+      toast(error.message, 'error');
+    });
+  }
+
+  function openPeerReportDialog(peerName) {
+    var done = (state.transcripts || []).filter(function (item) { return item.status === 'succeeded'; });
+    showDialog('生成研究简报 · ' + peerName, '<p class="wb-note">勾选这个同行的口播档案（按昵称/标题找），系统总结它的内容结构、表达特点与值得学习的优点。</p>' +
+      '<div class="wb-news-list" style="max-height:280px;overflow:auto">' + (done.length ? done.map(function (item) {
+        return '<label class="wb-news-card" style="display:flex;gap:8px;align-items:center;cursor:pointer"><input type="checkbox" data-peer-ts value="' + esc(item.id) + '">' +
+          '<span style="flex:1"><b>' + esc(item.title || '档案') + '</b><br><small>' + esc(item.nickname || '') + ' · ' + fmtDuration(item.durationSeconds) + '</small></span></label>';
+      }).join('') : '<p class="wb-muted">还没有已转写的档案。</p>') + '</div>' +
+      '<div class="wb-actions"><button class="btn primary" type="button" id="wb-peer-report-go"' + (done.length ? '' : ' disabled') + '>开始生成</button></div>');
+    $('#wb-peer-report-go').onclick = async function () {
+      var ids = $$('[data-peer-ts]:checked').map(function (input) { return input.value; });
+      if (!ids.length) { toast('请至少选 1 条档案', 'error'); return; }
+      var button = this;
+      button.disabled = true; button.innerHTML = ic('loader', 12) + '提交中…';
       try {
-        var result = await call('/workflows', { method: 'POST', body: { kind: kind, accountId: state.accountId, input: input } });
-        state.workflow = (result.data || result).workflow;
+        await call('/brains', { method: 'POST', body: { kind: 'peer_report', name: peerName, transcriptIds: ids, accountId: state.accountId } });
         closeDialog();
-        if (state.tab !== 'chat') setTab('chat'); else refreshWorkflowCard();
-        var box = $('#wb-flow-card');
-        if (box) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        toast('研究简报生成中，一两分钟后在本页查看', 'success');
+        refreshBrains(true);
+        setTimeout(function () { void refreshBrains(true); }, 8000);
       } catch (error) {
         toast(error.message, 'error');
-        button.disabled = false; button.innerHTML = ic('sparkle', 12) + '开始';
+        button.disabled = false; button.innerHTML = '开始生成';
       }
     };
   }
+
+  /* ───────────── 文案大脑页签（蒸馏档案） ───────────── */
+  async function refreshBrains(silent) {
+    try {
+      var data = await call('/brains');
+      state.brains = data.items || [];
+    } catch (error) {
+      if (!silent) toast(error.message, 'error');
+      return;
+    }
+    if (state.tab === 'copybrains') renderBrains();
+    if (state.brains.some(function (item) { return item.status === 'running'; }) && !state.brainPollTimer) {
+      state.brainPollTimer = setInterval(async function () {
+        if (!state.brains.some(function (item) { return item.status === 'running'; })) { clearInterval(state.brainPollTimer); state.brainPollTimer = null; return; }
+        refreshBrains(true);
+      }, 4000);
+    }
+  }
+  function brainArchiveHtml(brain) {
+    var profile = brain.profile || {};
+    var parts = [];
+    Object.keys(profile).forEach(function (key) {
+      if (profile[key]) parts.push('<p><b>' + esc({ thinking_framework: '思考框架', topic_approach: '选题切入', positioning: '账号定位', cadence: '选题节奏', tone: '表达风格' }[key] || key) + '：</b>' + esc(profile[key]) + '</p>');
+    });
+    (brain.sections || []).forEach(function (section) {
+      if (section && section.title) parts.push('<h4>' + esc(section.title) + '</h4><p>' + esc(section.content || '') + '</p>');
+    });
+    return parts.join('') || '<p class="wb-muted">档案还没有内容。</p>';
+  }
+  function renderBrains() {
+    var brains = state.brains;
+    var groups = [
+      ['copy_brain', '写作大脑', '在创作流程的「写作大脑」一步选用；借它的结构、节奏和表达方法，不模仿原作者身份。'],
+      ['peer_report', '同行研究简报', '总结同行的内容结构、表达特点与值得学习的优点；在同行观察页生成。'],
+    ];
+    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
+      '<div class="wb-card"><div class="wb-card-head"><div><h3>蒸馏新大脑</h3><p>从「同行观察」已转写的口播档案里，提炼创作者讲的方法和实际写法（带证据）。</p></div>' +
+      '<button class="btn primary" type="button" id="wb-brain-new">' + ic('plus', 12) + '添加大脑</button></div>' +
+      (brains.length ? '' : '<p class="wb-muted">还没有档案。先去「同行观察」采集几条同行的口播（自动转写），再来蒸馏。</p>') + '</div>' +
+      groups.map(function (group) {
+        var list = brains.filter(function (item) { return item.kind === group[0]; });
+        return '<div class="wb-card"><div class="wb-card-head"><div><h3>' + group[1] + '</h3><p>' + group[2] + '</p></div></div>' +
+          (list.length ? '<div class="wb-cards">' + list.map(function (brain) {
+            var profile = brain.profile || {};
+            var preview = profile.thinking_framework || profile.positioning || profile.tone || (brain.status === 'running' ? '正在蒸馏…' : brain.error || '');
+            return '<article class="wb-item"><div class="wb-card-head"><div><h4>' + esc(brain.name) + '</h4><div class="wb-meta">' + (brain.status === 'ready' ? (brain.sections || []).length + ' 个板块 · ' : '') + fmtDate(brain.createdAt) + '</div></div>' +
+              '<span class="wb-tag ' + (brain.status === 'ready' ? 'ok' : brain.status === 'failed' ? 'bad' : '') + '">' + esc(brain.status === 'ready' ? '可用' : brain.status === 'running' ? '蒸馏中' : '失败') + '</span></div>' +
+              '<p class="wb-preview" style="-webkit-line-clamp:3">' + esc(String(preview).slice(0, 160)) + '</p>' +
+              '<div class="wb-actions"><button class="btn" type="button" data-brain-view="' + esc(brain.id) + '">查看档案</button>' +
+              '<button class="btn" type="button" data-brain-del="' + esc(brain.id) + '">' + ic('trash', 12) + '</button></div></article>';
+          }).join('') + '</div>' : '<p class="wb-muted">还没有。</p>') + '</div>';
+      }).join('') + '</div></div>';
+    $('#wb-brain-new').onclick = openBrainCreateDialog;
+    $$('[data-brain-view]').forEach(function (button) {
+      button.onclick = async function () {
+        try {
+          var data = await call('/brains/' + encodeURIComponent(button.dataset.brainView));
+          var brain = (data.data || data).brain;
+          showDialog(brain.name + ' · 方法档案', brainArchiveHtml(brain));
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    });
+    $$('[data-brain-del]').forEach(function (button) {
+      button.onclick = async function () {
+        if (!confirm('删除这份档案？')) return;
+        try {
+          await call('/brains/' + encodeURIComponent(button.dataset.brainDel), { method: 'DELETE' });
+          state.brains = state.brains.filter(function (item) { return item.id !== button.dataset.brainDel; });
+          renderBrains();
+        } catch (error) { toast(error.message, 'error'); }
+      };
+    });
+  }
+  function openBrainCreateDialog() {
+    var done = (state.transcripts || []).filter(function (item) { return item.status === 'succeeded'; });
+    showDialog('添加写作大脑', '<p class="wb-note">选 2 条以上已转写的口播档案作为语料（先去「同行观察」采集）。系统会分开提炼「创作者明确讲授的方法」和「作品里反复出现的写作习惯」，并给出可直接借用的综合规则。</p>' +
+      '<label class="wb-field full"><span>大脑名称</span><input id="wb-brain-name" placeholder="例如：某某校长的口播方法" maxlength="60"></label>' +
+      '<div class="wb-news-list" style="max-height:280px;overflow:auto">' + (done.length ? done.map(function (item) {
+        return '<label class="wb-news-card" style="display:flex;gap:8px;align-items:center;cursor:pointer"><input type="checkbox" data-brain-ts value="' + esc(item.id) + '">' +
+          '<span style="flex:1"><b>' + esc(item.title || '档案') + '</b><br><small>' + esc(item.nickname || '') + ' · ' + fmtDuration(item.durationSeconds) + '</small></span></label>';
+      }).join('') : '<p class="wb-muted">还没有已转写的档案。先去「同行观察」采集。</p>') + '</div>' +
+      '<div class="wb-actions"><button class="btn primary" type="button" id="wb-brain-go"' + (done.length ? '' : ' disabled') + '>开始蒸馏</button></div>');
+    $('#wb-brain-go').onclick = async function () {
+      var name = String(($('#wb-brain-name') || {}).value || '').trim();
+      var ids = $$('[data-brain-ts]:checked').map(function (input) { return input.value; });
+      if (!name) { toast('请填写大脑名称', 'error'); return; }
+      if (ids.length < 1) { toast('请至少选 1 条档案', 'error'); return; }
+      var button = this;
+      button.disabled = true; button.innerHTML = ic('loader', 12) + '提交中…';
+      try {
+        await call('/brains', { method: 'POST', body: { kind: 'copy_brain', name: name, transcriptIds: ids, accountId: state.accountId } });
+        closeDialog();
+        toast('蒸馏已开始，通常一两分钟', 'success');
+        refreshBrains(true);
+      } catch (error) {
+        toast(error.message, 'error');
+        button.disabled = false; button.innerHTML = '开始蒸馏';
+      }
+    };
+  }
+
+  /* ───────────── 使用设置页签（只读状态） ───────────── */
+  async function renderSettings() {
+    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll"><div class="wb-card"><div class="wb-card-head"><div><h3>渠道与依赖</h3><p>API Key 统一在' + esc('平台管理后台（AI 渠道设置）') + '配置；这里只看当前状态。</p></div></div><div id="wb-settings-body"><p class="wb-muted">读取中…</p></div></div>' +
+      '<div class="wb-card"><div class="wb-card-head"><div><h3>工作台口径</h3></div></div>' +
+      '<p class="wb-note">· 对话/文案/蒸馏走平台 TEXT 渠道；模型档位「深度」会换用渠道里的另一个模型，成本更高。<br>· 视频渲染/数字人走平台视频渠道，按次计费（成本观测记录在任务里）。<br>· 抖音采集只读公开数据，每机构每小时限 40 次；转写走渠道 ASR。</p></div></div></div>';
+    try {
+      var data = await call('/settings-status');
+      var s = data.data || data;
+      var row = function (label, ok, detail) {
+        return '<tr><td>' + esc(label) + '</td><td><span class="wb-tag ' + (ok ? 'ok' : 'bad') + '">' + (ok ? '可用' : '未就绪') + '</span></td><td>' + esc(detail || '') + '</td></tr>';
+      };
+      $('#wb-settings-body').innerHTML = '<table class="wb-table"><thead><tr><th>能力</th><th>状态</th><th>说明</th></tr></thead><tbody>' +
+        row('对话 / 文案（TEXT 渠道）', s.text && s.text.configured && s.text.mode !== 'mock', (s.text ? s.text.provider + ' · ' + s.text.model : '')) +
+        row('视频渲染 / 数字人（VIDEO 渠道）', s.video && s.video.configured && s.video.mode !== 'mock', (s.video ? s.video.provider + ' · ' + s.video.model : '')) +
+        row('口播转写（ASR）', s.asr, s.asr ? '走渠道 whisper' : '需要 seedance.nz 渠道') +
+        row('抖音采集（F2 运行时）', s.douyinWorker, s.douyinWorker ? '隔离 Python 运行时就绪' : '服务器未安装 f2 运行时') +
+        row('写作大脑', (s.brains || 0) > 0, '已蒸馏 ' + (s.brains || 0) + ' 个可用档案') +
+        '</tbody></table>';
+    } catch (error) {
+      $('#wb-settings-body').innerHTML = '<p class="err">' + esc(error.message) + '</p>';
+    }
+  }
+
   function openMemoriesDialog() {
     var groups = [
       ['长期记忆', state.memories.filter(function (item) { return item.kind === 'memory'; })],
@@ -1626,7 +2162,7 @@
           (group[1].length ? group[1].map(function (item) {
             return '<div class="wb-mem-item"><p>' + esc(item.content) + '</p><small>' + esc(item.source || '') + ' · ' + fmtDate(item.createdAt) + '</small>' +
               '<button class="btn" type="button" data-mem-del="' + esc(item.id) + '">' + ic('trash', 11) + '</button></div>';
-          }).join('') : '<p class="wb-muted">还没有。在小铃铛的回答下点「记为长期记忆」，或在今日选题里存灵感。</p>');
+          }).join('') : '<p class="wb-muted">还没有。</p>');
       }).join(''));
     $('#wb-mem-add-btn').onclick = async function () {
       var value = String(($('#wb-mem-new') || {}).value || '').trim();
@@ -1649,7 +2185,7 @@
     });
   }
 
-  /* ───────────── 合规体检（复用 junshi 的规则引擎） ───────────── */
+  /* ───────────── 合规体检（复用 junshi 的规则引擎） ───────────── */  /* ───────────── 合规体检（复用 junshi 的规则引擎） ───────────── */
   async function checkCompliance(content) {
     if (!String(content || '').trim()) { toast('没有可检查的文本', 'error'); return; }
     toast('正在做合规体检…');
@@ -1687,8 +2223,10 @@
     else if (state.tab === 'copy') renderCopy();
     else if (state.tab === 'video') renderVideo();
     else if (state.tab === 'assets') renderAssets();
+    else if (state.tab === 'copybrains') renderBrains();
     else if (state.tab === 'reports') renderReports();
     else if (state.tab === 'jobs') renderJobs();
+    else if (state.tab === 'settings') renderSettings();
     else renderChat();
   }
 

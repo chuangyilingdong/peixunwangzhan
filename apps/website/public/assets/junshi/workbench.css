@@ -344,3 +344,16 @@
 
 /* ── 五期：数字人口播 ── */
 #js-app .wb-render .wb-tag { margin-left: 8px; }
+
+/* ── 六期：消息流卡片 / 附件 / 蓝图 / 来源选择 ── */
+#js-app .wb-option-hint { color: var(--text-3); font-size: 11px; display: block; margin: 4px 0; }
+#js-app .wb-blueprint { border: 1px dashed var(--hairline); border-radius: var(--r-card); padding: 8px 10px; margin-bottom: 8px; font-size: 12.5px; }
+#js-app .wb-blueprint summary { cursor: pointer; color: var(--accent, #4b7bec); }
+#js-app .wb-blueprint-grid p { margin: 4px 0; }
+#js-app .wb-viral-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin-top: 10px; }
+#js-app .wb-chat-attach { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 14px 6px; }
+#js-app .wb-attach-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--hairline); border-radius: var(--r-pill); padding: 4px 10px; font-size: 11.5px; color: var(--text-2); }
+#js-app .wb-attach-chip button { border: 0; background: none; cursor: pointer; color: var(--text-3); font-size: 13px; padding: 0; }
+#js-app .wb-composer-foot { display: flex; gap: 6px; align-items: center; padding: 8px 14px 12px; }
+#js-app .wb-composer-foot .chip { padding: 4px 10px; font-size: 11.5px; }
+#js-app .wb-composer-foot .chip.on { background: var(--accent); color: #fff; }

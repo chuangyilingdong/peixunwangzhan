@@ -521,3 +521,97 @@ export function demoPickedHotspots(keyword) {
     { id: 'h3', title: `「${clean(keyword) || '教育'}」相关报道三`, fact: '（演示样本）', sourceUrl: '', source: '演示', publishedAt: '', relation: '可支撑账号的核心观点。', recommendedAngle: '热点做趋势信号' },
   ];
 }
+
+/* ───────────── 六期：对齐原版交互逻辑（2026-10-25） ───────────── */
+
+/** 爆款复刻·单版本生成（流式预览用：一次一个版本，完成即推送）。首个版本同时产出复刻蓝图。 */
+export function buildViralOnePrompt({ profile, orgProfile, sourceText, strength, index }) {
+  const rule = { low: '低强度：只借鉴选题机制，结构与表达全部重建。', medium: '中强度：借鉴冲突与信息递进，换主题、证据、表达与镜头。', high: '高强度：尽量保留传播机制和节奏，但不复用原句、原素材或一一对应镜头。' }[strength] || '';
+  const indexRule = index === 1
+    ? '第 1 个版本走「最稳」的改写：结构清晰、信息密度高。'
+    : index === 2
+      ? '第 2 个版本换一个切入角度（与第 1 个明显不同）。'
+      : '第 3 个版本走最大胆的改写：反转或反常识开场。';
+  return `【任务】参考下面这条爆款原文，为这个内容账号产出第 ${index} 个合规改写版本。${indexRule}
+
+【铁律】只学习传播机制，不复用原钩子、原案例、原画面或原音频；不出现「保证」「第一」「最」等绝对化用语；不承诺流量、收益、提分或效果。
+【改造强度】${rule}
+
+【爆款原文（只作机制参考）】
+${String(sourceText || '').slice(0, 3000)}
+
+【机构画像】
+${orgProfile || '（未填写）'}
+
+【内容账号档案】
+${workbenchProfileBlock(profile)}
+
+【输出】${index === 1 ? `先输出一行 JSON 蓝图（不要代码围栏）：{"blueprint":{"hook":"这条爆款的开头机制（一句话）","progression":["信息推进1","信息推进2"],"turn":"转折（一句话）","closing":"收束（一句话）"}}，然后空一行。再输出：` : '直接输出：'}JSON 对象 {"title":"标题（20字内）","content":"完整口播（180-320 字，符合铁律与强度）"}。只输出 JSON，不要其他文字。`;
+}
+
+export function demoViralOne(profile, sourceText, strength, index) {
+  const base = demoViralRewrites(profile, sourceText, strength);
+  const item = base[(index - 1) % base.length];
+  return index === 1
+    ? { blueprint: { hook: '用一个反常识判断打断划走', progression: ['现象：家长的普遍焦虑', '冲突：报得多的孩子未必学得好'], turn: '把决定权从价格转回需求', closing: '给出一个低门槛动作' }, ...item }
+    : item;
+}
+
+/** 文案大脑蒸馏：从带时间码的转写档案提炼方法档案。 */
+export function buildBrainDistillPrompt({ name, transcripts }) {
+  const corpus = transcripts.map((item, index) => {
+    const lines = (item.segments || []).slice(0, 80).map((segment) => `[${Number(segment.start).toFixed(1)}-${Number(segment.end).toFixed(1)}秒] ${segment.text}`).join('\n');
+    return `〔作品${index + 1}〕${item.title || '未命名'}\n${lines || item.text}`;
+  }).join('\n\n');
+  return `【任务】下面是创作者「${clean(name)}」的多条作品口播（带时间码）。请像原版「文案大脑」一样，把「创作者明确讲授的方法」和「作品里反复出现的写作习惯」分开提炼，再合成「可用于他人创作的综合规则」。只依据语料，不编造；每条结论都要给出语料里的时间码证据。
+
+【语料】
+${corpus.slice(0, 24000)}
+
+【只输出一个 JSON 对象】
+{"profile":{"thinking_framework":"选题/思考框架（80字内）","topic_approach":"切入话题的习惯（80字内）","tone":"语言风格（60字内）"},
+"teaching_methods":[{"title":"方法名","method":"具体做法","applicability":"适用场景","evidence":[{"start":3.2,"end":9.0,"quote":"原文片段"}]}],
+"writing_patterns":[{"title":"写作习惯名","pattern":"具体写法","evidence":[{"start":10.0,"end":15.5,"quote":"原文片段"}]}],
+"combined_rules":["可直接借用的综合规则1","规则2","规则3","规则4","规则5"]}
+teaching_methods 2-5 条、writing_patterns 2-5 条、combined_rules 3-6 条。${JSON_ONLY.replace('数组', '对象')}`;
+}
+
+export function demoBrain(name) {
+  return {
+    profile: { thinking_framework: '（演示样本）先立一个家长普遍的焦虑，再给反常识判断，落到低门槛动作。', topic_approach: '从家长群里最近吵的话题切入。', tone: '口语、短句、有停顿' },
+    teaching_methods: [
+      { title: '三段式口播', method: '现象→冲突→办法，每段不超过三句。', applicability: '知识类口播', evidence: [{ start: 0, end: 8, quote: '（演示样本）很多家长问我……' }] },
+      { title: '数字锚点', method: '用具体数字代替形容词。', applicability: '证明类内容', evidence: [{ start: 12, end: 18, quote: '（演示样本）3000 个家长里……' }] },
+    ],
+    writing_patterns: [
+      { title: '开头抛问', pattern: '第一句永远是问句或否定句。', evidence: [{ start: 0, end: 3, quote: '（演示样本）你别再……' }] },
+    ],
+    combined_rules: ['开头 3 秒必须打断划走', '证据用数字不用形容词', '收尾给一个不花钱的动作', '一条只讲一个判断'],
+  };
+}
+
+/** 同行研究简报（同行观察页）。 */
+export function buildPeerReportPrompt({ name, transcripts }) {
+  const corpus = transcripts.map((item, index) => `〔作品${index + 1}〕${item.title || '未命名'}\n${String(item.text || '').slice(0, 1500)}`).join('\n\n');
+  return `【任务】为同行账号「${clean(name)}」生成一份研究简报：总结它的内容结构、表达特点与值得学习的共同优点，供我方账号借鉴（拆结构，不抄内容）。
+
+【语料（已转写口播）】
+${corpus.slice(0, 20000)}
+
+【只输出一个 JSON 对象】
+{"profile":{"positioning":"账号定位一句话","cadence":"选题节奏特点","tone":"表达风格"},
+"sections":[{"title":"内容结构","content":"……"},{"title":"表达特点","content":"……"},{"title":"值得学习的共同优点","content":"……"},{"title":"对我方的启发","content":"……"}]}
+4 个 sections 都要写，每个 80-150 字。${JSON_ONLY.replace('数组', '对象')}`;
+}
+
+export function demoPeerReport(name) {
+  return {
+    profile: { positioning: '（演示样本）面向家长的美术教育口播号', cadence: '每周 3-4 条，固定栏目化', tone: '亲切、短句、多举例' },
+    sections: [
+      { title: '内容结构', content: '（演示样本）开头抛焦虑，中间一个真实课堂案例，结尾给一个不花钱的判断动作。' },
+      { title: '表达特点', content: '（演示样本）短句为主，数字具体，几乎不用专业术语。' },
+      { title: '值得学习的共同优点', content: '（演示样本）每条只讲一个判断；案例都带孩子的原话。' },
+      { title: '对我方的启发', content: '（演示样本）可以把体验课的真实对话做成固定栏目。' },
+    ],
+  };
+}

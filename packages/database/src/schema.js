@@ -1439,6 +1439,25 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_avatar_runs (
   updated_at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_avatar_owner ON junshi_workbench_avatar_runs(owner_key, created_at DESC);
+
+-- 六期：文案大脑 / 同行研究简报（蒸馏自转写档案，带时间码证据）。
+-- kind: copy_brain=文案大脑（供创作流选用）；peer_report=同行研究简报（同行观察页）。
+CREATE TABLE IF NOT EXISTS junshi_workbench_brains (
+  id          TEXT NOT NULL PRIMARY KEY,
+  owner_key   TEXT NOT NULL,
+  org_id      TEXT,
+  account_id  TEXT NOT NULL DEFAULT 'default',
+  kind        TEXT NOT NULL DEFAULT 'copy_brain',
+  name        TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'running',
+  error       TEXT NOT NULL DEFAULT '',
+  profile     TEXT NOT NULL DEFAULT '{}',
+  sections    TEXT NOT NULL DEFAULT '[]',
+  source_note TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_brain_owner ON junshi_workbench_brains(owner_key, created_at DESC);
 `;
 
 db.exec(SCHEMA);

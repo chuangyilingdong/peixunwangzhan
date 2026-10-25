@@ -383,8 +383,8 @@ export async function textProviderIsMock() {
  * 跑一段一次性文本生成（合规深度审读用）：与 runChat 走同一条 TEXT 渠道、同一份输出预算，
  * 但不做资料检索、不带专家人设 —— system/user 由调用方给全。
  */
-export async function runRawText(ctx, { system, user, messages: providedMessages, onStatus, onDelta, signal, statusLabel = '生成' }) {  const policy = await getAiProviderPolicy();
-  const selection = providerSelectionForModality(policy, 'TEXT');
+export async function runRawText(ctx, { system, user, messages: providedMessages, onStatus, onDelta, signal, statusLabel = '生成', model: modelOverride = '' }) {  const policy = await getAiProviderPolicy();
+  const selection = providerSelectionForModality(policy, 'TEXT', String(modelOverride || '').trim());
   const provider = getGenerationProvider(selection);
   if (typeof provider.generateStream !== 'function') throw new Error('当前 AI 渠道不支持流式生成');
   const messages = Array.isArray(providedMessages) && providedMessages.length
