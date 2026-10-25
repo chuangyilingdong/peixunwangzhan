@@ -38,6 +38,7 @@ import {
   submitVideoTask,
   pollVideoTask,
   parseFaceSession,
+  safeLipSyncEndTime,
 } from '../services/junshiAvatar.js';
 import {
   createDouyinPairing,
@@ -2701,12 +2702,13 @@ async function runTalkingHead(owner, { runId, text, speakerId, voiceRow, imageAs
     const policy = await getAiProviderPolicy();
     const config = await seedanceChannelConfig(policy?.channels);
     if (!config) throw Object.assign(new Error('数字人渠道未配置（需要 seedance.nz 渠道 Key）'), { code: 'WORKBENCH_AVATAR_NOT_CONFIGURED' });
-    // ⓪ 底片：形象照 → 5 秒人物正面视频（kling 对口型吃视频不吃照片）
+    // ⓪ 底片：形象照 → 约 6 秒人物正面视频（kling 对口型吃视频不吃照片）
     const imageBuffer = await assetBytes(imageAssetRow);
     if (imageBuffer.length > 10 * 1024 * 1024) throw Object.assign(new Error('形象照超过 10MB，请压缩后重传'), { code: 'WORKBENCH_AVATAR_IMAGE_TOO_LARGE' });
     const imageUrl = await uploadToSeedance({ ...config, buffer: imageBuffer, fileName: imageAssetRow.file_name || 'face.jpg', mimeType: imageAssetRow.mime_type || 'image/jpeg' });
     // ⚠️ Seedance 2.0 i2v 要顶层 images；放 metadata.images 会报「image-to-video requires at least one input image」。
-    const baseTask = await submitVideoTask({ ...config, model: 'seedance-2.0-standard-i2v', images: [imageUrl], promptOverride: '一位教师正面面对镜头，微微点头，嘴唇自然开合像在讲话，背景不变，光线稳定' });
+    // 底片 6 秒：给 5 秒口播留出 lip-sync 需要的 700ms 安全余量（5 秒底片会只剩 4 秒可对口型）。
+    const baseTask = await submitVideoTask({ ...config, model: 'seedance-2.0-standard-i2v', images: [imageUrl], promptOverride: '一位教师正面面对镜头，微微点头，嘴唇自然开合像在讲话，背景不变，光线稳定', extra: { seconds: '6' } });
     const base = await pollVideoTask({ ...config, taskId: baseTask, timeoutMs: 600000 });
     if (!base.url) throw Object.assign(new Error('底片生成没有返回视频地址'), { code: 'WORKBENCH_BASE_NO_URL' });
     await mark('base', 'done'); await mark('tts', 'running');
@@ -2734,10 +2736,12 @@ async function runTalkingHead(owner, { runId, text, speakerId, voiceRow, imageAs
     try {
       const faceTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-identify-face', metadata: { video_url: base.url } });
       const face = await pollVideoTask({ ...config, taskId: faceTask, timeoutMs: 600000 });
-      const { sessionId, faceId } = parseFaceSession(face.resultText);
+      const { sessionId, faceId, endTime } = parseFaceSession(face.resultText);
       await mark('face', 'done'); await mark('lipsync', 'running');
-      // 底片 5 秒，soundEndTime 不要写 30000；写大了上游会按超长音频处理。
-      const syncTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-video', metadata: { sessionId, faceId, audio_url: tts.url, soundStartTime: 0, soundEndTime: 5000, soundInsertTime: 0, soundVolume: 1, originalAudioVolume: 0 } });
+      // 上游的「session_id has expired」其实是 soundEndTime 太靠近底片末尾；
+      // 按 identify-face 返回的 end_time 留 700ms 余量，才能真正跑通对口型。
+      const soundEndTime = safeLipSyncEndTime(endTime, 5000);
+      const syncTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-video', metadata: { sessionId, faceId, audio_url: tts.url, soundStartTime: 0, soundEndTime, soundInsertTime: 0, soundVolume: 1, originalAudioVolume: 0 } });
       const synced = await pollVideoTask({ ...config, taskId: syncTask, timeoutMs: 900000 });
       if (!synced.url) throw Object.assign(new Error('对口型完成但没有返回视频地址'), { code: 'WORKBENCH_LIPSYNC_NO_URL' });
       outputBuffer = await downloadUrlBuffer(synced.url);

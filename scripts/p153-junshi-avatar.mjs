@@ -1,9 +1,10 @@
 /**
  * P153 数字人口播：上游适配的纯函数守卫。
  *
- * 2026-10-25 实测出的两个真实 bug：
+ * 2026-10-25 实测出的真实 bug：
  *   ① Seedance 2.0 i2v 的参考图必须在顶层 images；放 metadata.images 会 400「requires at least one input image」。
- *   ② identify-face 返回 results 数组，session_id / face_id 分在两条 text 子 JSON 里；旧 parser 只认单对象。
+ *   ② identify-face 返回 results 数组，session_id / face_id / end_time 分在 text 子 JSON 里；旧 parser 只认单对象。
+ *   ③ lip-sync 的「session_id has expired」是误导报错：soundEndTime 必须比底片 end_time 早约 700ms。
  * 另外锁定「克隆通道不可用 → 参考音频直出」的降级标记，避免 UI 把参考直出当训练克隆。
  *
  * 跑法：node scripts/p153-junshi-avatar.mjs
@@ -13,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const root = process.cwd();
-const { parseFaceSession, submitVideoTask } = await import('../apps/server/src/services/junshiAvatar.js');
+const { parseFaceSession, safeLipSyncEndTime, submitVideoTask } = await import('../apps/server/src/services/junshiAvatar.js');
 let failures = 0;
 const check = (label, ok, detail = '') => {
   if (ok) console.log(`  ✓ ${label}`);
@@ -31,10 +32,15 @@ const observed = JSON.stringify({
 const parsed = parseFaceSession(observed);
 check('① session_id 从子 JSON 取出', parsed.sessionId === '943294915512387346', parsed.sessionId);
 check('① face_id="0" 不被当成空值丢掉', parsed.faceId === '0', parsed.faceId);
+check('① end_time 一并取出', parsed.endTime === 5300, parsed.endTime);
 check('① 旧版单对象格式仍兼容', parseFaceSession('{"sessionId":"s1","faceId":"f1"}').sessionId === 's1');
 let threw = false;
 try { parseFaceSession('{"results":[]}'); } catch { threw = true; }
 check('① 没有会话字段时明确报错', threw);
+check('① 4700ms 底片留 700ms → 4000', safeLipSyncEndTime(4700) === 4000, safeLipSyncEndTime(4700));
+check('① 5300ms 底片留 700ms → 4600', safeLipSyncEndTime(5300) === 4600, safeLipSyncEndTime(5300));
+check('① 6 秒底片封顶 5000', safeLipSyncEndTime(6300) === 5000, safeLipSyncEndTime(6300));
+check('① end_time 缺失时回退 4000', safeLipSyncEndTime(0) === 4000, safeLipSyncEndTime(0));
 
 console.log('② Seedance 2.0 i2v 顶层 images');
 const originalFetch = global.fetch;
@@ -58,6 +64,7 @@ const route = fs.readFileSync(path.join(root, 'apps/server/src/routes/junshiWork
 const front = fs.readFileSync(path.join(root, 'apps/website/public/assets/junshi/workbench.js'), 'utf8');
 check('③ 克隆失败会降级到参考音频直出', route.includes("'reference'") && route.includes('参考音频直出'));
 check('③ 对口型失败会降级为底片+配音并带 note', route.includes('非精准对口型') && route.includes('muxAudioOntoVideo'));
+check('③ 对口型按 end_time 计算 soundEndTime', route.includes('safeLipSyncEndTime(endTime') && route.includes("seconds: '6'"));
 check('③ 前端展示参考直出与降级说明', front.includes('（参考直出）') && front.includes('run.note'));
 check('③ custom voice id 去掉下划线/只留字母数字', route.includes("replace(/[^A-Za-z0-9]/g, '')"));
 check('③ 服务文件头记录顶层 images 约束', avatar.includes('i2v 参考图必须在顶层 images'));

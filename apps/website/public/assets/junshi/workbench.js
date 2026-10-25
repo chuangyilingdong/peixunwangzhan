@@ -222,6 +222,8 @@
     shotFrameUrls: {},
     // 十六期 · 内容方案卡（对齐原版 renderPlans：聊天产出方案 → 查看/改/确认制作/导出）
     plans: [],
+    // 内容计划内部两个子视图：创作方案 / 周期计划。文案草稿页已按用户口径删除。
+    planView: 'plans',
     // 八期 · 内容计划/周期日历（对齐原版 content-cycles，作者本人授权复刻）
     cycles: [],
     currentCycle: null,
@@ -285,7 +287,22 @@
     if (state.renderTimer) { clearInterval(state.renderTimer); state.renderTimer = null; }
   }
 
+  /* 一级导航按当前口径：8 个内容目的地 + 独立「历史任务」。
+     使用设置从界面隐藏；文案草稿页删除；历史任务不再并入数据复盘。 */
+  var TAB_META = {
+    chat: { label: '小铃铛', sub: '说目标，小铃铛帮你查资料、把内容做出来' },
+    account: { label: '账号档案', sub: '写清卖给谁、卖什么，建议才会具体' },
+    references: { label: '同行观察', sub: '看同行在发什么，采集作品和口播' },
+    copybrains: { label: '文案大脑', sub: '把创作者的写法提炼成可调用的方法' },
+    plan: { label: '内容计划', sub: '先排做什么，再决定怎么拍' },
+    video: { label: '视频创作', sub: '编导稿、成片，以及数字人口播' },
+    assets: { label: '素材库', sub: '图片、视频、音色和成片都在这里' },
+    reports: { label: '数据复盘', sub: '看发布效果，判断什么内容有效' },
+    jobs: { label: '历史任务', sub: '每次生成任务的状态和失败原因' },
+  };
+
   function setTab(tab) {
+    if (!TAB_META[tab]) tab = 'chat';
     state.tab = tab;
     if (tab !== 'video') { stopRenderPolling(); stopAvatarPolling(); stopVideoWorkPolling(); }
     if (tab !== 'chat') stopWfPolling();
@@ -297,12 +314,19 @@
     if (tab !== 'copybrains' && state.brainPollTimer) { clearInterval(state.brainPollTimer); state.brainPollTimer = null; }
     if (tab === 'copybrains') void refreshBrains(true);
     if (tab === 'reports') void loadReports(true);
-    if (tab === 'settings') void renderSettings();
     $$('#wb-tabs [data-wb]').forEach(function (button) {
       if (button.dataset.wb === tab) button.setAttribute('aria-current', 'true');
       else button.removeAttribute('aria-current');
     });
+    var meta = TAB_META[tab];
+    var crumb = $('#wb-crumb');
+    if (crumb) crumb.textContent = meta.label;
+    var sub = $('#wb-title-sub');
+    if (sub) sub.textContent = meta.sub;
+    renderTopbar();
+    try { localStorage.setItem('junshi.wb.tab', tab); } catch (e) { /* ignore */ }
     if (tab === 'reports' || tab === 'jobs') {
+      render();
       call('/summary').then(function (data) {
         state.summary = Object.assign({}, state.summary, data);
         state.jobs = data.jobs || state.jobs;
@@ -311,6 +335,48 @@
     } else {
       render();
     }
+  }
+
+  function topbarAccountHtml() {
+    var list = state.accounts && state.accounts.length ? state.accounts : [{ id: 'default', name: '默认账号' }];
+    return '<label class="wb-top-account"><span>账号</span><select id="wb-global-account" aria-label="切换创作账号">' +
+      list.map(function (item) {
+        return '<option value="' + esc(item.id) + '"' + (item.id === state.accountId ? ' selected' : '') + '>' + esc(item.name) + '</option>';
+      }).join('') + '</select></label>';
+  }
+
+  /** 顶栏只放「当前页能做的动作」：小铃铛页是三大工作流 + 清空；其他页只显示账号。 */
+  function renderTopbar() {
+    var box = $('#wb-top-actions');
+    if (!box) return;
+    var html = '';
+    if (state.tab === 'chat') {
+      html = '<button class="btn primary" type="button" id="wb-flow-today">' + ic('bulb', 12) + '今日选题</button>' +
+        '<button class="btn" type="button" id="wb-flow-viral">' + ic('copy', 12) + '爆款复刻</button>' +
+        '<button class="btn" type="button" id="wb-flow-hotspot">' + ic('sparkle', 12) + '热点结合</button>' +
+        '<button class="btn" type="button" id="wb-clear-chat">清空对话</button>';
+    }
+    html += topbarAccountHtml();
+    box.innerHTML = html;
+    var select = $('#wb-global-account');
+    if (select) select.onchange = function () { switchAccount(select.value); };
+    if (state.tab === 'chat') {
+      $('#wb-flow-today').onclick = function () { openFlowStartDialog('today'); };
+      $('#wb-flow-viral').onclick = function () { openFlowStartDialog('viral'); };
+      $('#wb-flow-hotspot').onclick = function () { openFlowStartDialog('hotspot'); };
+      $('#wb-clear-chat').onclick = clearChat;
+    }
+  }
+
+  async function clearChat() {
+    if (!confirm('清空当前机构的内容工作台对话？账号档案、素材、文案和任务都会保留。')) return;
+    try {
+      await call('/chat', { method: 'DELETE' });
+      state.messages = [];
+      renderMessages(true);
+      bindPromptButtons();
+      toast('对话已清空');
+    } catch (error) { toast(error.message, 'error'); }
   }
 
   /** 切换当前创作账号：档案、文案、视频、素材都按账号重新拉一遍。 */
@@ -338,6 +404,7 @@
       if (state.tab === 'video') { state.selectedVideo = null; state.videoShotEditing = null; state.videoShotEdits = {}; void loadVideoData(true); }
       if (state.tab === 'plan') { state.cycleSlotEditing = null; void loadCycles(true); }
     } catch (e) { /* 保持旧数据 */ }
+    renderTopbar();
     render();
   }
 
@@ -381,7 +448,9 @@
       state.brains = results[11].items || [];
       state.plans = results[12].items || [];
       state.loaded = true;
-      render();
+      renderTopbar();
+      if (state.tab === 'chat') render();
+      else setTab(state.tab);
       void loadVideoData(true);
     } catch (error) {
       if (view) view.innerHTML = '<div class="wb-page"><div class="wb-card"><p class="err">' + ic('alert', 14) + '<span>' + esc(error.message || '工作台加载失败') + '</span></p></div></div>';
@@ -469,21 +538,13 @@
       if (state.profile.audience) chips.push('人群：' + state.profile.audience);
       if (state.profile.goal) chips.push('目标：' + state.profile.goal);
     }
+    var note = chips.length ? '已读取 ' + chips.join(' · ') : '还没填账号档案，建议会偏通用';
     $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-chat">' +
-      '<div class="wb-chat-head"><b>小铃铛</b><span class="wb-note">' + esc(chips.join(' · ') || '先补账号档案，建议会更具体') + '</span>' +
-      '<div class="wb-flow-entry">' +
-      '<button class="btn" type="button" id="wb-flow-today">' + ic('bulb', 12) + '今日选题</button>' +
-      '<button class="btn" type="button" id="wb-flow-viral">' + ic('copy', 12) + '爆款复刻</button>' +
-      '<button class="btn" type="button" id="wb-flow-hotspot">' + ic('sparkle', 12) + '热点结合</button>' +
-      '<button class="btn" type="button" id="wb-mem-open">' + ic('quote', 12) + '记忆(' + state.memories.length + ')</button>' +
-      '<button class="btn" type="button" id="wb-clear-chat">清空对话</button></div></div>' +
+      '<div class="wb-chat-head"><b>小铃铛</b><span class="wb-note">' + esc(note) + '</span>' +
+      (chips.length ? '' : '<button class="wb-mini-btn" type="button" id="wb-chat-profile">去补档案 →</button>') +
+      '<button class="wb-mini-btn" type="button" id="wb-mem-open">' + ic('quote', 11) + '记忆(' + state.memories.length + ')</button></div>' +
       '<div class="wb-msgs" id="wb-msgs"></div>' +
-      '<div><div class="wb-quick">' +
-      '<button class="chip" type="button" data-wb-prompt="给我 3 个今天能拍的选题">今日选题</button>' +
-      '<button class="chip" type="button" data-wb-prompt="写 5 条 30 秒口播文案">写口播</button>' +
-      '<button class="chip" type="button" data-wb-prompt="帮我按钩子、痛点、证明、转折、行动拆解这个同行内容">拆同行</button>' +
-      '<button class="chip" type="button" data-wb-prompt="把今天的热点和我的课程结合起来，给我 3 个选题">热点结合</button>' +
-      '</div><div class="wb-chat-attach" id="wb-chat-attach"></div>' +
+      '<div><div class="wb-chat-attach" id="wb-chat-attach"></div>' +
       '<div class="wb-composer"><textarea id="wb-input" placeholder="说说你今天想做什么，或贴一段同行口播…（可直接粘贴截图）"></textarea>' +
       '<button class="btn primary" type="button" id="wb-send">' + (state.busy ? ic('stop', 14) + '停止' : ic('arrow-up', 15) + '发送') + '</button></div>' +
       '<div class="wb-composer-foot"><button class="btn" type="button" id="wb-chat-attach-btn">' + ic('image', 12) + '添加图片</button>' +
@@ -495,10 +556,9 @@
     renderMessages(true);
     bindPromptButtons();
     bindWorkflowCard();
-    $('#wb-flow-today').onclick = function () { openFlowStartDialog('today'); };
-    $('#wb-flow-viral').onclick = function () { openFlowStartDialog('viral'); };
-    $('#wb-flow-hotspot').onclick = function () { openFlowStartDialog('hotspot'); };
     $('#wb-mem-open').onclick = openMemoriesDialog;
+    var profileLink = $('#wb-chat-profile');
+    if (profileLink) profileLink.onclick = function () { setTab('account'); };
     bindChatComposerExtras();
     var input = $('#wb-input');
     var send = $('#wb-send');
@@ -514,16 +574,6 @@
       input.style.height = 'auto';
       input.style.height = Math.min(160, input.scrollHeight) + 'px';
     });
-    $('#wb-clear-chat').onclick = async function () {
-      if (!confirm('清空当前机构的内容工作台对话？')) return;
-      try {
-        await call('/chat', { method: 'DELETE' });
-        state.messages = [];
-        renderMessages(true);
-        bindPromptButtons();
-        toast('对话已清空');
-      } catch (error) { toast(error.message, 'error'); }
-    };
   }
   function bindChatComposerExtras() {
     var attachBtn = $('#wb-chat-attach-btn');
@@ -1144,7 +1194,7 @@
     $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
       douyinConnectionBarHtml() +
       '<div class="wb-card"><div class="wb-card-head"><div><h3>同行观察</h3><p>记录同行 → 按筛选条件同步作品（下载+转写带时间码）→ 生成研究简报。同步和转写按次计费；只读公开数据、每机构每小时限 40 次。</p></div>' +
-      '<div class="wb-actions"><label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-dy-account"') + '</label>' +
+      '<div class="wb-actions">' +
       '<button class="btn primary" type="button" data-peer-action="sync-all"' + (syncableCount ? '' : ' disabled') + '>' + ic('refresh', 13) + '更新全部同行' + (syncableCount ? '（' + syncableCount + '）' : '') + '</button></div></div>' +
       '<div class="wb-peer-auto"><label class="wb-inline"><input type="checkbox" id="wb-peer-auto"' + (settings.autoEnabled ? ' checked' : '') + '><span>自动同步</span></label>' +
       '<label class="wb-inline"><span>间隔</span><select id="wb-peer-auto-interval">' + [6, 12, 24, 48, 72, 168].map(function (h) {
@@ -1197,7 +1247,6 @@
           '</div></article>';
       }).join('') + '</div>' : '<div class="wb-card"><p class="wb-muted">还没有同行记录。</p></div>') +
       '</div></div>';
-    bindAccountSwitch('#wb-dy-account');
     bindDouyinActions();
     if (!state.douyinLoaded) { state.douyinLoaded = true; void loadDouyinConnection(true); }
     var go = $('#wb-dy-go');
@@ -1308,74 +1357,6 @@
   }
 
   /* ───────────── 文案大脑 ───────────── */
-  function renderCopy() {
-    var formState = state.copyForm || {};
-    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
-      '<div class="wb-card"><div class="wb-card-head"><div><h3>生成新文案</h3><p>围绕一个主题，一次给你多条不同角度的口播。</p></div>' +
-      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-copy-account"') + '</label></div>' +
-      '<form id="wb-copy-form" class="wb-form">' +
-      '<label class="wb-field full"><span>主题</span><input name="topic" required placeholder="例如：寒假班怎么选、体验课怎么开口" value="' + esc(formState.topic || '') + '"></label>' +
-      '<label class="wb-field"><span>条数</span><select name="count">' + [3, 5, 7, 10].map(function (n) { return '<option' + (Number(formState.count || 5) === n ? ' selected' : '') + '>' + n + '</option>'; }).join('') + '</select></label>' +
-      '<label class="wb-field"><span>风格</span><select name="style">' + ['口语化', '专业理性', '故事感', '犀利反常识'].map(function (s) { return '<option' + (formState.style === s ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select></label>' +
-      '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">生成文案</button><span class="wb-note">使用平台模型渠道；模型返回空时会给出演示样本。</span></div></form></div>' +
-      (state.copy.length ? '<div class="wb-cards wb-copy-grid">' + state.copy.map(function (item) {
-        var stats = item.stats || null;
-        var statsHtml = stats ? '<div class="wb-meta" style="color:var(--text-2)">📊 发布数据：播放 ' + (stats.plays ?? '—') + ' · 赞 ' + (stats.likes ?? '—') + ' · 评 ' + (stats.comments ?? '—') + ' · 藏 ' + (stats.saves ?? '—') + (stats.publishedAt ? ' · ' + esc(stats.publishedAt) : '') + '</div>' : '';
-        return '<article class="wb-item"><div class="wb-card-head"><div><h4>' + esc(item.topic) + '</h4><div class="wb-meta">' + esc(item.style) + ' · ' + esc(accountName(item.accountId)) + ' · ' + fmtDate(item.createdAt) + '</div></div></div>' +
-          '<div class="wb-copy-body">' + md(item.content) + '</div>' + statsHtml +
-          '<div class="wb-actions"><button class="btn" type="button" data-copy-content="' + esc(item.id) + '">' + ic('copy', 12) + '复制</button>' +
-          '<button class="btn" type="button" data-copy-check="' + esc(item.id) + '">' + ic('shield', 12) + '合规体检</button>' +
-          '<button class="btn" type="button" data-copy-stats="' + esc(item.id) + '">' + ic('chart', 12) + (stats ? '更新数据' : '回填数据') + '</button>' +
-          '<button class="btn" type="button" data-copy-del="' + esc(item.id) + '">' + ic('trash', 12) + '</button></div></article>';
-      }).join('') + '</div>' : '<div class="wb-card"><p class="wb-muted">这个账号还没有文案。输入一个主题，先生成 5 条。</p></div>') +
-      '</div></div>';
-    bindAccountSwitch('#wb-copy-account');
-    $('#wb-copy-form').onsubmit = async function (event) {
-      event.preventDefault();
-      var form = event.currentTarget;
-      var button = form.querySelector('[type="submit"]');
-      var original = button.innerHTML;
-      button.disabled = true; button.innerHTML = ic('loader', 13) + '生成中…';
-      try {
-        var data = Object.fromEntries(new FormData(form).entries());
-        data.count = Number(data.count || 5);
-        data.accountId = state.accountId;
-        state.copyForm = { topic: data.topic, count: data.count, style: data.style };
-        var result = await call('/copy', { method: 'POST', body: data });
-        state.copy.unshift(result.draft);
-        renderCopy();
-        toast(result.demo ? '已生成演示文案（模型未返回正文）' : '文案已生成', 'success');
-      } catch (error) { toast(error.message, 'error'); button.disabled = false; button.innerHTML = original; }
-    };
-    $$('[data-copy-content]').forEach(function (button) {
-      button.onclick = function () {
-        var item = state.copy.filter(function (row) { return row.id === button.dataset.copyContent; })[0];
-        if (!item) return;
-        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(item.content).then(function () { toast('已复制', 'success'); }, function () { toast('复制失败', 'error'); });
-        else toast('当前浏览器不支持自动复制', 'error');
-      };
-    });
-    $$('[data-copy-check]').forEach(function (button) {
-      button.onclick = function () {
-        var item = state.copy.filter(function (row) { return row.id === button.dataset.copyCheck; })[0];
-        if (item) checkCompliance(item.content);
-      };
-    });
-    $$('[data-copy-stats]').forEach(function (button) {
-      button.onclick = function () { backfillStats(button.dataset.copyStats); };
-    });
-    $$('[data-copy-del]').forEach(function (button) {
-      button.onclick = async function () {
-        if (!confirm('删除这条文案？')) return;
-        try {
-          await call('/copy/' + encodeURIComponent(button.dataset.copyDel), { method: 'DELETE' });
-          state.copy = state.copy.filter(function (row) { return row.id !== button.dataset.copyDel; });
-          renderCopy();
-        } catch (error) { toast(error.message, 'error'); }
-      };
-    });
-  }
-
   /* ───────────── 数字人口播（音色克隆 + 对口型） ───────────── */
   function stopAvatarPolling() {
     if (state.avatarTimer) { clearInterval(state.avatarTimer); state.avatarTimer = null; }
@@ -1461,11 +1442,11 @@
     var referenceVoices = readyVoices.filter(function (item) { return item.mode === 'reference'; });
     var training = state.voices.filter(function (item) { return item.status === 'training'; });
     var imageAssets = state.assets.filter(function (item) { return item.kind === 'image'; });
-    box.innerHTML = '<div class="wb-card-head"><div><h3>数字人口播</h3><p>用自己的音色和形象照，把文案直接变成口播视频（音色克隆 → 语音合成 → 对口型）。克隆通道不可用时自动改用参考音频直出；上游对口型异常时输出底片+配音版本。成片进素材库「数字人」文件夹。</p></div></div>' +
+    box.innerHTML = '<div class="wb-card-head"><div><h3>数字人口播</h3><p>用自己的音色和形象照，把文案直接变成精准对口型口播。克隆通道不可用时自动改用参考音频直出；只有对口型真正失败才输出底片+配音并标注。成片进素材库「数字人」文件夹。</p></div></div>' +
       '<form id="wb-avatar-form" class="wb-form">' +
       '<label class="wb-field"><span>音色</span><select name="voiceId">' + (readyVoices.length ? readyVoices.map(function (v) { return '<option value="' + esc(v.id) + '">' + esc(v.name) + (v.mode === 'reference' ? '（参考直出）' : '') + '</option>'; }).join('') : '<option value="">（先克隆一个音色）</option>') + '</select></label>' +
       '<label class="wb-field"><span>形象照（正面人脸清晰）</span><select name="imageAssetId">' + (imageAssets.length ? imageAssets.slice(0, 30).map(function (a) { return '<option value="' + esc(a.id) + '">' + esc(a.fileName) + '</option>'; }).join('') : '<option value="">（素材库里还没有图片）</option>') + '</select></label>' +
-      '<label class="wb-field full"><span>口播文案（底片 5 秒，建议 20 字内；超出会截断）</span><textarea name="text" placeholder="把要口播的文案粘进来（建议 20 字内；上游对口型修复后会按音频时长输出）"></textarea></label>' +
+      '<label class="wb-field full"><span>口播文案（底片约 6 秒，建议 20 字内；超出会截断）</span><textarea name="text" placeholder="把要口播的文案粘进来（建议 20 字内，口播更完整）"></textarea></label>' +
       '<div class="wb-field full wb-actions"><button class="btn primary" type="submit"' + (readyVoices.length && imageAssets.length ? '' : ' disabled') + '>' + ic('video', 13) + '生成口播视频</button>' +
       '<button class="btn" type="button" id="wb-voice-clone-open">' + ic('plus', 12) + '克隆新音色</button>' +
       (training.length ? '<span class="wb-note">' + ic('loader', 11) + ' ' + training.length + ' 个音色克隆中…</span>' : '') +
@@ -1602,7 +1583,7 @@
     (state.messages || []).forEach(function (message) {
       if (message.plan) message.plan = byId[message.plan.id] || null;
     });
-    if (state.tab === 'plan') renderPlan();
+    if (state.tab === 'plan' && (state.planView || 'plans') === 'plans') renderPlan();
   }
   function planStatusLabel(plan) {
     if (plan.status === 'submitted') return '已提交制作';
@@ -1915,7 +1896,7 @@
     if (state.accountId !== accountId) return;
     state.cycles = data.items || [];
     state.currentCycle = data.current || null;
-    if (state.tab === 'plan') renderPlan();
+    if (state.tab === 'plan' && state.planView === 'cycles') renderPlan();
     startCyclePolling();
   }
   function activeCycle() {
@@ -1965,13 +1946,34 @@
       '<button class="btn" type="button" data-cycle-action="remove-slot" data-cycle="' + esc(cycle.id) + '" data-slot="' + esc(slot.id) + '" data-version="' + cycle.version + '">移除</button>' +
       '</div></article>';
   }
+  function planSubtabsHtml() {
+    var items = [['plans', '创作方案'], ['cycles', '周期计划']];
+    return '<div class="wb-subtabs" role="tablist" aria-label="内容计划子视图">' + items.map(function (row) {
+      return '<button class="wb-subtab" type="button" role="tab" data-plan-view="' + row[0] + '"' +
+        ((state.planView || 'plans') === row[0] ? ' aria-current="true"' : '') + '>' + row[1] + '</button>';
+    }).join('') + '</div>';
+  }
   function renderPlan() {
+    var view = state.planView === 'cycles' ? 'cycles' : 'plans';
+    var desc = view === 'cycles'
+      ? '一次排好几天的节奏；确认后可以逐槽开始创作。'
+      : '聊天里提炼或手动建立的制作方案；确认后生成编导稿。';
+    $('#wb-view').innerHTML = '<div class="wb-page">' +
+      '<div class="wb-page-head">' + planSubtabsHtml() + '<span class="wb-note" style="margin-left:auto">' + esc(desc) + '</span></div>' +
+      '<div class="wb-scroll" id="wb-plan-subview"></div></div>';
+    $$('[data-plan-view]').forEach(function (button) {
+      button.onclick = function () { state.planView = button.dataset.planView; renderPlan(); };
+    });
+    if (view === 'cycles') { renderCycleSubview(); return; }
+    $('#wb-plan-subview').innerHTML = planSectionHtml();
+    bindPlanActions();
+  }
+  function renderCycleSubview() {
     var active = activeCycle();
     var generating = state.cycles.filter(function (item) { return item.status === 'generating'; })[0] || null;
     var failed = state.cycles.filter(function (item) { return item.status === 'failed'; })[0] || null;
     var form = state.cycleForm || {};
-    var head = '<div class="wb-card"><div class="wb-card-head"><div><h3>周期计划</h3><p>一次排好几天的选题节奏：每天发什么、讲什么、为什么这么排；确认后可以逐槽开始创作。</p></div>' +
-      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-plan-account"') + '</label></div>' +
+    var head = '<div class="wb-card"><div class="wb-card-head"><div><h3>周期计划</h3><p>一次排好几天的选题节奏：每天发什么、讲什么、为什么这么排；确认后可以逐槽开始创作。</p></div></div>' +
       '<div class="wb-field full wb-actions">' +
       '<label class="wb-inline"><span>条数</span><select id="wb-plan-count">' + [4, 5, 6, 7, 10].map(function (n) { return '<option value="' + n + '"' + (Number(form.count) === n ? ' selected' : '') + '>' + n + ' 条</option>'; }).join('') + '</select></label>' +
       '<input id="wb-plan-brief" placeholder="方向要求（可选）：例如主打暑期班，穿插学员案例" value="' + esc(form.brief || '') + '" maxlength="120">' +
@@ -2007,9 +2009,7 @@
     } else if (!generating) {
       activeHtml = '<div class="wb-card"><p class="wb-muted">还没有周期计划。先确定条数和方向，生成第一份。</p></div>';
     }
-    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' + planSectionHtml() + '<div class="wb-plan-divider"><span>周期计划</span></div>' + head + current + activeHtml + '</div></div>';
-    bindAccountSwitch('#wb-plan-account');
-    bindPlanActions();
+    $('#wb-plan-subview').innerHTML = head + current + activeHtml;
     $$('[data-cycle-action]').forEach(function (button) {
       button.onclick = async function () {
         var action = button.dataset.cycleAction;
@@ -2659,8 +2659,7 @@
   /* ── 页面组装 ── */
   function renderVideo() {
     loadVideoDrafts();
-    var launcher = '<div class="wb-card"><div class="wb-card-head"><div><h3>开始一个视频任务</h3><p>像发消息一样创建任务；生成模式从需求创作，复刻模式参考现有内容，自动模式按周期日更。</p></div>' +
-      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-video-account"') + '</label></div>' +
+    var launcher = '<div class="wb-card"><div class="wb-card-head"><div><h3>开始一个视频任务</h3><p>像发消息一样创建任务；生成模式从需求创作，复刻模式参考现有内容，自动模式按周期日更。</p></div></div>' +
       '<div class="wb-actions">' +
       '<button class="btn primary" type="button" data-wb-v-launch="generate">' + ic('sparkle', 13) + '生成模式</button>' +
       '<button class="btn primary" type="button" data-wb-v-launch="replicate">' + ic('copy', 13) + '复刻模式</button>' +
@@ -2673,7 +2672,6 @@
       launcher + draftCards + workCards + emptyWork + renderLegacyVideoProjects() + renderVideoQueue() +
       '<div class="wb-card"><div class="wb-card-head"><div><h3>数字人口播（五期）</h3><p>用自己的音色和形象照，把文案直接变成对口型口播视频；也可以直接在下方继续使用。</p></div></div><div id="wb-avatar-panel"></div></div>' +
       '</div></div>';
-    bindAccountSwitch('#wb-video-account');
     renderAvatarPanel();
     refreshAvatarRuns(true);
     bindLegacyVideoHandlers();
@@ -3010,8 +3008,7 @@
       }).join('') + '</div>' : '<p class="wb-muted">这个筛选下还没有素材。上传课程图、课堂视频、参考音频或口播文本。</p>';
     }
     $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
-      '<div class="wb-card"><div class="wb-card-head"><div><h3>素材库</h3><p>树形文件夹整理素材；图片可进分析队列（画面描述/标签/可复用判定，关页继续跑）；AI 生成的成片自动进「成片」文件夹和画廊。</p></div>' +
-      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-asset-account"') + '</label></div>' +
+      '<div class="wb-card"><div class="wb-card-head"><div><h3>素材库</h3><p>树形文件夹整理素材；图片可进分析队列（画面描述/标签/可复用判定，关页继续跑）；AI 生成的成片自动进「成片」文件夹和画廊。</p></div></div>' +
       '<div class="chips" style="margin:2px 0 6px">' + assetBreadcrumb() + '</div>' +
       (childChips ? '<div class="chips" style="margin:0 0 6px">' + childChips + '</div>' : '') +
       '<div class="chips" style="margin:0 0 10px">' +
@@ -3026,7 +3023,6 @@
       '<span class="wb-note">当前：' + (state.assetFolder === '__none__' ? '未分类' : (state.assetFolder || '全部')) + '</span></div>' +
       cards +
       '</div></div></div>';
-    bindAccountSwitch('#wb-asset-account');
     $$('[data-asset-folder]').forEach(function (chip) {
       chip.onclick = function () {
         state.assetFolder = chip.dataset.assetFolder;
@@ -3144,44 +3140,45 @@
   }
 
   function renderReports() {
+    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll" id="wb-report-subview"></div></div>';
+    renderReportsData();
+  }
+  function renderReportsData() {
     // 十四期 · 数据复盘：自己作品（采集助手）+ 截图回填，统一由 /reports 返回。
     var report = state.reports;
     if (!report) {
-      $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll"><div class="wb-card"><p class="wb-muted">' + ic('loader', 14) + ' 正在读取复盘数据…</p></div></div></div>';
+      $('#wb-report-subview').innerHTML = '<div class="wb-card"><p class="wb-muted">' + ic('loader', 14) + ' 正在读取复盘数据…</p></div>';
       return;
     }
     var published = report.items || [];
     var totals = report.totals || {};
     var counts = report.counts || {};
-    var pending = Number(counts.pending || 0);
     var ownCount = Number(counts.own || 0);
     var screenshotCount = Number(counts.screenshot || 0);
     var reviewCards = [['已复盘', published.length, '条'], ['总播放', totals.plays || 0, ''], ['总点赞', totals.likes || 0, ''], ['总评论', totals.comments || 0, ''], ['总分享', totals.shares || 0, ''], ['总收藏', totals.saves || 0, '']];
     var insight = state.reviewInsight;
-    var head = '<div class="wb-card"><div class="wb-card-head"><div><h3>发布数据复盘</h3><p>用自己的主页采集作品数据，或在抖音作者端截图回填；积累几条后让小铃铛出复盘洞察。</p></div>' +
-      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-reports-account"') + '</label></div>' +
+    var head = '<div class="wb-card"><div class="wb-card-head"><div><h3>发布数据复盘</h3><p>用采集助手同步自己的主页作品数据；积累几条后让小铃铛出复盘洞察。</p></div></div>' +
       '<div class="wb-stats">' + reviewCards.map(function (item) { return '<div class="wb-stat"><span>' + item[0] + '</span><b>' + item[1] + '<small style="font-size:11px;color:var(--text-3);font-weight:400"> ' + item[2] + '</small></b></div>'; }).join('') + '</div>' +
-      '<p class="wb-muted">采集助手 ' + ownCount + ' 条 · 截图回填 ' + screenshotCount + ' 条' + (pending ? ' · 另有 ' + pending + ' 条文案未回填' : '') + '</p>' +
+      '<p class="wb-muted">采集助手 ' + ownCount + ' 条' + (screenshotCount ? ' · 历史截图 ' + screenshotCount + ' 条' : '') + '</p>' +
       '<div class="wb-field full wb-actions">' +
       '<button class="btn primary" type="button" data-review-action="insight"' + (published.length ? '' : ' disabled') + '>' + ic('bulb', 13) + '生成复盘洞察</button>' +
       '<button class="btn" type="button" data-review-action="self-help">' + ic('refresh', 13) + '采集我的作品</button>' +
       '<button class="btn" type="button" data-review-action="refresh-reports">刷新</button>' +
-      (pending > 0 ? '<button class="btn" type="button" data-review-action="go-copy">' + pending + ' 条还没回填，去文案草稿</button>' : '') +
       '</div>' +
       (insight ? '<div class="wb-copy-body wb-review-insight">' + md(insight) + '</div>' +
         '<div class="wb-actions"><button class="btn primary" type="button" data-review-action="next-cycle">' + ic('sparkle', 13) + '用这份复盘生成下个周期计划</button></div>' : '') +
       '</div>';
     var listHtml;
     if (published.length) {
-      listHtml = '<div class="wb-card"><div class="wb-card-head"><div><h3>已发布内容数据</h3><p>按回填/同步时间倒序；采集助手同步的作品会持续更新，截图回填可随时重做。</p></div></div>' +
-        '<table class="wb-table"><thead><tr><th>主题</th><th>来源</th><th>发布</th><th>播放</th><th>赞</th><th>评</th><th>转</th><th>藏</th><th>回填</th><th></th></tr></thead><tbody>' +
+      listHtml = '<div class="wb-card"><div class="wb-card-head"><div><h3>已发布内容数据</h3><p>按同步时间倒序；采集助手同步的作品会持续更新。</p></div></div>' +
+        '<table class="wb-table"><thead><tr><th>主题</th><th>来源</th><th>发布</th><th>播放</th><th>赞</th><th>评</th><th>转</th><th>藏</th><th>同步</th><th></th></tr></thead><tbody>' +
         published.map(function (item) {
           var s = item.stats || {};
           var isOwn = item.origin === 'douyin_assistant';
           var publishedText = isOwn ? String(s.publishedAt || '').slice(0, 10) : (s.publishedAt || '');
           var action = isOwn
             ? (item.shareUrl ? '<a class="btn" href="' + esc(item.shareUrl) + '" target="_blank" rel="noopener noreferrer">打开作品</a>' : '<span class="wb-muted">已同步</span>')
-            : '<button class="btn" type="button" data-review-backfill="' + esc(item.id) + '">更新数据</button>';
+            : '<span class="wb-muted">历史数据</span>';
           return '<tr><td title="' + esc(item.topic) + '">' + esc(String(item.topic || '').slice(0, 26)) + '</td>' +
             '<td>' + (isOwn ? '采集助手' : '截图') + '</td>' +
             '<td>' + esc(publishedText || '—') + '</td>' +
@@ -3190,24 +3187,22 @@
             '<td>' + action + '</td></tr>';
         }).join('') + '</tbody></table></div>';
     } else {
-      listHtml = '<div class="wb-card"><p class="wb-muted">还没有复盘数据。用采集助手同步自己的主页，或在文案草稿里回填截图。</p></div>';
+      listHtml = '<div class="wb-card"><p class="wb-muted">还没有复盘数据。用采集助手同步自己的主页。</p></div>';
     }
     var stats = (state.summary && state.summary.stats) || {};
-    var cards = [['对话消息', stats.messages || 0, '条'], ['文案草稿', stats.copy_drafts || 0, '条'], ['视频项目', stats.videos || 0, '个'], ['素材', stats.assets || 0, '份'], ['同行观察', stats.references || 0, '条'], ['生成任务', stats.jobs || 0, '次']];
+    var cards = [['对话消息', stats.messages || 0, '条'], ['视频项目', stats.videos || 0, '个'], ['素材', stats.assets || 0, '份'], ['同行观察', stats.references || 0, '条'], ['生成任务', stats.jobs || 0, '次']];
     var jobs = (state.summary && state.summary.jobs) || state.jobs.slice(0, 8);
-    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' + head + listHtml +
+    $('#wb-report-subview').innerHTML = head + listHtml +
       '<div class="wb-card"><div class="wb-card-head"><div><h3>账号资产概览</h3><p>当前机构的内容资产与最近任务。</p></div></div>' +
       '<div class="wb-stats">' + cards.map(function (item) { return '<div class="wb-stat"><span>' + item[0] + '</span><b>' + item[1] + '<small style="font-size:11px;color:var(--text-3);font-weight:400"> ' + item[2] + '</small></b></div>'; }).join('') + '</div></div>' +
       '<div class="wb-card"><div class="wb-card-head"><div><h3>最近任务</h3><p>生成成功或失败都会记录。</p></div><button class="btn" type="button" data-wb-go="jobs">查看全部</button></div>' +
       (jobs.length ? '<table class="wb-table"><thead><tr><th>类型</th><th>状态</th><th>说明</th><th>时间</th></tr></thead><tbody>' +
         jobs.map(function (job) { return '<tr><td>' + esc(job.kind) + '</td><td>' + esc(jobStatusText(job.status)) + '</td><td>' + esc(job.detail) + '</td><td>' + fmtDate(job.createdAt) + '</td></tr>'; }).join('') + '</tbody></table>' : '<p class="wb-muted">还没有任务。</p>') +
-      '</div></div></div>';
-    bindAccountSwitch('#wb-reports-account');
+      '</div>';
     $$('[data-wb-go]').forEach(function (button) { button.onclick = function () { setTab(button.dataset.wbGo); }; });
     $$('[data-review-action]').forEach(function (button) {
       button.onclick = async function () {
         var action = button.dataset.reviewAction;
-        if (action === 'go-copy') { setTab('copy'); return; }
         if (action === 'self-help') { openSelfCollectHelp(); return; }
         if (action === 'refresh-reports') {
           button.disabled = true; button.innerHTML = ic('loader', 12) + '刷新中…';
@@ -3223,6 +3218,7 @@
             await call('/cycles', { method: 'POST', body: { count: 7, brief, accountId: state.accountId } });
             state.cycleForm = { count: 7, brief: '' };
             state.cycles = [];
+            state.planView = 'cycles';
             setTab('plan');
             toast('已开始生成下个周期计划，通常十几秒到一分钟', 'success');
           } catch (error) {
@@ -3242,13 +3238,11 @@
         } catch (error) { toast(error.message, 'error'); button.disabled = false; button.innerHTML = original; }
       };
     });
-    $$('[data-review-backfill]').forEach(function (button) {
-      button.onclick = function () { backfillStats(button.dataset.reviewBackfill); };
-    });
   }
+  /* 历史任务：独立一级目的地（按用户口径保留），不再塞进数据复盘子页签。 */
   function renderJobs() {
     var jobs = state.jobs;
-    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll"><div class="wb-card"><div class="wb-card-head"><div><h3>任务流水</h3><p>文案/视频生成的每次状态。</p></div></div>' +
+    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll"><div class="wb-card"><div class="wb-card-head"><div><h3>任务流水</h3><p>文案、视频、数字人生成的每次状态；失败原因也在这里。</p></div></div>' +
       (jobs.length ? '<table class="wb-table"><thead><tr><th>类型</th><th>状态</th><th>说明</th><th>创建</th><th>更新</th></tr></thead><tbody>' +
         jobs.map(function (job) { return '<tr><td>' + esc(job.kind) + '</td><td>' + esc(jobStatusText(job.status)) + '</td><td>' + esc(job.detail) + '</td><td>' + fmtDate(job.createdAt) + '</td><td>' + fmtDate(job.updatedAt) + '</td></tr>'; }).join('') + '</tbody></table>' : '<p class="wb-muted">还没有历史任务。</p>') +
       '</div></div></div>';
@@ -3536,7 +3530,7 @@
       if (data.workflow) state.workflow = data.workflow;
       if (data.draft) {
         state.copy.unshift(data.draft);
-        toast('已选定，文案已存入「文案草稿」', 'success');
+        toast('已选定，文案已保存', 'success');
       }
       if (data.switchToManual) {
         state.workflow = null;
@@ -4048,27 +4042,34 @@
     if (state.tab === 'chat') renderChat();
     else if (state.tab === 'account') renderAccount();
     else if (state.tab === 'references') renderReferences();
-    else if (state.tab === 'copy') renderCopy();
     else if (state.tab === 'plan') renderPlan();
     else if (state.tab === 'video') renderVideo();
     else if (state.tab === 'assets') renderAssets();
     else if (state.tab === 'copybrains') renderBrains();
     else if (state.tab === 'reports') renderReports();
     else if (state.tab === 'jobs') renderJobs();
-    else if (state.tab === 'settings') renderSettings();
     else renderChat();
   }
 
   function mount() {
     if (state.mounted) return;
     state.mounted = true;
+    // 回到上次所在目的地；不从聊天页强制重置。
+    try {
+      var saved = localStorage.getItem('junshi.wb.tab');
+      if (saved && TAB_META[saved]) state.tab = saved;
+    } catch (e) { /* ignore */ }
     var toastEl = document.createElement('div');
     toastEl.id = 'wb-toast';
     toastEl.className = 'wb-toast';
     toastEl.hidden = true;
     $('#scr-workbench').appendChild(toastEl);
     $$('#wb-tabs [data-wb]').forEach(function (button) {
-      button.addEventListener('click', function () { setTab(button.dataset.wb); });
+      button.addEventListener('click', function () {
+        // 一级导航回到每个目的地的默认子视图；子页签自己的切换不受影响。
+        if (button.dataset.wb === 'plan' && state.tab !== 'plan') state.planView = 'plans';
+        setTab(button.dataset.wb);
+      });
     });
     var close = $('#wb-dialog-close');
     if (close) close.onclick = closeDialog;

@@ -240,7 +240,7 @@
   --t-enter: 220ms;
   --t-panel: 260ms;
 
-  display:grid; grid-template-rows:auto minmax(0,1fr);
+  display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr);
   height:100dvh; overflow:hidden;
   color:var(--text); line-height:1.6;
   background:var(--bg);
@@ -647,6 +647,9 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
      只改列不改行时，.main 会和横向侧栏叠在同一格，导航被内容盖住、点不到（390px 实测）。 */
   #js-app .body{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
   #js-app .side{flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--hairline);overflow:visible}
+  /* 窄屏主导航一行四格：原来 .navitem 还是 width:100%，横向侧栏被撑成四行，白占半屏。 */
+  #js-app .navitem{width:auto;flex:1;justify-content:center;gap:0;padding:10px 4px;font-size:12.5px}
+  #js-app .side .navitem svg.ic{display:none}
   #js-app .sidenote{display:none}
   #js-app .main{padding:14px}
   #js-app .msgs{padding:14px 14px 112px}
@@ -716,24 +719,48 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
 
     <section class="screen" id="scr-workbench" hidden aria-label="内容工作台">
       <div class="wb">
-        <div class="wb-head">
-          <div class="wb-title"><b>内容工作台</b><span>账号档案、同行观察、文案大脑、视频创作、素材库、报表和任务</span></div>
-          <div class="wb-tabs" id="wb-tabs" role="tablist" aria-label="工作台功能">
-            <button class="wb-tab" type="button" role="tab" data-wb="chat" aria-current="true">小铃铛</button>
-            <button class="wb-tab" type="button" role="tab" data-wb="account">账号档案</button>
-            <button class="wb-tab" type="button" role="tab" data-wb="references">同行观察</button>
-            <button class="wb-tab" type="button" role="tab" data-wb="copybrains">文案大脑</button>
-            <button class="wb-tab" type="button" role="tab" data-wb="copy">文案草稿</button>
-            <button class="wb-tab" type="button" role="tab" data-wb="plan">内容计划</button>
-            <button class="wb-tab" type="button" role="tab" data-wb="video">视频创作</button>
-            <button class="wb-tab" type="button" role="tab" data-wb="assets">素材库</button>
-            <button class="wb-tab" type="button" role="tab" data-wb="reports">数据复盘</button>
-            <button class="wb-tab" type="button" role="tab" data-wb="jobs">历史任务</button>
-            <button class="wb-tab" type="button" role="tab" data-wb="settings">使用设置</button>
+        <!-- 工作台自己的二级导航：对齐原版客户端的左侧栏，一次只给 8 个目的地。
+             文案草稿收进「内容计划」，历史任务收进「数据复盘」，使用设置沉到底部。 -->
+        <aside class="wb-side">
+          <div class="wb-title"><b>内容工作台</b><span id="wb-title-sub">说目标，小铃铛帮你把内容做出来</span></div>
+          <nav class="wb-tabs" id="wb-tabs" role="tablist" aria-label="工作台功能">
+            <button class="wb-tab" type="button" role="tab" data-wb="chat" aria-current="true" title="对话、今日选题、爆款复刻、热点结合">
+              <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-chat"></use></svg><span>小铃铛</span>
+            </button>
+            <button class="wb-tab" type="button" role="tab" data-wb="account" title="账号定位、产品、人群和内容边界">
+              <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-user"></use></svg><span>账号档案</span>
+            </button>
+            <button class="wb-tab" type="button" role="tab" data-wb="references" title="研究同行、采集作品和口播">
+              <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-eye"></use></svg><span>同行观察</span>
+            </button>
+            <button class="wb-tab" type="button" role="tab" data-wb="copybrains" title="提炼创作者的方法档案">
+              <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-sparkle"></use></svg><span>文案大脑</span>
+            </button>
+            <button class="wb-tab" type="button" role="tab" data-wb="plan" title="创作方案和周期计划">
+              <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-list"></use></svg><span>内容计划</span>
+            </button>
+            <button class="wb-tab" type="button" role="tab" data-wb="video" title="编导稿、成片和数字人">
+              <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-video"></use></svg><span>视频创作</span>
+            </button>
+            <button class="wb-tab" type="button" role="tab" data-wb="assets" title="图片、视频、音色和成片">
+              <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-folder"></use></svg><span>素材库</span>
+            </button>
+            <button class="wb-tab" type="button" role="tab" data-wb="reports" title="发布数据和复盘洞察">
+              <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-chart"></use></svg><span>数据复盘</span>
+            </button>
+            <button class="wb-tab" type="button" role="tab" data-wb="jobs" title="每次生成任务的状态和失败原因">
+              <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-list"></use></svg><span>历史任务</span>
+            </button>
+          </nav>
+        </aside>
+        <div class="wb-main">
+          <div class="wb-topbar">
+            <div class="wb-crumb"><span>内容工作台</span><i>/</i><b id="wb-crumb">小铃铛</b></div>
+            <div class="wb-top-actions" id="wb-top-actions"></div>
           </div>
-        </div>
-        <div class="wb-body" id="wb-view">
-          <div class="loading">正在打开内容工作台…</div>
+          <div class="wb-body" id="wb-view">
+            <div class="loading">正在打开内容工作台…</div>
+          </div>
         </div>
       </div>
       <div class="wb-dialog" id="wb-dialog" hidden>

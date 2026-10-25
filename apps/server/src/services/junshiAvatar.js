@@ -14,16 +14,18 @@
  * ⚠️ i2v 参考图必须在顶层 images（不是 metadata.images）；放错会 400
  *    「image-to-video requires at least one input image」。2026-10-25 复测确认。
  *
- * ⚠️ 2026-10-24/25 生产实测（上游故障仍存在）：
- *    1. identify-face 返回的是 results 数组：session_id / face_id 分在两条 outputType=text
- *       的子 JSON 里；旧 parser 只认单对象。parseFaceSession 已做递归兼容。
- *    2. session_id 拿到后 13 秒内提交 kling-lip-sync-video 仍报「session_id has expired」；
- *       换 kling-lip-sync-tts 返回的 audioId 也一样。上游两步状态不互通，属于上游侧故障。
- *       本模块保留正确实现；runTalkingHead 在失败时降级为「底片+配音」，UI 标注非精准对口型。
+ * ⚠️ 2026-10-24/25 生产实测：
+ *    1. identify-face 返回的是 results 数组：session_id / face_id / end_time 分在
+ *       outputType=text 的子 JSON 里；parseFaceSession 已递归兼容，并返回 endTime。
+ *    2. kling-lip-sync-video 的「session_id has expired」是误导性报错。同一份新会话：
+ *       4700ms 底片 + soundEndTime 5000/4700/4600 全部失败，4000 成功；
+ *       5300ms 底片 + 4700 成功。真正约束是 soundEndTime 要比 end_time 早约 700ms。
+ *       用 safeLipSyncEndTime(endTime) 计算，不要再写死 5000。
  *    3. 音色克隆仍被上游阻：doubao-voice-clone 503「No available channel」，
  *       minimax-voice-clone「模型响应异常」。但 doubao-seed-audio-1.0 的参考音频直出可用
  *       （audio_url），因此克隆失败时降级为「参考音频直出」（音色相近，非训练克隆）。
- *    4. 底片是 5 秒视频，lip-sync 的 soundEndTime 用 5000，不要写 30000。
+ *    4. 底片 i2v 传 seconds:'6'，给 5 秒口播留出 700ms 安全余量；仍保留「底片+配音」
+ *       降级，仅在真正失败时触发。
  */
 import { getProviderApiKey } from './providerSecret.js';
 import { AI_PROVIDER_API_KEY } from '../config.js';
@@ -142,13 +144,14 @@ export async function pollVideoTask({ endpoint, apiKey, taskId, timeoutMs = 9000
 }
 
 /**
- * 从 identify-face 的 result_text 里抠出 sessionId/faceId。
+ * 从 identify-face 的 result_text 里抠出 sessionId/faceId/endTime。
  * 2026-10-25 实测上游返回的是 results 数组，session_id 和 face_id 分别放在
- * 两条 outputType=text 的子 JSON 里，不再是单个对象；这里做递归兼容。
+ * 两条 outputType=text 的子 JSON 里，不再是单个对象；end_time 与 face_id 在同一条。
+ * endTime 是底片可对口型的截止毫秒数，lip-sync 的 soundEndTime 必须留出余量。
  */
 export function parseFaceSession(resultText) {
   const raw = String(resultText || '').trim();
-  const found = { sessionId: '', faceId: '' };
+  const found = { sessionId: '', faceId: '', endTime: 0 };
   const takeText = (value) => {
     const textValue = String(value || '');
     const start = textValue.indexOf('{');
@@ -163,12 +166,29 @@ export function parseFaceSession(resultText) {
     if (sessionId !== undefined && sessionId !== null && String(sessionId) !== '') found.sessionId = String(sessionId);
     const faceId = value.faceId ?? value.face_id ?? value.data?.faceId ?? value.data?.face_id;
     if (faceId !== undefined && faceId !== null && String(faceId) !== '') found.faceId = String(faceId);
+    const endTime = value.endTime ?? value.end_time ?? value.data?.endTime ?? value.data?.end_time;
+    if (endTime !== undefined && endTime !== null && Number(endTime) > 0) found.endTime = Number(endTime);
     for (const child of Object.values(value)) {
       if (child && typeof child === 'object') takeObject(child);
       else if (typeof child === 'string' && child.includes('{')) takeText(child);
     }
   };
   takeText(raw);
-  if (found.sessionId && found.faceId !== '') return { sessionId: found.sessionId, faceId: found.faceId };
+  if (found.sessionId && found.faceId !== '') return { sessionId: found.sessionId, faceId: found.faceId, endTime: found.endTime };
   throw Object.assign(new Error('人脸分析结果里没有 sessionId/faceId'), { status: 502 });
+}
+
+/**
+ * 计算 lip-sync 的安全结束时间。
+ *
+ * 2026-10-25 复测结论：`session_id has expired` 是上游的误导性报错。同一份
+ * identify-face 会话，在 4700ms 底片上提交 soundEndTime=5000/4700/4600 全部报
+ * 「过期」，而 4000 成功；在 5300ms 底片上 4700 成功。真正约束是
+ * `soundEndTime` 必须比底片 end_time 早约 700ms。这里统一留 700ms 余量并按
+ * 100ms 向下取整，避免最后一帧/音频尾部触发参数校验。
+ */
+export function safeLipSyncEndTime(endTime, maxMs = 5000) {
+  const end = Number(endTime) || 0;
+  if (!(end > 0)) return 4000;
+  return Math.max(1000, Math.min(maxMs, Math.floor((end - 700) / 100) * 100));
 }
