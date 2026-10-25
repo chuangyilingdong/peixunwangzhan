@@ -151,7 +151,12 @@ export async function fetchDouyinVideo(awemeId) {
 
 /** 同行主页 + 最近作品一页（F2）。 */
 export async function fetchDouyinProfile(secUserId, cursor = 0) {
-  const raw = await runDouyinWorker({ target: { kind: 'user', id: String(secUserId), cursor: Number(cursor) || 0 } });
+  // ⚠️ 坑：worker 见到 target 里带 cursor 就只拉作品列表、跳过主页信息请求。
+  // 首屏（cursor=0）必须不带 cursor，才能同时拿到昵称/粉丝 + 第一批作品；
+  // 否则作品接口被抖音拒时连主页信息都没有，会误报「取不到这个主页」（2026-10-25 真实踩到）。
+  const target = { kind: 'user', id: String(secUserId) };
+  if (Number(cursor) > 0) target.cursor = Number(cursor);
+  const raw = await runDouyinWorker({ target });
   if (!raw || raw.error) {
     const message = { access_denied: '抖音拒绝了这个请求（主页可能已设私）', rate_limited: '抖音限流了，请稍后再试', unavailable: '暂时取不到这个主页，请稍后再试' }[raw?.error] || '取不到这个主页';
     throw Object.assign(new Error(message), { status: 502 });
@@ -160,6 +165,8 @@ export async function fetchDouyinProfile(secUserId, cursor = 0) {
   if (!user.nickname && !Array.isArray(raw.aweme_list)) {
     throw Object.assign(new Error('取不到这个主页（可能不存在、已设私或抖音暂时拒绝），稍后再试'), { code: 'DOUYIN_EMPTY_PROFILE' });
   }
+  /** 主页读到了但作品列表被抖音拒：把原因单独带出来，别让上层误判成「主页不存在」。 */
+  const worksError = raw.works_status === 'unavailable' ? String(raw.works_error || 'APIResponseError').slice(0, 80) : '';
   const works = (Array.isArray(raw.aweme_list) ? raw.aweme_list : []).filter((item) => item && item.aweme_id).map((item) => ({
     awemeId: String(item.aweme_id),
     desc: String(item.desc || '').slice(0, 300),
@@ -181,6 +188,7 @@ export async function fetchDouyinProfile(secUserId, cursor = 0) {
     followerCount: normalizeStat(user.follower_count),
     totalFavorited: normalizeStat(user.total_favorited),
     worksStatus: raw.works_status || 'read',
+    worksError,
     nextCursor: raw.next_cursor != null ? Number(raw.next_cursor) : null,
     hasMore: raw.has_more === true,
     works,

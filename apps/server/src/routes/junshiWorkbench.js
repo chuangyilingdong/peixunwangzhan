@@ -975,6 +975,13 @@ async function runPeerSync({ ownerKey, syncId, refId, accountId }) {
     await peerSyncStep(syncId, { status: 'running', stage: 'reading', message: '正在读取主页作品…' });
     // 一次只读一页：原版也是「按需再点继续读下一批」，避免一次性拉爆限流。
     const profile = await fetchDouyinProfile(secUserId, 0).catch((error) => { throw new Error(`读取主页失败：${error.message}`); });
+    // 主页读到了但作品列表被抖音拒（2026-10-25 实测：作品接口风控，f2 最新版也过不去）：
+    // 如实说明「不是链接问题」，并在 refs 上记下粉丝数，避免用户反复重试。
+    if (profile.worksError) {
+      await aq('UPDATE junshi_workbench_refs SET last_sync_at=?, last_sync_status=?, last_sync_message=? WHERE id=? AND owner_key=?',
+        [nowIso(), 'failed', `主页可读（${profile.nickname || '未知'}${profile.followerCount ? `，粉丝 ${profile.followerCount}` : ''}），但抖音拒绝了作品列表接口（${profile.worksError}）——这是抖音侧风控，不是链接问题`, refId, ownerKey]).catch(() => {});
+      throw new Error(`主页可读（${profile.nickname || '未知'}${profile.followerCount ? `，粉丝 ${profile.followerCount}` : ''}），但抖音拒绝了作品列表接口（${profile.worksError}）：这是抖音侧风控，换时间再试或改用单条作品链接采集。`);
+    }
     const works = Array.isArray(profile.works) ? profile.works : [];
     await peerSyncStep(syncId, { stage: 'filtering', found_count: works.length, message: `主页读到 ${works.length} 条作品，正在按条件筛选…` });
     // 先看这个账户已采集过哪些（sourceUrl 里带 aweme id），筛掉重复。
