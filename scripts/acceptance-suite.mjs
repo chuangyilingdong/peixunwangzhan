@@ -84,6 +84,8 @@ const FAST = [
   // 这条走真 HTTP：空画布能不能提交、提交后还能不能存/能不能生成、重复提交幂等、
   // 课堂结束立刻收口 —— 只看源码或只调处理函数都验不出来。
   'scripts/p139-canvas-incremental-submit.mjs',
+  // 2026-10-25 加：采集助手「自己作品」→ 数据复盘（新表 upsert、/reports 合并、洞察样本）。
+  'scripts/p149-junshi-published-works.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));

@@ -1251,6 +1251,34 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_copy_drafts (
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_copy_owner ON junshi_workbench_copy_drafts(owner_key, created_at DESC);
 
+-- 十四期：采集助手采集「自己已发布的作品」（2026-10-25）。
+-- 与文案草稿的截图回填分表：自己作品是持续同步的公开数据，不能混进草稿列表，
+-- 否则会挤占草稿名额、删草稿还会把复盘数据一起删掉。
+-- 唯一键 owner_key + aweme_id：同一作品重复上报只更新数据，不新增行。
+CREATE TABLE IF NOT EXISTS junshi_workbench_published_works (
+  id            TEXT NOT NULL PRIMARY KEY,
+  owner_key     TEXT NOT NULL,
+  org_id        TEXT,
+  account_id    TEXT NOT NULL DEFAULT 'default',
+  aweme_id      TEXT NOT NULL,
+  title         TEXT NOT NULL DEFAULT '',
+  cover_url     TEXT NOT NULL DEFAULT '',
+  share_url     TEXT NOT NULL DEFAULT '',
+  play_url      TEXT NOT NULL DEFAULT '',
+  duration_ms   INTEGER NOT NULL DEFAULT 0,
+  plays         INTEGER NOT NULL DEFAULT 0,
+  likes         INTEGER NOT NULL DEFAULT 0,
+  comments      INTEGER NOT NULL DEFAULT 0,
+  shares        INTEGER NOT NULL DEFAULT 0,
+  saves         INTEGER NOT NULL DEFAULT 0,
+  published_at  TEXT NOT NULL DEFAULT '',
+  collected_at  TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_junshi_wb_pub_aweme ON junshi_workbench_published_works(owner_key, aweme_id);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_pub_owner ON junshi_workbench_published_works(owner_key, account_id, published_at DESC);
+
 CREATE TABLE IF NOT EXISTS junshi_workbench_video_projects (
   id             TEXT NOT NULL PRIMARY KEY,
   owner_key      TEXT NOT NULL,

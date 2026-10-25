@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "招生军师 · 抖音采集助手",
-  "version": "1.0.0",
-  "description": "在你的浏览器里读取抖音同行主页的作品列表并同步到招生军师内容工作台（不上传登录信息）。",
+  "version": "1.1.0",
+  "description": "在你的浏览器里读取抖音主页的作品列表并同步到招生军师内容工作台（可采同行，也可同步自己已发布作品；不上传登录信息）。",
   "permissions": [
     "storage",
     "activeTab",

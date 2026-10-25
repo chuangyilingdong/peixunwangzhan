@@ -227,6 +227,9 @@
     cycleForm: { count: 7, brief: '' },
     cycleRequirements: '',
     reviewInsight: null,
+    // 十四期 · 数据复盘（采集助手自己作品 + 截图回填，统一由 /reports 返回）
+    reports: null,
+    reportsLoading: false,
     // 十期 · 素材库（树形/分析队列/成片画廊）
     assetView: 'grid',
     assetAnalysisFilter: '',
@@ -290,6 +293,7 @@
     if (tab === 'references') void loadPeerSyncs(true);
     if (tab !== 'copybrains' && state.brainPollTimer) { clearInterval(state.brainPollTimer); state.brainPollTimer = null; }
     if (tab === 'copybrains') void refreshBrains(true);
+    if (tab === 'reports') void loadReports(true);
     if (tab === 'settings') void renderSettings();
     $$('#wb-tabs [data-wb]').forEach(function (button) {
       if (button.dataset.wb === tab) button.setAttribute('aria-current', 'true');
@@ -323,6 +327,8 @@
       state.videos = results[2].items || [];
       state.assets = results[3].items || [];
       state.assetFolders = results[3].folders || [];
+      state.reports = null;
+      if (state.tab === 'reports') void loadReports(true);
       if (state.tab === 'video') { state.selectedVideo = null; state.videoShotEditing = null; state.videoShotEdits = {}; void loadVideoData(true); }
       if (state.tab === 'plan') { state.cycleSlotEditing = null; void loadCycles(true); }
     } catch (e) { /* 保持旧数据 */ }
@@ -973,13 +979,13 @@
   async function startAssistantPairing() {
     var body = $('#wb-assistant-body');
     try {
-      var data = await call('/douyin/assistant/pairing', { method: 'POST', body: {} });
+      var data = await call('/douyin/assistant/pairing', { method: 'POST', body: { accountId: state.accountId } });
       var code = data.code;
       var expireAt = Date.parse(data.expiresAt) || (Date.now() + 600000);
       body.innerHTML =
         '<p class="wb-note">配对码 <b class="wb-pair-code">' + esc(code) + '</b>（10 分钟内有效，输进扩展里）</p>' +
         '<ol class="wb-assistant-steps">' +
-        '<li><a class="btn" href="/assets/junshi/douyin-assistant.zip?v=20261025" download>下载采集助手（zip）</a>并解压到一个固定文件夹</li>' +
+        '<li><a class="btn" href="/assets/junshi/douyin-assistant.zip?v=20261025-2" download>下载采集助手（zip）</a>并解压到一个固定文件夹</li>' +
         '<li>Edge 打开 <code>edge://extensions</code>（Chrome 是 <code>chrome://extensions</code>）→ 打开「开发人员模式」→ 点「加载解压缩的扩展」→ 选刚解压的文件夹</li>' +
         '<li>点浏览器工具栏上的助手图标 → 输入上面的配对码 → 配对</li>' +
         '</ol>' +
@@ -1477,6 +1483,7 @@
         toast('发布数据已回填', 'success');
         var refreshed = await call('/copy');
         state.copy = refreshed.items || state.copy;
+        if (state.tab === 'reports') await loadReports(true);
         render();
         setTimeout(closeDialog, 1200);
       } catch (error) {
@@ -2737,41 +2744,83 @@
   }
 
   /* ───────────── 报表 / 任务 ───────────── */
+  async function loadReports(force) {
+    if (state.reportsLoading) return;
+    if (!force && state.reports) return;
+    state.reportsLoading = true;
+    try {
+      state.reports = await call('/reports?accountId=' + encodeURIComponent(state.accountId));
+    } catch (error) {
+      if (!state.reports) {
+        state.reports = {
+          items: [],
+          totals: {},
+          counts: { pending: state.copy.filter(function (item) { return !(item.stats && (item.stats.backfilledAt || item.stats.plays != null)); }).length },
+        };
+      }
+    }
+    state.reportsLoading = false;
+    if (state.tab === 'reports') renderReports();
+  }
+
+  function openSelfCollectHelp() {
+    showDialog('采集我的作品', '<p class="wb-note">不用逐条截图：在自己的抖音主页点一下采集助手，播放/赞评数据会直接进复盘。</p>' +
+      '<ol class="wb-assistant-steps">' +
+      '<li>打开抖音网页版，点右下角「我」进入自己的主页，往下滚动加载作品。</li>' +
+      '<li>点浏览器工具栏的采集助手图标 → 「采集我的作品」。</li>' +
+      '<li>回到这里点「刷新」，新作品会按发布时间排列；同一作品重复采集只更新数字。</li>' +
+      '</ol>' +
+      '<p class="wb-note">还没装采集助手？先下载 zip，解压后在 <code>edge://extensions</code> / <code>chrome://extensions</code> 开发者模式加载；配对入口在「同行观察 → 连接采集助手」。</p>' +
+      '<p><a class="btn" href="/assets/junshi/douyin-assistant.zip?v=20261025-2" download>下载采集助手（zip）</a></p>');
+  }
+
   function renderReports() {
-    // 九期 · 数据复盘：数据来自五期截图回填（文案草稿 stats），这里聚合成页 + AI 洞察。
-    var published = state.copy.filter(function (item) { return item.stats && (item.stats.backfilledAt || item.stats.plays != null); });
-    var totals = published.reduce(function (acc, item) {
-      ['plays', 'likes', 'comments', 'shares', 'saves'].forEach(function (key) {
-        acc[key] += Number(item.stats[key]) || 0;
-      });
-      return acc;
-    }, { plays: 0, likes: 0, comments: 0, shares: 0, saves: 0 });
-    var pending = state.copy.length - published.length;
-    var reviewCards = [['已回填', published.length, '条'], ['总播放', totals.plays, ''], ['总点赞', totals.likes, ''], ['总评论', totals.comments, ''], ['总分享', totals.shares, ''], ['总收藏', totals.saves, '']];
+    // 十四期 · 数据复盘：自己作品（采集助手）+ 截图回填，统一由 /reports 返回。
+    var report = state.reports;
+    if (!report) {
+      $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll"><div class="wb-card"><p class="wb-muted">' + ic('loader', 14) + ' 正在读取复盘数据…</p></div></div></div>';
+      return;
+    }
+    var published = report.items || [];
+    var totals = report.totals || {};
+    var counts = report.counts || {};
+    var pending = Number(counts.pending || 0);
+    var ownCount = Number(counts.own || 0);
+    var screenshotCount = Number(counts.screenshot || 0);
+    var reviewCards = [['已复盘', published.length, '条'], ['总播放', totals.plays || 0, ''], ['总点赞', totals.likes || 0, ''], ['总评论', totals.comments || 0, ''], ['总分享', totals.shares || 0, ''], ['总收藏', totals.saves || 0, '']];
     var insight = state.reviewInsight;
-    var head = '<div class="wb-card"><div class="wb-card-head"><div><h3>发布数据复盘</h3><p>发布后在抖音作者端截图，回来一键识别回填；积累几条后让小铃铛出复盘洞察。</p></div>' +
+    var head = '<div class="wb-card"><div class="wb-card-head"><div><h3>发布数据复盘</h3><p>用自己的主页采集作品数据，或在抖音作者端截图回填；积累几条后让小铃铛出复盘洞察。</p></div>' +
       '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-reports-account"') + '</label></div>' +
       '<div class="wb-stats">' + reviewCards.map(function (item) { return '<div class="wb-stat"><span>' + item[0] + '</span><b>' + item[1] + '<small style="font-size:11px;color:var(--text-3);font-weight:400"> ' + item[2] + '</small></b></div>'; }).join('') + '</div>' +
+      '<p class="wb-muted">采集助手 ' + ownCount + ' 条 · 截图回填 ' + screenshotCount + ' 条' + (pending ? ' · 另有 ' + pending + ' 条文案未回填' : '') + '</p>' +
       '<div class="wb-field full wb-actions">' +
       '<button class="btn primary" type="button" data-review-action="insight"' + (published.length ? '' : ' disabled') + '>' + ic('bulb', 13) + '生成复盘洞察</button>' +
+      '<button class="btn" type="button" data-review-action="self-help">' + ic('refresh', 13) + '采集我的作品</button>' +
+      '<button class="btn" type="button" data-review-action="refresh-reports">刷新</button>' +
       (pending > 0 ? '<button class="btn" type="button" data-review-action="go-copy">' + pending + ' 条还没回填，去文案草稿</button>' : '') +
       '</div>' +
       (insight ? '<div class="wb-copy-body wb-review-insight">' + md(insight) + '</div>' : '') +
       '</div>';
     var listHtml;
     if (published.length) {
-      listHtml = '<div class="wb-card"><div class="wb-card-head"><div><h3>已发布内容数据</h3><p>按回填时间倒序；数据来自作者端截图识别，可随时更新。</p></div></div>' +
-        '<table class="wb-table"><thead><tr><th>主题</th><th>发布</th><th>播放</th><th>赞</th><th>评</th><th>转</th><th>藏</th><th>回填</th><th></th></tr></thead><tbody>' +
+      listHtml = '<div class="wb-card"><div class="wb-card-head"><div><h3>已发布内容数据</h3><p>按回填/同步时间倒序；采集助手同步的作品会持续更新，截图回填可随时重做。</p></div></div>' +
+        '<table class="wb-table"><thead><tr><th>主题</th><th>来源</th><th>发布</th><th>播放</th><th>赞</th><th>评</th><th>转</th><th>藏</th><th>回填</th><th></th></tr></thead><tbody>' +
         published.map(function (item) {
-          var s = item.stats;
+          var s = item.stats || {};
+          var isOwn = item.origin === 'douyin_assistant';
+          var publishedText = isOwn ? String(s.publishedAt || '').slice(0, 10) : (s.publishedAt || '');
+          var action = isOwn
+            ? (item.shareUrl ? '<a class="btn" href="' + esc(item.shareUrl) + '" target="_blank" rel="noopener noreferrer">打开作品</a>' : '<span class="wb-muted">已同步</span>')
+            : '<button class="btn" type="button" data-review-backfill="' + esc(item.id) + '">更新数据</button>';
           return '<tr><td title="' + esc(item.topic) + '">' + esc(String(item.topic || '').slice(0, 26)) + '</td>' +
-            '<td>' + esc(s.publishedAt || '—') + '</td>' +
+            '<td>' + (isOwn ? '采集助手' : '截图') + '</td>' +
+            '<td>' + esc(publishedText || '—') + '</td>' +
             [s.plays, s.likes, s.comments, s.shares, s.saves].map(function (value) { return '<td>' + (Number.isFinite(Number(value)) ? Number(value).toLocaleString() : '—') + '</td>'; }).join('') +
             '<td>' + fmtDate(s.backfilledAt) + '</td>' +
-            '<td><button class="btn" type="button" data-review-backfill="' + esc(item.id) + '">更新数据</button></td></tr>';
+            '<td>' + action + '</td></tr>';
         }).join('') + '</tbody></table></div>';
     } else {
-      listHtml = '<div class="wb-card"><p class="wb-muted">还没有回填过发布数据。在文案草稿里点「回填数据」，或发布后回来补。</p></div>';
+      listHtml = '<div class="wb-card"><p class="wb-muted">还没有复盘数据。用采集助手同步自己的主页，或在文案草稿里回填截图。</p></div>';
     }
     var stats = (state.summary && state.summary.stats) || {};
     var cards = [['对话消息', stats.messages || 0, '条'], ['文案草稿', stats.copy_drafts || 0, '条'], ['视频项目', stats.videos || 0, '个'], ['素材', stats.assets || 0, '份'], ['同行观察', stats.references || 0, '条'], ['生成任务', stats.jobs || 0, '次']];
@@ -2787,7 +2836,14 @@
     $$('[data-wb-go]').forEach(function (button) { button.onclick = function () { setTab(button.dataset.wbGo); }; });
     $$('[data-review-action]').forEach(function (button) {
       button.onclick = async function () {
-        if (button.dataset.reviewAction === 'go-copy') { setTab('copy'); return; }
+        var action = button.dataset.reviewAction;
+        if (action === 'go-copy') { setTab('copy'); return; }
+        if (action === 'self-help') { openSelfCollectHelp(); return; }
+        if (action === 'refresh-reports') {
+          button.disabled = true; button.innerHTML = ic('loader', 12) + '刷新中…';
+          await loadReports(true);
+          return;
+        }
         var original = button.innerHTML;
         button.disabled = true; button.innerHTML = ic('loader', 12) + '分析中…';
         try {

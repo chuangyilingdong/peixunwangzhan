@@ -19,13 +19,19 @@
       if (accountId && (item.author || {}).sec_uid && (item.author || {}).sec_uid !== accountId) continue;
       var video = item.video || {};
       var play = (video.play_addr || video.playAddr || {}).url_list || [];
+      var cover = (video.cover || video.origin_cover || video.dynamic_cover || {}).url_list || [];
       var stats = item.statistics || {};
+      var share = item.share_url || (item.share_info || {}).share_url || ('https://www.douyin.com/video/' + item.aweme_id);
       out.push({
         awemeId: String(item.aweme_id),
         desc: String(item.desc || '').slice(0, 300),
         playUrl: String(play[0] || ''),
+        cover: String(cover[0] || ''),
+        shareUrl: String(share),
+        createTime: Number(item.create_time) || null,
         durationMs: Number(video.duration) || null,
         stats: {
+          plays: Number(stats.play_count) || 0,
           digg: Number(stats.digg_count) || 0,
           comment: Number(stats.comment_count) || 0,
           share: Number(stats.share_count) || 0,

@@ -1264,6 +1264,143 @@ async function ingestAssistantWorks({ ownerKey, accountId, refId, syncId, filter
   }
 }
 
+/** 采集助手「自己作品」：把上报条目归一成 published_works 的列。 */
+function normalizeAssistantOwnWork(work) {
+  const awemeId = String(work?.awemeId || '').replace(/[^0-9]/g, '').slice(0, 25);
+  if (!awemeId) return null;
+  const rawStats = work?.stats && typeof work.stats === 'object' ? work.stats : {};
+  const count = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? Math.round(number) : 0;
+  };
+  const rawTime = work?.createTime ?? work?.create_time ?? work?.publishedAt ?? 0;
+  let publishedAt = '';
+  if (Number(rawTime) > 0) {
+    publishedAt = new Date(Number(rawTime) * 1000).toISOString();
+  } else if (rawTime) {
+    const date = new Date(rawTime);
+    if (!Number.isNaN(date.getTime())) publishedAt = date.toISOString();
+  }
+  return {
+    awemeId,
+    title: String(work?.desc || work?.title || '').slice(0, 500),
+    coverUrl: String(work?.cover || work?.coverUrl || '').slice(0, 2000),
+    shareUrl: String(work?.shareUrl || '').slice(0, 2000),
+    playUrl: String(work?.playUrl || '').slice(0, 2000),
+    durationMs: count(work?.durationMs),
+    plays: count(rawStats.plays ?? rawStats.play),
+    likes: count(rawStats.digg ?? rawStats.likes),
+    comments: count(rawStats.comment ?? rawStats.comments),
+    shares: count(rawStats.share ?? rawStats.shares),
+    saves: count(rawStats.collect ?? rawStats.saves),
+    publishedAt,
+  };
+}
+
+/**
+ * 采集助手上报「自己主页」的作品：按 owner + aweme_id 幂等 upsert。
+ * 只存公开数据，不碰登录态；重复上报只更新数字，不会新增重复作品。
+ */
+async function saveAssistantOwnWorks({ ownerKey, orgId, accountId, works }) {
+  const unique = new Map();
+  for (const work of works || []) {
+    const normalized = normalizeAssistantOwnWork(work);
+    if (normalized && !unique.has(normalized.awemeId)) unique.set(normalized.awemeId, normalized);
+  }
+  const rows = Array.from(unique.values()).slice(0, 60);
+  const ownerAccount = String(accountId || 'default') || 'default';
+  const at = nowIso();
+  let created = 0;
+  let updated = 0;
+  for (const work of rows) {
+    const existing = await arow('SELECT id FROM junshi_workbench_published_works WHERE owner_key=? AND aweme_id=?', [ownerKey, work.awemeId]);
+    if (existing) {
+      await aq(
+        'UPDATE junshi_workbench_published_works SET org_id=?, account_id=?, title=?, cover_url=?, share_url=?, play_url=?, duration_ms=?, plays=?, likes=?, comments=?, shares=?, saves=?, published_at=?, collected_at=?, updated_at=? WHERE id=? AND owner_key=?',
+        [orgId || null, ownerAccount, work.title, work.coverUrl, work.shareUrl, work.playUrl, work.durationMs, work.plays, work.likes, work.comments, work.shares, work.saves, work.publishedAt, at, at, existing.id, ownerKey],
+      );
+      updated += 1;
+    } else {
+      await aq(
+        'INSERT INTO junshi_workbench_published_works (id,owner_key,org_id,account_id,aweme_id,title,cover_url,share_url,play_url,duration_ms,plays,likes,comments,shares,saves,published_at,collected_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [id('jwpub'), ownerKey, orgId || null, ownerAccount, work.awemeId, work.title, work.coverUrl, work.shareUrl, work.playUrl, work.durationMs, work.plays, work.likes, work.comments, work.shares, work.saves, work.publishedAt, at, at, at],
+      );
+      created += 1;
+    }
+  }
+  return { accepted: rows.length, created, updated };
+}
+
+function ownWorkOut(row) {
+  return {
+    id: row.id,
+    awemeId: row.aweme_id || '',
+    title: row.title || '',
+    coverUrl: row.cover_url || '',
+    shareUrl: row.share_url || '',
+    playUrl: row.play_url || '',
+    durationMs: Number(row.duration_ms) || 0,
+    plays: Number(row.plays) || 0,
+    likes: Number(row.likes) || 0,
+    comments: Number(row.comments) || 0,
+    shares: Number(row.shares) || 0,
+    saves: Number(row.saves) || 0,
+    publishedAt: row.published_at || '',
+    collectedAt: row.collected_at || '',
+    updatedAt: row.updated_at || '',
+    source: 'douyin_assistant',
+  };
+}
+
+/**
+ * 数据复盘的统一数据源：自己作品（采集助手实时同步）+ 文案草稿截图回填。
+ * 返回 [{ id, origin, topic, style, shareUrl?, coverUrl?, stats }]，按回填/更新时间倒序。
+ */
+async function publishedForReports(ownerKey, accountId) {
+  const [copyRows, ownRows] = await Promise.all([
+    arows('SELECT id,topic,style,stats FROM junshi_workbench_copy_drafts WHERE owner_key=? AND account_id=? ORDER BY created_at DESC', [ownerKey, accountId]),
+    arows('SELECT * FROM junshi_workbench_published_works WHERE owner_key=? AND account_id=? ORDER BY published_at DESC, updated_at DESC LIMIT 100', [ownerKey, accountId]).catch(() => []),
+  ]);
+  const screenshotItems = [];
+  let pendingCount = 0;
+  for (const row of copyRows) {
+    try {
+      const stats = row.stats ? JSON.parse(row.stats) : null;
+      if (!stats || (stats.backfilledAt == null && stats.plays == null)) {
+        pendingCount += 1;
+        continue;
+      }
+      screenshotItems.push({ id: row.id, origin: 'screenshot', topic: row.topic || '', style: row.style || '', stats });
+    } catch {
+      pendingCount += 1;
+    }
+  }
+  const ownItems = ownRows.map((row) => {
+    const work = ownWorkOut(row);
+    return {
+      id: work.id,
+      origin: 'douyin_assistant',
+      topic: work.title || '抖音作品',
+      style: '抖音已发布',
+      shareUrl: work.shareUrl,
+      coverUrl: work.coverUrl,
+      stats: {
+        plays: work.plays,
+        likes: work.likes,
+        comments: work.comments,
+        shares: work.shares,
+        saves: work.saves,
+        publishedAt: String(work.publishedAt || '').slice(0, 10),
+        backfilledAt: work.updatedAt || work.collectedAt,
+        source: 'douyin_assistant',
+        awemeId: work.awemeId,
+      },
+    };
+  });
+  const items = ownItems.concat(screenshotItems).sort((left, right) => String(right.stats?.backfilledAt || '').localeCompare(String(left.stats?.backfilledAt || '')));
+  return { items, ownCount: ownItems.length, screenshotCount: screenshotItems.length, pendingCount };
+}
+
 
 /**
  * 采集助手的两个免登录入口（浏览器扩展没有机构登录态）：
@@ -1281,11 +1418,27 @@ export async function handleDouyinAssistantPublic(ctx, rest, method) {
     const token = String(ctx.req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
     const assistant = await resolveDouyinAssistant(token);
     if (!assistant) throw errors.unauthorized('采集助手未配对或已失效，请在工作台重新生成配对码', 'DOUYIN_ASSISTANT_UNAUTHORIZED');
+    const mode = text(ctx.body?.mode) === 'self' ? 'self' : 'peer';
     const secUserId = text(ctx.body?.secUserId).slice(0, 128);
     const nickname = text(ctx.body?.nickname).slice(0, 120);
     const works = Array.isArray(ctx.body?.works) ? ctx.body.works.slice(0, 60) : [];
+    if (!works.length) {
+      throw errors.badRequest(
+        mode === 'self' ? '没有可用的作品数据（请先打开自己的抖音主页并往下滚动加载作品）' : '没有可用的作品数据（请在同行主页上采集）',
+        'VALIDATION_ERROR',
+      );
+    }
+    if (mode === 'self') {
+      const saved = await saveAssistantOwnWorks({
+        ownerKey: assistant.ownerKey,
+        orgId: assistant.orgId,
+        accountId: assistant.accountId,
+        works,
+      });
+      if (!saved.accepted) throw errors.badRequest('上报里没有可用的作品数据（请先打开自己的抖音主页并往下滚动加载作品）', 'VALIDATION_ERROR');
+      return { mode: 'self', ...saved, accountId: assistant.accountId || 'default' };
+    }
     if (!secUserId && !nickname) throw errors.badRequest('上报里缺少主页标识', 'VALIDATION_ERROR');
-    if (!works.length) throw errors.badRequest('没有可用的作品数据（请在同行主页上采集）', 'VALIDATION_ERROR');
     let refRow = secUserId
       ? await arow('SELECT * FROM junshi_workbench_refs WHERE owner_key=? AND (sec_user_id=? OR url LIKE ?) ORDER BY created_at DESC LIMIT 1', [assistant.ownerKey, secUserId, `%${secUserId}%`])
       : null;
@@ -3111,7 +3264,8 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
   if (rest === '/douyin/assistant/pairing' && method === 'POST') {
     rateLimit(owner.key);
     void pruneDouyinPairings();
-    const pairing = await createDouyinPairing(owner);
+    const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
+    const pairing = await createDouyinPairing(owner, accountId);
     return { code: pairing.code, expiresAt: pairing.expiresAt };
   }
   if (rest === '/douyin/assistant' && method === 'DELETE') {
@@ -3328,18 +3482,35 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     return { stats: cleaned };
   }
 
-  /* ── 九期 · 数据复盘洞察（数据来自五期截图回填，存在文案草稿 stats 里） ── */
+  /* ── 十四期 · 数据复盘数据源（采集助手自己作品 + 五期截图回填） ── */
+  if (rest === '/reports' && method === 'GET') {
+    const accountId = await resolveAccountId(owner.key, text(search.get('accountId')) || undefined);
+    const report = await publishedForReports(owner.key, accountId);
+    const totals = report.items.reduce((acc, item) => {
+      for (const key of ['plays', 'likes', 'comments', 'shares', 'saves']) {
+        const value = Number(item.stats?.[key]);
+        acc[key] += Number.isFinite(value) && value > 0 ? value : 0;
+      }
+      return acc;
+    }, { plays: 0, likes: 0, comments: 0, shares: 0, saves: 0 });
+    return {
+      items: report.items,
+      totals,
+      counts: {
+        published: report.items.length,
+        own: report.ownCount,
+        screenshot: report.screenshotCount,
+        pending: report.pendingCount,
+      },
+    };
+  }
+
+  /* ── 九期 · 数据复盘洞察（自己作品 + 截图回填，统一由 publishedForReports 提供） ── */
   if (rest === '/reviews/insights' && method === 'POST') {
     const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
     rateLimit(owner.key);
-    const rows = await arows("SELECT topic, style, stats FROM junshi_workbench_copy_drafts WHERE owner_key=? AND account_id=? AND stats IS NOT NULL AND stats != '' ORDER BY created_at DESC LIMIT 50", [owner.key, accountId]);
-    const published = rows.map((row) => {
-      try {
-        const stats = JSON.parse(row.stats);
-        return stats && (stats.backfilledAt || stats.plays != null) ? { topic: row.topic, style: row.style, stats } : null;
-      } catch { return null; }
-    }).filter(Boolean);
-    if (!published.length) throw errors.badRequest('还没有回填过发布数据；先在文案草稿或复盘页回填截图，再生成复盘。', 'WORKBENCH_REVIEWS_EMPTY');
+    const published = (await publishedForReports(owner.key, accountId)).items;
+    if (!published.length) throw errors.badRequest('还没有复盘数据；先用采集助手同步自己的主页，或在文案草稿里回填截图，再生成复盘。', 'WORKBENCH_REVIEWS_EMPTY');
     const profile = (await readProfile(owner.key, accountId)).profile;
     const orgProfile = await orgProfileText(owner.key);
     const providerMock = await textProviderIsMock().catch(() => false);

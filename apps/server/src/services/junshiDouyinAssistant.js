@@ -32,14 +32,14 @@ function normalizeCode(input) {
   return String(input || '').toUpperCase().replace(/[^A-Z2-9]/g, '').slice(0, 6);
 }
 
-/** 生成配对码（机构在工作台点「生成配对码」）。 */
-export async function createDouyinPairing(owner) {
+/** 生成配对码（机构在工作台点「生成配对码」；绑定当前创作账号，自己作品按账号归档）。 */
+export async function createDouyinPairing(owner, accountId = 'default') {
   const code = makeCode();
   const token = makeToken();
   const at = nowIso();
   const expiresAt = new Date(Date.now() + PAIRING_TTL_MS).toISOString();
   await aq('INSERT INTO junshi_workbench_douyin_pairings (code_hash,owner_key,org_id,account_id,token_hash,status,device,created_at,expires_at,used_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-    [sha256(code), owner.key, owner.orgId, 'default', sha256(token), 'pending', '', at, expiresAt, null]);
+    [sha256(code), owner.key, owner.orgId, String(accountId || 'default') || 'default', sha256(token), 'pending', '', at, expiresAt, null]);
   return { code, expiresAt };
 }
 
