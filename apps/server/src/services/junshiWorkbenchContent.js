@@ -546,7 +546,7 @@ ${orgProfile || '（未填写）'}
 【内容账号档案】
 ${workbenchProfileBlock(profile)}
 
-【输出】${index === 1 ? `先输出一行 JSON 蓝图（不要代码围栏）：{"blueprint":{"hook":"这条爆款的开头机制（一句话）","progression":["信息推进1","信息推进2"],"turn":"转折（一句话）","closing":"收束（一句话）"}}，然后空一行。再输出：` : '直接输出：'}JSON 对象 {"title":"标题（20字内）","content":"完整口播（180-320 字，符合铁律与强度）"}。只输出 JSON，不要其他文字。`;
+【输出】${index === 1 ? `只输出一个 JSON 对象（蓝图与版本合一，不要拆成两个）：{"blueprint":{"hook":"这条爆款的开头机制（一句话）","progression":["信息推进1","信息推进2"],"turn":"转折（一句话）","closing":"收束（一句话）"},"title":"标题（20字内）","content":"完整口播（180-320 字，符合铁律与强度）"}` : `只输出一个 JSON 对象：{"title":"标题（20字内）","content":"完整口播（180-320 字，符合铁律与强度）"}`}。不要输出任何其他文字或代码围栏。`;
 }
 
 export function demoViralOne(profile, sourceText, strength, index) {
