@@ -405,3 +405,6 @@
 #js-app .wb-cycle-slot { margin: 0; }
 #js-app .wb-cycle-slot.editing { border-color: var(--accent); }
 #js-app .wb-cycle-topic { margin: 6px 0; font-size: 13px; font-weight: 600; line-height: 1.5; }
+
+/* ───────────── 九期 · 数据复盘 ───────────── */
+#js-app .wb-review-insight { border: 1px solid var(--hairline); border-radius: 12px; padding: 10px 14px; margin-top: 10px; background: var(--bg-2, rgba(0,0,0,0.02)); }

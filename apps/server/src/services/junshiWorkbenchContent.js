@@ -804,3 +804,50 @@ export function demoCycleSlot({ slot }) {
     recommendation_reason: '（演示）替换后的选题与前文不重复，节奏上承接前一天的类型。',
   }, null, 2);
 }
+
+/* ───────────── 九期 · 数据复盘洞察（基于五期截图回填的发布数据） ───────────── */
+
+export function buildReviewsInsightPrompt({ profile, orgProfile, published }) {
+  const rows = (published || []).map((item, index) => {
+    const stats = item.stats || {};
+    const pick = (key) => (Number.isFinite(Number(stats[key])) ? Number(stats[key]) : '—');
+    return `${index + 1}. 主题：${item.topic}（风格：${item.style || '—'}；发布：${stats.publishedAt || '—'}）→ 播放 ${pick('plays')}，赞 ${pick('likes')}，评 ${pick('comments')}，转 ${pick('shares')}，藏 ${pick('saves')}`;
+  }).join('\n');
+  return `你是内容数据分析师。基于这家机构自己回填的发布数据，做一次复盘：哪些内容跑得好、为什么、下一周期怎么调。
+
+【机构画像】
+${orgProfile || '未填写'}
+【内容账号档案】
+${workbenchProfileBlock(profile)}
+【已回填的发布数据（${(published || []).length} 条）】
+${rows}
+
+输出 Markdown（不要代码块，直接正文）：
+## 一句话总结
+（整体表现与最突出的信号）
+## 跑得好的内容
+（点名 2-3 条，说清共同特征：主题/钩子/类型/发布节奏）
+## 表现平平的内容
+（共同问题，对事不对人）
+## 下一周期建议
+（3 条以内，具体到选题方向和类型配比，能直接执行）
+
+规则：只基于上面给出的数字下结论，数字不足就明说「样本还太少」；不承诺效果，不使用绝对化用语。`;
+}
+
+export function demoReviewsInsight({ published = [] } = {}) {
+  const count = (published || []).length;
+  return `## 一句话总结
+（演示洞察）已回填 ${count} 条数据；样本${count >= 5 ? '初步够看趋势' : '还太少，先多回填几条再下结论'}。
+
+## 跑得好的内容
+（演示）主题具体、带真实场景的条目通常数据更好；建议把表现最好的 2 条的钩子结构记下来复用。
+
+## 表现平平的内容
+（演示）主题偏「介绍我们」而不是「对号入座」的条目普遍偏弱。
+
+## 下一周期建议
+1. 把下一周期里表现最好的类型配比调高一档。
+2. 选题继续「具体冲突 + 真实场景」，避免空泛介绍。
+3. 每条发布后 48 小时内回填截图，让下轮复盘有据可依。`;
+}

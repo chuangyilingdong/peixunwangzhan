@@ -57,12 +57,14 @@ import {
   buildViralRewritePrompt,
   buildCyclePlanPrompt,
   buildCycleSlotPrompt,
+  buildReviewsInsightPrompt,
   buildDirectorScriptPrompt,
   demoBrain,
   demoChat,
   demoCopy,
   demoCyclePlan,
   demoCycleSlot,
+  demoReviewsInsight,
   demoDirectorScript,
   demoHotspotCopies,
   demoIdeas,
@@ -2634,6 +2636,32 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     cleaned.backfilledAt = nowIso();
     await aq('UPDATE junshi_workbench_copy_drafts SET stats=?, created_at=created_at WHERE id=? AND owner_key=?', [JSON.stringify(cleaned), draftId, owner.key]);
     return { stats: cleaned };
+  }
+
+  /* ── 九期 · 数据复盘洞察（数据来自五期截图回填，存在文案草稿 stats 里） ── */
+  if (rest === '/reviews/insights' && method === 'POST') {
+    const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
+    rateLimit(owner.key);
+    const rows = await arows("SELECT topic, style, stats FROM junshi_workbench_copy_drafts WHERE owner_key=? AND account_id=? AND stats IS NOT NULL AND stats != '' ORDER BY created_at DESC LIMIT 50", [owner.key, accountId]);
+    const published = rows.map((row) => {
+      try {
+        const stats = JSON.parse(row.stats);
+        return stats && (stats.backfilledAt || stats.plays != null) ? { topic: row.topic, style: row.style, stats } : null;
+      } catch { return null; }
+    }).filter(Boolean);
+    if (!published.length) throw errors.badRequest('还没有回填过发布数据；先在文案草稿或复盘页回填截图，再生成复盘。', 'WORKBENCH_REVIEWS_EMPTY');
+    const profile = (await readProfile(owner.key, accountId)).profile;
+    const orgProfile = await orgProfileText(owner.key);
+    const providerMock = await textProviderIsMock().catch(() => false);
+    let insight = '';
+    if (providerMock) {
+      insight = demoReviewsInsight({ published });
+    } else {
+      const prompt = buildReviewsInsightPrompt({ profile, orgProfile, published });
+      const result = await collectText(null, { system: WORKBENCH_SYSTEM, user: prompt });
+      insight = mockOrEmpty(result) ? demoReviewsInsight({ published }) : result.text;
+    }
+    return { insight, sampleCount: published.length };
   }
 
   /* ── 设置状态（只读：渠道与依赖一览，Key 仍在平台后台管理） ── */

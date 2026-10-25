@@ -226,6 +226,7 @@
     cycleSlotEditing: null,
     cycleForm: { count: 7, brief: '' },
     cycleRequirements: '',
+    reviewInsight: null,
     // 多创作账号：当前选中的账号 id（'default' = 默认账号）；文案/视频/素材/档案都跟着它走。
     accounts: [],
     accountId: 'default',
@@ -1145,7 +1146,7 @@
         toast('发布数据已回填', 'success');
         var refreshed = await call('/copy');
         state.copy = refreshed.items || state.copy;
-        if (state.tab === 'copy') renderCopy();
+        render();
         setTimeout(closeDialog, 1200);
       } catch (error) {
         msg.textContent = '';
@@ -2259,17 +2260,69 @@
 
   /* ───────────── 报表 / 任务 ───────────── */
   function renderReports() {
+    // 九期 · 数据复盘：数据来自五期截图回填（文案草稿 stats），这里聚合成页 + AI 洞察。
+    var published = state.copy.filter(function (item) { return item.stats && (item.stats.backfilledAt || item.stats.plays != null); });
+    var totals = published.reduce(function (acc, item) {
+      ['plays', 'likes', 'comments', 'shares', 'saves'].forEach(function (key) {
+        acc[key] += Number(item.stats[key]) || 0;
+      });
+      return acc;
+    }, { plays: 0, likes: 0, comments: 0, shares: 0, saves: 0 });
+    var pending = state.copy.length - published.length;
+    var reviewCards = [['已回填', published.length, '条'], ['总播放', totals.plays, ''], ['总点赞', totals.likes, ''], ['总评论', totals.comments, ''], ['总分享', totals.shares, ''], ['总收藏', totals.saves, '']];
+    var insight = state.reviewInsight;
+    var head = '<div class="wb-card"><div class="wb-card-head"><div><h3>发布数据复盘</h3><p>发布后在抖音作者端截图，回来一键识别回填；积累几条后让小铃铛出复盘洞察。</p></div>' +
+      '<label class="wb-inline"><span>账号</span>' + accountSelectHtml('id="wb-reports-account"') + '</label></div>' +
+      '<div class="wb-stats">' + reviewCards.map(function (item) { return '<div class="wb-stat"><span>' + item[0] + '</span><b>' + item[1] + '<small style="font-size:11px;color:var(--text-3);font-weight:400"> ' + item[2] + '</small></b></div>'; }).join('') + '</div>' +
+      '<div class="wb-field full wb-actions">' +
+      '<button class="btn primary" type="button" data-review-action="insight"' + (published.length ? '' : ' disabled') + '>' + ic('bulb', 13) + '生成复盘洞察</button>' +
+      (pending > 0 ? '<button class="btn" type="button" data-review-action="go-copy">' + pending + ' 条还没回填，去文案草稿</button>' : '') +
+      '</div>' +
+      (insight ? '<div class="wb-copy-body wb-review-insight">' + md(insight) + '</div>' : '') +
+      '</div>';
+    var listHtml;
+    if (published.length) {
+      listHtml = '<div class="wb-card"><div class="wb-card-head"><div><h3>已发布内容数据</h3><p>按回填时间倒序；数据来自作者端截图识别，可随时更新。</p></div></div>' +
+        '<table class="wb-table"><thead><tr><th>主题</th><th>发布</th><th>播放</th><th>赞</th><th>评</th><th>转</th><th>藏</th><th>回填</th><th></th></tr></thead><tbody>' +
+        published.map(function (item) {
+          var s = item.stats;
+          return '<tr><td title="' + esc(item.topic) + '">' + esc(String(item.topic || '').slice(0, 26)) + '</td>' +
+            '<td>' + esc(s.publishedAt || '—') + '</td>' +
+            [s.plays, s.likes, s.comments, s.shares, s.saves].map(function (value) { return '<td>' + (Number.isFinite(Number(value)) ? Number(value).toLocaleString() : '—') + '</td>'; }).join('') +
+            '<td>' + fmtDate(s.backfilledAt) + '</td>' +
+            '<td><button class="btn" type="button" data-review-backfill="' + esc(item.id) + '">更新数据</button></td></tr>';
+        }).join('') + '</tbody></table></div>';
+    } else {
+      listHtml = '<div class="wb-card"><p class="wb-muted">还没有回填过发布数据。在文案草稿里点「回填数据」，或发布后回来补。</p></div>';
+    }
     var stats = (state.summary && state.summary.stats) || {};
     var cards = [['对话消息', stats.messages || 0, '条'], ['文案草稿', stats.copy_drafts || 0, '条'], ['视频项目', stats.videos || 0, '个'], ['素材', stats.assets || 0, '份'], ['同行观察', stats.references || 0, '条'], ['生成任务', stats.jobs || 0, '次']];
     var jobs = (state.summary && state.summary.jobs) || state.jobs.slice(0, 8);
-    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' +
+    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' + head + listHtml +
       '<div class="wb-card"><div class="wb-card-head"><div><h3>账号资产概览</h3><p>当前机构的内容资产与最近任务。</p></div></div>' +
       '<div class="wb-stats">' + cards.map(function (item) { return '<div class="wb-stat"><span>' + item[0] + '</span><b>' + item[1] + '<small style="font-size:11px;color:var(--text-3);font-weight:400"> ' + item[2] + '</small></b></div>'; }).join('') + '</div></div>' +
       '<div class="wb-card"><div class="wb-card-head"><div><h3>最近任务</h3><p>生成成功或失败都会记录。</p></div><button class="btn" type="button" data-wb-go="jobs">查看全部</button></div>' +
       (jobs.length ? '<table class="wb-table"><thead><tr><th>类型</th><th>状态</th><th>说明</th><th>时间</th></tr></thead><tbody>' +
         jobs.map(function (job) { return '<tr><td>' + esc(job.kind) + '</td><td>' + esc(jobStatusText(job.status)) + '</td><td>' + esc(job.detail) + '</td><td>' + fmtDate(job.createdAt) + '</td></tr>'; }).join('') + '</tbody></table>' : '<p class="wb-muted">还没有任务。</p>') +
       '</div></div></div>';
+    bindAccountSwitch('#wb-reports-account');
     $$('[data-wb-go]').forEach(function (button) { button.onclick = function () { setTab(button.dataset.wbGo); }; });
+    $$('[data-review-action]').forEach(function (button) {
+      button.onclick = async function () {
+        if (button.dataset.reviewAction === 'go-copy') { setTab('copy'); return; }
+        var original = button.innerHTML;
+        button.disabled = true; button.innerHTML = ic('loader', 12) + '分析中…';
+        try {
+          var result = await call('/reviews/insights', { method: 'POST', body: { accountId: state.accountId } });
+          state.reviewInsight = result.insight;
+          renderReports();
+          toast('复盘洞察已生成', 'success');
+        } catch (error) { toast(error.message, 'error'); button.disabled = false; button.innerHTML = original; }
+      };
+    });
+    $$('[data-review-backfill]').forEach(function (button) {
+      button.onclick = function () { backfillStats(button.dataset.reviewBackfill); };
+    });
   }
   function renderJobs() {
     var jobs = state.jobs;
