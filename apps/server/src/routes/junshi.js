@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { arow, arows, aq, corsHeaders, errors, id, nowIso, requireAuth, requireRole } from '../lib.js';
 import { EXPERTS, runChat, runRawText } from '../services/junshiChat.js';
 import { audit as auditCompliance, AUDIT_PROMPT, loadPack as loadCompliancePack } from '../services/complianceEngine.js';
-import { handleJunshiWorkbench } from './junshiWorkbench.js';
+import { handleDouyinAssistantPublic, handleJunshiWorkbench } from './junshiWorkbench.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../../data/junshi');
@@ -273,7 +273,12 @@ export async function handleJunshi(ctx) {
 
   // 内容工作台独立成模块：不加载 2.6MB 参考数据，也不经过上面的专家/会话路由。
   if (rest === '/workbench' || rest.startsWith('/workbench/')) {
-    return handleJunshiWorkbench(ctx, rest.slice('/workbench'.length) || '/', search, method);
+    const workbenchRest = rest.slice('/workbench'.length) || '/';
+    // 十三期：抖音采集助手的两个入口免机构登录态（扩展是独立进程，靠配对码/长期 token 鉴权）。
+    if (workbenchRest === '/douyin/assistant/pair' || workbenchRest === '/douyin/assistant/ingest') {
+      return handleDouyinAssistantPublic(ctx, workbenchRest, method);
+    }
+    return handleJunshiWorkbench(ctx, workbenchRest, search, method);
   }
 
   const { library, knowledge, compliance } = load();

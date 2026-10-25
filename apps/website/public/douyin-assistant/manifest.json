@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "招生军师 · 抖音采集助手",
+  "version": "1.0.0",
+  "description": "在你的浏览器里读取抖音同行主页的作品列表并同步到招生军师内容工作台（不上传登录信息）。",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.douyin.com/*",
+    "https://aicyld.com/*",
+    "http://127.0.0.1:8799/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "采集当前抖音主页"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.douyin.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://www.douyin.com/*"
+      ],
+      "js": [
+        "bridge.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

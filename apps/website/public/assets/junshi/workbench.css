@@ -439,3 +439,7 @@
 #js-app .wb-douyin-bar.warn .wb-dy-dot { background: #ef4444; }
 #js-app .wb-dy-qr-wrap { display: flex; justify-content: center; padding: 8px 0; }
 #js-app .wb-dy-qr { width: 220px; height: 220px; border-radius: 12px; border: 1px solid var(--hairline); background: #fff; }
+#js-app .wb-pair-code { font-size: 18px; letter-spacing: 3px; color: var(--accent); }
+#js-app .wb-assistant-steps { margin: 8px 0 8px 18px; padding: 0; font-size: 12.5px; line-height: 1.7; color: var(--text-2); }
+#js-app .wb-assistant-steps li { margin-bottom: 4px; }
+#js-app .wb-assistant-steps code { background: var(--bg-2, rgba(0,0,0,0.05)); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }

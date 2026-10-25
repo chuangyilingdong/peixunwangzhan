@@ -239,6 +239,7 @@
     douyinEnabled: true,
     douyinLoginSession: null,
     douyinPollTimer: null,
+    douyinAssistant: { paired: false },
     // 多创作账号：当前选中的账号 id（'default' = 默认账号）；文案/视频/素材/档案都跟着它走。
     accounts: [],
     accountId: 'default',
@@ -939,30 +940,69 @@
 
   /* ───────────── 十二期 · 抖音账号连接（扫码登录，登录态共用） ───────────── */
   async function loadDouyinConnection(silent) {
-    var data = await call('/douyin/connect').catch(function () { return null; });
-    if (!data) return;
-    state.douyinConnection = data.connection || { connected: false };
-    state.douyinEnabled = data.enabled !== false;
+    var results = await Promise.all([
+      call('/douyin/connect').catch(function () { return null; }),
+      call('/douyin/assistant').catch(function () { return null; }),
+    ]);
+    if (results[0]) {
+      state.douyinConnection = results[0].connection || { connected: false };
+      state.douyinEnabled = results[0].enabled !== false;
+    }
+    if (results[1]) state.douyinAssistant = results[1];
     if (state.tab === 'references' || state.tab === 'settings') render();
   }
   function douyinConnectionBarHtml() {
-    var c = state.douyinConnection || { connected: false };
-    var enabled = state.douyinEnabled !== false;
-    if (!enabled) return '';
-    if (c.connected) {
+    var assistant = state.douyinAssistant || { paired: false };
+    if (assistant.paired) {
       return '<div class="wb-douyin-bar connected"><span class="wb-dy-dot"></span>' +
-        '<div><b>抖音已连接' + (c.nickname ? '：' + esc(c.nickname) : '') + '</b>' +
-        '<small>登录态供自己的账号、同行、文案大脑共用 · 连接于 ' + fmtDate(c.connectedAt) + '</small></div>' +
-        '<div class="wb-actions"><button class="btn" type="button" data-douyin-action="reconnect">重新连接</button>' +
-        '<button class="btn" type="button" data-douyin-action="disconnect">断开</button></div></div>';
+        '<div><b>采集助手已连接</b>' +
+        '<small>在抖音网页打开任意同行主页 → 点浏览器上的采集助手图标 → 「采集当前主页」，作品会自动下载并转写（' +
+        (assistant.assistants || []).length + ' 台设备已配对）。</small></div>' +
+        '<div class="wb-actions"><button class="btn" type="button" data-douyin-action="repair">换一台电脑</button>' +
+        '<button class="btn" type="button" data-douyin-action="unpair">断开</button></div></div>';
     }
-    var expired = c.status === 'expired';
-    return '<div class="wb-douyin-bar' + (expired ? ' warn' : '') + '"><span class="wb-dy-dot"></span>' +
-      '<div><b>' + (expired ? '抖音登录已失效' : '抖音未连接') + '</b>' +
-      '<small>' + (expired
-        ? '抖音要求重新登录才能继续读取作品。点右侧扫码重连，之后采集会自动复用。'
-        : '抖音对未登录访问只开放主页信息，读不到作品列表。扫码连接一次，自己的账号、同行、文案大脑都复用这份登录态。') + '</small></div>' +
-      '<div class="wb-actions"><button class="btn primary" type="button" data-douyin-action="connect">' + ic('link', 13) + '连接抖音</button></div></div>';
+    return '<div class="wb-douyin-bar"><span class="wb-dy-dot"></span>' +
+      '<div><b>还没连接抖音</b>' +
+      '<small>服务器读不到抖音作品列表（平台限制），改由你的浏览器来读：装一次「采集助手」，之后在抖音主页点一下图标就能同步。</small></div>' +
+      '<div class="wb-actions"><button class="btn primary" type="button" data-douyin-action="pair">' + ic('link', 13) + '连接采集助手</button></div></div>';
+  }
+  function openAssistantPairDialog() {
+    showDialog('连接采集助手', '<div id="wb-assistant-body"><p class="wb-muted">' + ic('loader', 13) + ' 正在生成配对码…</p></div>');
+    void startAssistantPairing();
+  }
+  async function startAssistantPairing() {
+    var body = $('#wb-assistant-body');
+    try {
+      var data = await call('/douyin/assistant/pairing', { method: 'POST', body: {} });
+      var code = data.code;
+      var expireAt = Date.parse(data.expiresAt) || (Date.now() + 600000);
+      body.innerHTML =
+        '<p class="wb-note">配对码 <b class="wb-pair-code">' + esc(code) + '</b>（10 分钟内有效，输进扩展里）</p>' +
+        '<ol class="wb-assistant-steps">' +
+        '<li><a class="btn" href="/downloads/douyin-assistant.zip" download>下载采集助手（zip）</a>并解压到一个固定文件夹</li>' +
+        '<li>Edge 打开 <code>edge://extensions</code>（Chrome 是 <code>chrome://extensions</code>）→ 打开「开发人员模式」→ 点「加载解压缩的扩展」→ 选刚解压的文件夹</li>' +
+        '<li>点浏览器工具栏上的助手图标 → 输入上面的配对码 → 配对</li>' +
+        '</ol>' +
+        '<p class="wb-muted" id="wb-assistant-countdown">配对码 10 分钟内有效；过期了关掉重来即可。</p>' +
+        '<div class="wb-actions"><button class="btn" type="button" data-douyin-action="pair-again">刷新配对码</button></div>';
+      // 倒计时 + 自动检测配对成功
+      var tick = setInterval(async function () {
+        if (!$('#wb-assistant-body')) { clearInterval(tick); return; }
+        var left = Math.max(0, Math.round((expireAt - Date.now()) / 1000));
+        var el = $('#wb-assistant-countdown');
+        if (el) el.textContent = left > 0 ? ('配对码剩余 ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0')) : '配对码已过期，点「刷新配对码」重新生成';
+        var status = await call('/douyin/assistant').catch(function () { return null; });
+        if (status && status.paired) {
+          clearInterval(tick);
+          state.douyinAssistant = status;
+          closeDialog();
+          toast('采集助手已连接，可以去抖音主页采集了', 'success');
+          render();
+        }
+      }, 3000);
+    } catch (error) {
+      if (body) body.innerHTML = '<p class="wb-v-error">' + esc(error.message) + '</p>';
+    }
   }
   function openDouyinConnectDialog() {
     bindDouyinActions();
@@ -1028,6 +1068,18 @@
       var button = event.target.closest && event.target.closest('[data-douyin-action]');
       if (!button) return;
       var action = button.dataset.douyinAction;
+      if (action === 'pair' || action === 'repair' || action === 'pair-again') { openAssistantPairDialog(); return; }
+      if (action === 'unpair') {
+        if (!window.confirm('断开采集助手？断开后需要重新配对才能采集。')) return;
+        button.disabled = true;
+        try {
+          await call('/douyin/assistant', { method: 'DELETE' });
+          state.douyinAssistant = { paired: false };
+          toast('已断开采集助手', 'success');
+          render();
+        } catch (error) { toast(error.message, 'error'); button.disabled = false; }
+        return;
+      }
       if (action === 'connect' || action === 'reconnect') { openDouyinConnectDialog(); return; }
       if (action === 'restart') { stopDouyinConnectPolling(); openDouyinConnectDialog(); return; }
       if (action === 'cancel') {

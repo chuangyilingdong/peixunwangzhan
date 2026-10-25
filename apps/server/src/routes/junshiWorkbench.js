@@ -38,6 +38,14 @@ import {
   parseFaceSession,
 } from '../services/junshiAvatar.js';
 import {
+  createDouyinPairing,
+  douyinAssistants,
+  pairDouyinAssistant,
+  pruneDouyinPairings,
+  resolveDouyinAssistant,
+  revokeDouyinAssistants,
+} from '../services/junshiDouyinAssistant.js';
+import {
   cancelDouyinLogin,
   disconnectDouyin,
   douyinConnection,
@@ -1211,6 +1219,110 @@ async function readDouyinProfileForOwner(owner, secUserId, cursor = 0) {
   throw errors.badRequest(
     `已连接抖音，但这次读取作品被平台拦下${reasonMap[browserError] ? `（${reasonMap[browserError]}）` : ''}。稍后重试；若是验证/登录问题，请重新连接抖音。`,
     browserError === 'login_required' || browserError === 'verification_required' ? 'DOUYIN_LOGIN_REQUIRED' : 'DOUYIN_FETCH_FAILED');
+}
+
+/** 采集助手上报的作品：按同行筛选条件挑选 → 下载 → 入素材库 → 起转写（复用既有链路）。 */
+async function ingestAssistantWorks({ ownerKey, accountId, refId, syncId, filter, works }) {
+  let done = 0;
+  let failed = 0;
+  let lastError = '';
+  try {
+    const existing = new Set((await arows('SELECT source_url FROM junshi_workbench_transcripts WHERE owner_key=?', [ownerKey]).catch(() => []))
+      .map((row) => String(row.source_url || '')).filter(Boolean));
+    const fresh = (works || []).filter((work) => !existing.has(`https://www.douyin.com/video/${work.awemeId}`));
+    const matches = fresh.filter((work) => {
+      const stats = work.stats || {};
+      if (Number(stats.digg || 0) < filter.minLikes) return false;
+      if (Number(stats.comment || 0) < filter.minComments) return false;
+      if (Number(stats.collect || 0) < filter.minCollects) return false;
+      if (Number(stats.share || 0) < filter.minShares) return false;
+      return true;
+    }).sort((left, right) => Number(right.stats?.digg || 0) - Number(left.stats?.digg || 0)).slice(0, filter.targetCount);
+    await peerSyncStep(syncId, { selected_count: matches.length, message: matches.length ? `筛出 ${matches.length} 条，开始下载并转写…` : '没有符合筛选条件的新作品。' });
+    if (!matches.length) {
+      await peerSyncStep(syncId, { status: 'succeeded', stage: 'done', message: `上报 ${works.length} 条，按条件筛出 0 条（可放宽筛选条件）` });
+      await aq("UPDATE junshi_workbench_refs SET last_sync_at=?, last_sync_status='succeeded', last_sync_message=? WHERE id=? AND owner_key=?",
+        [nowIso(), `上报 ${works.length} 条，无符合条件的`, refId, ownerKey]).catch(() => {});
+      return;
+    }
+    for (const work of matches) {
+      try {
+        await downloadAndTranscribePeerWork({ ownerKey, accountId, awemeId: work.awemeId, desc: work.desc, playUrl: work.playUrl });
+        done += 1;
+      } catch (error) {
+        failed += 1;
+        lastError = String(error?.message || error).slice(0, 160);
+      }
+      await peerSyncStep(syncId, { done_count: done, failed_count: failed, message: `已完成 ${done}/${matches.length}${failed ? `（失败 ${failed}）` : ''}…` });
+    }
+    const summary = `完成 ${done} 条${failed ? `，失败 ${failed} 条${lastError ? `（${lastError}）` : ''}` : ''}`;
+    await peerSyncStep(syncId, { status: failed && !done ? 'failed' : 'succeeded', stage: failed && !done ? 'failed' : 'done', done_count: done, failed_count: failed, message: summary });
+    await aq("UPDATE junshi_workbench_refs SET last_sync_at=?, last_sync_status=?, last_sync_message=? WHERE id=? AND owner_key=?",
+      [nowIso(), failed && !done ? 'failed' : 'succeeded', summary, refId, ownerKey]).catch(() => {});
+  } catch (error) {
+    await peerSyncStep(syncId, { status: 'failed', stage: 'failed', message: String(error?.message || error).slice(0, 500) }).catch(() => {});
+  }
+}
+
+
+/**
+ * 采集助手的两个免登录入口（浏览器扩展没有机构登录态）：
+ *   POST /douyin/assistant/pair    用 6 位配对码换长期 token
+ *   POST /douyin/assistant/ingest  带 token 上报作品列表
+ * 由 junshi.js 在进入工作台鉴权之前分流过来。
+ */
+export async function handleDouyinAssistantPublic(ctx, rest, method) {
+  if (rest === '/douyin/assistant/pair' && method === 'POST') {
+    const result = await pairDouyinAssistant(ctx.body?.code, text(ctx.body?.device));
+    if (!result.ok) throw errors.badRequest(result.error, 'DOUYIN_PAIRING_INVALID');
+    return { token: result.token };
+  }
+  if (rest === '/douyin/assistant/ingest' && method === 'POST') {
+    const token = String(ctx.req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+    const assistant = await resolveDouyinAssistant(token);
+    if (!assistant) throw errors.unauthorized('采集助手未配对或已失效，请在工作台重新生成配对码', 'DOUYIN_ASSISTANT_UNAUTHORIZED');
+    const secUserId = text(ctx.body?.secUserId).slice(0, 128);
+    const nickname = text(ctx.body?.nickname).slice(0, 120);
+    const works = Array.isArray(ctx.body?.works) ? ctx.body.works.slice(0, 60) : [];
+    if (!secUserId && !nickname) throw errors.badRequest('上报里缺少主页标识', 'VALIDATION_ERROR');
+    if (!works.length) throw errors.badRequest('没有可用的作品数据（请在同行主页上采集）', 'VALIDATION_ERROR');
+    let refRow = secUserId
+      ? await arow('SELECT * FROM junshi_workbench_refs WHERE owner_key=? AND (sec_user_id=? OR url LIKE ?) ORDER BY created_at DESC LIMIT 1', [assistant.ownerKey, secUserId, `%${secUserId}%`])
+      : null;
+    if (!refRow && nickname) {
+      refRow = await arow('SELECT * FROM junshi_workbench_refs WHERE owner_key=? AND name=? LIMIT 1', [assistant.ownerKey, nickname]);
+    }
+    const at = nowIso();
+    if (!refRow) {
+      const refId = id('jwr');
+      await aq('INSERT INTO junshi_workbench_refs (id,owner_key,org_id,name,url,notes,sec_user_id,created_at) VALUES (?,?,?,?,?,?,?,?)',
+        [refId, assistant.ownerKey, assistant.orgId, nickname || '抖音同行', secUserId ? `https://www.douyin.com/user/${secUserId}` : '', '由采集助手上报自动创建', secUserId, at]);
+      refRow = await arow('SELECT * FROM junshi_workbench_refs WHERE id=?', [refId]);
+    } else if (secUserId && !refRow.sec_user_id) {
+      await aq('UPDATE junshi_workbench_refs SET sec_user_id=? WHERE id=?', [secUserId, refRow.id]).catch(() => {});
+    }
+    const normalized = works.map((work) => ({
+      awemeId: String(work?.awemeId || '').replace(/[^0-9]/g, '').slice(0, 25),
+      desc: String(work?.desc || '').slice(0, 300),
+      playUrl: String(work?.playUrl || '').slice(0, 2000),
+      durationMs: Number(work?.durationMs) || null,
+      stats: {
+        digg: Number(work?.stats?.digg) || 0,
+        comment: Number(work?.stats?.comment) || 0,
+        share: Number(work?.stats?.share) || 0,
+        collect: Number(work?.stats?.collect) || 0,
+      },
+    })).filter((work) => work.awemeId && work.playUrl);
+    if (!normalized.length) throw errors.badRequest('上报的作品缺少可用播放地址（请在主页上滚动加载后再采集）', 'VALIDATION_ERROR');
+    const syncId = id('jwps');
+    const filter = peerFilterOf(refRow);
+    const nowAt = nowIso();
+    await aq('INSERT INTO junshi_workbench_peer_syncs (id,owner_key,org_id,ref_id,status,stage,target_count,found_count,selected_count,done_count,failed_count,message,filter,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [syncId, assistant.ownerKey, assistant.orgId, refRow.id, 'running', 'downloading', filter.targetCount, normalized.length, 0, 0, 0, `采集助手上报 ${normalized.length} 条，正在按条件筛选…`, JSON.stringify(filter), nowAt, nowAt]);
+    void ingestAssistantWorks({ ownerKey: assistant.ownerKey, accountId: assistant.accountId, refId: refRow.id, syncId, filter, works: normalized });
+    return { accepted: normalized.length, syncId, refId: refRow.id };
+  }
+  return null;
 }
 
 /* ───────────── 路由 ───────────── */
@@ -2987,6 +3099,24 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     douyinRateLimit(owner.key);
     const target = await resolveDouyinTarget(ctx.body?.text).catch((error) => { throw errors.badRequest(error.message, 'DOUYIN_RESOLVE_FAILED'); });
     return { target };
+  }
+  /* ── 十三期 · 抖音采集助手（浏览器扩展配对 + 作品上报 → 服务器下载转写） ── */
+  if (rest === '/douyin/assistant' && method === 'GET') {
+    const assistants = await douyinAssistants(owner.key);
+    return {
+      paired: assistants.length > 0,
+      assistants: assistants.map((row) => ({ device: row.device || '浏览器', pairedAt: row.used_at })),
+    };
+  }
+  if (rest === '/douyin/assistant/pairing' && method === 'POST') {
+    rateLimit(owner.key);
+    void pruneDouyinPairings();
+    const pairing = await createDouyinPairing(owner);
+    return { code: pairing.code, expiresAt: pairing.expiresAt };
+  }
+  if (rest === '/douyin/assistant' && method === 'DELETE') {
+    await revokeDouyinAssistants(owner.key);
+    return { ok: true };
   }
   /* ── 十二期 · 抖音账号连接（扫码登录，登录态共用） ── */
   if (rest === '/douyin/connect' && method === 'GET') {

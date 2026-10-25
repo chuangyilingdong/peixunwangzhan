@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 320px; margin: 0; padding: 14px; font: 13px/1.5 -apple-system, "Segoe UI", "PingFang SC", sans-serif; color: #1d1d1f; }
+  h1 { font-size: 14px; margin: 0 0 4px; }
+  p { margin: 6px 0; color: #6b7280; font-size: 12px; }
+  input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; }
+  button { width: 100%; margin-top: 8px; padding: 9px 10px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font-size: 13px; cursor: pointer; }
+  button.secondary { background: #f3f4f6; color: #374151; }
+  button:disabled { opacity: .5; cursor: default; }
+  #msg { margin-top: 8px; font-size: 12px; min-height: 16px; }
+  .ok { color: #16a34a; } .err { color: #dc2626; }
+  .hide { display: none; }
+</style>
+</head>
+<body>
+  <h1>抖音采集助手</h1>
+  <div id="paired-view" class="hide">
+    <p>已连接到你的内容工作台。打开任意抖音同行主页，然后点下面按钮。</p>
+    <button id="collect">采集当前主页</button>
+    <button id="unpair" class="secondary">断开连接</button>
+  </div>
+  <div id="pair-view" class="hide">
+    <p>在内容工作台的「同行观察」里点「连接采集助手」，把 6 位配对码填在这里。</p>
+    <input id="code" maxlength="6" placeholder="配对码" autocomplete="off">
+    <input id="api" class="hide">
+    <button id="pair">配对</button>
+  </div>
+  <div id="msg"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

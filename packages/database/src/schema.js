@@ -1588,6 +1588,22 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_douyin_sessions (
   updated_at   TEXT NOT NULL
 );
 
+-- 十三期：抖音采集助手配对（浏览器扩展 ↔ 机构）。
+-- 配对码 10 分钟有效、用完即废；配对成功后扩展拿长期 token（只存哈希）。
+CREATE TABLE IF NOT EXISTS junshi_workbench_douyin_pairings (
+  code_hash  TEXT NOT NULL PRIMARY KEY,
+  owner_key  TEXT NOT NULL,
+  org_id     TEXT,
+  account_id TEXT NOT NULL DEFAULT 'default',
+  token_hash TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'pending',
+  device     TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_pair_token ON junshi_workbench_douyin_pairings(token_hash);
+
 `;
 
 db.exec(SCHEMA);
