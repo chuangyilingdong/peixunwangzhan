@@ -1413,7 +1413,7 @@
       var body = '';
       if (run.status === 'running') body = '<div class="wb-flow-steps">' + (run.steps || []).map(avatarStepHtml).join('') + '</div>';
       if (run.status === 'failed') body = '<p class="err">' + ic('alert', 13) + '<span>' + esc(run.error || '合成失败') + '</span></p>';
-      if (run.status === 'succeeded' && run.videoAssetId) body = '<video class="wb-render-video" controls preload="metadata" data-avatar-video="' + esc(run.videoAssetId) + '"></video>';
+      if (run.status === 'succeeded' && run.videoAssetId) body = (run.note ? '<p class="wb-note">' + esc(run.note) + '</p>' : '') + '<video class="wb-render-video" controls preload="metadata" data-avatar-video="' + esc(run.videoAssetId) + '"></video>';
       return '<div class="wb-render"><div class="wb-card-head"><div><b>' + esc((run.text || '').slice(0, 40)) + '</b>' +
         '<span class="wb-tag ' + (run.status === 'succeeded' ? 'ok' : run.status === 'failed' ? 'bad' : '') + '">' + esc(run.status === 'running' ? '合成中' : run.status === 'succeeded' ? '完成' : '失败') + '</span>' +
         '<div class="wb-meta">' + fmtDate(run.createdAt) + '</div></div></div>' + body + '</div>';
@@ -1458,16 +1458,18 @@
     var box = $('#wb-avatar-panel');
     if (!box) return;
     var readyVoices = state.voices.filter(function (item) { return item.status === 'ready'; });
+    var referenceVoices = readyVoices.filter(function (item) { return item.mode === 'reference'; });
     var training = state.voices.filter(function (item) { return item.status === 'training'; });
     var imageAssets = state.assets.filter(function (item) { return item.kind === 'image'; });
-    box.innerHTML = '<div class="wb-card-head"><div><h3>数字人口播</h3><p>用自己的音色和形象照，把文案直接变成对口型口播视频（音色克隆 → 语音合成 → 对口型）。成片进素材库「数字人」文件夹。</p></div></div>' +
+    box.innerHTML = '<div class="wb-card-head"><div><h3>数字人口播</h3><p>用自己的音色和形象照，把文案直接变成口播视频（音色克隆 → 语音合成 → 对口型）。克隆通道不可用时自动改用参考音频直出；上游对口型异常时输出底片+配音版本。成片进素材库「数字人」文件夹。</p></div></div>' +
       '<form id="wb-avatar-form" class="wb-form">' +
-      '<label class="wb-field"><span>音色</span><select name="voiceId">' + (readyVoices.length ? readyVoices.map(function (v) { return '<option value="' + esc(v.id) + '">' + esc(v.name) + '</option>'; }).join('') : '<option value="">（先克隆一个音色）</option>') + '</select></label>' +
+      '<label class="wb-field"><span>音色</span><select name="voiceId">' + (readyVoices.length ? readyVoices.map(function (v) { return '<option value="' + esc(v.id) + '">' + esc(v.name) + (v.mode === 'reference' ? '（参考直出）' : '') + '</option>'; }).join('') : '<option value="">（先克隆一个音色）</option>') + '</select></label>' +
       '<label class="wb-field"><span>形象照（正面人脸清晰）</span><select name="imageAssetId">' + (imageAssets.length ? imageAssets.slice(0, 30).map(function (a) { return '<option value="' + esc(a.id) + '">' + esc(a.fileName) + '</option>'; }).join('') : '<option value="">（素材库里还没有图片）</option>') + '</select></label>' +
       '<label class="wb-field full"><span>口播文案</span><textarea name="text" placeholder="把要口播的文案粘进来（建议 200 字内一段）"></textarea></label>' +
       '<div class="wb-field full wb-actions"><button class="btn primary" type="submit"' + (readyVoices.length && imageAssets.length ? '' : ' disabled') + '>' + ic('video', 13) + '生成口播视频</button>' +
       '<button class="btn" type="button" id="wb-voice-clone-open">' + ic('plus', 12) + '克隆新音色</button>' +
       (training.length ? '<span class="wb-note">' + ic('loader', 11) + ' ' + training.length + ' 个音色克隆中…</span>' : '') +
+      (referenceVoices.length ? '<span class="wb-note">' + ic('alert', 11) + ' ' + referenceVoices.length + ' 个音色为参考音频直出（非训练克隆）</span>' : '') +
       '<span class="wb-note">按次计费（克隆/合成/对口型各一步）；20 次/小时。</span></div></form>' +
       '<div id="wb-avatar-list" style="margin-top:10px"></div>';
     renderAvatarList();

@@ -90,6 +90,8 @@ const FAST = [
   'scripts/p150-video-storyboard-frames.mjs',
   // 2026-10-25 加：内容方案卡（聊天提炼、版本锁、预检、确认制作、导出）。
   'scripts/p152-junshi-plan-cards.mjs',
+  // 2026-10-25 加：数字人上游适配（i2v 顶层 images、identify-face 数组解析、降级口径）。
+  'scripts/p153-junshi-avatar.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));

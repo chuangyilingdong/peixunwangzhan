@@ -11,13 +11,19 @@
  *                                  且视频要 ffmpeg baseline/faststart 标准化，上游不接受 profile 过高的 mp4）
  * 音频任务轮询 GET /v1/audio/generations/{id}，视频任务轮询 GET /v1/videos/{id}。
  *
- * ⚠️ 2026-10-24 生产实测：identify-face 的 session_id 拿到后立即（1.3 秒内）提交
- *    kling-lip-sync-video 仍报「session_id has expired」——上游 identify-face 与
- *    lip-sync-video 两步的状态不互通，属于上游侧故障，已排查清单见交接文档四期/五期节。
- *    本模块保留全部正确实现；上游修复后 runTalkingHead 无需改动即可用。
- *    音色克隆同样被上游阻：doubao-voice-clone 在 default 分组无通道（503），
- *    minimax-voice-clone 通道在但任务一律「模型响应异常」。预置音色合成
- *    （doubao-seed-audio-1.0 + 内置 speaker）是可用的，已用于底片链路验证。
+ * ⚠️ i2v 参考图必须在顶层 images（不是 metadata.images）；放错会 400
+ *    「image-to-video requires at least one input image」。2026-10-25 复测确认。
+ *
+ * ⚠️ 2026-10-24/25 生产实测（上游故障仍存在）：
+ *    1. identify-face 返回的是 results 数组：session_id / face_id 分在两条 outputType=text
+ *       的子 JSON 里；旧 parser 只认单对象。parseFaceSession 已做递归兼容。
+ *    2. session_id 拿到后 13 秒内提交 kling-lip-sync-video 仍报「session_id has expired」；
+ *       换 kling-lip-sync-tts 返回的 audioId 也一样。上游两步状态不互通，属于上游侧故障。
+ *       本模块保留正确实现；runTalkingHead 在失败时降级为「底片+配音」，UI 标注非精准对口型。
+ *    3. 音色克隆仍被上游阻：doubao-voice-clone 503「No available channel」，
+ *       minimax-voice-clone「模型响应异常」。但 doubao-seed-audio-1.0 的参考音频直出可用
+ *       （audio_url），因此克隆失败时降级为「参考音频直出」（音色相近，非训练克隆）。
+ *    4. 底片是 5 秒视频，lip-sync 的 soundEndTime 用 5000，不要写 30000。
  */
 import { getProviderApiKey } from './providerSecret.js';
 import { AI_PROVIDER_API_KEY } from '../config.js';
@@ -101,9 +107,12 @@ export async function pollAudioTask({ endpoint, apiKey, taskId, timeoutMs = 6000
 }
 
 /* ── 视频任务：提交与轮询（/v1/videos 家族） ── */
-export async function submitVideoTask({ endpoint, apiKey, model, metadata, promptOverride }) {
+export async function submitVideoTask({ endpoint, apiKey, model, metadata, promptOverride, images = null, extra = null }) {
   const body = { model, metadata: metadata || {} };
   if (promptOverride) body.prompt = promptOverride;
+  // Seedance 2.0 i2v 要顶层 images；放进 metadata 会被上游判成「没有输入图」。
+  if (Array.isArray(images) && images.length) body.images = images;
+  if (extra && typeof extra === 'object' && !Array.isArray(extra)) Object.assign(body, extra);
   const json = await apiFetch({ endpoint, apiKey, path: '/v1/video/generations', method: 'POST', body });
   const taskId = json?.task_id || json?.id || json?.data?.task_id || '';
   if (!taskId) throw Object.assign(new Error(`提交 ${model} 没有返回任务号`), { status: 502 });
@@ -132,24 +141,34 @@ export async function pollVideoTask({ endpoint, apiKey, taskId, timeoutMs = 9000
   }
 }
 
-/** 从 identify-face 的 result_text 里抠出 sessionId/faceId（结构未知，宽容解析）。 */
+/**
+ * 从 identify-face 的 result_text 里抠出 sessionId/faceId。
+ * 2026-10-25 实测上游返回的是 results 数组，session_id 和 face_id 分别放在
+ * 两条 outputType=text 的子 JSON 里，不再是单个对象；这里做递归兼容。
+ */
 export function parseFaceSession(resultText) {
   const raw = String(resultText || '').trim();
-  try {
-    const parsed = JSON.parse(raw);
-    const sessionId = parsed.sessionId || parsed.session_id || parsed.data?.sessionId || parsed.data?.session_id || '';
-    const faceId = parsed.faceId || parsed.face_id || parsed.data?.faceId || parsed.data?.face_id || '';
-    if (sessionId && faceId) return { sessionId, faceId };
-  } catch { /* 不是纯 JSON */ }
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start >= 0 && end > start) {
-    try {
-      const parsed = JSON.parse(raw.slice(start, end + 1));
-      const sessionId = parsed.sessionId || parsed.session_id || '';
-      const faceId = parsed.faceId || parsed.face_id || '';
-      if (sessionId && faceId) return { sessionId, faceId };
-    } catch { /* ignore */ }
-  }
+  const found = { sessionId: '', faceId: '' };
+  const takeText = (value) => {
+    const textValue = String(value || '');
+    const start = textValue.indexOf('{');
+    const end = textValue.lastIndexOf('}');
+    if (start < 0 || end <= start) return;
+    try { takeObject(JSON.parse(textValue.slice(start, end + 1))); } catch { /* ignore */ }
+  };
+  const takeObject = (value) => {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) { for (const item of value) takeObject(item); return; }
+    const sessionId = value.sessionId ?? value.session_id ?? value.data?.sessionId ?? value.data?.session_id;
+    if (sessionId !== undefined && sessionId !== null && String(sessionId) !== '') found.sessionId = String(sessionId);
+    const faceId = value.faceId ?? value.face_id ?? value.data?.faceId ?? value.data?.face_id;
+    if (faceId !== undefined && faceId !== null && String(faceId) !== '') found.faceId = String(faceId);
+    for (const child of Object.values(value)) {
+      if (child && typeof child === 'object') takeObject(child);
+      else if (typeof child === 'string' && child.includes('{')) takeText(child);
+    }
+  };
+  takeText(raw);
+  if (found.sessionId && found.faceId !== '') return { sessionId: found.sessionId, faceId: found.faceId };
   throw Object.assign(new Error('人脸分析结果里没有 sessionId/faceId'), { status: 502 });
 }

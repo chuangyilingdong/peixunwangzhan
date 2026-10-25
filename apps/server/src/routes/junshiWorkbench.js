@@ -2581,15 +2581,21 @@ function startWfCopy(ctx, owner, wfId, job = null) {
 
 /* ───────────── 数字人口播（音色克隆 + 对口型）+ 截图回填 ───────────── */
 function voiceOut(row) {
-  return { id: row.id, name: row.name, speakerId: row.speaker_id || '', status: row.status, error: row.error || '', sampleAssetId: row.sample_asset_id || null, accountId: row.account_id || 'default', createdAt: row.created_at, updatedAt: row.updated_at };
+  return {
+    id: row.id, name: row.name, speakerId: row.speaker_id || '',
+    mode: row.speaker_id === 'reference' ? 'reference' : 'clone',
+    status: row.status, error: row.error || '', sampleAssetId: row.sample_asset_id || null,
+    accountId: row.account_id || 'default', createdAt: row.created_at, updatedAt: row.updated_at,
+  };
 }
 function avatarRunOut(row) {
   let steps = [];
   try { steps = JSON.parse(row.steps || '[]'); } catch { /* ignore */ }
+  const note = steps.filter((step) => step?.note).map((step) => String(step.note)).join('；');
   return {
     id: row.id, voiceId: row.voice_id || null, speakerId: row.speaker_id || '',
     imageAssetId: row.image_asset_id || null, text: row.text || '', status: row.status,
-    error: row.error || '', steps, videoAssetId: row.video_asset_id || null,
+    error: row.error || '', note, steps, videoAssetId: row.video_asset_id || null,
     videoUrl: row.video_asset_id ? `/api/junshi/workbench/assets/${encodeURIComponent(row.video_asset_id)}/file` : null,
     accountId: row.account_id || 'default', createdAt: row.created_at, updatedAt: row.updated_at,
   };
@@ -2598,7 +2604,10 @@ async function avatarStepsUpdate(id, ownerKey, steps) {
   await aq('UPDATE junshi_workbench_avatar_runs SET steps=?, updated_at=? WHERE id=? AND owner_key=?', [JSON.stringify(steps), nowIso(), id, ownerKey]).catch(() => {});
 }
 
-/** 后台克隆音色：样本直链上传 → doubao-voice-clone → speaker_id。 */
+/** 后台克隆音色：样本直链上传 → doubao/minimax 克隆 → speaker_id。
+ *  2026-10-25 实测两条克隆通道都不可用；此时降级为「参考音频直出」：
+ *  不训练 speaker，直接把样本当参考音频交给 doubao-seed-audio-1.0 合成。
+ *  音色相近，但不是训练克隆；UI 会标注。 */
 async function runCloneVoice(owner, { voiceId, assetRow, auditionText }) {
   const fail = async (message) => {
     await aq('UPDATE junshi_workbench_voices SET status=?, error=?, updated_at=? WHERE id=? AND owner_key=?', ['failed', String(message).slice(0, 1000), nowIso(), voiceId, owner.key]).catch(() => {});
@@ -2610,19 +2619,71 @@ async function runCloneVoice(owner, { voiceId, assetRow, auditionText }) {
     const sampleBuffer = await assetBytes(assetRow);
     if (sampleBuffer.length > 10 * 1024 * 1024) throw Object.assign(new Error('音色样本超过 10MB，请剪短一些（10-30 秒清晰人声即可）'), { code: 'WORKBENCH_VOICE_SAMPLE_TOO_LARGE' });
     const sampleUrl = await uploadToSeedance({ ...config, buffer: sampleBuffer, fileName: assetRow.file_name || 'voice-sample.mp3', mimeType: assetRow.mime_type || 'audio/mpeg' });
-    const taskId = await submitAudioTask({ ...config, model: 'doubao-voice-clone', prompt: auditionText, metadata: { audio_url: sampleUrl, enable_audio_denoise: true } });
-    const result = await pollAudioTask({ ...config, taskId, timeoutMs: 600000 });
-    const speakerId = result.resultText;
-    if (!speakerId) throw Object.assign(new Error('克隆完成但没有返回音色 ID'), { code: 'WORKBENCH_VOICE_NO_SPEAKER' });
-    await aq('UPDATE junshi_workbench_voices SET status=?, speaker_id=?, error="", updated_at=? WHERE id=? AND owner_key=?', ['ready', String(speakerId).slice(0, 200), nowIso(), voiceId, owner.key]);
+    let speakerId = '';
+    let lastError = '';
+    try {
+      const taskId = await submitAudioTask({ ...config, model: 'doubao-voice-clone', prompt: auditionText, metadata: { audio_url: sampleUrl, language: '1', custom_speaker_id: voiceId, enable_audio_denoise: true } });
+      const result = await pollAudioTask({ ...config, taskId, timeoutMs: 600000 });
+      speakerId = String(result.resultText || '').trim();
+      if (!speakerId) throw new Error('克隆完成但没有返回音色 ID');
+    } catch (error) {
+      lastError = String(error?.message || error);
+    }
+    if (!speakerId) {
+      try {
+        const taskId = await submitAudioTask({ ...config, model: 'minimax-voice-clone', prompt: auditionText, metadata: { audio_url: sampleUrl, custom_voice_id: voiceId } });
+        const result = await pollAudioTask({ ...config, taskId, timeoutMs: 600000 });
+        speakerId = String(result.resultText || '').trim();
+        if (!speakerId) throw new Error('克隆完成但没有返回音色 ID');
+      } catch (error) {
+        lastError = String(error?.message || error);
+      }
+    }
+    if (speakerId) {
+      await aq('UPDATE junshi_workbench_voices SET status=?, speaker_id=?, error="", updated_at=? WHERE id=? AND owner_key=?', ['ready', String(speakerId).slice(0, 200), nowIso(), voiceId, owner.key]);
+    } else {
+      // 两条克隆通道都不可用：保留样本，TTS 时用参考音频直出。
+      const note = `上游音色克隆通道暂不可用，已改用参考音频直出（音色相近，非训练克隆）。${lastError ? `上游返回：${lastError.slice(0, 200)}` : ''}`;
+      await aq('UPDATE junshi_workbench_voices SET status=?, speaker_id=?, error=?, updated_at=? WHERE id=? AND owner_key=?', ['ready', 'reference', note, nowIso(), voiceId, owner.key]);
+    }
   } catch (error) {
     await fail(error?.message || '克隆失败');
   }
 }
 
+async function downloadUrlBuffer(url) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(300000) });
+  if (!response.ok) throw Object.assign(new Error(`素材下载失败（HTTP ${response.status}）`), { status: 502 });
+  return Buffer.from(await response.arrayBuffer());
+}
+/** 上游对口型不可用时的降级：底片视频 + TTS 音轨。非精准对口型，UI 必须标注。 */
+async function muxAudioOntoVideo(baseUrl, audioUrl) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'jw-avatar-mux-'));
+  try {
+    const basePath = path.join(dir, 'base.mp4');
+    const audioPath = path.join(dir, 'voice.mp3');
+    const outPath = path.join(dir, 'out.mp4');
+    await writeFile(basePath, await downloadUrlBuffer(baseUrl));
+    await writeFile(audioPath, await downloadUrlBuffer(audioUrl));
+    await runCommand('ffmpeg', ['-y', '-i', basePath, '-i', audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-shortest', '-movflags', '+faststart', outPath], 180000);
+    return await readFile(outPath);
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+async function saveAvatarVideo(owner, runId, buffer) {
+  const stored = await persistSecureUpload({ fileName: `${runId}.mp4`, mimeType: 'video/mp4', buffer });
+  const assetId = id('jwa');
+  await aq('INSERT INTO junshi_workbench_assets (id,owner_key,org_id,account_id,file_name,storage_key,storage_backend,mime_type,kind,file_size,folder,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+    [assetId, owner.key, owner.orgId, 'default', stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || 'video/mp4', 'video', stored.fileSize || buffer.length, '数字人', nowIso()]);
+  return assetId;
+}
+
 /** 后台数字人合成：底片生成（形象照 i2v）→ TTS → 人脸分析 → 对口型 → 存素材库。
- *  合同细节与上游已知故障见 services/junshiAvatar.js 文件头。 */
-async function runTalkingHead(owner, { runId, text, speakerId, imageAssetRow }) {
+ *  合同细节与上游已知故障见 services/junshiAvatar.js 文件头。
+ *  2026-10-25：克隆通道不可用时音色用参考音频直出；Kling session 过期时
+ *  降级为「底片+配音」（非精准对口型），并在 steps 里带 note。 */
+async function runTalkingHead(owner, { runId, text, speakerId, voiceRow, imageAssetRow }) {
   const steps = [
     { key: 'base', label: '生成人物底片（形象照 → 视频）', status: 'running' },
     { key: 'tts', label: '口播语音合成', status: 'pending' },
@@ -2642,37 +2703,63 @@ async function runTalkingHead(owner, { runId, text, speakerId, imageAssetRow }) 
     const imageBuffer = await assetBytes(imageAssetRow);
     if (imageBuffer.length > 10 * 1024 * 1024) throw Object.assign(new Error('形象照超过 10MB，请压缩后重传'), { code: 'WORKBENCH_AVATAR_IMAGE_TOO_LARGE' });
     const imageUrl = await uploadToSeedance({ ...config, buffer: imageBuffer, fileName: imageAssetRow.file_name || 'face.jpg', mimeType: imageAssetRow.mime_type || 'image/jpeg' });
-    const baseTask = await submitVideoTask({ ...config, model: 'seedance-2.0-standard-i2v', metadata: { images: [imageUrl] }, promptOverride: '一位教师正面面对镜头，微微点头，嘴唇自然开合像在讲话，背景不变，光线稳定' });
+    // ⚠️ Seedance 2.0 i2v 要顶层 images；放 metadata.images 会报「image-to-video requires at least one input image」。
+    const baseTask = await submitVideoTask({ ...config, model: 'seedance-2.0-standard-i2v', images: [imageUrl], promptOverride: '一位教师正面面对镜头，微微点头，嘴唇自然开合像在讲话，背景不变，光线稳定' });
     const base = await pollVideoTask({ ...config, taskId: baseTask, timeoutMs: 600000 });
     if (!base.url) throw Object.assign(new Error('底片生成没有返回视频地址'), { code: 'WORKBENCH_BASE_NO_URL' });
     await mark('base', 'done'); await mark('tts', 'running');
-    // ① TTS（用克隆音色）
-    const ttsTask = await submitAudioTask({ ...config, model: 'doubao-seed-icl-2.0', prompt: text, metadata: { speaker: speakerId, voice_model: 'seed-tts-2.0-standard', format: 'mp3' } });
+    // ① TTS：有训练克隆音色就用克隆；否则用样本参考音频直出（克隆通道不可用时的兜底）。
+    let ttsTask = '';
+    if (!speakerId || speakerId === 'reference') {
+      const sampleAsset = voiceRow?.sample_asset_id
+        ? await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [voiceRow.sample_asset_id, owner.key])
+        : null;
+      if (!sampleAsset) throw new Error('音色样本不存在，无法用参考音频直出');
+      const sampleBuffer = await assetBytes(sampleAsset);
+      if (sampleBuffer.length > 10 * 1024 * 1024) throw new Error('音色样本超过 10MB，请剪短一些');
+      const sampleUrl = await uploadToSeedance({ ...config, buffer: sampleBuffer, fileName: sampleAsset.file_name || 'voice-sample.mp3', mimeType: sampleAsset.mime_type || 'audio/mpeg' });
+      ttsTask = await submitAudioTask({ ...config, model: 'doubao-seed-audio-1.0', prompt: text, metadata: { audio_url: sampleUrl, format: 'mp3', sample_rate: '24000' } });
+      const ttsStep = steps.find((step) => step.key === 'tts');
+      if (ttsStep) ttsStep.label = '口播语音合成（参考音频直出）';
+    } else {
+      ttsTask = await submitAudioTask({ ...config, model: 'doubao-seed-icl-2.0', prompt: text, metadata: { speaker: speakerId, voice_model: 'seed-tts-2.0-standard', format: 'mp3' } });
+    }
     const tts = await pollAudioTask({ ...config, taskId: ttsTask, timeoutMs: 600000 });
     if (!tts.url) throw Object.assign(new Error('语音合成没有返回音频地址'), { code: 'WORKBENCH_TTS_NO_URL' });
     await mark('tts', 'done'); await mark('face', 'running');
-    // ② 人脸分析（底片签名直链；注意必须完整签名 URL，裸 COS 路径上游处理不了）
-    const faceTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-identify-face', metadata: { video_url: base.url } });
-    const face = await pollVideoTask({ ...config, taskId: faceTask, timeoutMs: 600000 });
-    const { sessionId, faceId } = parseFaceSession(face.resultText);
-    await mark('face', 'done'); await mark('lipsync', 'running');
-    // ③ 对口型合成（soundEndTime 用底片实际时长上限 30000ms 内；session 过期是上游已知故障）
-    const syncTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-video', metadata: { sessionId, faceId, audio_url: tts.url, soundStartTime: 0, soundEndTime: 30000, soundInsertTime: 0, soundVolume: 1, originalAudioVolume: 0 } });
-    const synced = await pollVideoTask({ ...config, taskId: syncTask, timeoutMs: 900000 });
-    if (!synced.url) throw Object.assign(new Error('对口型完成但没有返回视频地址'), { code: 'WORKBENCH_LIPSYNC_NO_URL' });
-    await mark('lipsync', 'done'); await mark('save', 'running');
-    // ④ 转存素材库（上游地址 24h 过期）
-    const videoResponse = await fetch(synced.url, { signal: AbortSignal.timeout(300000) });
-    if (!videoResponse.ok) throw Object.assign(new Error(`成片下载失败（HTTP ${videoResponse.status}）`), { status: 502 });
-    const buffer = Buffer.from(await videoResponse.arrayBuffer());
-    const stored = await persistSecureUpload({ fileName: `${runId}.mp4`, mimeType: 'video/mp4', buffer });
-    const assetId = id('jwa');
-    await aq('INSERT INTO junshi_workbench_assets (id,owner_key,org_id,account_id,file_name,storage_key,storage_backend,mime_type,kind,file_size,folder,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-      [assetId, owner.key, owner.orgId, 'default', stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || 'video/mp4', 'video', stored.fileSize || buffer.length, '数字人', nowIso()]);
+    // ②③ 人脸分析 + 对口型；上游 session 过期时降级为「底片+配音」，并明确标注。
+    let outputBuffer = null;
+    try {
+      const faceTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-identify-face', metadata: { video_url: base.url } });
+      const face = await pollVideoTask({ ...config, taskId: faceTask, timeoutMs: 600000 });
+      const { sessionId, faceId } = parseFaceSession(face.resultText);
+      await mark('face', 'done'); await mark('lipsync', 'running');
+      // 底片 5 秒，soundEndTime 不要写 30000；写大了上游会按超长音频处理。
+      const syncTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-video', metadata: { sessionId, faceId, audio_url: tts.url, soundStartTime: 0, soundEndTime: 5000, soundInsertTime: 0, soundVolume: 1, originalAudioVolume: 0 } });
+      const synced = await pollVideoTask({ ...config, taskId: syncTask, timeoutMs: 900000 });
+      if (!synced.url) throw Object.assign(new Error('对口型完成但没有返回视频地址'), { code: 'WORKBENCH_LIPSYNC_NO_URL' });
+      outputBuffer = await downloadUrlBuffer(synced.url);
+      await mark('lipsync', 'done');
+    } catch (error) {
+      const message = String(error?.message || error);
+      const step = steps.find((item) => item.key === 'lipsync');
+      if (step) {
+        step.label = '对口型（上游不可用，改用底片+配音）';
+        step.note = `上游对口型失败，本次输出为底片+配音版本（非精准对口型）。原因：${message.slice(0, 160)}`;
+        step.status = 'done';
+      }
+      await avatarStepsUpdate(runId, owner.key, steps);
+      outputBuffer = await muxAudioOntoVideo(base.url, tts.url);
+    }
+    await mark('save', 'running');
+    const assetId = await saveAvatarVideo(owner, runId, outputBuffer);
     await aq('UPDATE junshi_workbench_avatar_runs SET status=?, video_asset_id=?, error="", updated_at=? WHERE id=? AND owner_key=?', ['succeeded', assetId, nowIso(), runId, owner.key]);
     await mark('save', 'done');
+    return { ok: true, message: '数字人口播完成' };
   } catch (error) {
-    await fail(error?.message || '数字人合成失败');
+    const message = String(error?.message || '数字人合成失败').slice(0, 1000);
+    await fail(message);
+    return { ok: false, message };
   }
 }
 function transcriptOut(row, { withSegments = false } = {}) {
@@ -4095,8 +4182,10 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     await aq('INSERT INTO junshi_workbench_avatar_runs (id,owner_key,org_id,account_id,voice_id,speaker_id,image_asset_id,text,status,error,steps,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
       [runId, owner.key, owner.orgId, accountId, voiceId, voiceRow.speaker_id, imageAssetId, speech, 'running', '', '[]', at, at]);
     const job = jobStart(owner, '数字人口播', speech.slice(0, 60));
-    void runTalkingHead(owner, { runId, text: speech, speakerId: voiceRow.speaker_id, imageAssetRow })
-      .finally(() => jobDone(job, 'succeeded', '数字人口播完成').catch(() => {}));
+    void runTalkingHead(owner, { runId, text: speech, speakerId: voiceRow.speaker_id, voiceRow, imageAssetRow })
+      .then((result) => jobDone(job, result?.ok ? 'succeeded' : 'failed', result?.message || '数字人口播完成'))
+      .catch((error) => jobDone(job, 'failed', String(error?.message || error).slice(0, 1000)))
+      .catch(() => {});
     return { run: avatarRunOut(await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=?', [runId])) };
   }
 
