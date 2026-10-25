@@ -2619,10 +2619,12 @@ async function runCloneVoice(owner, { voiceId, assetRow, auditionText }) {
     const sampleBuffer = await assetBytes(assetRow);
     if (sampleBuffer.length > 10 * 1024 * 1024) throw Object.assign(new Error('音色样本超过 10MB，请剪短一些（10-30 秒清晰人声即可）'), { code: 'WORKBENCH_VOICE_SAMPLE_TOO_LARGE' });
     const sampleUrl = await uploadToSeedance({ ...config, buffer: sampleBuffer, fileName: assetRow.file_name || 'voice-sample.mp3', mimeType: assetRow.mime_type || 'audio/mpeg' });
+    // 上游 custom voice id 只收字母/数字（不能带下划线），且至少 8 位；voiceId 里的 jwv2_ 不能直接传。
+    const customVoiceId = ('voice' + String(voiceId).replace(/[^A-Za-z0-9]/g, '')).slice(0, 64);
     let speakerId = '';
     let lastError = '';
     try {
-      const taskId = await submitAudioTask({ ...config, model: 'doubao-voice-clone', prompt: auditionText, metadata: { audio_url: sampleUrl, language: '1', custom_speaker_id: voiceId, enable_audio_denoise: true } });
+      const taskId = await submitAudioTask({ ...config, model: 'doubao-voice-clone', prompt: auditionText, metadata: { audio_url: sampleUrl, language: '1', custom_speaker_id: customVoiceId, enable_audio_denoise: true } });
       const result = await pollAudioTask({ ...config, taskId, timeoutMs: 600000 });
       speakerId = String(result.resultText || '').trim();
       if (!speakerId) throw new Error('克隆完成但没有返回音色 ID');
@@ -2631,7 +2633,7 @@ async function runCloneVoice(owner, { voiceId, assetRow, auditionText }) {
     }
     if (!speakerId) {
       try {
-        const taskId = await submitAudioTask({ ...config, model: 'minimax-voice-clone', prompt: auditionText, metadata: { audio_url: sampleUrl, custom_voice_id: voiceId } });
+        const taskId = await submitAudioTask({ ...config, model: 'minimax-voice-clone', prompt: auditionText, metadata: { audio_url: sampleUrl, custom_voice_id: customVoiceId } });
         const result = await pollAudioTask({ ...config, taskId, timeoutMs: 600000 });
         speakerId = String(result.resultText || '').trim();
         if (!speakerId) throw new Error('克隆完成但没有返回音色 ID');

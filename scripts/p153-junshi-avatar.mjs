@@ -59,6 +59,7 @@ const front = fs.readFileSync(path.join(root, 'apps/website/public/assets/junshi
 check('③ 克隆失败会降级到参考音频直出', route.includes("'reference'") && route.includes('参考音频直出'));
 check('③ 对口型失败会降级为底片+配音并带 note', route.includes('非精准对口型') && route.includes('muxAudioOntoVideo'));
 check('③ 前端展示参考直出与降级说明', front.includes('（参考直出）') && front.includes('run.note'));
+check('③ custom voice id 去掉下划线/只留字母数字', route.includes("replace(/[^A-Za-z0-9]/g, '')"));
 check('③ 服务文件头记录顶层 images 约束', avatar.includes('i2v 参考图必须在顶层 images'));
 
 if (failures) process.exitCode = 1;
