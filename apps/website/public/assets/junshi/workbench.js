@@ -979,7 +979,7 @@
       body.innerHTML =
         '<p class="wb-note">配对码 <b class="wb-pair-code">' + esc(code) + '</b>（10 分钟内有效，输进扩展里）</p>' +
         '<ol class="wb-assistant-steps">' +
-        '<li><a class="btn" href="/downloads/douyin-assistant.zip" download>下载采集助手（zip）</a>并解压到一个固定文件夹</li>' +
+        '<li><a class="btn" href="/assets/junshi/douyin-assistant.zip?v=20261025" download>下载采集助手（zip）</a>并解压到一个固定文件夹</li>' +
         '<li>Edge 打开 <code>edge://extensions</code>（Chrome 是 <code>chrome://extensions</code>）→ 打开「开发人员模式」→ 点「加载解压缩的扩展」→ 选刚解压的文件夹</li>' +
         '<li>点浏览器工具栏上的助手图标 → 输入上面的配对码 → 配对</li>' +
         '</ol>' +
