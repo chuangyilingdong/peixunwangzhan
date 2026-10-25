@@ -9,6 +9,8 @@
  * 绝不自动拖拽拼图。
  */
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, createCipheriv, createDecipheriv, createHash } from 'node:crypto';
@@ -20,6 +22,23 @@ const LOGIN_WORKER = path.join(DOUYIN_DIR, 'douyin_login_worker.py');
 const BROWSER_WORKER = path.join(DOUYIN_DIR, 'douyin_browser_worker.py');
 
 const LOGIN_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * Worker 进程的 HOME：生产服务单元带 ProtectSystem=strict，服务的 HOME(/srv/...) 是只读的，
+ * 有头 Chromium 要写配置/缓存，写不了就直接 SIGTRAP 崩（2026-10-25 实测）。
+ * 统一给一个可写的临时 HOME（systemd PrivateTmp 下 /tmp 私有且可写）。
+ */
+const WORKER_HOME = path.join(os.tmpdir(), 'junshi-douyin-home');
+function workerEnv() {
+  const env = { ...process.env, HOME: WORKER_HOME };
+  env.XDG_CONFIG_HOME = path.join(WORKER_HOME, '.config');
+  env.XDG_CACHE_HOME = path.join(WORKER_HOME, '.cache');
+  try {
+    fs.mkdirSync(env.XDG_CONFIG_HOME, { recursive: true });
+    fs.mkdirSync(env.XDG_CACHE_HOME, { recursive: true });
+  } catch { /* 目录不可写时交给 worker 报错 */ }
+  return env;
+}
 const secretKey = createHash('sha256').update(String(process.env.AUTH_PEPPER || 'p0-local-pepper')).digest();
 
 function encrypt(text) {
@@ -66,8 +85,8 @@ export function startDouyinLogin(ownerKey) {
   const python = douyinPython();
   const useXvfb = process.platform === 'linux' && !process.env.DISPLAY;
   const child = useXvfb
-    ? spawn('xvfb-run', ['-a', python, LOGIN_WORKER], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
-    : spawn(python, [LOGIN_WORKER], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    ? spawn('xvfb-run', ['-a', python, LOGIN_WORKER], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: workerEnv() })
+    : spawn(python, [LOGIN_WORKER], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: workerEnv() });
   const session = { sessionId, child, status: 'starting', qr: '', cookie: '', userAgent: '', nickname: '', error: '', startedAt: Date.now(), timer: null };
   logins.set(ownerKey, session);
 
@@ -193,7 +212,7 @@ export async function fetchProfileViaBrowser(ownerKey, secUserId, { knownIds = [
   // 登录态只是让读取更稳、能看更多历史。未连接就传空 cookie。
   const session = await douyinSession(ownerKey);
   return await new Promise((resolve) => {
-    const child = spawn(douyinPython(), [BROWSER_WORKER], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(douyinPython(), [BROWSER_WORKER], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: workerEnv() });
     let out = '';
     let err = '';
     let settled = false;

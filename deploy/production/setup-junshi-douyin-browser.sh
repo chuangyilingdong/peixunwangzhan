@@ -21,6 +21,18 @@ else
 fi
 command -v xvfb-run >/dev/null && echo "   xvfb-run: $(command -v xvfb-run)"
 
+echo "== 1b. 服务用户必须有可写的 HOME"
+# 有头 Chromium 会写配置/缓存；HOME 指向不存在的目录会直接 SIGTRAP 崩掉（2026-10-25 踩到）。
+if id ai-kids-prod >/dev/null 2>&1; then
+  SERVICE_HOME="$(getent passwd ai-kids-prod | cut -d: -f6)"
+  if [ -n "$SERVICE_HOME" ] && [ ! -d "$SERVICE_HOME" ]; then
+    mkdir -p "$SERVICE_HOME" && chown ai-kids-prod:ai-kids-prod "$SERVICE_HOME"
+    echo "   已创建 $SERVICE_HOME"
+  else
+    echo "   HOME=$SERVICE_HOME 已存在"
+  fi
+fi
+
 echo "== 2. 装 Playwright（与原版桌面端同一套浏览器自动化）"
 "$VENV/bin/pip" install -q --upgrade playwright -i https://pypi.tuna.tsinghua.edu.cn/simple
 "$VENV/bin/python" -c "import playwright; print('   playwright ok')"
