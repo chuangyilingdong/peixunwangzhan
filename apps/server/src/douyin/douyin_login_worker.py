@@ -61,6 +61,19 @@ def qr_box(info):
     return None
 
 
+async def nudge_login(page):
+    """有些会话打开 /user/self 不会自动弹登录框 —— 主动点一次「登录」。"""
+    for selector in ('button:has-text("登录")', '[data-e2e="login-button"]', 'span:has-text("登录")'):
+        try:
+            target = page.locator(selector).first
+            if await target.count() and await target.is_visible():
+                await target.click(timeout=3000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 async def read_identity(page):
     """Best-effort nickname/avatar label from the logged-in header."""
     try:
@@ -84,9 +97,14 @@ async def run():
             context = await browser.new_context(viewport={'width': 1100, 'height': 800}, accept_downloads=False)
             page = await context.new_page()
             await page.goto(LOGIN_URL, wait_until='domcontentloaded', timeout=40000)
-            # The login dialog shows up on its own for /user/self; nudge it if not.
-            for _ in range(12):
+            # The login dialog usually opens by itself on /user/self; some sessions need a click.
+            nudged = False
+            for attempt in range(12):
                 await page.wait_for_timeout(1200)
+                if not nudged and attempt >= 2:
+                    nudged = True
+                    await nudge_login(page)
+                    await page.wait_for_timeout(1500)
                 info = await page.evaluate("""() => {
                     const out = [];
                     document.querySelectorAll('img, canvas').forEach(el => {

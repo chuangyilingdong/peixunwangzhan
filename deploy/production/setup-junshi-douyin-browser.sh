@@ -26,10 +26,26 @@ echo "== 2. 装 Playwright（与原版桌面端同一套浏览器自动化）"
 "$VENV/bin/python" -c "import playwright; print('   playwright ok')"
 
 echo "== 3. 装 Chromium 与系统依赖（首次约 150MB）"
-"$VENV/bin/playwright" install --with-deps chromium
+# ⚠️ 必须装到服务用户可读的共享路径：默认落到 /root/.cache/ms-playwright，
+# 而服务以 ai-kids-prod 运行 → 启动浏览器必然 browser_launch_failed（2026-10-25 踩到）。
+BROWSERS_PATH=/srv/ai-kids-platform/runtime/ms-playwright
+mkdir -p "$BROWSERS_PATH"
+PLAYWRIGHT_BROWSERS_PATH="$BROWSERS_PATH" "$VENV/bin/playwright" install --with-deps chromium
+if id ai-kids-prod >/dev/null 2>&1; then
+  chown -R ai-kids-prod:ai-kids-prod "$BROWSERS_PATH"
+  echo "   已授权 ai-kids-prod 读取 $BROWSERS_PATH"
+fi
+ENV_FILE=/etc/ai-kids-platform/production.env
+if [ -f "$ENV_FILE" ]; then
+  grep -q '^PLAYWRIGHT_BROWSERS_PATH=' "$ENV_FILE" \
+    || echo "PLAYWRIGHT_BROWSERS_PATH=$BROWSERS_PATH" >> "$ENV_FILE"
+  echo "   production.env: $(grep '^PLAYWRIGHT_BROWSERS_PATH=' "$ENV_FILE")"
+else
+  echo "!! 找不到 $ENV_FILE，请手动加 PLAYWRIGHT_BROWSERS_PATH=$BROWSERS_PATH"
+fi
 
 echo "== 4. 验证（无头启动 + 有头起窗口）"
-"$VENV/bin/python" - <<'EOF'
+PLAYWRIGHT_BROWSERS_PATH="$BROWSERS_PATH" "$VENV/bin/python" - <<'EOF'
 import asyncio
 from playwright.async_api import async_playwright
 
@@ -43,7 +59,7 @@ async def main():
 
 asyncio.run(main())
 EOF
-xvfb-run -a "$VENV/bin/python" - <<'EOF'
+PLAYWRIGHT_BROWSERS_PATH="$BROWSERS_PATH" xvfb-run -a "$VENV/bin/python" - <<'EOF'
 import asyncio
 from playwright.async_api import async_playwright
 
