@@ -336,7 +336,7 @@
     if (!TAB_META[tab]) tab = 'chat';
     state.tab = tab;
     // 离开视频页就退出单任务专注；目的地导航永远回到任务列表。
-    if (tab !== 'video') { state.videoFocus = null; state.videoStep = 1; state.videoModePicker = false; }
+    if (tab !== 'video') { discardTransientVideoDraft(); state.videoFocus = null; state.videoStep = 1; state.videoModePicker = false; }
     if (tab !== 'video') { stopRenderPolling(); stopAvatarPolling(); stopVideoWorkPolling(); stopVideoPackagePolling(); stopVideoPackageSweep(); }
     if (tab !== 'chat') stopWfPolling();
     if (tab !== 'plan') stopCyclePolling();
@@ -2583,7 +2583,9 @@
     return row.label;
   }
   function videoDraftTitle(draft) {
-    return (draft && String(draft.topic || draft.brief || draft.speech || '').replace(/\s+/g, ' ').trim().slice(0, 36)) || '新视频任务';
+    var content = videoDraftContentTitle(draft, 36);
+    if (content) return content;
+    return draft ? videoDraftModeLabel(draft) + ' · 新任务' : '新视频任务';
   }
   function videoWorkTitle(work) {
     return (work && work.title || '').trim() || '未命名视频任务';
@@ -2591,6 +2593,7 @@
   function openVideoFocus(kind, id, step) {
     if (!kind || !id) return;
     if (state.tab !== 'video') setTab('video');
+    if (state.videoFocus && state.videoFocus.kind === 'draft' && state.videoFocus.id !== id) discardTransientVideoDraft();
     stopVideoPackagePolling();
     if (kind === 'work') delete state.videoPackages[id];
     state.videoModePicker = false;
@@ -2606,6 +2609,7 @@
     syncVideoChrome();
   }
   function closeVideoFocus() {
+    discardTransientVideoDraft();
     state.videoFocus = null;
     state.videoStep = 1;
     state.videoModePicker = false;
@@ -2701,18 +2705,67 @@
   function wbShotRoleLabel(value) { return WB_SHOT_ROLES[value] || value || '分镜'; }
 
   function videoDraftKey() { return 'wb-video-drafts:' + state.accountId; }
+  function videoDraftHasContent(draft) {
+    if (!draft) return false;
+    return Boolean(
+      String(draft.topic || '').trim() ||
+      String(draft.brief || '').trim() ||
+      String(draft.speech || '').trim() ||
+      String(draft.reference || '').trim() ||
+      draft.sourceId ||
+      (Array.isArray(draft.assetRefs) && draft.assetRefs.length)
+    );
+  }
+  function videoDraftContentTitle(draft, maxLength) {
+    if (!draft) return '';
+    var max = maxLength || 36;
+    var text = String(draft.topic || draft.brief || draft.speech || draft.reference || '').replace(/\s+/g, ' ').trim();
+    if (text) return text.slice(0, max);
+    if (draft.sourceId) {
+      var transcript = (state.transcripts || []).filter(function (item) { return item.id === draft.sourceId; })[0];
+      if (transcript) return String(transcript.title || transcript.nickname || '参考视频').replace(/\s+/g, ' ').trim().slice(0, max);
+    }
+    return '';
+  }
+  function discardTransientVideoDraft() {
+    var focus = state.videoFocus;
+    if (!focus || focus.kind !== 'draft') return;
+    var draft = findVideoDraft(focus.id);
+    if (!draft || !draft.transient) return;
+    state.videoDrafts = state.videoDrafts.filter(function (row) { return row.id !== draft.id; });
+    saveVideoDrafts();
+  }
   function loadVideoDrafts() {
     try {
       var rows = JSON.parse(localStorage.getItem(videoDraftKey()) || '[]');
-      state.videoDrafts = Array.isArray(rows) ? rows.map(function (row) {
-        return Object.assign({ productionMode: 'storyboard', speech: '', voiceId: '', imageAssetId: '', speed: 'natural', autoHost: false, topic: '' }, row);
+      var list = Array.isArray(rows) ? rows.map(function (row) {
+        return Object.assign({ productionMode: 'storyboard', speech: '', voiceId: '', imageAssetId: '', speed: 'natural', autoHost: false, topic: '', userTouched: false, transient: false }, row);
       }) : [];
+      var kept = list.filter(function (row) {
+        if (row.transient) return false;
+        return row.userTouched === true || videoDraftHasContent(row);
+      });
+      var focusedTransient = null;
+      if (state.videoFocus && state.videoFocus.kind === 'draft') {
+        focusedTransient = (state.videoDrafts || []).filter(function (draft) {
+          return draft.id === state.videoFocus.id && draft.transient;
+        })[0] || null;
+      }
+      state.videoDrafts = kept;
+      if (focusedTransient && !kept.some(function (draft) { return draft.id === focusedTransient.id; })) {
+        state.videoDrafts.push(focusedTransient);
+      }
+      if (kept.length !== list.length) saveVideoDrafts();
     } catch (e) { state.videoDrafts = []; }
   }
   function saveVideoDrafts() {
-    try { localStorage.setItem(videoDraftKey(), JSON.stringify(state.videoDrafts.slice(-8))); } catch (e) { /* 隐私模式忽略 */ }
+    try {
+      var persisted = state.videoDrafts.filter(function (draft) { return !draft.transient; });
+      localStorage.setItem(videoDraftKey(), JSON.stringify(persisted.slice(-8)));
+    } catch (e) { /* 隐私模式忽略 */ }
   }
   function newVideoDraft(mode, productionMode, options) {
+    var persist = Boolean(options && options.persist);
     var draft = {
       id: 'draft-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6), mode: mode, status: 'configuring',
       productionMode: productionMode || 'storyboard',
@@ -2720,9 +2773,10 @@
       type: 'ecommerce', subtype: '口播带货', hookStrategy: 'auto', model: '', durationSeconds: 15,
       resolution: '768P', ratio: '9:16', brief: '', assetRefs: [], reference: '', sourceKind: 'text',
       sourceId: '', speech: '', voiceId: '', imageAssetId: '', speed: 'natural',
+      transient: !persist, userTouched: persist,
     };
     state.videoDrafts.push(draft);
-    saveVideoDrafts();
+    if (persist) saveVideoDrafts();
     return draft;
   }
   function findVideoDraft(id) { return state.videoDrafts.filter(function (row) { return row.id === id; })[0] || null; }
@@ -2730,6 +2784,8 @@
     var draft = findVideoDraft(id);
     if (!draft) return;
     Object.keys(patch || {}).forEach(function (key) { draft[key] = patch[key]; });
+    draft.transient = false;
+    draft.userTouched = true;
     saveVideoDrafts();
   }
   function removeVideoDraft(id) {
@@ -3414,7 +3470,7 @@
         var role = roleSelect ? roleSelect.value : '场景';
         if (draft.assetRefs.some(function (ref) { return ref.assetId === button.dataset.wbVPickAdd; })) { toast('这个素材已经加过了', 'error'); return; }
         draft.assetRefs.push({ assetId: button.dataset.wbVPickAdd, role: role, label: button.dataset.file || '', notes: '' });
-        saveVideoDrafts();
+        updateVideoDraft(draft.id, { assetRefs: draft.assetRefs });
         closeDialog();
         renderVideo();
         toast('已添加 @' + role + ' 引用', 'success');
@@ -3491,10 +3547,10 @@
         if (!sample) return;
         var draftId = button.dataset.draft;
         var draft = draftId ? findVideoDraft(draftId) : null;
-        if (!draft) { draft = state.videoDrafts.filter(function (row) { return row.mode !== 'auto'; }).slice(-1)[0] || newVideoDraft('generate'); }
+        if (!draft) { draft = state.videoDrafts.filter(function (row) { return row.mode !== 'auto'; }).slice(-1)[0] || newVideoDraft('generate', 'storyboard', { persist: true }); }
         if (draft.assetRefs.some(function (ref) { return ref.assetId === sample.assetId; })) { toast('这条音色已经在引用里了', 'error'); return; }
         draft.assetRefs.push({ assetId: sample.assetId, role: '音色', label: sample.name, notes: '口播音色参考' });
-        saveVideoDrafts();
+        updateVideoDraft(draft.id, { assetRefs: draft.assetRefs });
         try { await call('/voice-samples/' + encodeURIComponent(sample.id) + '/use', { method: 'POST' }); } catch (e) { /* 计数失败不影响使用 */ }
         closeDialog();
         renderVideo();
@@ -4072,7 +4128,7 @@
   function renderVideoDraftRow(draft) {
     var hosted = Boolean(draft.autoHost);
     var talking = draft.productionMode === 'talking_head';
-    var title = String(draft.topic || draft.brief || draft.speech || '新视频任务').replace(/\s+/g, ' ').trim().slice(0, 46) || '新视频任务';
+    var title = videoDraftContentTitle(draft, 46) || (videoDraftModeLabel(draft) + ' · 未填写内容');
     var detail = hosted ? '只写主题，自动写稿、选音色/形象照、算费用'
       : talking ? '口播稿 + 音色/形象照，分段对口型'
         : draft.mode === 'replicate' ? '参考转写档案或链接，生成编导稿'
@@ -4236,7 +4292,7 @@
         var draft = findVideoDraft(button.dataset.wbVUnref);
         if (!draft) return;
         draft.assetRefs.splice(Number(button.dataset.index), 1);
-        saveVideoDrafts();
+        updateVideoDraft(draft.id, { assetRefs: draft.assetRefs });
         renderVideo();
       };
     });
