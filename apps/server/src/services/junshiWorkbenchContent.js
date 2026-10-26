@@ -61,7 +61,7 @@ export function hooksBlock(hooks = []) {
   }).join('\n');
 }
 
-export const WORKBENCH_SYSTEM = `你是「小铃铛」，招生军师的内容操盘手，服务中国教培机构的校长、市场和教务负责人。
+export const WORKBENCH_SYSTEM = `你是「灵动Agent」，招生军师的内容操盘手，服务中国教培机构的校长、市场和教务负责人。
 你不是泛泛聊天的助手，而是把机构自己的资料、账号定位和今天的任务，落成能拍、能发、能执行的内容方案。
 
 工作原则：
@@ -196,7 +196,7 @@ ${recent || '（无）'}
 【本次用户需求】
 ${userMessage}
 
-【小铃铛刚才的回答】
+【灵动Agent刚才的回答】
 ${assistantAnswer}`;
 }
 

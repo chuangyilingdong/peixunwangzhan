@@ -298,7 +298,7 @@
   /* 一级导航按当前口径：8 个内容目的地 + 独立「历史任务」。
      使用设置从界面隐藏；文案草稿页删除；历史任务不再并入数据复盘。 */
   var TAB_META = {
-    chat: { label: '小铃铛', sub: '说目标，小铃铛帮你查资料、把内容做出来' },
+    chat: { label: '灵动Agent', sub: '说目标，灵动Agent帮你查资料、把内容做出来' },
     account: { label: '账号档案', sub: '写清卖给谁、卖什么，建议才会具体' },
     references: { label: '同行观察', sub: '看同行在发什么，采集作品和口播' },
     copybrains: { label: '文案大脑', sub: '把创作者的写法提炼成可调用的方法' },
@@ -358,7 +358,7 @@
       }).join('') + '</select></label>';
   }
 
-  /** 顶栏只放「当前页能做的动作」：小铃铛页是三大工作流 + 清空；其他页只显示账号。 */
+  /** 顶栏只放「当前页能做的动作」：灵动Agent页是三大工作流 + 清空；其他页只显示账号。 */
   function renderTopbar() {
     var box = $('#wb-top-actions');
     if (!box) return;
@@ -396,6 +396,7 @@
   async function switchAccount(accountId) {
     if (!accountId || accountId === state.accountId) return;
     state.accountId = accountId;
+    try { localStorage.setItem('junshi.wb.account', accountId); } catch (e) { /* ignore */ }
     state.assetFolder = '';
     try {
       var results = await Promise.all([
@@ -429,11 +430,14 @@
       state.profile = boot.profile || null;
       state.summary = boot;
       state.accounts = boot.accounts || [{ id: 'default', name: '默认账号', platform: '抖音', note: '', createdAt: null }];
+      var savedAccount = '';
+      try { savedAccount = localStorage.getItem('junshi.wb.account') || ''; } catch (e) { /* ignore */ }
+      state.accountId = savedAccount && state.accounts.some(function (item) { return item.id === savedAccount; }) ? savedAccount : 'default';
       var results = await Promise.all([
         call('/chat').catch(function () { return { messages: [] }; }),
-        call('/copy').catch(function () { return { items: [] }; }),
-        call('/videos').catch(function () { return { items: [] }; }),
-        call('/assets').catch(function () { return { items: [], folders: [] }; }),
+        call('/copy?accountId=' + encodeURIComponent(state.accountId)).catch(function () { return { items: [] }; }),
+        call('/videos?accountId=' + encodeURIComponent(state.accountId)).catch(function () { return { items: [] }; }),
+        call('/assets?accountId=' + encodeURIComponent(state.accountId)).catch(function () { return { items: [], folders: [] }; }),
         call('/refs').catch(function () { return { items: [] }; }),
         call('/jobs').catch(function () { return { items: [] }; }),
         call('/workflows').catch(function () { return { items: [], styles: [], angles: [], strengths: [] }; }),
@@ -443,6 +447,7 @@
         call('/avatar/runs').catch(function () { return { items: [] }; }),
         call('/brains').catch(function () { return { items: [] }; }),
         call('/plans?accountId=' + encodeURIComponent(state.accountId)).catch(function () { return { items: [] }; }),
+        call('/profile?accountId=' + encodeURIComponent(state.accountId)).catch(function () { return null; }),
       ]);
       state.messages = results[0].messages || [];
       state.copy = results[1].items || [];
@@ -460,6 +465,7 @@
       state.avatarRuns = results[10].items || [];
       state.brains = results[11].items || [];
       state.plans = results[12].items || [];
+      if (results[13] && results[13].profile) state.profile = results[13].profile;
       state.loaded = true;
       renderTopbar();
       if (state.tab === 'chat') render();
@@ -517,7 +523,7 @@
     } else if (!me && content && !message.pending && message.id && String(content).length > 80) {
       plan = '<button class="wb-mini-btn" type="button" data-plan-from-chat="' + index + '" title="把这条回答整理成可检查、可修改的内容方案">' + ic('sparkle', 11) + '整理成制作方案</button>';
     }
-    return '<div class="wb-msg' + (me ? ' me' : '') + '"><div class="wb-msg-meta">' + (me ? '你' : '小铃铛') + (message.pending ? ' · 正在写' : '') + '</div>' +
+    return '<div class="wb-msg' + (me ? ' me' : '') + '"><div class="wb-msg-meta">' + (me ? '你' : '灵动Agent') + (message.pending ? ' · 正在写' : '') + '</div>' +
       '<div class="wb-bubble">' + body + attachments + status + '</div>' + saveMem + plan + sources + '</div>';
   }
   function renderMessages(forceBottom) {
@@ -541,11 +547,11 @@
         var message = state.messages[Number(button.dataset.memSave)];
         if (!message || !message.content) return;
         try {
-          var result = await call('/memories', { method: 'POST', body: { kind: 'memory', content: String(message.content).replace(/[#*`>]/g, '').trim().slice(0, 1200), source: '小铃铛对话', accountId: state.accountId } });
+          var result = await call('/memories', { method: 'POST', body: { kind: 'memory', content: String(message.content).replace(/[#*`>]/g, '').trim().slice(0, 1200), source: '灵动Agent对话', accountId: state.accountId } });
           state.memories.unshift((result.data || result).memory);
           var counter = $('#wb-mem-open');
           if (counter) counter.innerHTML = ic('quote', 12) + '记忆(' + state.memories.length + ')';
-          toast('已记入长期记忆，小铃铛之后的回答会参考它', 'success');
+          toast('已记入长期记忆，灵动Agent之后的回答会参考它', 'success');
         } catch (error) { toast(error.message, 'error'); }
       };
     });
@@ -567,7 +573,7 @@
     }
     var note = chips.length ? '已读取 ' + chips.join(' · ') : '还没填账号档案，建议会偏通用';
     $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-chat">' +
-      '<div class="wb-chat-head"><b>小铃铛</b><span class="wb-note">' + esc(note) + '</span>' +
+      '<div class="wb-chat-head"><b>灵动Agent</b><span class="wb-note">' + esc(note) + '</span>' +
       (chips.length ? '' : '<button class="wb-mini-btn" type="button" id="wb-chat-profile">去补档案 →</button>') +
       '<button class="wb-mini-btn" type="button" id="wb-mem-open">' + ic('quote', 11) + '记忆(' + state.memories.length + ')</button></div>' +
       '<div class="wb-msgs" id="wb-msgs"></div>' +
@@ -757,7 +763,7 @@
     // 意图识别（对齐原版 isCreativeStartIntent）
     var intent = creativeIntentOf(text);
     if (intent && !state.workflow) {
-      showDialog('今天想从哪里开始？', '<p>可以先给一个大致方向，也可以让小铃铛根据账号资料推荐三个选题。</p>' +
+      showDialog('今天想从哪里开始？', '<p>可以先给一个大致方向，也可以让灵动Agent根据账号资料推荐三个选题。</p>' +
         '<label class="wb-field full"><span>我有大致想法</span><input id="wb-today-idea" placeholder="例如：想讲客户总觉得服务贵"></label>' +
         '<div class="wb-actions"><button class="btn primary" type="button" id="wb-today-with">按这个想法推荐 3 个选题</button>' +
         '<button class="btn" type="button" id="wb-today-no">我没头绪，推荐 3 个选题</button></div>');
@@ -900,7 +906,7 @@
         }
         return '<label class="wb-field' + full + '"><span>' + label + '</span><input name="' + key + '" value="' + esc(value) + '" placeholder="' + esc(placeholder) + '"></label>';
       }).join('') +
-      '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">保存档案</button><span class="wb-note">保存后，小铃铛会按这份档案回答。</span></div>' +
+      '<div class="wb-field full wb-actions"><button class="btn primary" type="submit">保存档案</button><span class="wb-note">保存后，灵动Agent会按这份档案回答。</span></div>' +
       '</form></div></div></div>';
     bindAccountSwitch('#wb-account-switch');
     $('#wb-account-new').onsubmit = async function (event) {
@@ -1840,7 +1846,7 @@
     var cards = (state.plans || []).map(planCardHtml).join('');
     return '<div class="wb-card wb-plan-head"><div class="wb-card-head"><div><h3>创作方案</h3><p>聊天里说「做一条视频 / 分镜」会自动整理成方案，也可以手动建。确认制作只创建视频任务并生成编导稿，渲染前还会在视频创作里再确认一次。</p></div>' +
       '<button class="btn primary" type="button" data-plan-new>' + ic('plus', 12) + '手动建方案</button></div></div>' +
-      (cards ? '<div class="wb-plan-grid">' + cards + '</div>' : '<div class="wb-card"><p class="wb-muted">还没有内容方案。去「小铃铛」说一条想做的视频，或手动建一份。</p></div>');
+      (cards ? '<div class="wb-plan-grid">' + cards + '</div>' : '<div class="wb-card"><p class="wb-muted">还没有内容方案。去「灵动Agent」说一条想做的视频，或手动建一份。</p></div>');
   }
   function planAssetRow(asset, checked) {
     return '<div class="wb-plan-asset" data-plan-asset-row="' + esc(asset.id) + '">' +
@@ -2153,7 +2159,7 @@
       '<p class="wb-cycle-topic">' + esc(slot.topic || '待生成选题') + '</p>' +
       '<p class="wb-v-shot-line muted">目的：' + esc(slot.purpose || '待确定') + '</p>' +
       '<p class="wb-v-shot-line"><b>推荐原因：</b>' + esc(slot.recommendationReason || '待补充') + '</p>' +
-      (regenerating ? '<p class="wb-muted">' + ic('loader', 12) + ' 小铃铛正在重新生成这一条…</p>' : '') +
+      (regenerating ? '<p class="wb-muted">' + ic('loader', 12) + ' 灵动Agent正在重新生成这一条…</p>' : '') +
       '<div class="wb-actions">' +
       (cycle.status === 'confirmed' ? '<button class="btn primary" type="button" data-cycle-action="start-slot" data-cycle="' + esc(cycle.id) + '" data-slot="' + esc(slot.id) + '" data-version="' + cycle.version + '">从这一项开始创作</button>' : '') +
       '<button class="btn" type="button" data-cycle-action="regen-slot" data-cycle="' + esc(cycle.id) + '" data-slot="' + esc(slot.id) + '" data-version="' + cycle.version + '"' + (regenerating ? ' disabled' : '') + '>重新生成这一条</button>' +
@@ -3788,6 +3794,16 @@
       body = '<p class="err">' + ic('alert', 13) + '<span>' + esc(wf.state.searchError || '搜索没有成功') + '</span></p>' +
         '<div class="wb-actions"><button class="btn primary" type="button" data-wf-search-retry>' + ic('refresh', 12) + '重新搜索</button>' +
         '<button class="btn" type="button" data-wf-search-manual>改用手动填写</button></div>';
+    } else if (wf.kind === 'hotspot' && wf.stage === 'angle') {
+      var picked = wf.state.hotspot || {};
+      body = '<p class="wb-note">热点：<b>' + esc(picked.title || '') + '</b></p>' +
+        (picked.fact ? '<p>' + esc(picked.fact) + '</p>' : '') +
+        '<h4>怎么把这个热点和你的账号结合？</h4><p class="wb-note">只借热点的注意力或事实关系，不编造新闻细节；下一步再选写作大脑。</p>' +
+        '<div class="wb-choice-grid">' + (state.workflowMeta.angles || []).map(function (item) {
+          var value = Array.isArray(item) ? item[0] : item;
+          var desc = Array.isArray(item) ? item[1] : '';
+          return '<button class="wb-choice" type="button" data-wf-angle="' + esc(value) + '"><b>' + esc(value) + '</b><small>' + esc(desc) + '</small></button>';
+        }).join('') + '</div>';
     } else if (wf.stage === 'brain') {
       var context = wf.kind === 'today'
         ? '选题：<b>' + esc((wf.state.selectedIdea || {}).title || '') + '</b>'
@@ -4204,7 +4220,7 @@
     var form = '';
     if (kind === 'today') {
       // 对齐原版 creativeBrainChoiceDialog：两按钮点击即开始
-      showDialog('今天想从哪里开始？', '<p>可以先给一个大致方向，也可以让小铃铛根据账号资料推荐三个选题。' +
+      showDialog('今天想从哪里开始？', '<p>可以先给一个大致方向，也可以让灵动Agent根据账号资料推荐三个选题。' +
         (state.workflow && state.workflow.status === 'active' ? '</p>' : '</p><p class="wb-note">开始新创作后，原来的未完成创作仍可在列表中查看。</p>') +
         '<label class="wb-field full"><span>我有大致想法</span><input id="wb-flow-goal" placeholder="例如：想讲家长总觉得课贵"></label>' +
         '<div class="wb-actions"><button class="btn primary" type="button" id="wb-today-go">' + ic('bulb', 12) + '按这个想法推荐 3 个选题</button>' +
@@ -4219,7 +4235,7 @@
       $('#wb-today-noidea').onclick = startTodayFlow;
       return;
     }
-    if (false) {
+    if (kind === 'hotspot') {
       form = '<div class="wb-choice-grid">' +
         '<button class="wb-choice recommended" type="button" id="wb-flow-hotspot-auto"><b>关键词联网搜索 · 推荐</b><small>输入一个方向，系统用 DeepSeek 搜索近 3 天新闻，挑出 3 条最值得结合的热点。</small></button>' +
         '<button class="wb-choice" type="button" id="wb-flow-hotspot-manual"><b>手动填写热点</b><small>把你刷到的新闻填进来，系统只引用你写的事实。</small></button></div>' +
@@ -4247,22 +4263,30 @@
     }
     $('#wb-flow-start').onclick = async function () {
       var button = this;
-      button.disabled = true; button.innerHTML = ic('loader', 12) + '生成中…';
+      var resetButton = function () { button.disabled = false; button.innerHTML = ic('sparkle', 12) + '开始'; };
       var input = {};
+      var optimisticStage = 'searching';
+      var optimisticState = { keyword: '', message: '正在联网搜索今天的热点…', copyOptions: [] };
       if (kind === 'today') input.goal = ($('#wb-flow-goal') || {}).value || '';
       if (kind === 'hotspot') {
         if (hotspotMode.mode === 'keyword') {
           input.mode = 'keyword';
-          input.keyword = ($('#wb-flow-keyword') || {}).value || '';
+          input.keyword = String(($('#wb-flow-keyword') || {}).value || '').trim();
+          if (!input.keyword) { toast('先填一个搜索关键词，或改用手动填写热点', 'error'); resetButton(); return; }
+          optimisticState = { keyword: input.keyword, message: '正在联网搜索今天的热点…', copyOptions: [] };
         } else {
           input.mode = 'manual';
-          input.title = ($('#wb-flow-title') || {}).value || '';
-          input.fact = ($('#wb-flow-fact') || {}).value || '';
-          input.sourceUrl = ($('#wb-flow-url') || {}).value || '';
+          input.title = String(($('#wb-flow-title') || {}).value || '').trim();
+          input.fact = String(($('#wb-flow-fact') || {}).value || '').trim();
+          input.sourceUrl = String(($('#wb-flow-url') || {}).value || '').trim();
+          if (!input.title || !input.fact) { toast('手动热点需要标题和事实描述', 'error'); resetButton(); return; }
+          optimisticStage = 'angle';
+          optimisticState = { hotspot: { title: input.title, fact: input.fact, sourceUrl: input.sourceUrl }, copyOptions: [] };
         }
       }
-      launchWorkflow(kind, input, titles[kind], 'searching',
-        { keyword: input.keyword || '', message: '正在联网搜索今天的热点…', copyOptions: [] });
+      button.disabled = true; button.innerHTML = ic('loader', 12) + '生成中…';
+      closeDialog();
+      launchWorkflow(kind, input, titles[kind], optimisticStage, optimisticState);
     };
   }
   /** 统一乐观启动：立即出卡片 → POST → 换成服务端状态（对齐原版 optimistic session）。 */
@@ -4440,7 +4464,7 @@
       ['长期记忆', state.memories.filter(function (item) { return item.kind === 'memory'; })],
       ['灵感收藏', state.memories.filter(function (item) { return item.kind === 'inspiration'; })],
     ];
-    showDialog('记忆与灵感', '<p class="wb-note">长期记忆会进入小铃铛的每次回答；灵感是存下来的选题。</p>' +
+    showDialog('记忆与灵感', '<p class="wb-note">长期记忆会进入灵动Agent的每次回答；灵感是存下来的选题。</p>' +
       '<div class="wb-mem-add"><input id="wb-mem-new" placeholder="手动记一条：例如「我们体验课转化率 40%，主打寒暑假」"><button class="btn" type="button" id="wb-mem-add-btn">记一条</button></div>' +
       groups.map(function (group) {
         return '<h4 style="margin:12px 0 6px">' + group[0] + '（' + group[1].length + '）</h4>' +

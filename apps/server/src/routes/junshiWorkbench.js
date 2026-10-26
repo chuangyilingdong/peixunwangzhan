@@ -324,6 +324,8 @@ function jobStart(owner, kind, detail, meta = {}) {
   const retryOf = text(meta.retryOf).slice(0, 64);
   return {
     id: jobId, kind, detail, now, entityType, entityId, attempts, retryOf,
+    // 后台执行体（蒸馏/重试）可能直接拿这个内存对象读 payload；DB 里也有同一份。
+    payload,
     promise: aq('INSERT INTO junshi_workbench_jobs (id,owner_key,org_id,kind,status,detail,error,entity_type,entity_id,attempts,payload,retry_of,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
       [jobId, owner.key, owner.orgId, kind, 'running', detail, '', entityType, entityId, attempts, payload, retryOf, now, now]),
   };
@@ -2872,7 +2874,7 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
       // 十六期：只在「明确要做一条视频/分镜/方案」时自动提炼方案卡，别让普通问答悄悄多一次模型调用。
       if (looksLikePlanRequest(message)) {
         try {
-          const recent = history.slice(-8).map((item) => `${item.role === 'user' ? '用户' : '小铃铛'}：${String(item.content || '').slice(0, 300)}`).join('\n');
+          const recent = history.slice(-8).map((item) => `${item.role === 'user' ? '用户' : '灵动Agent'}：${String(item.content || '').slice(0, 300)}`).join('\n');
           const plan = await createPlanFromChat(owner, {
             accountId: chatAccountId, assistantMessageId: assistantId,
             userMessage: message, assistantAnswer: answer, recent,
@@ -4453,7 +4455,7 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
       [owner.key, messageRow.created_at, messageRow.created_at, messageRow.id]);
     const recentRows = await arows("SELECT role, content FROM junshi_workbench_messages WHERE owner_key=? AND (created_at<? OR (created_at=? AND id<?)) ORDER BY created_at DESC, id DESC LIMIT 8",
       [owner.key, messageRow.created_at, messageRow.created_at, messageRow.id]);
-    const recent = recentRows.reverse().map((item) => `${item.role === 'user' ? '用户' : '小铃铛'}：${String(item.content || '').slice(0, 300)}`).join('\n');
+    const recent = recentRows.reverse().map((item) => `${item.role === 'user' ? '用户' : '灵动Agent'}：${String(item.content || '').slice(0, 300)}`).join('\n');
     const plan = await createPlanFromChat(owner, {
       accountId: await resolveAccountId(owner.key, ctx.body?.accountId),
       assistantMessageId: messageRow.id,
@@ -4461,7 +4463,7 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
       assistantAnswer: messageRow.content || '',
       recent,
     });
-    if (!plan) throw errors.badRequest('这条回答里没有足够的具体内容，先让小铃铛给出口播和画面再整理。', 'WORKBENCH_PLAN_EMPTY');
+    if (!plan) throw errors.badRequest('这条回答里没有足够的具体内容，先让灵动Agent给出口播和画面再整理。', 'WORKBENCH_PLAN_EMPTY');
     return { plan };
   }
   if (rest.startsWith('/plans/')) {
