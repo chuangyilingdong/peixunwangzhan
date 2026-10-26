@@ -2851,7 +2851,7 @@ async function extractStatsFromScreenshot(assetRow) {
   let stats = null;
   try {
     const result = await collectText(null, { system: WORKBENCH_SYSTEM, messages });
-    stats = parseLooseJsonObject(result.text);
+    stats = firstJsonObject(result.text);
   } catch { /* 落到下面的失败分支 */ }
   if (!stats) throw errors.badRequest('没能从截图里识别出数据；换一张更清晰的作者端数据截图试试', 'WORKBENCH_STATS_UNRECOGNIZED');
   const cleaned = {};
