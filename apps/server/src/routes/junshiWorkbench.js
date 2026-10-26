@@ -3417,6 +3417,28 @@ async function ensureAvatarFaceSession(config, meta) {
   meta.faceEndTime = endTime;
   return meta;
 }
+/**
+ * i2v 返回的底片 URL 不是长期直链：多段任务跑到第 2 段时常已过期，上游把它误报成
+ * 「session_id has expired」。生成后立刻下载并重新上传成 24h 直链，后面所有分段都用这条。
+ */
+async function stabilizeAvatarBase(config, baseUrl, runId) {
+  if (!baseUrl) return '';
+  try {
+    const buffer = await downloadUrlBuffer(baseUrl);
+    const stable = await uploadToSeedance({ ...config, buffer, fileName: `${runId}-base.mp4`, mimeType: 'video/mp4' });
+    return stable || baseUrl;
+  } catch (error) {
+    console.warn('[avatar] base stabilize failed:', String(error?.message || error).slice(0, 200));
+    return baseUrl;
+  }
+}
+/** 每段 lip-sync 前重建会话：上游同一个 face session 不能稳定复用到第二段。 */
+async function refreshAvatarFaceSession(config, meta) {
+  delete meta.sessionId;
+  delete meta.faceId;
+  delete meta.faceEndTime;
+  return ensureAvatarFaceSession(config, meta);
+}
 async function synthAvatarSegmentAudio({ config, owner, runId, segment, speakerId, voiceRow, speed, meta }) {
   let sampleUrl = '';
   if (!speakerId || speakerId === 'reference') {
@@ -3635,25 +3657,27 @@ async function runTalkingHead(owner, { runId, text, speakerId, voiceRow, imageAs
       const baseTask = await submitVideoTask({ ...config, model: 'seedance-2.0-standard-i2v', images: [imageUrl], promptOverride: '一位教师正面面对镜头，微微点头，嘴唇自然开合像在讲话，背景不变，光线稳定', extra: { seconds: '6' } });
       const base = await pollVideoTask({ ...config, taskId: baseTask, timeoutMs: 600000 });
       if (!base.url) throw new Error('底片生成没有返回视频地址');
-      meta.baseUrl = base.url;
+      meta.baseUrl = await stabilizeAvatarBase(config, base.url, runId);
       meta.baseAt = Date.now();
+      meta.baseStable = meta.baseUrl !== base.url;
       delete meta.sessionId; delete meta.faceId; delete meta.faceEndTime;
       await avatarMetaUpdate(runId, owner.key, meta);
       await mark('base', 'done');
     }
-    // ① 人脸分析（复用已有会话；失败重试时若会话过期会在对口型里重建）
-    await mark('face', 'running');
-    await ensureAvatarFaceSession(config, meta);
-    await avatarMetaUpdate(runId, owner.key, meta);
-    await mark('face', 'done');
+    let failures = 0;
+    if (!targets.length) await mark('face', 'done');
     await mark('tts', 'running');
     await mark('lipsync', 'running');
-    let failures = 0;
     for (const segment of targets) {
       if (segment.status === 'done') continue;
       segment.status = 'running'; segment.error = ''; segment.note = '';
       await avatarSegmentsUpdate(runId, owner.key, segments);
       try {
+        // ⓪ 每段单独做一次人脸分析：同一 session 连续 lip-sync 会被上游判过期。
+        await mark('face', 'running');
+        await refreshAvatarFaceSession(config, meta);
+        await avatarMetaUpdate(runId, owner.key, meta);
+        await mark('face', 'done');
         const audio = await synthAvatarSegmentAudio({ config, owner, runId, segment, speakerId, voiceRow, speed, meta });
         Object.assign(segment, {
           audioSeconds: audio.audioSeconds, audioStorageKey: audio.storage.storageKey,

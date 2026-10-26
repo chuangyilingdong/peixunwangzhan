@@ -184,6 +184,8 @@ try {
   const route = fs.readFileSync(path.join(root, 'apps/server/src/routes/junshiWorkbench.js'), 'utf8');
   check('⑦ 服务端有分段重试路由与拼接', route.includes('avatarRetryMatch') && route.includes('重试失败分段') && route.includes('concatAvatarSegments'));
   check('⑦ 语速四档与 atempo 真实变速', route.includes('slightly_fast') && route.includes("'-filter:a'") || route.includes('atempo='));
+  check('⑦ 底片生成后重新上传为稳定直链', route.includes('stabilizeAvatarBase(config, base.url') && route.includes('baseStable'));
+  check('⑦ 每段 lip-sync 前重建人脸会话', route.includes('refreshAvatarFaceSession(config, meta)'));
 
   console.log('⑧ 旧入口仍兼容（文案草稿截图回填）');
   const draft = await aq('INSERT INTO junshi_workbench_copy_drafts (id,owner_key,org_id,account_id,topic,style,content,created_at) VALUES (?,?,?,?,?,?,?,?)',
