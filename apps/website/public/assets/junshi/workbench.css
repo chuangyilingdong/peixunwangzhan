@@ -578,3 +578,224 @@
 #js-app .wb-msg-plan-meta { margin-top: 3px; font-size: 11.5px; color: var(--text-3); }
 #js-app .wb-msg-plan .wb-actions { margin-top: 7px; }
 #js-app .wb-plan-card .btn[disabled] { opacity: .45; cursor: not-allowed; }
+
+/* ───────────── 十八期 · 工作台信息架构收敛（2026-10-26） ─────────────
+   目标：工作台只保留一条目的地侧栏；进入具体视频任务后，侧栏切换成制作步骤，
+   不再出现「平台侧栏 + 工作台侧栏 + 步骤条」三层。 */
+#js-app.screen-workbench .body { grid-template-columns: minmax(0, 1fr); }
+#js-app.screen-workbench .side { display: none; }
+#js-app.screen-workbench .main { padding: 18px 22px; }
+
+#js-app .wb-back {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  text-align: left;
+}
+#js-app .wb-back:hover { background: var(--hover); color: var(--text); }
+#js-app .wb-back span { font-size: 14px; line-height: 1; }
+#js-app .wb-nav-group {
+  padding: 13px 9px 5px;
+  color: var(--text-4);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .08em;
+}
+#js-app .wb-nav-group:first-child { padding-top: 3px; }
+
+/* 专注制作：工作台侧栏让位给步骤栏，主区仍然是同一块内容区。 */
+#js-app .wb.focus { grid-template-columns: 210px minmax(0, 1fr); }
+#js-app .wb.focus .wb-side { display: none; }
+#js-app .wb-flow-side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 9px 10px;
+  background: var(--surface);
+  border-radius: var(--r-panel);
+  box-shadow: var(--sh-panel);
+}
+#js-app .wb-flow-side[hidden] { display: none; }
+#js-app .wb-flow-side-head { padding: 0 9px 12px; }
+#js-app .wb-flow-side-head b { display: block; font-size: 14px; font-weight: 650; }
+#js-app .wb-flow-side-head span { display: block; margin-top: 4px; color: var(--text-3); font-size: 11px; line-height: 1.55; }
+#js-app .wb-flow-steps { display: flex; flex-direction: column; gap: 2px; }
+#js-app .wb-flow-step {
+  display: grid;
+  grid-template-columns: 25px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  width: 100%;
+  padding: 9px 8px;
+  border-radius: 10px;
+  color: var(--text-2);
+  text-align: left;
+}
+#js-app .wb-flow-step:hover { background: var(--hover); color: var(--text); }
+#js-app .wb-flow-step .num {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--hairline);
+  border-radius: 50%;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+}
+#js-app .wb-flow-step .label { display: block; font-size: 12.5px; font-weight: 550; line-height: 1.4; }
+#js-app .wb-flow-step .desc { display: block; margin-top: 2px; color: var(--text-3); font-size: 10.5px; line-height: 1.45; }
+#js-app .wb-flow-step[aria-current="step"] { background: var(--accent-soft); color: var(--accent); }
+#js-app .wb-flow-step[aria-current="step"] .num { border-color: var(--accent); background: var(--accent); color: #fff; }
+#js-app .wb-flow-step.done .num { border-color: color-mix(in srgb, var(--green, #2f9e63) 55%, var(--hairline)); color: var(--green, #2f9e63); }
+#js-app .wb-flow-step.done .label { color: var(--text-2); }
+#js-app .wb-flow-step.locked { opacity: .46; cursor: not-allowed; }
+#js-app .wb-flow-side-foot { margin-top: auto; padding: 10px 9px 2px; border-top: 1px solid var(--hairline); }
+#js-app .wb-flow-side-foot b { display: block; font-size: 11.5px; }
+#js-app .wb-flow-side-foot span { display: block; margin-top: 3px; color: var(--text-3); font-size: 10.5px; line-height: 1.5; }
+
+#js-app .wb-focus { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+#js-app .wb-focus-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 2px 20px; }
+#js-app .wb-focus-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 2px 2px 12px;
+}
+#js-app .wb-focus-head h2 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -.02em; }
+#js-app .wb-focus-head p { margin: 4px 0 0; color: var(--text-3); font-size: 12px; line-height: 1.55; }
+#js-app .wb-focus-head .wb-actions { margin-left: auto; }
+#js-app .wb-focus-body { display: flex; flex-direction: column; gap: 12px; max-width: 1080px; }
+#js-app .wb-focus-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  padding: 10px 4px 2px;
+  border-top: 1px solid var(--hairline);
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 0%, transparent), var(--bg) 35%);
+}
+#js-app .wb-focus-foot .wb-focus-status { flex: 1; min-width: 0; text-align: center; color: var(--text-3); font-size: 11.5px; }
+#js-app .wb-focus-foot .wb-focus-status b { color: var(--text-2); font-weight: 600; }
+#js-app .wb-focus-foot .btn[disabled] { opacity: .45; cursor: not-allowed; }
+#js-app .wb-step-kicker { color: var(--accent); font-size: 11px; font-weight: 650; letter-spacing: .04em; }
+#js-app .wb-step-title { margin: 2px 0 0; font-size: 16px; font-weight: 650; }
+#js-app .wb-step-note { margin: 5px 0 0; color: var(--text-3); font-size: 11.5px; line-height: 1.6; }
+#js-app .wb-step-card { background: var(--surface); border-radius: var(--r-panel); box-shadow: var(--sh-card); padding: 16px; }
+#js-app .wb-step-card .wb-card-head { margin-bottom: 8px; }
+#js-app .wb-step-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+#js-app .wb-step-summary div { border: 1px solid var(--hairline); border-radius: 10px; padding: 8px 10px; }
+#js-app .wb-step-summary small { display: block; color: var(--text-3); font-size: 10.5px; }
+#js-app .wb-step-summary b { display: block; margin-top: 3px; font-size: 12.5px; font-weight: 550; }
+
+/* 任务列表：从「所有工具堆一起」变成可扫读的任务卡。 */
+#js-app .wb-v-list-head { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
+#js-app .wb-v-list-head h2 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -.02em; }
+#js-app .wb-v-list-head p { margin: 4px 0 0; color: var(--text-3); font-size: 12px; line-height: 1.6; }
+#js-app .wb-v-list-head .wb-actions { margin-left: auto; }
+#js-app .wb-v-section { display: flex; flex-direction: column; gap: 8px; }
+#js-app .wb-v-section-head { display: flex; align-items: baseline; gap: 7px; padding: 4px 2px 0; }
+#js-app .wb-v-section-head b { font-size: 13px; font-weight: 650; }
+#js-app .wb-v-section-head span { color: var(--text-3); font-size: 11px; }
+#js-app .wb-v-task-grid { display: flex; flex-direction: column; gap: 8px; }
+#js-app .wb-v-task {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  gap: 11px;
+  align-items: center;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--surface);
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color var(--t-press) var(--ease), background var(--t-press) var(--ease);
+}
+#js-app .wb-v-task:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline)); background: var(--surface-hover, var(--hover)); }
+#js-app .wb-v-task-index { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 650; }
+#js-app .wb-v-task-main { min-width: 0; }
+#js-app .wb-v-task-title { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+#js-app .wb-v-task-title b { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#js-app .wb-v-task-meta { margin-top: 3px; color: var(--text-3); font-size: 11px; line-height: 1.5; }
+#js-app .wb-v-task-progress { margin-top: 7px; height: 3px; border-radius: 999px; background: var(--fill-2, rgba(0,0,0,.06)); overflow: hidden; }
+#js-app .wb-v-task-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+#js-app .wb-v-task-side { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+#js-app .wb-v-task-side .btn { padding: 5px 10px; font-size: 11.5px; white-space: nowrap; }
+#js-app .wb-v-task-estimate { max-width: 250px; color: var(--text-3); font-size: 10.5px; line-height: 1.45; text-align: right; }
+#js-app .wb-v-task-estimate b { color: var(--text-2); font-weight: 600; }
+#js-app .wb-v-empty { padding: 18px; border: 1px dashed var(--hairline); border-radius: 14px; color: var(--text-3); font-size: 12px; }
+#js-app .wb-v-tools { margin-top: 4px; }
+#js-app .wb-v-tools > summary { cursor: pointer; color: var(--text-3); font-size: 12px; padding: 9px 2px; }
+#js-app .wb-v-tools[open] > summary { color: var(--text-2); }
+#js-app .wb-v-tools-body { display: flex; flex-direction: column; gap: 10px; }
+#js-app .wb-v-config { scroll-margin-top: 10px; }
+#js-app .wb-v-config > .wb-actions:last-of-type { margin-top: 4px; }
+#js-app .wb-v-config .wb-actions > .btn:not(.primary) { color: var(--text-2); }
+#js-app .wb-v-work .wb-v-headside .btn { opacity: .55; }
+#js-app .wb-v-work .wb-v-headside .btn:hover { opacity: 1; color: var(--red); }
+#js-app .wb-plan-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+#js-app .wb-plan-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 2px; }
+#js-app .wb-plan-tools .wb-mini-btn { font-size: 11px; }
+#js-app .wb-plan-tools .danger { color: var(--red); }
+#js-app .wb-plan-tools .danger:hover { color: var(--red); }
+#js-app .wb-plan-tools .wb-mini-btn:hover { color: var(--accent); }
+#js-app .wb-quick-actions { display: inline-flex; align-items: center; gap: 3px; padding: 2px; border: 1px solid var(--hairline); border-radius: var(--r-pill); }
+#js-app .wb-quick-actions .btn { border: 0; background: transparent; box-shadow: none; padding: 5px 9px; font-size: 11.5px; }
+#js-app .wb-quick-actions .btn:hover { background: var(--hover); }
+#js-app .wb-quick-actions .btn.primary { background: var(--accent); color: #fff; }
+#js-app .wb-top-actions .wb-icon-btn { width: 28px; height: 28px; padding: 0; justify-content: center; color: var(--text-3); }
+#js-app .wb-top-actions .wb-icon-btn:hover { color: var(--red); background: var(--red-bg); }
+
+@media (max-width: 1000px) {
+  #js-app.screen-workbench .main { padding: 12px; }
+  #js-app .wb.focus { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); gap: 8px; }
+  #js-app .wb-flow-side { flex-direction: row; align-items: center; padding: 7px 8px; overflow-x: auto; }
+  #js-app .wb-flow-side[hidden] { display: none; }
+  #js-app .wb-flow-side-head, #js-app .wb-flow-side-foot { display: none; }
+  #js-app .wb-flow-steps { flex-direction: row; gap: 4px; overflow-x: auto; width: 100%; }
+  #js-app .wb-flow-step { display: flex; align-items: center; gap: 6px; width: auto; flex: none; padding: 6px 8px; }
+  #js-app .wb-flow-step .num { width: 20px; height: 20px; font-size: 10px; flex: none; }
+  #js-app .wb-flow-step .desc { display: none; }
+  #js-app .wb-flow-step .label { font-size: 11.5px; }
+  #js-app .wb-side { grid-template-columns: auto minmax(0, 1fr); }
+  #js-app .wb-back { width: auto; margin: 0; padding: 7px 7px; white-space: nowrap; }
+  #js-app .wb-back span { display: none; }
+  #js-app .wb-nav-group { display: none; }
+  #js-app .wb-v-task { grid-template-columns: 32px minmax(0, 1fr); }
+  #js-app .wb-v-task-side { grid-column: 1 / -1; flex-direction: row; align-items: center; justify-content: flex-end; }
+  #js-app .wb-v-task-estimate { text-align: left; max-width: none; }
+  #js-app .wb-focus-foot { flex-wrap: wrap; }
+  #js-app .wb-focus-foot .wb-focus-status { order: -1; flex-basis: 100%; text-align: left; }
+}
+@media (max-width: 820px) {
+  #js-app.screen-workbench .main { padding: 10px; }
+  #js-app .wb-focus-head h2 { font-size: 17px; }
+  #js-app .wb-focus-body { gap: 10px; }
+  #js-app .wb-step-card { padding: 13px; }
+  #js-app .wb-focus-foot { gap: 8px; padding-top: 8px; }
+  #js-app .wb-focus-foot .btn { flex: 1; justify-content: center; }
+  #js-app .wb-plan-actions .btn { flex: 1; }
+}
+
+/* 长任务名在面包屑和状态区里截断，不要把移动端顶栏撑出横向滚动。 */
+#js-app .wb-crumb { min-width: 0; overflow: hidden; }
+#js-app .wb-crumb b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#js-app .wb-crumb span, #js-app .wb-crumb i { flex: none; }
+#js-app .wb-focus-head .wb-actions { flex: none; align-items: center; }
+#js-app .wb-focus-head .wb-tag { white-space: nowrap; }
+@media (max-width: 820px) {
+  #js-app .wb-focus-head .wb-actions { width: 100%; margin-left: 0; justify-content: flex-start; }
+}
+#js-app .wb-v-headside { flex: none; }
+#js-app .wb-v-headside .wb-tag { white-space: nowrap; }
+#js-app .wb-card-head > div:first-child { min-width: 0; }

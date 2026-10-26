@@ -227,6 +227,9 @@
       if (b.dataset.screen === name) b.setAttribute('aria-current', 'true');
       else b.removeAttribute('aria-current');
     });
+    // 工作台有自己的目的地侧栏；再叠一层平台主导航会变成两条等宽侧栏。
+    // 进入工作台后收起平台侧栏，用工作台侧栏顶部的「返回专家团」回平台。
+    document.getElementById('js-app').classList.toggle('screen-workbench', name === 'workbench');
     state.screen = name;
     if (!inited[name]) { inited[name] = true; (INIT[name] || function () {})(); }
   }

@@ -722,11 +722,20 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
         <!-- 工作台自己的二级导航：对齐原版客户端的左侧栏，一次只给 8 个目的地。
              文案草稿收进「内容计划」，历史任务收进「数据复盘」，使用设置沉到底部。 -->
         <aside class="wb-side">
+          <button class="wb-back" type="button" id="wb-back-platform"><span aria-hidden="true">←</span> 返回专家团</button>
           <div class="wb-title"><b>内容工作台</b><span id="wb-title-sub">说目标，灵动Agent帮你把内容做出来</span></div>
           <nav class="wb-tabs" id="wb-tabs" role="tablist" aria-label="工作台功能">
+            <div class="wb-nav-group" role="presentation">创作</div>
             <button class="wb-tab" type="button" role="tab" data-wb="chat" aria-current="true" title="对话、今日选题、爆款复刻、热点结合">
               <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-chat"></use></svg><span>灵动Agent</span>
             </button>
+            <button class="wb-tab" type="button" role="tab" data-wb="plan" title="创作方案和周期计划">
+              <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-list"></use></svg><span>内容计划</span>
+            </button>
+            <button class="wb-tab" type="button" role="tab" data-wb="video" title="编导稿、成片和数字人">
+              <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-video"></use></svg><span>视频创作</span>
+            </button>
+            <div class="wb-nav-group" role="presentation">资料</div>
             <button class="wb-tab" type="button" role="tab" data-wb="account" title="账号定位、产品、人群和内容边界">
               <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-user"></use></svg><span>账号档案</span>
             </button>
@@ -736,15 +745,10 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
             <button class="wb-tab" type="button" role="tab" data-wb="copybrains" title="提炼创作者的方法档案">
               <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-sparkle"></use></svg><span>文案大脑</span>
             </button>
-            <button class="wb-tab" type="button" role="tab" data-wb="plan" title="创作方案和周期计划">
-              <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-list"></use></svg><span>内容计划</span>
-            </button>
-            <button class="wb-tab" type="button" role="tab" data-wb="video" title="编导稿、成片和数字人">
-              <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-video"></use></svg><span>视频创作</span>
-            </button>
             <button class="wb-tab" type="button" role="tab" data-wb="assets" title="图片、视频、音色和成片">
               <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-folder"></use></svg><span>素材库</span>
             </button>
+            <div class="wb-nav-group" role="presentation">结果</div>
             <button class="wb-tab" type="button" role="tab" data-wb="reports" title="发布数据和复盘洞察">
               <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-chart"></use></svg><span>数据复盘</span>
             </button>
@@ -752,6 +756,14 @@ html.theming,html.theming body,html.theming #js-app,html.theming #js-app *{
               <svg class="ic" width="16" height="16" aria-hidden="true"><use href="#i-list"></use></svg><span>历史任务</span>
             </button>
           </nav>
+        </aside>
+        <aside class="wb-flow-side" id="wb-flow-side" hidden aria-label="视频制作步骤">
+          <div class="wb-flow-side-head">
+            <b>制作流程</b>
+            <span id="wb-flow-side-sub">一次只做当前这一步</span>
+          </div>
+          <div class="wb-flow-steps" id="wb-flow-steps"></div>
+          <div class="wb-flow-side-foot" id="wb-flow-side-foot"></div>
         </aside>
         <div class="wb-main">
           <div class="wb-topbar">
