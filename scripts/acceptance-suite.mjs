@@ -100,6 +100,8 @@ const FAST = [
   'scripts/p191-junshi-talking-head.mjs',
   // 2026-10-26 加：二十一期一键托管（免费步骤自动跑完、确认前不计费、成功后自动打包）。
   'scripts/p192-junshi-auto-host.mjs',
+  // 2026-10-26 加：文案大脑蒸馏曾引用 handler 内的解析函数，真实渠道直接 TypeError。
+  'scripts/p194-junshi-module-json-parser.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));

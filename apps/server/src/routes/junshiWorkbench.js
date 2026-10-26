@@ -723,7 +723,7 @@ async function runBrainDistill(owner, brainId, job) {
         ? buildPeerReportPrompt({ name, transcripts })
         : buildBrainDistillPrompt({ name, transcripts });
       const result = await collectText(null, { system: WORKBENCH_SYSTEM, user: prompt });
-      generated = mockOrEmpty(result) ? null : parseLooseJsonObject(result.text);
+      generated = mockOrEmpty(result) ? null : firstJsonObject(result.text);
     }
     if (!generated || typeof generated !== 'object') throw new Error('这次没有蒸馏出有效档案，重试一次');
     const profile = generated.profile && typeof generated.profile === 'object' ? generated.profile : {};
