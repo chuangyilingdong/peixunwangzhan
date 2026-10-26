@@ -616,14 +616,14 @@
       '<button class="wb-mini-btn" type="button" id="wb-mem-open">' + ic('quote', 11) + '记忆(' + state.memories.length + ')</button></div>' +
       '<div class="wb-msgs" id="wb-msgs"></div>' +
       '<div><div class="wb-chat-attach" id="wb-chat-attach"></div>' +
-      '<div class="wb-composer"><textarea id="wb-input" placeholder="说说你今天想做什么，或贴一段同行口播…（可发图片/视频/音频，用 @图片1 / @视频1 / @音频1 指定）"></textarea>' +
+      '<div class="wb-composer"><textarea id="wb-input" placeholder="说说你今天想做什么，或贴一段同行口播…" title="可发图片/视频/音频，用 @图片1 / @视频1 / @音频1 指定" aria-label="输入内容，可发图片、视频或音频，用 @图片1 / @视频1 / @音频1 指定"></textarea>' +
       '<button class="btn primary" type="button" id="wb-send">' + (state.busy ? ic('stop', 14) + '停止' : ic('arrow-up', 15) + '发送') + '</button></div>' +
       '<div class="wb-composer-foot"><button class="btn" type="button" id="wb-chat-attach-btn">' + ic('plus', 12) + '添加附件</button>' +
       '<input id="wb-chat-file" type="file" accept="image/*,video/*,audio/*" multiple hidden>' +
-      '<span class="wb-note" id="wb-chat-attach-hint"></span>' +
-      '<span class="wb-note" style="margin-left:auto">模型：</span>' +
+      '<span class="wb-note wb-composer-attach-hint" id="wb-chat-attach-hint"></span>' +
+      '<span class="wb-composer-model"><span class="wb-note">模型：</span>' +
       '<button class="chip' + (state.chatTier === 'fast' ? ' on' : '') + '" type="button" data-tier="fast">标准</button>' +
-      '<button class="chip' + (state.chatTier === 'deep' ? ' on' : '') + '" type="button" data-tier="deep">深度</button>' +
+      '<button class="chip' + (state.chatTier === 'deep' ? ' on' : '') + '" type="button" data-tier="deep">深度</button></span>' +
       '</div></div></div></div>';
     renderMessages(true);
     bindPromptButtons();
