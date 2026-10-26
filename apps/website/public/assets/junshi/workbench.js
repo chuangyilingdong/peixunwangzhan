@@ -205,6 +205,12 @@
     assetFolders: [],
     refs: [],
     jobs: [],
+    jobFacets: [],
+    jobStatusFacets: [],
+    jobTotal: 0,
+    jobKind: '',
+    jobStatus: '',
+    jobsTimer: null,
     summary: null,
     busy: false,
     abort: null,
@@ -217,6 +223,7 @@
     videoQueue: [],
     voiceSamples: [],
     videoWorkTimer: null,
+    videoEstimateTimer: null,
     videoShotEditing: null,
     videoShotEdits: {},
     shotFrameUrls: {},
@@ -269,6 +276,7 @@
     voices: [],
     avatarRuns: [],
     avatarTimer: null,
+    avatarEstimateTimer: null,
   };
 
   function accountName(accountId) {
@@ -308,6 +316,8 @@
     if (tab !== 'chat') stopWfPolling();
     if (tab !== 'plan') stopCyclePolling();
     if (tab !== 'assets') stopAssetPolling();
+    if (tab !== 'jobs') stopJobsPolling();
+    if (tab === 'jobs') void loadJobs(true);
     if (tab === 'plan') { void loadPlans(); void loadCycles(); }
     if (tab !== 'references') { stopTsPolling(); stopPeerSyncPolling(); }
     if (tab === 'references') void loadPeerSyncs(true);
@@ -325,7 +335,10 @@
     if (sub) sub.textContent = meta.sub;
     renderTopbar();
     try { localStorage.setItem('junshi.wb.tab', tab); } catch (e) { /* ignore */ }
-    if (tab === 'reports' || tab === 'jobs') {
+    if (tab === 'jobs') {
+      render();
+      void loadJobs(true);
+    } else if (tab === 'reports') {
       render();
       call('/summary').then(function (data) {
         state.summary = Object.assign({}, state.summary, data);
@@ -469,10 +482,24 @@
       '<button class="wb-suggestion" type="button" data-wb-prompt="帮我做一条 45 秒视频的脚本和分镜，课程、人群和目标都按我的账号档案来。">做一条分镜<small>含口播和拍摄清单</small></button>' +
       '</div></div>';
   }
+  function attachmentIcon(kind) {
+    return kind === 'video' ? 'video' : kind === 'audio' ? 'music' : 'image';
+  }
+  function attachmentChipHtml(item, clickable) {
+    var label = item.label || ('@' + ({ image: '图片', video: '视频', audio: '音频' }[item.kind] || '附件') + (item.index || ''));
+    var tag = clickable ? 'button' : 'span';
+    return '<' + tag + ' class="wb-attach-chip"' + (clickable ? ' type="button"' : '') + ' data-msg-attach="' + esc(item.id) + '" title="' + esc(item.fileName || '') + '">' +
+      ic(attachmentIcon(item.kind), 11) + ' ' + esc(label) +
+      (item.fileName ? '<small>' + esc(String(item.fileName).slice(0, 18)) + '</small>' : '') + '</' + tag + '>';
+  }
   function messageHtml(message, index) {
     var me = message.role === 'user';
     var content = message.content || '';
-    var body = me ? esc(content).replace(/\n/g, '<br>') : (content ? md(content) : '<span class="loading">正在写…</span>');
+    var body = me ? esc(content).replace(/\n/g, '<br>') : (content ? md(content) : '<span class="loading">' + esc(message.status || '正在写…') + '</span>');
+    var attachments = me && Array.isArray(message.attachments) && message.attachments.length
+      ? '<div class="wb-msg-attach">' + message.attachments.map(function (item) { return attachmentChipHtml(item, false); }).join('') + '</div>'
+      : '';
+    var status = !me && message.pending && message.status && content ? '<div class="wb-msg-status">' + ic('loader', 11) + ' ' + esc(message.status) + '</div>' : '';
     var saveMem = '';
     if (!me && content && !message.pending) {
       saveMem = '<button class="wb-mini-btn" type="button" data-mem-save="' + index + '" title="把这条回答里值得长期记住的事实或偏好存进记忆">' + ic('quote', 11) + '记为长期记忆</button>';
@@ -491,7 +518,7 @@
       plan = '<button class="wb-mini-btn" type="button" data-plan-from-chat="' + index + '" title="把这条回答整理成可检查、可修改的内容方案">' + ic('sparkle', 11) + '整理成制作方案</button>';
     }
     return '<div class="wb-msg' + (me ? ' me' : '') + '"><div class="wb-msg-meta">' + (me ? '你' : '小铃铛') + (message.pending ? ' · 正在写' : '') + '</div>' +
-      '<div class="wb-bubble">' + body + '</div>' + saveMem + plan + sources + '</div>';
+      '<div class="wb-bubble">' + body + attachments + status + '</div>' + saveMem + plan + sources + '</div>';
   }
   function renderMessages(forceBottom) {
     var box = $('#wb-msgs');
@@ -545,10 +572,11 @@
       '<button class="wb-mini-btn" type="button" id="wb-mem-open">' + ic('quote', 11) + '记忆(' + state.memories.length + ')</button></div>' +
       '<div class="wb-msgs" id="wb-msgs"></div>' +
       '<div><div class="wb-chat-attach" id="wb-chat-attach"></div>' +
-      '<div class="wb-composer"><textarea id="wb-input" placeholder="说说你今天想做什么，或贴一段同行口播…（可直接粘贴截图）"></textarea>' +
+      '<div class="wb-composer"><textarea id="wb-input" placeholder="说说你今天想做什么，或贴一段同行口播…（可发图片/视频/音频，用 @图片1 / @视频1 / @音频1 指定）"></textarea>' +
       '<button class="btn primary" type="button" id="wb-send">' + (state.busy ? ic('stop', 14) + '停止' : ic('arrow-up', 15) + '发送') + '</button></div>' +
-      '<div class="wb-composer-foot"><button class="btn" type="button" id="wb-chat-attach-btn">' + ic('image', 12) + '添加图片</button>' +
-      '<input id="wb-chat-file" type="file" accept="image/*" multiple hidden>' +
+      '<div class="wb-composer-foot"><button class="btn" type="button" id="wb-chat-attach-btn">' + ic('plus', 12) + '添加附件</button>' +
+      '<input id="wb-chat-file" type="file" accept="image/*,video/*,audio/*" multiple hidden>' +
+      '<span class="wb-note" id="wb-chat-attach-hint"></span>' +
       '<span class="wb-note" style="margin-left:auto">模型：</span>' +
       '<button class="chip' + (state.chatTier === 'fast' ? ' on' : '') + '" type="button" data-tier="fast">标准</button>' +
       '<button class="chip' + (state.chatTier === 'deep' ? ' on' : '') + '" type="button" data-tier="deep">深度</button>' +
@@ -575,6 +603,35 @@
       input.style.height = Math.min(160, input.scrollHeight) + 'px';
     });
   }
+  var CHAT_ATTACH_LIMITS = { image: 9, video: 3, audio: 3 };
+  var CHAT_ATTACH_LABELS = { image: '图片', video: '视频', audio: '音频' };
+  function chatAttachmentKindOf(file) {
+    var type = String((file && file.type) || '');
+    if (type.indexOf('image/') === 0) return 'image';
+    if (type.indexOf('video/') === 0) return 'video';
+    if (type.indexOf('audio/') === 0) return 'audio';
+    return '';
+  }
+  function chatAttachmentCounts(extraKind) {
+    var counts = { image: 0, video: 0, audio: 0 };
+    state.chatAttachments.forEach(function (chip) {
+      if (counts[chip.kind] !== undefined && chip.status !== 'failed') counts[chip.kind] += 1;
+    });
+    if (extraKind && counts[extraKind] !== undefined) counts[extraKind] += 1;
+    return counts;
+  }
+  function chatAttachmentMeta() {
+    var counts = { image: 0, video: 0, audio: 0 };
+    return state.chatAttachments.map(function (chip) {
+      if (chip.status !== 'ready') return null;
+      counts[chip.kind] += 1;
+      return {
+        id: chip.id, kind: chip.kind, index: counts[chip.kind],
+        label: '@' + CHAT_ATTACH_LABELS[chip.kind] + counts[chip.kind],
+        fileName: chip.fileName || chip.name || '',
+      };
+    }).filter(Boolean);
+  }
   function bindChatComposerExtras() {
     var attachBtn = $('#wb-chat-attach-btn');
     var fileInput = $('#wb-chat-file');
@@ -597,24 +654,50 @@
         if (files.length) { event.preventDefault(); void addChatAttachmentFiles(files); }
       });
     }
+    var chat = $('.wb-chat');
+    if (chat && !chat.dataset.dropBound) {
+      chat.dataset.dropBound = '1';
+      chat.addEventListener('dragover', function (event) {
+        event.preventDefault();
+        chat.classList.add('dragging');
+      });
+      chat.addEventListener('dragleave', function (event) {
+        if (!chat.contains(event.relatedTarget)) chat.classList.remove('dragging');
+      });
+      chat.addEventListener('drop', function (event) {
+        event.preventDefault();
+        chat.classList.remove('dragging');
+        var files = Array.prototype.slice.call((event.dataTransfer || {}).files || []);
+        if (files.length) void addChatAttachmentFiles(files);
+      });
+    }
   }
   async function addChatAttachmentFiles(files) {
     for (var i = 0; i < files.length; i++) {
-      if (state.chatAttachments.length >= 4) { toast('一条消息最多带 4 张图片', 'error'); break; }
-      var chip = { id: 'pending' + Date.now() + i, name: files[i].name, status: 'uploading' };
+      var file = files[i];
+      var kind = chatAttachmentKindOf(file);
+      if (!kind) { toast(file.name + '：只支持图片、视频、音频', 'error'); continue; }
+      var counts = chatAttachmentCounts(kind);
+      if (counts[kind] >= CHAT_ATTACH_LIMITS[kind]) {
+        toast(CHAT_ATTACH_LABELS[kind] + '最多 ' + CHAT_ATTACH_LIMITS[kind] + ' 个，已跳过 ' + file.name, 'error');
+        continue;
+      }
+      var chip = { id: 'pending' + Date.now() + i, name: file.name, fileName: file.name, kind: kind, status: 'uploading' };
       state.chatAttachments.push(chip);
       renderChatAttachments();
       try {
         var form = new FormData();
-        form.append('file', files[i]);
+        form.append('file', file);
         form.append('accountId', state.accountId);
+        form.append('folder', '聊天附件');
         var result = await call('/assets', { method: 'POST', body: form });
         chip.id = result.asset.id;
+        chip.fileName = result.asset.fileName || file.name;
         chip.status = 'ready';
         state.assets.unshift(result.asset);
       } catch (error) {
         chip.status = 'failed';
-        toast(files[i].name + '：' + error.message, 'error');
+        toast(file.name + '：' + error.message, 'error');
       }
       renderChatAttachments();
     }
@@ -622,14 +705,45 @@
   function renderChatAttachments() {
     var box = $('#wb-chat-attach');
     if (!box) return;
+    var counts = { image: 0, video: 0, audio: 0 };
     box.innerHTML = state.chatAttachments.map(function (chip, index) {
-      return '<span class="wb-attach-chip">' + ic(chip.status === 'ready' ? 'image' : 'loader', 11) + ' 图片' + (index + 1) +
-        (chip.status === 'failed' ? '（上传失败）' : '') +
+      var label = '';
+      if (chip.status === 'ready' && counts[chip.kind] !== undefined) {
+        counts[chip.kind] += 1;
+        label = '@' + CHAT_ATTACH_LABELS[chip.kind] + counts[chip.kind];
+      }
+      return '<span class="wb-attach-chip' + (chip.status === 'failed' ? ' failed' : '') + '" title="' + esc(chip.fileName || chip.name || '') + '" data-attach-chip="' + index + '" data-attach-label="' + esc(label) + '">' +
+        ic(chip.status === 'uploading' ? 'loader' : attachmentIcon(chip.kind), 11) + ' ' + (chip.status === 'failed' ? esc(chip.fileName || '上传失败') : esc(label)) +
+        (chip.status === 'uploading' ? '<small>上传中</small>' : '') +
         '<button type="button" data-attach-del="' + index + '" aria-label="移除">×</button></span>';
     }).join('');
     $$('[data-attach-del]').forEach(function (button) {
-      button.onclick = function () { state.chatAttachments.splice(Number(button.dataset.attachDel), 1); renderChatAttachments(); };
+      button.onclick = function () {
+        state.chatAttachments.splice(Number(button.dataset.attachDel), 1);
+        renderChatAttachments();
+      };
     });
+    $$('[data-attach-chip]').forEach(function (chip) {
+      chip.onclick = function (event) {
+        if (event.target.closest('[data-attach-del]')) return;
+        var token = String(chip.dataset.attachLabel || '').trim();
+        if (!token) return;
+        var input = $('#wb-input');
+        if (!input) return;
+        token += ' ';
+        var start = input.selectionStart == null ? input.value.length : input.selectionStart;
+        input.value = input.value.slice(0, start) + token + input.value.slice(start);
+        input.selectionStart = input.selectionEnd = start + token.length;
+        input.focus();
+      };
+    });
+    var hint = $('#wb-chat-attach-hint');
+    if (hint) {
+      var total = state.chatAttachments.filter(function (chip) { return chip.status !== 'failed'; }).length;
+      hint.textContent = total
+        ? '已附 ' + counts.image + '/' + CHAT_ATTACH_LIMITS.image + ' 图 · ' + counts.video + '/' + CHAT_ATTACH_LIMITS.video + ' 视频 · ' + counts.audio + '/' + CHAT_ATTACH_LIMITS.audio + ' 音频；发送后自动抽帧/转写'
+        : '图片 9 / 视频 3 / 音频 3，可拖入；视频会抽关键帧并转写语音';
+    }
   }
   function creativeIntentOf(text) {
     if (/开始今天的选题|开始选题|帮我(想|做|搞|选).{0,8}(选题|文案|口播)|给我(想|做|写).{0,8}(选题|文案|口播)|我想(做|写|开始).{0,8}(选题|文案|口播)/.test(text)) return 'today';
@@ -658,13 +772,14 @@
       $('#wb-today-no').onclick = function () { startToday(false); };
       return;
     }
-    var attachmentIds = state.chatAttachments.filter(function (chip) { return chip.status === 'ready'; }).map(function (chip) { return chip.id; });
+    var attachmentMeta = chatAttachmentMeta();
+    var attachmentIds = attachmentMeta.map(function (item) { return item.id; });
     state.chatAttachments = [];
     renderChatAttachments();
     state.busy = true;
     state.abort = new AbortController();
-    state.messages.push({ role: 'user', content: text });
-    var assistant = { role: 'assistant', content: '', pending: true, citations: null };
+    state.messages.push({ role: 'user', content: text, attachments: attachmentMeta });
+    var assistant = { role: 'assistant', content: '', pending: true, citations: null, status: '' };
     state.messages.push(assistant);
     renderMessages(true);
     var send = $('#wb-send');
@@ -694,11 +809,13 @@
           if (line.indexOf('data: ') !== 0) continue;
           var data; try { data = JSON.parse(line.slice(6)); } catch (e) { continue; }
           if (event === 'citations') { assistant.citations = data; }
-          else if (event === 'delta') { assistant.pending = false; assistant.content += data.text || ''; renderMessages(); }
-          else if (event === 'reset') { assistant.content = ''; renderMessages(); }
+          else if (event === 'status') { assistant.status = data.text || ''; renderMessages(); }
+          else if (event === 'delta') { assistant.pending = false; assistant.status = ''; assistant.content += data.text || ''; renderMessages(); }
+          else if (event === 'reset') { assistant.content = ''; assistant.status = ''; renderMessages(); }
           else if (event === 'error') throw new Error(data.message || '生成失败');
           else if (event === 'done') {
             assistant.pending = false;
+            assistant.status = '';
             if (data.message) {
               assistant.id = data.message.id || assistant.id;
               assistant.content = data.message.content || assistant.content;
@@ -718,12 +835,14 @@
             renderMessages();
           } else if (event === 'stopped') {
             assistant.pending = false;
+            assistant.status = '';
             if (!assistant.content) assistant.content = '（已停止生成）';
           }
         }
       }
     } catch (error) {
       assistant.pending = false;
+      assistant.status = '';
       if (error.name === 'AbortError') assistant.content = assistant.content || '（已停止生成）';
       else { assistant.content = assistant.content || ('生成失败：' + (error.message || error)); toast(error.message || '生成失败', 'error'); }
     } finally {
@@ -1392,13 +1511,39 @@
     if (!box) return;
     box.innerHTML = state.avatarRuns.length ? state.avatarRuns.map(function (run) {
       var body = '';
-      if (run.status === 'running') body = '<div class="wb-flow-steps">' + (run.steps || []).map(avatarStepHtml).join('') + '</div>';
-      if (run.status === 'failed') body = '<p class="err">' + ic('alert', 13) + '<span>' + esc(run.error || '合成失败') + '</span></p>';
-      if (run.status === 'succeeded' && run.videoAssetId) body = (run.note ? '<p class="wb-note">' + esc(run.note) + '</p>' : '') + '<video class="wb-render-video" controls preload="metadata" data-avatar-video="' + esc(run.videoAssetId) + '"></video>';
+      var failedSegments = (run.segments || []).filter(function (segment) { return segment.status === 'failed'; });
+      if (run.status === 'running') body = '<div class="wb-flow-steps">' + (run.steps || []).map(avatarStepHtml).join('') + '</div>' +
+        (run.segmentCount ? '<p class="wb-note">已完成 ' + run.doneSegments + ' / ' + run.segmentCount + ' 段' + (run.failedSegments ? ' · 失败 ' + run.failedSegments + ' 段' : '') + '</p>' : '');
+      if (run.status === 'failed') {
+        var retryLabel = failedSegments.length ? '重试失败分段' : (run.segmentCount && run.doneSegments < run.segmentCount ? '重试未完成分段' : '重试整单');
+        body = '<p class="err">' + ic('alert', 13) + '<span>' + esc(run.error || '合成失败') + '</span></p>' +
+          (run.segmentCount ? '<p class="wb-note">已完成 ' + run.doneSegments + ' / ' + run.segmentCount + ' 段；已成功的段会保留。</p>' : '') +
+          (failedSegments.length ? '<div class="wb-job-segments">' + failedSegments.map(function (segment) {
+            return '<p><b>第 ' + segment.index + ' 段</b>：' + esc(segment.text) + '<br><span class="err">' + esc(segment.error || '失败') + '</span></p>';
+          }).join('') + '</div>' : '') +
+          '<button class="btn primary" type="button" data-avatar-retry="' + esc(run.id) + '">' + ic('refresh', 12) + retryLabel + '</button>';
+      }
+      if (run.status === 'succeeded' && run.videoAssetId) {
+        body = (run.note ? '<p class="wb-note">' + esc(run.note) + '</p>' : '') +
+          '<video class="wb-render-video" controls preload="metadata" data-avatar-video="' + esc(run.videoAssetId) + '"></video>';
+      }
       return '<div class="wb-render"><div class="wb-card-head"><div><b>' + esc((run.text || '').slice(0, 40)) + '</b>' +
         '<span class="wb-tag ' + (run.status === 'succeeded' ? 'ok' : run.status === 'failed' ? 'bad' : '') + '">' + esc(run.status === 'running' ? '合成中' : run.status === 'succeeded' ? '完成' : '失败') + '</span>' +
-        '<div class="wb-meta">' + fmtDate(run.createdAt) + '</div></div></div>' + body + '</div>';
+        '<div class="wb-meta">' + fmtDate(run.createdAt) + ' · ' + esc(run.speedLabel || '自然') + (run.segmentCount ? ' · ' + run.segmentCount + ' 段' : '') + (run.durationSeconds ? ' · ' + run.durationSeconds + ' 秒' : '') + '</div></div></div>' + body + '</div>';
     }).join('') : '<p class="wb-muted">还没有数字人口播记录。</p>';
+    $$('[data-avatar-retry]').forEach(function (button) {
+      button.onclick = async function () {
+        button.disabled = true; button.innerHTML = ic('loader', 12) + '重试中…';
+        try {
+          await call('/avatar/runs/' + encodeURIComponent(button.dataset.avatarRetry) + '/retry', { method: 'POST', body: {} });
+          toast('已重新提交失败分段', 'success');
+          refreshAvatarRuns(true);
+        } catch (error) {
+          toast(error.message, 'error');
+          button.disabled = false; button.innerHTML = ic('refresh', 12) + '重试失败分段';
+        }
+      };
+    });
     (function () {
       var videos = $$('[data-avatar-video]');
       for (var i = 0; i < videos.length; i++) {
@@ -1411,6 +1556,43 @@
         })(videos[i]);
       }
     })();
+  }
+  function scheduleAvatarEstimate() {
+    if (state.avatarEstimateTimer) clearTimeout(state.avatarEstimateTimer);
+    state.avatarEstimateTimer = setTimeout(function () { void updateAvatarEstimate(); }, 350);
+  }
+  async function updateAvatarEstimate() {
+    var form = $('#wb-avatar-form');
+    var box = $('#wb-avatar-estimate');
+    if (!form || !box) return;
+    var speech = String((form.querySelector('[name="text"]') || {}).value || '').trim();
+    var speed = String((form.querySelector('[name="speed"]') || {}).value || 'natural');
+    if (!speech) {
+      var emptySubmit = form.querySelector('[type="submit"]');
+      if (emptySubmit) emptySubmit.disabled = !((form.querySelector('[name="voiceId"]') || {}).value) || !((form.querySelector('[name="imageAssetId"]') || {}).value);
+      box.innerHTML = '<span class="wb-muted">填入口播文案后，这里会显示预计时长、分段数和参考费用。</span>';
+      return;
+    }
+    box.innerHTML = '<span class="wb-muted">' + ic('loader', 11) + ' 正在按语速估算…</span>';
+    try {
+      var result = await call('/estimate/avatar', { method: 'POST', body: { text: speech, speed: speed } });
+      var estimate = result.estimate || {};
+      var plan = estimate.plan || {};
+      var items = (estimate.items || []).map(function (item) {
+        return '<span>' + esc(item.label) + '：约 ' + (Number(item.fen || 0) / 100).toFixed(2) + ' 元</span>';
+      }).join('');
+      var overLimit = plan.overLimit || Number(plan.batchCount || 0) > Number(plan.maxSegments || 30);
+      var submit = form.querySelector('[type="submit"]');
+      if (submit) submit.disabled = overLimit || !((form.querySelector('[name="voiceId"]') || {}).value) || !((form.querySelector('[name="imageAssetId"]') || {}).value);
+      box.innerHTML = '<div class="wb-avatar-estimate-head"><b>预计 ' + esc(plan.targetDuration || 0) + ' 秒 · ' + esc(plan.batchCount || 1) + ' 段</b>' +
+        '<span class="wb-tag">预估 ' + (estimate.minFen === estimate.maxFen ? '' : '约 ') + (Number(estimate.minFen || 0) / 100).toFixed(2) +
+        (estimate.minFen === estimate.maxFen ? '' : '–' + (Number(estimate.maxFen || 0) / 100).toFixed(2)) + ' 元</span></div>' +
+        (overLimit ? '<p class="err">这段文案超过单次 ' + esc(plan.maxSegments || 30) + ' 段上限，请拆成多条或缩短后再提交。</p>' : '') +
+        '<p class="wb-note">' + esc(estimate.note || '') + '</p>' +
+        (items ? '<details class="wb-avatar-estimate-items"><summary>费用明细</summary>' + items + '</details>' : '');
+    } catch (error) {
+      box.innerHTML = '<span class="wb-muted">' + esc(error.message || '估价失败') + '</span>';
+    }
   }
   function openCloneVoiceDialog() {
     var audioAssets = state.assets.filter(function (item) { return item.kind === 'audio'; });
@@ -1442,20 +1624,33 @@
     var referenceVoices = readyVoices.filter(function (item) { return item.mode === 'reference'; });
     var training = state.voices.filter(function (item) { return item.status === 'training'; });
     var imageAssets = state.assets.filter(function (item) { return item.kind === 'image'; });
-    box.innerHTML = '<div class="wb-card-head"><div><h3>数字人口播</h3><p>用自己的音色和形象照，把文案直接变成精准对口型口播。克隆通道不可用时自动改用参考音频直出；只有对口型真正失败才输出底片+配音并标注。成片进素材库「数字人」文件夹。</p></div></div>' +
+    var speeds = [
+      ['natural', '自然 · 约50字/10秒'],
+      ['slightly_fast', '稍快 · 约60字/10秒'],
+      ['fast', '较快 · 约75字/10秒'],
+      ['extreme', '极快 · 约90字/10秒'],
+    ];
+    box.innerHTML = '<div class="wb-card-head"><div><h3>数字人口播</h3><p>用自己的音色和形象照做精准对口型口播。长文案会按标点自动分段、逐段合成后拼成一条完整视频，不用自己切；语速四档会真实改变配音速度。成片进素材库「数字人」文件夹。</p></div></div>' +
       '<form id="wb-avatar-form" class="wb-form">' +
       '<label class="wb-field"><span>音色</span><select name="voiceId">' + (readyVoices.length ? readyVoices.map(function (v) { return '<option value="' + esc(v.id) + '">' + esc(v.name) + (v.mode === 'reference' ? '（参考直出）' : '') + '</option>'; }).join('') : '<option value="">（先克隆一个音色）</option>') + '</select></label>' +
       '<label class="wb-field"><span>形象照（正面人脸清晰）</span><select name="imageAssetId">' + (imageAssets.length ? imageAssets.slice(0, 30).map(function (a) { return '<option value="' + esc(a.id) + '">' + esc(a.fileName) + '</option>'; }).join('') : '<option value="">（素材库里还没有图片）</option>') + '</select></label>' +
-      '<label class="wb-field full"><span>口播文案（按 4 秒合成，建议 15 字内；超出会截断）</span><textarea name="text" placeholder="把要口播的文案粘进来（建议 15 字内，口播更完整）"></textarea></label>' +
+      '<label class="wb-field"><span>语速</span><select name="speed">' + speeds.map(function (row) { return '<option value="' + row[0] + '">' + row[1] + '</option>'; }).join('') + '</select></label>' +
+      '<label class="wb-field full"><span>口播文案（会自动分段，每段不超过 4 秒；不用自己切）</span><textarea name="text" maxlength="3000" placeholder="把要口播的完整文案粘进来，例如：暑期班报名开始了，前 20 名送两节体验课…"></textarea></label>' +
+      '<div class="wb-field full" id="wb-avatar-estimate"></div>' +
       '<div class="wb-field full wb-actions"><button class="btn primary" type="submit"' + (readyVoices.length && imageAssets.length ? '' : ' disabled') + '>' + ic('video', 13) + '生成口播视频</button>' +
       '<button class="btn" type="button" id="wb-voice-clone-open">' + ic('plus', 12) + '克隆新音色</button>' +
       (training.length ? '<span class="wb-note">' + ic('loader', 11) + ' ' + training.length + ' 个音色克隆中…</span>' : '') +
       (referenceVoices.length ? '<span class="wb-note">' + ic('alert', 11) + ' ' + referenceVoices.length + ' 个音色为参考音频直出（非训练克隆）</span>' : '') +
-      '<span class="wb-note">按次计费（克隆/合成/对口型各一步）；20 次/小时。</span></div></form>' +
+      '<span class="wb-note">按次计费（底片/语音/对口型各一步）；20 次/小时。</span></div></form>' +
       '<div id="wb-avatar-list" style="margin-top:10px"></div>';
     renderAvatarList();
     $('#wb-voice-clone-open').onclick = openCloneVoiceDialog;
     var form = $('#wb-avatar-form');
+    var textarea = form.querySelector('[name="text"]');
+    var speedSelect = form.querySelector('[name="speed"]');
+    textarea.addEventListener('input', scheduleAvatarEstimate);
+    speedSelect.addEventListener('change', scheduleAvatarEstimate);
+    updateAvatarEstimate();
     form.onsubmit = async function (event) {
       event.preventDefault();
       var button = form.querySelector('[type="submit"]');
@@ -1464,8 +1659,12 @@
       try {
         var data = Object.fromEntries(new FormData(form).entries());
         data.accountId = state.accountId;
-        await call('/avatar/run', { method: 'POST', body: data });
-        toast('已提交，全流程通常 3-6 分钟；这一页会自动刷新', 'success');
+        var result = await call('/avatar/run', { method: 'POST', body: data });
+        if (result.run) state.avatarRuns.unshift(result.run);
+        toast(result.run && result.run.segmentCount > 1
+          ? '已提交：会分 ' + result.run.segmentCount + ' 段生成后自动拼接，这一页会自动刷新'
+          : '已提交，全流程通常 3-6 分钟；这一页会自动刷新', 'success');
+        renderAvatarList();
         refreshAvatarRuns(true);
       } catch (error) {
         toast(error.message, 'error');
@@ -1473,10 +1672,13 @@
       }
     };
   }
-  async function backfillStats(draftId) {
-    showDialog('回填发布数据', '<p class="wb-note">上传这条文案发布后的抖音作者端数据截图（播放/点赞/评论等），系统自动识别存档。</p>' +
-      '<label class="btn primary" for="wb-stats-input">选择截图</label>' +
-      '<input id="wb-stats-input" type="file" hidden accept=".jpg,.jpeg,.png,.webp">' +
+  function openStatsBackfill(source, sourceId) {
+    var updating = Boolean(source && sourceId);
+    showDialog(updating ? '更新发布数据' : '截图回填', '<p class="wb-note">上传抖音作者端的作品数据截图（播放/点赞/评论/分享/收藏），系统自动识别存档。' +
+      (updating ? '这次识别会覆盖这条记录原来的数字。' : '不用逐条截图，也不用回到文案草稿页。') + '</p>' +
+      '<label class="wb-field full"><span>作品主题（可选，便于在复盘列表里认出来）</span><input id="wb-stats-topic" maxlength="200" placeholder="例如：暑期班探店口播"></label>' +
+      '<label class="btn primary" for="wb-stats-input">' + (updating ? '选择新截图' : '选择截图') + '</label>' +
+      '<input id="wb-stats-input" type="file" hidden accept=".jpg,.jpeg,.png,.webp,image/*">' +
       '<p class="wb-note" id="wb-stats-msg" style="margin-top:8px"></p>');
     var input = $('#wb-stats-input');
     input.onchange = async function () {
@@ -1488,15 +1690,20 @@
         var form = new FormData();
         form.append('file', file);
         form.append('accountId', state.accountId);
+        form.append('folder', '数据复盘截图');
         var uploaded = await call('/assets', { method: 'POST', body: form });
-        var result = await call('/copy/' + encodeURIComponent(draftId) + '/stats', { method: 'POST', body: { assetId: uploaded.asset.id } });
+        var body = {
+          assetId: uploaded.asset.id,
+          accountId: state.accountId,
+          topic: String(($('#wb-stats-topic') || {}).value || '').trim(),
+        };
+        if (updating && source === 'snapshot') body.snapshotId = sourceId;
+        if (updating && source === 'copy_draft') body.draftId = sourceId;
+        var result = await call('/reviews/backfill', { method: 'POST', body: body });
         var stats = (result.data || result).stats || {};
         msg.textContent = '已识别：播放 ' + (stats.plays ?? '—') + ' · 赞 ' + (stats.likes ?? '—') + ' · 评论 ' + (stats.comments ?? '—') + (stats.publishedAt ? ' · ' + stats.publishedAt : '');
-        toast('发布数据已回填', 'success');
-        var refreshed = await call('/copy');
-        state.copy = refreshed.items || state.copy;
-        if (state.tab === 'reports') await loadReports(true);
-        render();
+        toast(updating ? '发布数据已更新' : '发布数据已回填', 'success');
+        await loadReports(true);
         setTimeout(closeDialog, 1200);
       } catch (error) {
         msg.textContent = '';
@@ -1773,9 +1980,17 @@
     var plan = info.plan;
     var missing = plan.missing || [];
     var repeats = info.repeatRisks || [];
+    var estimate = info.estimate;
+    var estimateHtml = '';
+    if (estimate) {
+      var range = estimate.minFen === estimate.maxFen
+        ? (Number(estimate.totalFen || 0) / 100).toFixed(2) + ' 元'
+        : (Number(estimate.minFen || 0) / 100).toFixed(2) + '–' + (Number(estimate.maxFen || 0) / 100).toFixed(2) + ' 元';
+      estimateHtml = '<div class="wb-plan-notice"><b>渲染预估：' + range + '</b>（' + esc(plan.duration) + ' 秒 · ' + esc(plan.resolution) + '）<br>' + esc(estimate.note || '') + '</div>';
+    }
     showDialog('确认本次制作', '<p><b>' + esc(plan.title) + '</b> · 第 ' + plan.version + ' 版 · ' + plan.duration + ' 秒 · ' + esc(plan.resolution) + ' · ' + esc(plan.ratio) + '</p>' +
       '<div class="wb-plan-notice">' + esc(info.notice) + '<br>输出 ' + info.outputSeconds + ' 秒；参考视频按素材实际时长另计（编导稿阶段不扣费）。' +
-      (missing.length ? '<br>尚缺素材：' + esc(missing.join('、')) : '') + '</div>' +
+      (missing.length ? '<br>尚缺素材：' + esc(missing.join('、')) : '') + '</div>' + estimateHtml +
       (repeats.length ? '<div class="wb-plan-notice warn">素材重复提醒：' + repeats.map(function (item) { return esc(item.name) + '（已用于 ' + item.usage.submitted + ' 个已提交方案）'; }).join('；') + '。这是风险提示，不保证或规避平台判重。</div>' : '') +
       (info.videoReady ? '' : '<p class="wb-note">当前视频渠道未配置；编导稿仍可先生成，渲染前需要管理员配置视频渠道。</p>') +
       '<h4>本次提交给编导的提示词</h4><pre class="wb-plan-prompt">' + esc(info.prompt) + '</pre>' +
@@ -2319,6 +2534,57 @@
       WB_RATIOS.map(function (r) { return '<option value="' + r + '"' + (draft.ratio === r ? ' selected' : '') + '>' + r + '</option>'; }).join('') + '</select></label>' +
       '</div>';
   }
+  function scheduleVideoEstimates() {
+    if (state.videoEstimateTimer) clearTimeout(state.videoEstimateTimer);
+    state.videoEstimateTimer = setTimeout(function () { void refreshVideoEstimates(); }, 300);
+  }
+  async function refreshVideoEstimates() {
+    var nodes = $$('[data-wb-v-estimate]');
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      var draft = findVideoDraft(node.dataset.wbVEstimate);
+      if (!draft) continue;
+      try {
+        var result = await call('/estimate/video', {
+          method: 'POST',
+          body: { durationSeconds: draft.durationSeconds, resolution: draft.resolution, audio: true },
+        });
+        var estimate = result.estimate || {};
+        var items = (estimate.items || []).map(function (item) {
+          return '<span>' + esc(item.label) + '：约 ' + (Number(item.fen || 0) / 100).toFixed(2) + ' 元</span>';
+        }).join('');
+        var range = estimate.minFen === estimate.maxFen
+          ? (Number(estimate.totalFen || 0) / 100).toFixed(2) + ' 元'
+          : (Number(estimate.minFen || 0) / 100).toFixed(2) + '–' + (Number(estimate.maxFen || 0) / 100).toFixed(2) + ' 元';
+        node.innerHTML = '<span class="wb-note">' + ic('bulb', 11) + ' 本次渲染预估 <b>' + range + '</b>（' + esc(draft.durationSeconds) + ' 秒 · ' + esc(draft.resolution) + '）；编导稿阶段不扣费。</span>' +
+          '<details class="wb-avatar-estimate-items"><summary>费用明细与口径</summary>' + (items || '') + '<span>' + esc(estimate.note || '') + '</span></details>';
+      } catch (error) {
+        node.innerHTML = '<span class="wb-muted">暂时估不出价格：' + esc(error.message || '渠道未配置') + '；提交后以上游实际扣费为准。</span>';
+      }
+    }
+  }
+  async function refreshWorkEstimates() {
+    var nodes = $$('[data-wb-v-work-estimate]');
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      var work = state.videoWorks.filter(function (item) { return item.id === node.dataset.wbVWorkEstimate; })[0];
+      if (!work || (work.status !== 'draft' && work.status !== 'failed')) continue;
+      try {
+        var result = await call('/estimate/video', {
+          method: 'POST',
+          body: { durationSeconds: work.durationSeconds, resolution: work.resolution || '768P', audio: true },
+        });
+        var estimate = result.estimate || {};
+        var range = estimate.minFen === estimate.maxFen
+          ? (Number(estimate.totalFen || 0) / 100).toFixed(2) + ' 元'
+          : (Number(estimate.minFen || 0) / 100).toFixed(2) + '–' + (Number(estimate.maxFen || 0) / 100).toFixed(2) + ' 元';
+        node.innerHTML = '<span class="wb-note">' + ic('bulb', 11) + ' 确认渲染前预估 <b>' + range + '</b>（' + esc(work.durationSeconds) + ' 秒 · ' + esc(work.resolution || '768P') + '）</span>' +
+          '<details class="wb-avatar-estimate-items"><summary>口径</summary><span>' + esc(estimate.note || '') + '</span></details>';
+      } catch (error) {
+        node.innerHTML = '<span class="wb-muted">暂时估不出价格：' + esc(error.message || '渠道未配置') + '</span>';
+      }
+    }
+  }
   function renderVideoDraftCard(draft) {
     var head = '<div class="wb-card-head"><div><h3>' + esc(WB_VIDEO_MODES[draft.mode] || '生成') + '模式 · 新任务</h3><p>内容方向、开场方式和参数一次选完；素材和音色从下方添加。</p></div>' +
       '<button class="btn" type="button" data-wb-v-draft="discard" data-id="' + esc(draft.id) + '">取消</button></div>';
@@ -2348,6 +2614,7 @@
       '<div class="wb-actions"><button class="btn" type="button" data-wb-v-action="pick-assets" data-id="' + esc(draft.id) + '">' + ic('image', 12) + '添加素材</button>' +
       '<button class="btn" type="button" data-wb-v-action="open-voices" data-id="' + esc(draft.id) + '">' + ic('music', 12) + '音色库</button></div></div>' +
       wbParamRow(draft, draft.mode !== 'replicate') +
+      '<div class="wb-field full wb-v-estimate" data-wb-v-estimate="' + esc(draft.id) + '"><span class="wb-muted">正在估算这次渲染费用…</span></div>' +
       '<div class="wb-field full wb-actions">' +
       '<button class="btn primary" type="button" data-wb-v-action="start" data-id="' + esc(draft.id) + '">' + (draft.mode === 'replicate' ? '开始复刻' : '开始创作') + '</button>' +
       '<span class="wb-note">先出编导稿（可逐镜修改），确认后再提交视频渲染。</span></div></article>';
@@ -2422,6 +2689,9 @@
     var rendersHtml = mainRender ? wbRenderRow(mainRender) : '';
     var output = work.status === 'succeeded' && work.outputUrl
       ? '<video class="wb-render-video" controls preload="metadata" data-work-video="' + esc(work.outputAssetId) + '"></video>' : '';
+    var estimateNode = (work.status === 'draft' || work.status === 'failed')
+      ? '<div class="wb-field full wb-v-estimate" data-wb-v-work-estimate="' + esc(work.id) + '"><span class="wb-muted">正在估算这次渲染费用…</span></div>'
+      : '';
     var actions = '<div class="wb-field full wb-actions">';
     if (work.status === 'draft' || work.status === 'failed') {
       if (work.status === 'failed' && !script) actions += '<button class="btn primary" type="button" data-wb-v-work="regenerate" data-id="' + esc(work.id) + '">重新生成脚本</button>';
@@ -2434,7 +2704,7 @@
     }
     if (script && !busy) actions += '<button class="btn" type="button" data-wb-v-work="save-script" data-id="' + esc(work.id) + '">保存编导稿修改</button>';
     actions += '</div>';
-    return '<article class="wb-card wb-v-work' + (busy ? ' busy' : '') + '" data-wb-v-work-card="' + esc(work.id) + '">' + head + message + error + refs + scriptHtml + rendersHtml + output + actions + '</article>';
+    return '<article class="wb-card wb-v-work' + (busy ? ' busy' : '') + '" data-wb-v-work-card="' + esc(work.id) + '">' + head + message + error + refs + scriptHtml + rendersHtml + output + estimateNode + actions + '</article>';
   }
   function renderVideoQueue() {
     var items = state.videoQueue.slice(0, 20);
@@ -2677,6 +2947,8 @@
     bindLegacyVideoHandlers();
     hydrateWorkVideos();
     void hydrateShotFrames();
+    void refreshVideoEstimates();
+    void refreshWorkEstimates();
 
     $$('[data-wb-v-launch]').forEach(function (button) {
       button.onclick = function () {
@@ -2708,6 +2980,7 @@
         var value = control.value;
         if (['durationSeconds', 'intervalDays', 'count'].indexOf(field) >= 0) value = Number(value);
         updateVideoDraft(draft.id, (function () { var patch = {}; patch[field] = value; return patch; })());
+        if (field === 'durationSeconds' || field === 'resolution') scheduleVideoEstimates();
       };
       if (control.tagName === 'TEXTAREA' || control.tagName === 'INPUT') control.addEventListener('input', handler);
       else control.addEventListener('change', handler);
@@ -3157,11 +3430,12 @@
     var screenshotCount = Number(counts.screenshot || 0);
     var reviewCards = [['已复盘', published.length, '条'], ['总播放', totals.plays || 0, ''], ['总点赞', totals.likes || 0, ''], ['总评论', totals.comments || 0, ''], ['总分享', totals.shares || 0, ''], ['总收藏', totals.saves || 0, '']];
     var insight = state.reviewInsight;
-    var head = '<div class="wb-card"><div class="wb-card-head"><div><h3>发布数据复盘</h3><p>用采集助手同步自己的主页作品数据；积累几条后让小铃铛出复盘洞察。</p></div></div>' +
+    var head = '<div class="wb-card"><div class="wb-card-head"><div><h3>发布数据复盘</h3><p>用采集助手同步自己的主页作品；没有接采集助手的历史作品，可以直接上传作者端数据截图回填。</p></div></div>' +
       '<div class="wb-stats">' + reviewCards.map(function (item) { return '<div class="wb-stat"><span>' + item[0] + '</span><b>' + item[1] + '<small style="font-size:11px;color:var(--text-3);font-weight:400"> ' + item[2] + '</small></b></div>'; }).join('') + '</div>' +
-      '<p class="wb-muted">采集助手 ' + ownCount + ' 条' + (screenshotCount ? ' · 历史截图 ' + screenshotCount + ' 条' : '') + '</p>' +
+      '<p class="wb-muted">采集助手 ' + ownCount + ' 条' + (screenshotCount ? ' · 截图回填 ' + screenshotCount + ' 条' : '') + '</p>' +
       '<div class="wb-field full wb-actions">' +
       '<button class="btn primary" type="button" data-review-action="insight"' + (published.length ? '' : ' disabled') + '>' + ic('bulb', 13) + '生成复盘洞察</button>' +
+      '<button class="btn" type="button" data-review-action="backfill">' + ic('image', 13) + '截图回填</button>' +
       '<button class="btn" type="button" data-review-action="self-help">' + ic('refresh', 13) + '采集我的作品</button>' +
       '<button class="btn" type="button" data-review-action="refresh-reports">刷新</button>' +
       '</div>' +
@@ -3178,16 +3452,18 @@
           var publishedText = isOwn ? String(s.publishedAt || '').slice(0, 10) : (s.publishedAt || '');
           var action = isOwn
             ? (item.shareUrl ? '<a class="btn" href="' + esc(item.shareUrl) + '" target="_blank" rel="noopener noreferrer">打开作品</a>' : '<span class="wb-muted">已同步</span>')
-            : '<span class="wb-muted">历史数据</span>';
+            : (item.canUpdate
+              ? '<button class="btn" type="button" data-review-update="' + esc(item.sourceId || '') + '" data-review-source="' + esc(item.sourceTable || 'snapshot') + '">更新数据</button>'
+              : '<span class="wb-muted">历史数据</span>');
           return '<tr><td title="' + esc(item.topic) + '">' + esc(String(item.topic || '').slice(0, 26)) + '</td>' +
-            '<td>' + (isOwn ? '采集助手' : '截图') + '</td>' +
+            '<td>' + (isOwn ? '采集助手' : '截图回填') + '</td>' +
             '<td>' + esc(publishedText || '—') + '</td>' +
             [s.plays, s.likes, s.comments, s.shares, s.saves].map(function (value) { return '<td>' + (Number.isFinite(Number(value)) ? Number(value).toLocaleString() : '—') + '</td>'; }).join('') +
             '<td>' + fmtDate(s.backfilledAt) + '</td>' +
             '<td>' + action + '</td></tr>';
         }).join('') + '</tbody></table></div>';
     } else {
-      listHtml = '<div class="wb-card"><p class="wb-muted">还没有复盘数据。用采集助手同步自己的主页。</p></div>';
+      listHtml = '<div class="wb-card"><p class="wb-muted">还没有复盘数据。用采集助手同步自己的主页，或点上面「截图回填」上传作者端数据截图。</p></div>';
     }
     var stats = (state.summary && state.summary.stats) || {};
     var cards = [['对话消息', stats.messages || 0, '条'], ['视频项目', stats.videos || 0, '个'], ['素材', stats.assets || 0, '份'], ['同行观察', stats.references || 0, '条'], ['生成任务', stats.jobs || 0, '次']];
@@ -3204,6 +3480,7 @@
       button.onclick = async function () {
         var action = button.dataset.reviewAction;
         if (action === 'self-help') { openSelfCollectHelp(); return; }
+        if (action === 'backfill') { openStatsBackfill(); return; }
         if (action === 'refresh-reports') {
           button.disabled = true; button.innerHTML = ic('loader', 12) + '刷新中…';
           await loadReports(true);
@@ -3238,14 +3515,200 @@
         } catch (error) { toast(error.message, 'error'); button.disabled = false; button.innerHTML = original; }
       };
     });
+    $$('[data-review-update]').forEach(function (button) {
+      button.onclick = function () {
+        openStatsBackfill(button.dataset.reviewSource || 'snapshot', button.dataset.reviewUpdate || '');
+      };
+    });
   }
   /* 历史任务：独立一级目的地（按用户口径保留），不再塞进数据复盘子页签。 */
+  /* 历史任务：独立一级目的地（按用户口径保留）；类型筛选 + 失败原因 + 单任务重试。 */
+  function stopJobsPolling() {
+    if (state.jobsTimer) { clearInterval(state.jobsTimer); state.jobsTimer = null; }
+  }
+  function startJobsPolling() {
+    var running = (state.jobStatusFacets || []).some(function (item) { return item.status === 'running' && Number(item.count) > 0; });
+    if (!running) { stopJobsPolling(); return; }
+    if (state.jobsTimer) return;
+    state.jobsTimer = setInterval(function () {
+      if (state.tab !== 'jobs') { stopJobsPolling(); return; }
+      void loadJobs(true);
+    }, 4000);
+  }
+  async function loadJobs(silent) {
+    var params = ['limit=100'];
+    if (state.jobKind) params.push('kind=' + encodeURIComponent(state.jobKind));
+    if (state.jobStatus) params.push('status=' + encodeURIComponent(state.jobStatus));
+    try {
+      var data = await call('/jobs?' + params.join('&'));
+      state.jobs = data.items || [];
+      state.jobFacets = data.kinds || [];
+      state.jobStatusFacets = data.statuses || [];
+      state.jobTotal = Number(data.total || 0);
+    } catch (error) {
+      if (!silent) toast(error.message, 'error');
+      return;
+    }
+    if (state.tab === 'jobs') renderJobs();
+    startJobsPolling();
+  }
+  function jobStatusChip(status) {
+    var cls = status === 'succeeded' ? 'ok' : status === 'failed' ? 'bad' : '';
+    return '<span class="wb-tag ' + cls + '">' + esc(jobStatusText(status)) + '</span>';
+  }
   function renderJobs() {
-    var jobs = state.jobs;
-    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll"><div class="wb-card"><div class="wb-card-head"><div><h3>任务流水</h3><p>文案、视频、数字人生成的每次状态；失败原因也在这里。</p></div></div>' +
-      (jobs.length ? '<table class="wb-table"><thead><tr><th>类型</th><th>状态</th><th>说明</th><th>创建</th><th>更新</th></tr></thead><tbody>' +
-        jobs.map(function (job) { return '<tr><td>' + esc(job.kind) + '</td><td>' + esc(jobStatusText(job.status)) + '</td><td>' + esc(job.detail) + '</td><td>' + fmtDate(job.createdAt) + '</td><td>' + fmtDate(job.updatedAt) + '</td></tr>'; }).join('') + '</tbody></table>' : '<p class="wb-muted">还没有历史任务。</p>') +
-      '</div></div></div>';
+    var jobs = state.jobs || [];
+    var totalAll = (state.jobFacets || []).reduce(function (sum, item) { return sum + Number(item.count || 0); }, 0);
+    var filters = '<div class="wb-chips" style="margin-bottom:10px">' +
+      '<button class="chip' + (state.jobKind ? '' : ' on') + '" type="button" data-job-kind="">全部 ' + totalAll + '</button>' +
+      (state.jobFacets || []).map(function (item) {
+        return '<button class="chip' + (state.jobKind === item.kind ? ' on' : '') + '" type="button" data-job-kind="' + esc(item.kind) + '">' + esc(item.kind) + ' ' + item.count + '</button>';
+      }).join('') + '</div>';
+    var statusSelect = '<label class="wb-inline"><span>状态</span><select id="wb-job-status">' +
+      [['', '全部'], ['running', '进行中'], ['succeeded', '完成'], ['failed', '失败']].map(function (row) {
+        return '<option value="' + row[0] + '"' + (state.jobStatus === row[0] ? ' selected' : '') + '>' + row[1] + '</option>';
+      }).join('') + '</select></label>';
+    var rows = jobs.map(function (job) {
+      var reason = job.status === 'failed' ? (job.error || job.detail || '') : '';
+      return '<tr data-job-row="' + esc(job.id) + '">' +
+        '<td><b>' + esc(job.kind) + '</b>' + (Number(job.attempts) > 0 ? '<div class="wb-meta">第 ' + (Number(job.attempts) + 1) + ' 次尝试</div>' : '') + '</td>' +
+        '<td>' + jobStatusChip(job.status) + '</td>' +
+        '<td title="' + esc(job.detail) + '">' + esc(String(job.detail || '').slice(0, 60)) + '</td>' +
+        '<td class="wb-job-error" title="' + esc(reason) + '">' + (reason ? esc(String(reason).slice(0, 80)) : '—') + '</td>' +
+        '<td>' + fmtDate(job.createdAt) + '</td>' +
+        '<td><div class="wb-actions"><button class="btn" type="button" data-job-detail="' + esc(job.id) + '">详情</button>' +
+        (job.retryable ? '<button class="btn primary" type="button" data-job-retry="' + esc(job.id) + '">重试</button>' : '') + '</div></td></tr>';
+    }).join('');
+    var head = '<div class="wb-card"><div class="wb-card-head"><div><h3>历史任务</h3><p>文案、视频、转写、数字人和方案的每次生成状态；失败原因单独保留，能重跑的会给出「重试」。</p></div>' +
+      '<div class="wb-actions">' + statusSelect + '<button class="btn" type="button" id="wb-job-refresh">' + ic('refresh', 12) + '刷新</button></div></div>' + filters +
+      (jobs.length
+        ? '<table class="wb-table"><thead><tr><th>类型</th><th>状态</th><th>说明</th><th>失败原因</th><th>创建</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+        : '<p class="wb-muted">' + (state.jobKind || state.jobStatus ? '当前筛选没有任务。' : '还没有历史任务。') + '</p>') +
+      '<p class="wb-muted" style="margin-top:8px">共 ' + state.jobTotal + ' 条' + (state.jobTotal > jobs.length ? '，当前显示最近 ' + jobs.length + ' 条' : '') + '。</p></div>';
+    $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' + head + '</div></div>';
+    $$('[data-job-kind]').forEach(function (button) {
+      button.onclick = function () { state.jobKind = button.dataset.jobKind; void loadJobs(); };
+    });
+    var status = $('#wb-job-status');
+    if (status) status.onchange = function () { state.jobStatus = status.value; void loadJobs(); };
+    var refresh = $('#wb-job-refresh');
+    if (refresh) refresh.onclick = function () { void loadJobs(); };
+    $$('[data-job-detail]').forEach(function (button) {
+      button.onclick = function () { void openJobDetail(button.dataset.jobDetail); };
+    });
+    $$('[data-job-retry]').forEach(function (button) {
+      button.onclick = function () { void retryJob(button.dataset.jobRetry, button); };
+    });
+    $$('[data-job-row]').forEach(function (row) {
+      row.onclick = function (event) {
+        if (event.target.closest('button')) return;
+        void openJobDetail(row.dataset.jobRow);
+      };
+    });
+  }
+  async function retryJob(jobId, button) {
+    var original = button ? button.innerHTML : '';
+    if (button) { button.disabled = true; button.innerHTML = ic('loader', 11) + '重试中…'; }
+    try {
+      var result = await call('/jobs/' + encodeURIComponent(jobId) + '/retry', { method: 'POST', body: {} });
+      toast('已重新提交，新任务已进入任务流水', 'success');
+      closeDialog();
+      await loadJobs(true);
+      return result;
+    } catch (error) {
+      toast(error.message, 'error');
+      if (button) { button.disabled = false; button.innerHTML = original; }
+    }
+  }
+  function jobResourceHtml(resource) {
+    if (!resource || !resource.item) return '<p class="wb-muted">这个任务没有可展示的关联资源。</p>';
+    var item = resource.item;
+    if (resource.type === 'avatar_run') {
+      var failed = (item.segments || []).filter(function (segment) { return segment.status === 'failed'; });
+      return '<div class="wb-job-resource"><p><b>数字人口播</b> · ' + esc(item.speedLabel || '') + ' · ' + item.segmentCount + ' 段 · ' + esc(jobStatusText(item.status)) + '</p>' +
+        (item.error ? '<p class="err">' + esc(item.error) + '</p>' : '') +
+        '<p class="wb-note">已完成 ' + item.doneSegments + ' 段' + (item.failedSegments ? ' · 失败 ' + item.failedSegments + ' 段' : '') + (item.durationSeconds ? ' · 成片 ' + item.durationSeconds + ' 秒' : '') + '</p>' +
+        (failed.length ? '<div class="wb-job-segments">' + failed.map(function (segment) {
+          return '<p><b>第 ' + segment.index + ' 段</b>：' + esc(segment.text) + '<br><span class="err">' + esc(segment.error || '失败') + '</span></p>';
+        }).join('') + '</div>' : '') +
+        (item.status === 'failed' && item.failedSegments ? '<button class="btn primary" type="button" data-job-avatar-retry="' + esc(item.id) + '">重试失败分段</button>' : '') +
+        '</div>';
+    }
+    if (resource.type === 'render') {
+      return '<div class="wb-job-resource"><p><b>视频渲染</b> · ' + esc(item.title || '') + ' · ' + esc(jobStatusText(item.status)) + '</p>' +
+        (item.error ? '<p class="err">' + esc(item.error) + '</p>' : '') + '</div>';
+    }
+    if (resource.type === 'video_work') {
+      return '<div class="wb-job-resource"><p><b>视频任务</b> · ' + esc(item.title || '未命名') + ' · ' + esc(item.status) + '</p>' +
+        (item.error ? '<p class="err">' + esc(item.error) + '</p>' : '') + '</div>';
+    }
+    if (resource.type === 'transcript') {
+      return '<div class="wb-job-resource"><p><b>转写档案</b> · ' + esc(item.title || '未命名') + ' · ' + esc(jobStatusText(item.status)) + '</p>' +
+        (item.error ? '<p class="err">' + esc(item.error) + '</p>' : '') + '</div>';
+    }
+    if (resource.type === 'brain') {
+      return '<div class="wb-job-resource"><p><b>写作大脑</b> · ' + esc(item.name || '未命名') + ' · ' + esc(jobStatusText(item.status)) + '</p>' +
+        (item.error ? '<p class="err">' + esc(item.error) + '</p>' : '') + '</div>';
+    }
+    if (resource.type === 'copy' || resource.type === 'video_script') {
+      var isCopy = resource.type === 'copy';
+      return '<div class="wb-job-resource"><p><b>' + (isCopy ? '文案产出' : '分镜脚本') + '</b> · ' + esc(item.topic || item.title || '') + (item.style || item.mode ? ' · ' + esc(item.style || item.mode) : '') + '</p>' +
+        '<pre class="wb-job-content">' + esc(item.content || item.script || '') + '</pre>' +
+        '<button class="btn" type="button" data-job-copy="1">' + ic('copy', 11) + '复制内容</button></div>';
+    }
+    return '<p class="wb-muted">关联资源：' + esc(resource.type) + '</p>';
+  }
+  async function openJobDetail(jobId) {
+    var info;
+    try { info = await call('/jobs/' + encodeURIComponent(jobId)); }
+    catch (error) { toast(error.message, 'error'); return; }
+    var job = info.job;
+    showDialog('任务详情', '<div class="wb-job-detail">' +
+      '<p><b>' + esc(job.kind) + '</b> ' + jobStatusChip(job.status) + '</p>' +
+      '<p class="wb-note">' + esc(job.detail) + '</p>' +
+      (job.error ? '<div class="wb-job-errorbox"><b>失败原因</b><p>' + esc(job.error) + '</p></div>' : '') +
+      '<p class="wb-meta">创建 ' + fmtDate(job.createdAt) + ' · 更新 ' + fmtDate(job.updatedAt) +
+      (job.attempts ? ' · 第 ' + (job.attempts + 1) + ' 次尝试' : '') + (job.retryOf ? ' · 重试自 ' + esc(job.retryOf) : '') + '</p>' +
+      (info.entityLabel ? '<p class="wb-meta">关联：' + esc(info.entityLabel) + (job.entityId ? ' · ' + esc(job.entityId) : '') + '</p>' : '') +
+      jobResourceHtml(info.resource) +
+      '<div class="wb-actions">' + (job.retryable ? '<button class="btn primary" type="button" id="wb-job-detail-retry">重试这个任务</button>' : '') +
+      '<button class="btn" type="button" id="wb-job-detail-close">关闭</button></div></div>');
+    $('#wb-job-detail-close').onclick = closeDialog;
+    var retry = $('#wb-job-detail-retry');
+    if (retry) retry.onclick = function () { void retryJob(job.id, retry); };
+    var avatarRetry = $('[data-job-avatar-retry]');
+    if (avatarRetry) {
+      avatarRetry.onclick = async function () {
+        avatarRetry.disabled = true; avatarRetry.innerHTML = ic('loader', 11) + '重试中…';
+        try {
+          await call('/avatar/runs/' + encodeURIComponent(avatarRetry.dataset.jobAvatarRetry) + '/retry', { method: 'POST', body: {} });
+          toast('已重新提交失败分段', 'success');
+          closeDialog();
+          await loadJobs(true);
+        } catch (error) {
+          toast(error.message, 'error');
+          avatarRetry.disabled = false; avatarRetry.innerHTML = '重试失败分段';
+        }
+      };
+    }
+    $$('[data-job-copy]').forEach(function (button) {
+      button.onclick = async function () {
+        var box = button.closest('.wb-job-resource');
+        var pre = box ? box.querySelector('pre') : null;
+        if (!pre) return;
+        try {
+          await navigator.clipboard.writeText(pre.textContent || '');
+          toast('已复制到剪贴板', 'success');
+        } catch {
+          var range = document.createRange();
+          range.selectNodeContents(pre);
+          var selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          toast('已选中内容，按 Ctrl+C 复制');
+        }
+      };
+    });
   }
 
   /* ───────────── 引导式创作工作流（消息流卡片 · 乐观 UI · 流式预览 · 双击改稿） ───────────── */

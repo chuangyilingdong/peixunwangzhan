@@ -24,8 +24,10 @@
  *    3. 音色克隆仍被上游阻：doubao-voice-clone 503「No available channel」，
  *       minimax-voice-clone「模型响应异常」。但 doubao-seed-audio-1.0 的参考音频直出可用
  *       （audio_url），因此克隆失败时降级为「参考音频直出」（音色相近，非训练克隆）。
- *    4. 底片 i2v 传 seconds:'6'，给 5 秒口播留出 700ms 安全余量；仍保留「底片+配音」
- *       降级，仅在真正失败时触发。
+ *    4. 底片 i2v 传 seconds:'6'，给单段口播留出 700ms 安全余量。
+ *    5. 十七期（2026-10-25）：长口播按语速切成 ≤3.4 秒/段，逐段 TTS（四档语速用 ffmpeg atempo
+ *       真实变速）→ 同一人脸会话逐段对口型 → ffmpeg 拼接。失败只标该段，重试复用已成功段；
+ *       不再整单降级成「底片+配音」。
  */
 import { getProviderApiKey } from './providerSecret.js';
 import { AI_PROVIDER_API_KEY } from '../config.js';

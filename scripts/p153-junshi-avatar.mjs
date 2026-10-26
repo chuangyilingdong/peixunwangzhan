@@ -63,9 +63,9 @@ const avatar = fs.readFileSync(path.join(root, 'apps/server/src/services/junshiA
 const route = fs.readFileSync(path.join(root, 'apps/server/src/routes/junshiWorkbench.js'), 'utf8');
 const front = fs.readFileSync(path.join(root, 'apps/website/public/assets/junshi/workbench.js'), 'utf8');
 check('③ 克隆失败会降级到参考音频直出', route.includes("'reference'") && route.includes('参考音频直出'));
-check('③ 对口型失败会降级为底片+配音并带 note', route.includes('非精准对口型') && route.includes('muxAudioOntoVideo'));
-check('③ 对口型按 end_time 计算 soundEndTime', route.includes('safeLipSyncEndTime(endTime') && route.includes("seconds: '6'"));
-check('③ 前端展示参考直出与降级说明', front.includes('（参考直出）') && front.includes('run.note'));
+check('③ 对口型失败保留失败分段，不静默降级', route.includes('重试失败分段') && route.includes('segments') && route.includes('runAvatarRetry'));
+check('③ 对口型按 end_time 计算 soundEndTime', route.includes('safeLipSyncEndTime(meta.faceEndTime') && route.includes('AVATAR_LIPSYNC_MAX_MS'));
+check('③ 前端展示语速、分段与重试入口', front.includes('语速') && front.includes('重试失败分段') && front.includes('estimate/avatar'));
 check('③ custom voice id 去掉下划线/只留字母数字', route.includes("replace(/[^A-Za-z0-9]/g, '')"));
 check('③ 服务文件头记录顶层 images 约束', avatar.includes('i2v 参考图必须在顶层 images'));
 

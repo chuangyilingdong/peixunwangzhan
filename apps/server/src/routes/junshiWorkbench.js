@@ -199,9 +199,16 @@ async function reapStale(ownerKey) {
     const cutoff = Date.now() - STALE_RUNNING_MS;
     const staleIds = rows.filter((row) => Date.parse(row.updated_at || '') < cutoff).map((row) => row.id);
     for (const jobId of staleIds) {
-      await aq("UPDATE junshi_workbench_jobs SET status='failed', detail=CASE WHEN detail='' THEN '超时未完成（可能服务重启中断）' ELSE detail END, updated_at=? WHERE id=? AND status='running'", [nowIso(), jobId]);
+      await aq("UPDATE junshi_workbench_jobs SET status='failed', detail=CASE WHEN detail='' THEN '超时未完成（可能服务重启中断）' ELSE detail END, error=CASE WHEN error IS NULL OR error='' THEN '超时未完成（可能服务重启中断）' ELSE error END, updated_at=? WHERE id=? AND status='running'", [nowIso(), jobId]);
       await aq("UPDATE junshi_workbench_video_renders SET status='failed', error='超时未完成（可能服务重启中断）', updated_at=? WHERE job_id=? AND status='running'", [nowIso(), jobId]);
     }
+    // 进程内管线（数字人/转写/蒸馏）没有独立的心跳表，同样按 updated_at 回收，
+    // 否则服务重启后资源会永远停在 running，用户连重试入口都点不到。
+    const staleBefore = new Date(cutoff).toISOString();
+    const staleMessage = '超时未完成（可能服务重启中断）';
+    await aq("UPDATE junshi_workbench_avatar_runs SET status='failed', error=?, updated_at=? WHERE owner_key=? AND status='running' AND updated_at<?", [staleMessage, nowIso(), ownerKey, staleBefore]).catch(() => {});
+    await aq("UPDATE junshi_workbench_transcripts SET status='failed', error=?, updated_at=? WHERE owner_key=? AND status='running' AND updated_at<?", [staleMessage, nowIso(), ownerKey, staleBefore]).catch(() => {});
+    await aq("UPDATE junshi_workbench_brains SET status='failed', error=?, updated_at=? WHERE owner_key=? AND status='running' AND updated_at<?", [staleMessage, nowIso(), ownerKey, staleBefore]).catch(() => {});
   } catch { /* 回收失败不影响读列表 */ }
 }
 
@@ -303,13 +310,400 @@ function mockOrEmpty(result) {
   return !result?.text || isMockProvider(result.provider || '');
 }
 
-function jobStart(owner, kind, detail) {
+/**
+ * 任务流水（历史任务页）：detail 是给人看的一句话，error 单独存失败原因，
+ * entity_type/entity_id 让失败任务能一键重试（重试时开一条新任务并保留 retry_of）。
+ */
+function jobStart(owner, kind, detail, meta = {}) {
   const jobId = id('jwj');
   const now = nowIso();
-  return { id: jobId, kind, detail, now, promise: aq('INSERT INTO junshi_workbench_jobs (id,owner_key,org_id,kind,status,detail,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', [jobId, owner.key, owner.orgId, kind, 'running', detail, now, now]) };
+  const entityType = text(meta.entityType).slice(0, 40);
+  const entityId = text(meta.entityId).slice(0, 64);
+  const attempts = clampInt(meta.attempts, 0, 0, 99);
+  const payload = JSON.stringify(meta.payload && typeof meta.payload === 'object' ? meta.payload : {});
+  const retryOf = text(meta.retryOf).slice(0, 64);
+  return {
+    id: jobId, kind, detail, now, entityType, entityId, attempts, retryOf,
+    promise: aq('INSERT INTO junshi_workbench_jobs (id,owner_key,org_id,kind,status,detail,error,entity_type,entity_id,attempts,payload,retry_of,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [jobId, owner.key, owner.orgId, kind, 'running', detail, '', entityType, entityId, attempts, payload, retryOf, now, now]),
+  };
 }
-async function jobDone(job, status, detail) {
-  await aq('UPDATE junshi_workbench_jobs SET status=?, detail=?, updated_at=? WHERE id=?', [status, detail, nowIso(), job.id]);
+async function jobDone(job, status, detail, error = '') {
+  const failure = status === 'failed' ? String(error || detail || '').slice(0, 2000) : '';
+  await aq('UPDATE junshi_workbench_jobs SET status=?, detail=?, error=?, updated_at=? WHERE id=?',
+    [status, String(detail || '').slice(0, 2000), failure, nowIso(), job.id]);
+}
+
+const JOB_ENTITY_LABELS = {
+  video_work: '视频任务',
+  render: '视频渲染',
+  transcript: '转写档案',
+  avatar_run: '数字人口播',
+  brain: '写作大脑',
+  copy: '文案',
+  video_script: '视频脚本',
+  workflow: '创作工作流',
+};
+function jobPayload(row) {
+  try { return row?.payload ? JSON.parse(row.payload) : {}; } catch { return {}; }
+}
+/** 只有「知道该重跑什么」的失败任务才显示重试按钮；不猜、不把重新生成伪装成重试。 */
+function jobRetryable(row) {
+  if (!row || row.status !== 'failed') return false;
+  const type = String(row.entity_type || '');
+  if (type === 'video_work') return Boolean(row.entity_id) && (/编导稿/.test(row.kind) || row.kind === '视频渲染');
+  if (type === 'render') return Boolean(row.entity_id);
+  if (type === 'transcript') return Boolean(row.entity_id);
+  if (type === 'avatar_run') return Boolean(row.entity_id);
+  if (type === 'brain') return Boolean(row.entity_id);
+  if (type === 'copy' || type === 'video_script') return Boolean(jobPayload(row).topic || jobPayload(row).title);
+  if (type === 'workflow') return row.kind === '热点搜索' && Boolean(row.entity_id);
+  return false;
+}
+function jobOut(row) {
+  return {
+    id: row.id, kind: row.kind, status: row.status, detail: row.detail || '',
+    error: row.error || '', entityType: row.entity_type || '', entityId: row.entity_id || '',
+    attempts: Number(row.attempts || 0), retryOf: row.retry_of || '',
+    retryable: jobRetryable(row), payload: jobPayload(row),
+    createdAt: row.created_at, updatedAt: row.updated_at,
+  };
+}
+
+/* ───────────── 十七期 · 提交前估价（视频 / 数字人） ───────────── */
+const AVATAR_SPEEDS = Object.freeze({
+  natural: { value: 'natural', label: '自然', charsPerSecond: 5, atempo: 1 },
+  slightly_fast: { value: 'slightly_fast', label: '稍快', charsPerSecond: 6, atempo: 1.2 },
+  fast: { value: 'fast', label: '较快', charsPerSecond: 7.5, atempo: 1.45 },
+  extreme: { value: 'extreme', label: '极快', charsPerSecond: 9, atempo: 1.75 },
+});
+const AVATAR_SEGMENT_MAX_SECONDS = 3.4;
+const AVATAR_MAX_SEGMENTS = 30;
+const AVATAR_LIPSYNC_MAX_MS = 4000;
+const REFERENCE_VIDEO_FEN_PER_SECOND = Object.freeze({ '480P': 15, '720P': 24, '768P': 30, '1080P': 40 });
+function avatarSpeedProfile(value) {
+  return AVATAR_SPEEDS[String(value || 'natural')] || AVATAR_SPEEDS.natural;
+}
+function speechCharCount(value) {
+  return String(value || '').replace(/\s/g, '').length;
+}
+/**
+ * 把口播台词切成每段「预计不超过 3.4 秒」的段：优先句号/问号/换行，其次逗号，
+ * 最后才硬切。分段是为了绕开上游 soundEndTime 封顶 4000ms —— 不是按字数强行截断。
+ */
+function splitSpeechSegments(value, speedValue) {
+  const speed = avatarSpeedProfile(speedValue);
+  const maxChars = Math.max(4, Math.floor(speed.charsPerSecond * AVATAR_SEGMENT_MAX_SECONDS));
+  const normalized = String(value || '').replace(/\r\n?/g, '\n').trim();
+  if (!normalized) return [];
+  const chunks = [];
+  const pushText = (input) => {
+    let rest = String(input || '').trim();
+    while (rest.length > maxChars) {
+      let cut = -1;
+      for (let index = maxChars; index >= Math.max(4, Math.floor(maxChars * 0.5)); index -= 1) {
+        if (/[，,、：:\s]/.test(rest[index - 1])) { cut = index; break; }
+      }
+      if (cut <= 0) cut = maxChars;
+      const head = rest.slice(0, cut).trim();
+      if (head) chunks.push(head);
+      rest = rest.slice(cut).trim();
+    }
+    if (rest) chunks.push(rest);
+  };
+  for (const sentence of normalized.split(/(?<=[。！？!?；;\n])/g)) {
+    const trimmed = sentence.trim();
+    if (trimmed) pushText(trimmed);
+  }
+  return chunks;
+}
+/** 按语速估算口播时长与分段数：与原版「50/60/75/90 字每 10 秒」同口径。 */
+function estimateSpeechPlan(textValue, speedValue) {
+  const speed = avatarSpeedProfile(speedValue);
+  const chars = speechCharCount(textValue);
+  const durationSeconds = chars > 0 ? chars / speed.charsPerSecond : 0;
+  const chunks = splitSpeechSegments(textValue, speed.value);
+  const batchCount = Math.max(1, chunks.length);
+  return {
+    chars, speed: speed.value, speedLabel: speed.label, atempo: speed.atempo,
+    charsPerSecond: speed.charsPerSecond,
+    targetDuration: Math.round(durationSeconds * 10) / 10,
+    batchCount,
+    segmentMaxSeconds: AVATAR_SEGMENT_MAX_SECONDS,
+    maxSegments: AVATAR_MAX_SEGMENTS,
+    overLimit: batchCount > AVATAR_MAX_SEGMENTS,
+    segments: chunks,
+  };
+}
+function videoUnitPrice(selection, resolution) {
+  const modelPrices = selection?.modelUnitPrices && selection.model ? selection.modelUnitPrices[selection.model] : null;
+  const video = modelPrices?.VIDEO || selection?.upstreamUnitPrices?.VIDEO || null;
+  if (!video) return null;
+  const tier = String(resolution || '').trim();
+  const byResolution = video.byResolution && typeof video.byResolution === 'object' ? video.byResolution : null;
+  const tierPrice = byResolution ? (byResolution[tier] ?? byResolution[tier.toUpperCase()] ?? byResolution[tier.toLowerCase()]) : null;
+  const perSecondFen = Number.isFinite(Number(tierPrice)) ? Number(tierPrice) : Number(video.perSecondFen);
+  if (!Number.isFinite(perSecondFen) || perSecondFen < 0) return null;
+  const audioExtraPerSecondFen = Number(video.audioExtraPerSecondFen);
+  return {
+    perSecondFen,
+    audioExtraPerSecondFen: Number.isFinite(audioExtraPerSecondFen) && audioExtraPerSecondFen >= 0 ? audioExtraPerSecondFen : 0,
+  };
+}
+/** 视频估价：配置了合同单价就精确算；没配则用近期实测参考价并明确标注。 */
+function estimateVideoCost(selection, { durationSeconds = 15, resolution = '768P', audio = true } = {}) {
+  const seconds = Math.max(1, Number(durationSeconds) || 15);
+  const unit = videoUnitPrice(selection, resolution);
+  if (unit) {
+    const totalFen = Math.round(seconds * (unit.perSecondFen + (audio ? unit.audioExtraPerSecondFen : 0)));
+    return {
+      currency: 'CNY', totalFen, minFen: totalFen, maxFen: totalFen,
+      source: 'CONFIGURED', model: selection?.model || '', resolution,
+      items: [{ key: 'video', label: `视频生成 ${seconds} 秒 · ${resolution}${audio ? ' · 含音频' : ''}`, fen: totalFen }],
+      note: '按平台当前视频渠道的合同单价折算；实际以上游结算为准。',
+    };
+  }
+  const tier = String(resolution || '768P').toUpperCase();
+  const perSecond = REFERENCE_VIDEO_FEN_PER_SECOND[tier] || REFERENCE_VIDEO_FEN_PER_SECOND['480P'];
+  const totalFen = Math.round(seconds * perSecond);
+  return {
+    currency: 'CNY', totalFen, minFen: Math.round(totalFen * 0.8), maxFen: Math.round(totalFen * 1.25),
+    source: 'REFERENCE', model: selection?.model || '', resolution,
+    items: [{ key: 'video', label: `视频生成 ${seconds} 秒 · ${tier}（参考价）`, fen: totalFen }],
+    note: '平台未配置该视频模型的合同单价，这里按近期实测参考价估算（480P 约 0.15 元/秒、768P 约 0.30 元/秒）；实际以上游扣费为准。',
+  };
+}
+/** 数字人估价：底片 i2v + 每段 TTS/人脸/对口型；按字数与语速先算段数。 */
+function estimateAvatarCost(selection, { text: speech = '', speed = 'natural', resolution = '480P' } = {}) {
+  const plan = estimateSpeechPlan(speech, speed);
+  const base = estimateVideoCost(selection, { durationSeconds: 6, resolution, audio: false });
+  const unit = videoUnitPrice(selection, resolution);
+  const lipFenPerSegment = unit
+    ? Math.round(4 * unit.perSecondFen)
+    : 39; // 近期实测：4000ms 精准对口型约 0.39 元/段
+  const ttsFenPerSegment = 5; // 参考价：TTS 每段约几分钱，平台未单列音频单价
+  const faceFenPerSegment = 3;
+  const segments = plan.batchCount;
+  const items = [
+    { key: 'base', label: '人物底片（6 秒图生视频）', fen: base.totalFen },
+    { key: 'tts', label: `口播语音合成 · ${segments} 段`, fen: ttsFenPerSegment * segments },
+    { key: 'face', label: `人脸分析 · ${segments} 段`, fen: faceFenPerSegment * segments },
+    { key: 'lipsync', label: `精准对口型 · ${segments} 段`, fen: lipFenPerSegment * segments },
+  ];
+  const totalFen = items.reduce((sum, item) => sum + item.fen, 0);
+  const configured = Boolean(unit);
+  return {
+    currency: 'CNY', totalFen,
+    minFen: Math.round(totalFen * 0.85),
+    maxFen: Math.round(totalFen * 1.25),
+    source: configured ? 'CONFIGURED' : 'REFERENCE',
+    plan, resolution, items,
+    note: configured
+      ? '底片/对口型按平台视频渠道合同单价折算，语音与人脸按每段参考价折算；实际以上游扣费为准。'
+      : '平台未配置该视频模型的合同单价，底片/对口型按近期实测参考价估算，语音与人脸按每段参考价折算；实际以上游扣费为准。',
+  };
+}
+
+/**
+ * 失败任务重试：按 entity_type 分派到原来的后台管线，开一条新任务（attempts+1 / retry_of）。
+ * 找不到实体、或原任务不支持重跑时抛 400，让用户看到明确原因，而不是假装已重试。
+ */
+async function retryFailedJob(owner, job) {
+  if (!jobRetryable(job)) throw errors.badRequest('这个任务没有可重跑的对象（可能只是查询/搜索类任务），请到对应页面重新发起。', 'WORKBENCH_JOB_NOT_RETRYABLE');
+  const payload = jobPayload(job);
+  const meta = {
+    entityType: job.entity_type,
+    entityId: job.entity_id,
+    attempts: Number(job.attempts || 0) + 1,
+    retryOf: job.id,
+    payload,
+  };
+  const type = String(job.entity_type || '');
+  if (type === 'video_work') {
+    const work = await arow('SELECT * FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [job.entity_id, owner.key]);
+    if (!work) throw errors.notFound('原视频任务已被删除，无法重试', 'NOT_FOUND');
+    if (['planning', 'rendering'].includes(work.status)) throw errors.badRequest('原视频任务正在生成中，请等这一轮结束。', 'WORKBENCH_VIDEO_BUSY');
+    if (/编导稿/.test(job.kind)) {
+      const retry = jobStart(owner, job.kind, work.title || job.detail, meta);
+      await retry.promise;
+      await aq("UPDATE junshi_workbench_video_works SET status='planning', message='正在重新生成编导稿…', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), work.id, owner.key]);
+      void runDirectorScript(owner, work.id, { reference: text(payload.reference), job: retry });
+      return { jobId: retry.id, kind: 'video_work', mode: 'script' };
+    }
+    const retry = jobStart(owner, '视频渲染', work.title || job.detail, meta);
+    await retry.promise;
+    try {
+      const result = await startWorkRender(owner, work, retry);
+      return { jobId: retry.id, kind: 'render', renderId: result.renderId };
+    } catch (error) {
+      await jobDone(retry, 'failed', String(error?.message || error)).catch(() => {});
+      throw error;
+    }
+  }
+  if (type === 'render') {
+    const row = await arow('SELECT * FROM junshi_workbench_video_renders WHERE id=? AND owner_key=?', [job.entity_id, owner.key]);
+    if (!row) throw errors.notFound('原渲染任务已被删除，无法重试', 'NOT_FOUND');
+    if (['running', 'queued'].includes(row.status)) throw errors.badRequest('这条渲染还在进行中。', 'WORKBENCH_VIDEO_BUSY');
+    renderRateLimit(owner.key);
+    const retry = jobStart(owner, row.kind === 'shot' ? '单镜渲染（重试）' : '视频渲染（重试）', String(row.title || job.detail).slice(0, 60), meta);
+    await retry.promise;
+    await aq("UPDATE junshi_workbench_video_renders SET status='running', error='', job_id=?, updated_at=? WHERE id=? AND owner_key=?", [retry.id, nowIso(), row.id, owner.key]);
+    if (row.work_id) await aq("UPDATE junshi_workbench_video_works SET status='rendering', message='正在重试渲染…', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), row.work_id, owner.key]).catch(() => {});
+    void runWorkbenchRender(owner, row.id, { job: retry });
+    return { jobId: retry.id, kind: 'render', renderId: row.id };
+  }
+  if (type === 'transcript') {
+    const row = await arow('SELECT * FROM junshi_workbench_transcripts WHERE id=? AND owner_key=?', [job.entity_id, owner.key]);
+    if (!row) throw errors.notFound('原转写档案已被删除，无法重试', 'NOT_FOUND');
+    if (row.status === 'running') throw errors.badRequest('这条转写还在进行中。', 'WORKBENCH_TRANSCRIPT_BUSY');
+    const retry = jobStart(owner, '视频转写', String(row.title || job.detail).slice(0, 60), meta);
+    await retry.promise;
+    void runTranscriptionPipeline(owner, row.id, retry);
+    return { jobId: retry.id, kind: 'transcript', transcriptId: row.id };
+  }
+  if (type === 'avatar_run') {
+    const row = await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=? AND owner_key=?', [job.entity_id, owner.key]);
+    if (!row) throw errors.notFound('原口播任务已被删除，无法重试', 'NOT_FOUND');
+    if (row.status === 'running') throw errors.badRequest('这条口播还在合成中。', 'WORKBENCH_AVATAR_BUSY');
+    const retry = jobStart(owner, '数字人口播（重试）', String(row.text || job.detail).slice(0, 60), meta);
+    await retry.promise;
+    void runAvatarRetry(owner, row, retry).catch((error) => jobDone(retry, 'failed', String(error?.message || error)).catch(() => {}));
+    return { jobId: retry.id, kind: 'avatar_run', runId: row.id };
+  }
+  if (type === 'brain') {
+    const row = await arow('SELECT * FROM junshi_workbench_brains WHERE id=? AND owner_key=?', [job.entity_id, owner.key]);
+    if (!row) throw errors.notFound('原档案已被删除，无法重试', 'NOT_FOUND');
+    if (row.status === 'running') throw errors.badRequest('这份档案还在蒸馏中。', 'WORKBENCH_BRAIN_BUSY');
+    const retry = jobStart(owner, job.kind, String(row.name || job.detail).slice(0, 60), meta);
+    await retry.promise;
+    await aq("UPDATE junshi_workbench_brains SET status='running', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), row.id, owner.key]);
+    void runBrainDistill(owner, row.id, retry);
+    return { jobId: retry.id, kind: 'brain', brainId: row.id };
+  }
+  if (type === 'copy') {
+    if (!text(payload.topic)) throw errors.badRequest('原任务没有保存文案主题，无法重试', 'WORKBENCH_JOB_NOT_RETRYABLE');
+    const retry = jobStart(owner, '文案生成', `主题：${payload.topic} · ${clampInt(payload.count, 5, 1, 10)} 条`, { ...meta, payload });
+    await retry.promise;
+    void generateCopyDraft(owner, payload, retry).catch((error) => jobDone(retry, 'failed', String(error?.message || error)).catch(() => {}));
+    return { jobId: retry.id, kind: 'copy' };
+  }
+  if (type === 'video_script') {
+    if (!text(payload.title)) throw errors.badRequest('原任务没有保存视频主题，无法重试', 'WORKBENCH_JOB_NOT_RETRYABLE');
+    const retry = jobStart(owner, '视频脚本', `${payload.mode === '复刻' ? '复刻' : '原创'} · ${payload.title}`, { ...meta, payload });
+    await retry.promise;
+    void generateVideoProject(owner, payload, retry).catch((error) => jobDone(retry, 'failed', String(error?.message || error)).catch(() => {}));
+    return { jobId: retry.id, kind: 'video_script' };
+  }
+  if (type === 'workflow') {
+    const wf = await arow('SELECT * FROM junshi_workbench_workflows WHERE id=? AND owner_key=?', [job.entity_id, owner.key]);
+    if (!wf) throw errors.notFound('原工作流已被删除，无法重试', 'NOT_FOUND');
+    if (wf.status !== 'active' || wf.stage !== 'search_failed') throw errors.badRequest('这个工作流已经不在搜索失败状态，请在对话里继续。', 'WORKBENCH_WORKFLOW_NOT_RETRYABLE');
+    const retry = jobStart(owner, '热点搜索', String(job.detail || '').slice(0, 60), meta);
+    await retry.promise;
+    await wfUpdate(wf.id, owner.key, { stage: 'searching', state: JSON.stringify({ keyword: text(payload.keyword || jobPayload(job).keyword) }) });
+    void runHotspotSearch(null, owner, { wfId: wf.id, keyword: text(payload.keyword), accountId: wf.account_id || 'default' })
+      .then((result) => jobDone(retry, result?.ok ? 'succeeded' : 'failed', result?.message || '热点搜索结束', result?.ok ? '' : result?.message))
+      .catch((error) => jobDone(retry, 'failed', String(error?.message || error)).catch(() => {}));
+    return { jobId: retry.id, kind: 'workflow', workflowId: wf.id };
+  }
+  throw errors.badRequest('不支持重试这个任务', 'WORKBENCH_JOB_NOT_RETRYABLE');
+}
+
+/** 文案生成执行体（首次与失败重试共用）：主题/条数/风格不变，重试只换一条新草稿。 */
+async function generateCopyDraft(owner, { topic, count, style, accountId: accountInput } = {}, job) {
+  try {
+    const accountId = await resolveAccountId(owner.key, accountInput);
+    const profile = (await readProfile(owner.key, accountId)).profile;
+    const orgProfile = await orgProfileText(owner.key);
+    const chunks = retrieve(topic, ['文案', '营销'], 4);
+    const copies = retrieveCopies(topic, 3);
+    const userPrompt = buildCopyPrompt({ profile, orgProfile, topic, count, style, chunks, copies });
+    const providerMock = await textProviderIsMock().catch(() => false);
+    const result = providerMock ? { text: '', provider: 'demo' } : await collectText(null, { system: WORKBENCH_SYSTEM, user: userPrompt });
+    const content = mockOrEmpty(result) ? demoCopy(profile, topic, count, style) : result.text;
+    const draftId = id('jwc');
+    const at = nowIso();
+    await aq('INSERT INTO junshi_workbench_copy_drafts (id,owner_key,org_id,account_id,topic,style,content,created_at) VALUES (?,?,?,?,?,?,?,?)',
+      [draftId, owner.key, owner.orgId, accountId, topic, style, content, at]);
+    // 任务详情能直接看到这次重试产出的文案（文案草稿页已删，不能只把结果藏在后台）。
+    await aq('UPDATE junshi_workbench_jobs SET entity_type=?, entity_id=?, detail=? WHERE id=?', ['copy', draftId, `已生成 ${count} 条文案`, job.id]).catch(() => {});
+    await jobDone(job, 'succeeded', `已生成 ${count} 条文案`);
+    return { draft: { id: draftId, topic, style, content, accountId, createdAt: at }, demo: mockOrEmpty(result) };
+  } catch (error) {
+    await jobDone(job, 'failed', String(error?.message || error).slice(0, 1000)).catch(() => {});
+    throw error;
+  }
+}
+
+/** 视频脚本执行体（首次与失败重试共用）：重试会新建一条分镜脚本项目。 */
+async function generateVideoProject(owner, { title, mode: rawMode, brief, referenceText, accountId: accountInput } = {}, job) {
+  try {
+    const mode = rawMode === '复刻' ? '复刻' : '原创';
+    const accountId = await resolveAccountId(owner.key, accountInput);
+    const profile = (await readProfile(owner.key, accountId)).profile;
+    const orgProfile = await orgProfileText(owner.key);
+    const chunks = retrieve(`${title} ${brief}`, ['营销', '转化', '续费', '文案'], 4);
+    const userPrompt = buildVideoPrompt({ profile, orgProfile, title, brief, referenceText, mode, chunks });
+    const providerMock = await textProviderIsMock().catch(() => false);
+    const result = providerMock ? { text: '', provider: 'demo' } : await collectText(null, { system: WORKBENCH_SYSTEM, user: userPrompt });
+    const script = mockOrEmpty(result) ? demoVideo(profile, title, brief, referenceText, mode) : result.text;
+    const projectId = id('jwv');
+    const at = nowIso();
+    await aq('INSERT INTO junshi_workbench_video_projects (id,owner_key,org_id,account_id,title,brief,reference_text,mode,script,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+      [projectId, owner.key, owner.orgId, accountId, title, brief, referenceText, mode, script, 'draft', at, at]);
+    await aq('UPDATE junshi_workbench_jobs SET entity_type=?, entity_id=?, detail=? WHERE id=?', ['video_script', projectId, '分镜脚本已生成', job.id]).catch(() => {});
+    await jobDone(job, 'succeeded', '分镜脚本已生成');
+    return {
+      project: { id: projectId, title, brief, referenceText, mode, script, status: 'draft', accountId, createdAt: at, updatedAt: at },
+      demo: mockOrEmpty(result),
+    };
+  } catch (error) {
+    await jobDone(job, 'failed', String(error?.message || error).slice(0, 1000)).catch(() => {});
+    throw error;
+  }
+}
+
+/** 蒸馏执行体（首次与失败重试共用）：从任务 payload 里取语料，重试不重新选素材。 */
+async function runBrainDistill(owner, brainId, job) {
+  try {
+    const brain = await arow('SELECT * FROM junshi_workbench_brains WHERE id=? AND owner_key=?', [brainId, owner.key]);
+    if (!brain) throw new Error('这份档案已被删除');
+    const payload = jobPayload(job);
+    const transcriptIds = Array.isArray(payload.transcriptIds) ? payload.transcriptIds : [];
+    const transcripts = [];
+    for (const transcriptId of transcriptIds) {
+      const row = await arow('SELECT * FROM junshi_workbench_transcripts WHERE id=? AND owner_key=? AND status=?', [transcriptId, owner.key, 'succeeded']);
+      if (row) transcripts.push({ title: row.title, text: row.text, segments: (() => { try { return JSON.parse(row.segments || '[]'); } catch { return []; } })() });
+    }
+    if (!transcripts.length) throw new Error('原任务引用的转写档案已不存在或尚未完成');
+    const kind = brain.kind === 'peer_report' ? 'peer_report' : 'copy_brain';
+    const name = brain.name || '写作大脑';
+    const providerMock = await textProviderIsMock().catch(() => false);
+    let generated = null;
+    if (providerMock) {
+      generated = kind === 'peer_report' ? demoPeerReport(name) : demoBrain(name);
+    } else {
+      const prompt = kind === 'peer_report'
+        ? buildPeerReportPrompt({ name, transcripts })
+        : buildBrainDistillPrompt({ name, transcripts });
+      const result = await collectText(null, { system: WORKBENCH_SYSTEM, user: prompt });
+      generated = mockOrEmpty(result) ? null : parseLooseJsonObject(result.text);
+    }
+    if (!generated || typeof generated !== 'object') throw new Error('这次没有蒸馏出有效档案，重试一次');
+    const profile = generated.profile && typeof generated.profile === 'object' ? generated.profile : {};
+    const sections = Array.isArray(generated.sections) ? generated.sections : Array.isArray(generated.combined_rules) ? [{ title: '综合规则', content: generated.combined_rules.join('；') }] : [];
+    const extra = kind === 'copy_brain'
+      ? [{ title: '创作者明确讲授的方法', content: (generated.teaching_methods || []).map((item) => `${item.title}：${item.method}${item.applicability ? `（适用：${item.applicability}）` : ''}`).join('\n') || '' },
+         { title: '作品里反复出现的写作习惯', content: (generated.writing_patterns || []).map((item) => `${item.title}：${item.pattern}`).join('\n') || '' }].filter((item) => item.content)
+      : [];
+    await aq('UPDATE junshi_workbench_brains SET status=?, error=?, profile=?, sections=?, updated_at=? WHERE id=? AND owner_key=?',
+      ['ready', '', JSON.stringify(profile), JSON.stringify([...sections, ...extra]), nowIso(), brainId, owner.key]);
+    await jobDone(job, 'succeeded', '蒸馏完成');
+  } catch (error) {
+    const message = String(error?.message || error).slice(0, 1000);
+    await aq('UPDATE junshi_workbench_brains SET status=?, error=?, updated_at=? WHERE id=? AND owner_key=?', ['failed', message, nowIso(), brainId, owner.key]).catch(() => {});
+    await jobDone(job, 'failed', message).catch(() => {});
+  }
 }
 
 /* ───────────── SSE ───────────── */
@@ -364,7 +758,13 @@ function assetOut(row) {
 function messageOut(row) {
   let citations = null;
   try { citations = row.citations ? JSON.parse(row.citations) : null; } catch { /* ignore */ }
-  return { id: row.id, role: row.role, content: row.content, citations, planId: row.plan_id || '', createdAt: row.created_at };
+  let attachments = [];
+  try { attachments = row.attachments ? JSON.parse(row.attachments) : []; } catch { /* ignore */ }
+  return {
+    id: row.id, role: row.role, content: row.content, citations,
+    attachments: Array.isArray(attachments) ? attachments : [],
+    planId: row.plan_id || '', createdAt: row.created_at,
+  };
 }
 function videoOut(row) {
   return {
@@ -521,12 +921,17 @@ function buildWorkRenderPrompt(script) {
   ].filter(Boolean).join('\n').slice(0, 2000);
 }
 /** 编导稿异步管线：拼档案+素材 → 模型单 JSON → 解析入库。 */
-async function runDirectorScript(owner, workId, { reference = '' } = {}) {
-  let job = null;
+async function runDirectorScript(owner, workId, { reference = '', job: providedJob = null } = {}) {
+  let job = providedJob;
   try {
     const work = await arow('SELECT * FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [workId, owner.key]);
     if (!work) return;
-    job = jobStart(owner, work.mode === 'replicate' ? '复刻编导稿' : '编导稿', work.id);
+    if (!job) {
+      job = jobStart(owner, work.mode === 'replicate' ? '复刻编导稿' : '编导稿', String(work.title || work.id).slice(0, 60), {
+        entityType: 'video_work', entityId: workId, payload: { reference },
+      });
+      await job.promise;
+    }
     const profile = (await readProfile(owner.key, work.account_id)).profile;
     const orgProfile = await orgProfileText(owner.key);
     let refs = [];
@@ -722,7 +1127,7 @@ async function extractWorkFrames(owner, work, requestedAssetId = '') {
 }
 
 /** 确认渲染（confirm 路由与自动任务共用）：渠道预检 → 建整片渲染行 → 异步跑。 */
-async function startWorkRender(owner, work) {
+async function startWorkRender(owner, work, providedJob = null) {
   const parsed = parseDirectorScript(work.director_script);
   if (!parsed.ok) throw errors.badRequest('编导稿还没有准备好，先等脚本生成或手动补一份。', 'WORKBENCH_VIDEO_NO_SCRIPT');
   if (work.status === 'rendering') throw errors.badRequest('已经在渲染中，请等这一条结束。', 'WORKBENCH_VIDEO_BUSY');
@@ -738,7 +1143,10 @@ async function startWorkRender(owner, work) {
   }
   const renderId = id('jwrd');
   const at = nowIso();
-  const job = jobStart(owner, '视频渲染', `${work.mode === 'replicate' ? '复刻' : videoTypeLabel(work.type)} · ${parsed.data.title || work.id}`);
+  const job = providedJob || jobStart(owner, '视频渲染', `${work.mode === 'replicate' ? '复刻' : videoTypeLabel(work.type)} · ${parsed.data.title || work.id}`, {
+    entityType: 'video_work', entityId: work.id, payload: {},
+  });
+  if (!providedJob) await job.promise;
   await aq('INSERT INTO junshi_workbench_video_renders (id,owner_key,org_id,project_id,account_id,job_id,title,prompt,duration_seconds,aspect_ratio,status,asset_id,error,work_id,shot_index,kind,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     [renderId, owner.key, owner.orgId, null, work.account_id, job.id, String(parsed.data.title || '整片').slice(0, 120), buildWorkRenderPrompt(parsed.data), clampInt(work.duration_seconds, 5, 5, 120), work.ratio, 'running', null, '', work.id, 0, 'main', at, at]);
   await aq("UPDATE junshi_workbench_video_works SET status='rendering', message='已提交视频生成，正在排队…', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), work.id, owner.key]);
@@ -1364,6 +1772,214 @@ async function assetBytes(row) {
   return Buffer.from(await readFile(absolute));
 }
 
+/* ───────────── 十七期 · 对话附件（图片 / 视频 / 音频 + @引用） ───────────── */
+const CHAT_ATTACHMENT_LIMITS = Object.freeze({ image: 9, video: 3, audio: 3 });
+const CHAT_ATTACHMENT_LABELS = Object.freeze({ image: '图片', video: '视频', audio: '音频' });
+const CHAT_IMAGE_TOTAL_BYTES = 24 * 1024 * 1024;
+const CHAT_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+const CHAT_ASR_MAX_BYTES = 24 * 1024 * 1024;
+const chatTranscriptCache = new Map();
+
+function chatAttachmentKind(row) {
+  const kind = String(row?.kind || '');
+  if (kind === 'image' || kind === 'video' || kind === 'audio') return kind;
+  const mime = String(row?.mime_type || '');
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  return '';
+}
+function normalizeChatAttachmentRefs(input) {
+  if (!Array.isArray(input)) return [];
+  const out = []; const seen = new Set();
+  for (const item of input.slice(0, 30)) {
+    const id = text(typeof item === 'string' ? item : item?.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+/** 读取附件元数据并按类型编号：@图片1 / @视频1 / @音频1（编号 = 该类型的上传顺序）。 */
+async function loadChatAttachmentRows(owner, ids) {
+  const items = []; const skipped = []; const counts = { image: 0, video: 0, audio: 0 };
+  for (const assetId of ids) {
+    const row = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, owner.key]).catch(() => null);
+    if (!row) { skipped.push(`有一个附件已不存在（${assetId.slice(0, 12)}…）`); continue; }
+    const kind = chatAttachmentKind(row);
+    if (!kind) { skipped.push(`「${row.file_name || assetId}」不是图片/视频/音频，已忽略`); continue; }
+    if (counts[kind] >= CHAT_ATTACHMENT_LIMITS[kind]) {
+      skipped.push(`${CHAT_ATTACHMENT_LABELS[kind]}最多 ${CHAT_ATTACHMENT_LIMITS[kind]} 个，「${row.file_name || assetId}」没有带上`);
+      continue;
+    }
+    counts[kind] += 1;
+    items.push({
+      id: row.id, kind, index: counts[kind], label: `@${CHAT_ATTACHMENT_LABELS[kind]}${counts[kind]}`,
+      fileName: String(row.file_name || row.id), mimeType: String(row.mime_type || ''), row,
+    });
+  }
+  return { items, skipped };
+}
+function chatAttachmentMentionWarnings(message, items) {
+  const present = new Set(items.map((item) => item.label));
+  const missing = new Set();
+  const pattern = /@(图片|视频|音频)\s*(\d+)/g;
+  let match;
+  while ((match = pattern.exec(String(message || '')))) {
+    const label = `@${match[1]}${Number(match[2])}`;
+    if (!present.has(label)) missing.add(label);
+  }
+  return [...missing].map((label) => `你提到了 ${label}，但本条消息没有这个附件`);
+}
+async function compressChatImage(row, buffer) {
+  if (buffer.length <= 3.5 * 1024 * 1024) return { buffer, mimeType: row.mime_type || 'image/jpeg' };
+  let dir = null;
+  try {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'jw-chat-img-'));
+    const ext = String(row.file_name || '').includes('.') ? path.extname(row.file_name).slice(0, 8) : '.jpg';
+    const input = path.join(dir, `in${ext || '.jpg'}`);
+    const output = path.join(dir, 'out.jpg');
+    await writeFile(input, buffer);
+    await runCommand('ffmpeg', ['-y', '-i', input, '-vf', 'scale=1600:-2:force_original_aspect_ratio=decrease', '-q:v', '4', output], 120000);
+    const compressed = await readFile(output);
+    if (!compressed.length) throw new Error('图片压缩为空');
+    return { buffer: compressed, mimeType: 'image/jpeg' };
+  } catch {
+    return { buffer, mimeType: row.mime_type || 'image/jpeg' };
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+async function chatImageBlock(row, item) {
+  const buffer = await assetBytes(row);
+  if (!buffer.length) throw new Error('图片文件是空的');
+  if (buffer.length > 12 * 1024 * 1024) throw new Error('图片超过 12MB，请压缩后再发');
+  const prepared = await compressChatImage(row, buffer);
+  if (prepared.buffer.length > CHAT_IMAGE_MAX_BYTES) throw new Error('图片压缩后仍超过 6MB，请换一张更小的');
+  return {
+    bytes: prepared.buffer.length,
+    block: { type: 'image_url', image_url: { url: `data:${prepared.mimeType};base64,${prepared.buffer.toString('base64')}` } },
+  };
+}
+/** 视频关键帧：均匀取 3 帧，缩到 1280 宽；不走上游，纯 ffmpeg。 */
+async function chatVideoFrameBlocks(row, item) {
+  const buffer = await assetBytes(row);
+  if (!buffer.length) throw new Error('视频文件是空的');
+  if (buffer.length > 200 * 1024 * 1024) throw new Error('视频超过 200MB，请先压缩');
+  let dir = null;
+  try {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'jw-chat-video-'));
+    const input = path.join(dir, `input${path.extname(String(row.file_name || '')).slice(0, 8) || '.mp4'}`);
+    await writeFile(input, buffer);
+    const duration = await probeVideoDuration(input);
+    const times = duration > 0.6
+      ? [0.12, 0.5, 0.88].map((ratio) => Math.max(0, Math.min(duration - 0.12, duration * ratio)))
+      : [0];
+    const frames = [];
+    for (let index = 0; index < times.length; index += 1) {
+      const outPath = path.join(dir, `frame-${index + 1}.jpg`);
+      await runCommand('ffmpeg', ['-y', '-ss', times[index].toFixed(3), '-i', input, '-frames:v', '1', '-vf', 'scale=1280:-2:force_original_aspect_ratio=decrease', '-q:v', '4', outPath], 120000);
+      const frame = await readFile(outPath);
+      if (!frame.length) continue;
+      frames.push({
+        time: Number(times[index].toFixed(2)),
+        block: { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${frame.toString('base64')}` } },
+      });
+    }
+    return { duration, frames };
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+/** 音频/视频转写（对话用，带 1 小时内存缓存；同一附件重复发送不重复计费）。 */
+async function chatTranscriptForAsset(row) {
+  const cacheKey = `${row.id}|${row.storage_key}`;
+  const cached = chatTranscriptCache.get(cacheKey);
+  const cacheTtl = cached?.value?.error ? 5 * 60 * 1000 : 60 * 60 * 1000;
+  if (cached && Date.now() - cached.at < cacheTtl) return cached.value;
+  let value;
+  try {
+    const buffer = await assetBytes(row);
+    if (!buffer.length) throw new Error('文件是空的');
+    if (buffer.length > CHAT_ASR_MAX_BYTES) throw new Error('文件超过 24MB，暂时无法转写，请剪短后再发');
+    const policy = await getAiProviderPolicy();
+    const asr = await seedanceAsrConfig(policy?.channels);
+    if (!asr) throw new Error('平台没有配置语音转写渠道');
+    const result = await transcribeMedia({
+      endpoint: asr.endpoint, apiKey: asr.apiKey, buffer,
+      fileName: row.file_name || `${row.id}.mp3`, mimeType: row.mime_type || 'audio/mpeg',
+    });
+    value = {
+      text: String(result.text || '').slice(0, 8000),
+      duration: Number(result.duration) || 0,
+      truncated: String(result.text || '').length > 8000,
+      error: '',
+    };
+  } catch (error) {
+    value = { text: '', duration: 0, truncated: false, error: String(error?.message || error).slice(0, 300) };
+  }
+  chatTranscriptCache.set(cacheKey, { at: Date.now(), value });
+  while (chatTranscriptCache.size > 80) chatTranscriptCache.delete(chatTranscriptCache.keys().next().value);
+  return value;
+}
+/**
+ * 把附件变成模型能读的 content blocks：图片直传；视频抽关键帧 + 转写；
+ * 音频转写。单个附件失败只降级成一句说明，不阻断整条对话。
+ */
+async function prepareChatAttachments({ owner, items, skipped, message, onStatus }) {
+  const blocks = [];
+  const notes = [];
+  const summary = [];
+  let imageBytes = 0;
+  for (const item of items) {
+    const heading = `${item.label}（${CHAT_ATTACHMENT_LABELS[item.kind]}：${item.fileName}）`;
+    summary.push(heading);
+    try {
+      if (item.kind === 'image') {
+        onStatus?.(`正在读取 ${item.label}…`);
+        if (imageBytes >= CHAT_IMAGE_TOTAL_BYTES) { notes.push(`${item.label} 没有发给模型：本条消息图片总量超过 24MB`); continue; }
+        const prepared = await chatImageBlock(item.row, item);
+        imageBytes += prepared.bytes;
+        blocks.push({ type: 'text', text: heading });
+        blocks.push(prepared.block);
+      } else if (item.kind === 'video') {
+        onStatus?.(`正在抽取 ${item.label} 的关键帧…`);
+        const { duration, frames } = await chatVideoFrameBlocks(item.row, item);
+        blocks.push({ type: 'text', text: `${heading}${duration ? `，时长 ${duration.toFixed(1)} 秒` : ''}` });
+        frames.forEach((frame, index) => {
+          blocks.push({ type: 'text', text: `${item.label} 关键帧 ${index + 1}/${frames.length}（第 ${frame.time} 秒）` });
+          blocks.push(frame.block);
+        });
+        if (!frames.length) notes.push(`${item.label} 没有抽到关键帧`);
+        onStatus?.(`正在转写 ${item.label} 的语音…`);
+        const transcript = await chatTranscriptForAsset(item.row);
+        if (transcript.text) {
+          blocks.push({ type: 'text', text: `${item.label} 的语音转写${transcript.duration ? `（约 ${Math.round(transcript.duration)} 秒）` : ''}：\n${transcript.text}` });
+          summary.push(`${item.label} 已转写语音`);
+        } else {
+          notes.push(`${item.label} 的语音没有转写出来：${transcript.error || '没有识别到人声'}`);
+        }
+      } else if (item.kind === 'audio') {
+        onStatus?.(`正在转写 ${item.label}…`);
+        const transcript = await chatTranscriptForAsset(item.row);
+        if (transcript.text) {
+          blocks.push({ type: 'text', text: `${heading} 的语音转写${transcript.duration ? `（约 ${Math.round(transcript.duration)} 秒）` : ''}：\n${transcript.text}` });
+          summary.push(`${item.label} 已转写语音`);
+        } else {
+          notes.push(`${item.label} 没有转写出来：${transcript.error || '没有识别到人声'}`);
+        }
+      }
+    } catch (error) {
+      notes.push(`${item.label} 读取失败：${String(error?.message || error).slice(0, 160)}`);
+    }
+  }
+  const warnings = [...skipped, ...chatAttachmentMentionWarnings(message, items), ...notes];
+  const header = summary.length ? `【本条消息附件】\n${summary.join('\n')}` : '';
+  if (header) blocks.unshift({ type: 'text', text: header });
+  if (warnings.length) blocks.push({ type: 'text', text: `【附件提示】\n${warnings.join('\n')}` });
+  return { blocks, notes };
+}
+
 /* ───────────── 十一期 · 同行同步队列（筛选下载 + 自动同步；每条下载+转写都计费，串行跑） ───────────── */
 const PEER_SYNC_STAGES = {
   queued: '排队中',
@@ -1614,25 +2230,40 @@ async function startTranscription(owner, { assetRow, source, title, sourceUrl, n
   // MySQL 的 TEXT 列不能有字面量默认值：INSERT 必须显式给全 text/segments/error/duration。
   await aq('INSERT INTO junshi_workbench_transcripts (id,owner_key,org_id,account_id,asset_id,source,title,source_url,nickname,status,error,text,segments,duration_seconds,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     [transcriptId, owner.key, owner.orgId, accountId, assetRow?.id || null, source, String(title || '').slice(0, 300), String(sourceUrl || '').slice(0, 1000), String(nickname || '').slice(0, 200), 'running', '', '', '[]', 0, at, at]);
-  const job = jobStart(owner, '视频转写', String(title || '').slice(0, 60));
-  void (async () => {
-    try {
-      const policy = await getAiProviderPolicy();
-      const asr = await seedanceAsrConfig(policy?.channels);
-      if (!asr) throw Object.assign(new Error('转写渠道未配置（需要 seedance.nz 渠道 Key 或 JUNSHI_ASR_ENDPOINT/KEY）'), { code: 'WORKBENCH_ASR_NOT_CONFIGURED' });
-      const buffer = await assetBytes(assetRow);
-      const result = await transcribeMedia({ endpoint: asr.endpoint, apiKey: asr.apiKey, buffer, fileName: assetRow.file_name || `${transcriptId}.mp4`, mimeType: assetRow.mime_type || 'video/mp4' });
-      if (!result.text.trim()) throw Object.assign(new Error('这条内容没有识别出语音（可能是纯音乐或时长太短）'), { code: 'WORKBENCH_ASR_EMPTY' });
-      await aq('UPDATE junshi_workbench_transcripts SET status=?, text=?, segments=?, duration_seconds=?, error="", updated_at=? WHERE id=?',
-        ['succeeded', result.text.slice(0, 100000), JSON.stringify(result.segments.slice(0, 2000)), Number(result.duration) || 0, nowIso(), transcriptId]);
-      await jobDone(job, 'succeeded', `转写完成：${result.segments.length} 段 / ${Math.round(result.duration)} 秒`);
-    } catch (error) {
-      await aq('UPDATE junshi_workbench_transcripts SET status=?, error=?, updated_at=? WHERE id=?',
-        ['failed', String(error?.message || error).slice(0, 1000), nowIso(), transcriptId]).catch(() => {});
-      await jobDone(job, 'failed', String(error?.message || error).slice(0, 1000)).catch(() => {});
-    }
-  })();
+  const job = jobStart(owner, '视频转写', String(title || '').slice(0, 60), {
+    entityType: 'transcript', entityId: transcriptId,
+    payload: { assetId: assetRow?.id || '', source, title: String(title || '').slice(0, 300), sourceUrl, nickname, accountId },
+  });
+  await job.promise;
+  void runTranscriptionPipeline(owner, transcriptId, job);
   return transcriptId;
+}
+
+/** 转写执行体（首次与失败重试共用）：只认档案行，不重复建档案。 */
+async function runTranscriptionPipeline(owner, transcriptId, job) {
+  try {
+    const transcript = await arow('SELECT * FROM junshi_workbench_transcripts WHERE id=? AND owner_key=?', [transcriptId, owner.key]);
+    if (!transcript) throw new Error('转写档案不存在或已被删除');
+    const assetRow = transcript.asset_id
+      ? await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [transcript.asset_id, owner.key])
+      : null;
+    if (!assetRow) throw new Error('原始素材已被删除，无法转写');
+    await aq("UPDATE junshi_workbench_transcripts SET status='running', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), transcriptId, owner.key]);
+    const policy = await getAiProviderPolicy();
+    const asr = await seedanceAsrConfig(policy?.channels);
+    if (!asr) throw Object.assign(new Error('转写渠道未配置（需要 seedance.nz 渠道 Key 或 JUNSHI_ASR_ENDPOINT/KEY）'), { code: 'WORKBENCH_ASR_NOT_CONFIGURED' });
+    const buffer = await assetBytes(assetRow);
+    const result = await transcribeMedia({ endpoint: asr.endpoint, apiKey: asr.apiKey, buffer, fileName: assetRow.file_name || `${transcriptId}.mp4`, mimeType: assetRow.mime_type || 'video/mp4' });
+    if (!result.text.trim()) throw Object.assign(new Error('这条内容没有识别出语音（可能是纯音乐或时长太短）'), { code: 'WORKBENCH_ASR_EMPTY' });
+    await aq('UPDATE junshi_workbench_transcripts SET status=?, text=?, segments=?, duration_seconds=?, error="", updated_at=? WHERE id=?',
+      ['succeeded', result.text.slice(0, 100000), JSON.stringify(result.segments.slice(0, 2000)), Number(result.duration) || 0, nowIso(), transcriptId]);
+    await jobDone(job, 'succeeded', `转写完成：${result.segments.length} 段 / ${Math.round(result.duration)} 秒`);
+  } catch (error) {
+    const message = String(error?.message || error).slice(0, 1000);
+    await aq('UPDATE junshi_workbench_transcripts SET status=?, error=?, updated_at=? WHERE id=?',
+      ['failed', message, nowIso(), transcriptId]).catch(() => {});
+    await jobDone(job, 'failed', message).catch(() => {});
+  }
 }
 
 /* ───────────── 十二期 · 抖音主页读取（官方接口 → 浏览器旁路 → 明确引导） ───────────── */
@@ -1832,17 +2463,67 @@ function ownWorkOut(row) {
   };
 }
 
+/** 截图 → 作品数据（多模态识别）。独立成函数，供「截图回填」新建/更新共用。 */
+async function extractStatsFromScreenshot(assetRow) {
+  if (!/^image\//.test(String(assetRow?.mime_type || ''))) throw errors.badRequest('请上传图片截图', 'VALIDATION_ERROR');
+  const buffer = await assetBytes(assetRow);
+  if (!buffer.length) throw errors.badRequest('截图文件是空的', 'VALIDATION_ERROR');
+  if (buffer.length > 8 * 1024 * 1024) throw errors.badRequest('截图超过 8MB，请压缩后重传', 'VALIDATION_ERROR');
+  const providerMock = await textProviderIsMock().catch(() => false);
+  if (providerMock) {
+    // 本地演示/没有真实视觉模型时也给出一条可验证的样例，别让整条入口不可用。
+    return {
+      assetId: assetRow.id,
+      stats: {
+        plays: 1280, likes: 66, comments: 9, shares: 4, saves: 12,
+        publishedAt: nowIso().slice(0, 10), note: '演示环境识别样例', backfilledAt: nowIso(),
+      },
+    };
+  }
+  const dataUrl = `data:${assetRow.mime_type};base64,${buffer.toString('base64')}`;
+  const messages = [{ role: 'user', content: [
+    { type: 'text', text: '这是一张抖音作者端的作品数据截图。只依据图中可见的数字提取：{"plays":播放,"likes":点赞,"comments":评论,"shares":分享,"saves":收藏,"publishedAt":"发布时间原文","note":"一句备注"}。数字看不清或没有的字段填 null。只输出这个 JSON，不要其他文字。' },
+    { type: 'image_url', image_url: { url: dataUrl } },
+  ] }];
+  let stats = null;
+  try {
+    const result = await collectText(null, { system: WORKBENCH_SYSTEM, messages });
+    stats = parseLooseJsonObject(result.text);
+  } catch { /* 落到下面的失败分支 */ }
+  if (!stats) throw errors.badRequest('没能从截图里识别出数据；换一张更清晰的作者端数据截图试试', 'WORKBENCH_STATS_UNRECOGNIZED');
+  const cleaned = {};
+  for (const key of ['plays', 'likes', 'comments', 'shares', 'saves']) {
+    const value = Number(stats[key]);
+    cleaned[key] = Number.isFinite(value) && value >= 0 ? Math.round(value) : null;
+  }
+  cleaned.publishedAt = String(stats.publishedAt || '').slice(0, 60);
+  cleaned.note = String(stats.note || '').slice(0, 200);
+  cleaned.backfilledAt = nowIso();
+  return { stats: cleaned, assetId: assetRow.id };
+}
+
 /**
- * 数据复盘的统一数据源：自己作品（采集助手实时同步）+ 文案草稿截图回填。
+ * 数据复盘的统一数据源：自己作品（采集助手实时同步）+ 独立截图回填 + 历史文案草稿回填。
  * 返回 [{ id, origin, topic, style, shareUrl?, coverUrl?, stats }]，按回填/更新时间倒序。
  */
 async function publishedForReports(ownerKey, accountId) {
-  const [copyRows, ownRows] = await Promise.all([
+  const [snapshotRows, copyRows, ownRows] = await Promise.all([
+    arows('SELECT id,topic,stats,created_at,updated_at FROM junshi_workbench_review_snapshots WHERE owner_key=? AND account_id=? ORDER BY created_at DESC LIMIT 200', [ownerKey, accountId]).catch(() => []),
     arows('SELECT id,topic,style,stats FROM junshi_workbench_copy_drafts WHERE owner_key=? AND account_id=? ORDER BY created_at DESC', [ownerKey, accountId]),
     arows('SELECT * FROM junshi_workbench_published_works WHERE owner_key=? AND account_id=? ORDER BY published_at DESC, updated_at DESC LIMIT 100', [ownerKey, accountId]).catch(() => []),
   ]);
   const screenshotItems = [];
   let pendingCount = 0;
+  for (const row of snapshotRows) {
+    try {
+      const stats = row.stats ? JSON.parse(row.stats) : null;
+      if (!stats) continue;
+      screenshotItems.push({
+        id: `snapshot:${row.id}`, sourceId: row.id, sourceTable: 'snapshot', canUpdate: true,
+        origin: 'screenshot', topic: row.topic || stats.note || '截图回填', style: '截图回填', stats,
+      });
+    } catch { /* 单条解析失败不影响列表 */ }
+  }
   for (const row of copyRows) {
     try {
       const stats = row.stats ? JSON.parse(row.stats) : null;
@@ -1850,7 +2531,10 @@ async function publishedForReports(ownerKey, accountId) {
         pendingCount += 1;
         continue;
       }
-      screenshotItems.push({ id: row.id, origin: 'screenshot', topic: row.topic || '', style: row.style || '', stats });
+      screenshotItems.push({
+        id: row.id, sourceId: row.id, sourceTable: 'copy_draft', canUpdate: true,
+        origin: 'screenshot', topic: row.topic || '', style: row.style || '', stats,
+      });
     } catch {
       pendingCount += 1;
     }
@@ -1974,9 +2658,7 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
       profileUpdatedAt: profile.updatedAt,
       accounts: [DEFAULT_ACCOUNT_OUT, ...accounts.map(accountOut)],
       stats: await counts(owner.key),
-      jobs: (await arows('SELECT * FROM junshi_workbench_jobs WHERE owner_key=? ORDER BY created_at DESC LIMIT 8', [owner.key])).map((row) => ({
-        id: row.id, kind: row.kind, status: row.status, detail: row.detail, createdAt: row.created_at, updatedAt: row.updated_at,
-      })),
+      jobs: (await arows('SELECT * FROM junshi_workbench_jobs WHERE owner_key=? ORDER BY created_at DESC LIMIT 8', [owner.key])).map(jobOut),
     };
   }
 
@@ -2035,9 +2717,32 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
   if (rest === '/summary' && method === 'GET') {
     return {
       stats: await counts(owner.key),
-      jobs: (await arows('SELECT * FROM junshi_workbench_jobs WHERE owner_key=? ORDER BY created_at DESC LIMIT 8', [owner.key])).map((row) => ({
-        id: row.id, kind: row.kind, status: row.status, detail: row.detail, createdAt: row.created_at, updatedAt: row.updated_at,
-      })),
+      jobs: (await arows('SELECT * FROM junshi_workbench_jobs WHERE owner_key=? ORDER BY created_at DESC LIMIT 8', [owner.key])).map(jobOut),
+    };
+  }
+
+  /* ── 提交前估价 ── */
+  if (rest === '/estimate/video' && method === 'POST') {
+    const policy = await getAiProviderPolicy();
+    const selection = providerSelectionForModality(policy, 'VIDEO');
+    return {
+      estimate: estimateVideoCost(selection, {
+        durationSeconds: clampInt(ctx.body?.durationSeconds, 15, 1, 120),
+        resolution: text(ctx.body?.resolution).slice(0, 16) || '768P',
+        audio: ctx.body?.audio === false ? false : true,
+      }),
+    };
+  }
+  if (rest === '/estimate/avatar' && method === 'POST') {
+    const speech = text(ctx.body?.text).slice(0, 30000);
+    const speed = avatarSpeedProfile(ctx.body?.speed).value;
+    const policy = await getAiProviderPolicy();
+    const selection = providerSelectionForModality(policy, 'VIDEO');
+    return {
+      estimate: estimateAvatarCost(selection, {
+        text: speech, speed,
+        resolution: text(ctx.body?.resolution).slice(0, 16) || '480P',
+      }),
     };
   }
 
@@ -2063,8 +2768,16 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
 
     const userAt = nowIso();
     const userId = id('jwm');
-    await aq('INSERT INTO junshi_workbench_messages (id,owner_key,org_id,role,content,citations,created_at) VALUES (?,?,?,?,?,?,?)',
-      [userId, owner.key, owner.orgId, 'user', message, null, userAt]);
+    // 先只读附件元数据（不读字节），把 @图片N/@视频N/@音频N 和消息一起落库。
+    const attachmentIds = normalizeChatAttachmentRefs(ctx.body?.attachments);
+    const attachmentBundle = attachmentIds.length
+      ? await loadChatAttachmentRows(owner, attachmentIds)
+      : { items: [], skipped: [] };
+    const attachmentRecords = attachmentBundle.items.map(({ id: assetId, kind, index, label, fileName, mimeType }) => ({
+      id: assetId, kind, index, label, fileName, mimeType,
+    }));
+    await aq('INSERT INTO junshi_workbench_messages (id,owner_key,org_id,role,content,citations,attachments,created_at) VALUES (?,?,?,?,?,?,?,?)',
+      [userId, owner.key, owner.orgId, 'user', message, null, JSON.stringify(attachmentRecords), userAt]);
 
     const historyRows = await arows('SELECT role, content FROM junshi_workbench_messages WHERE owner_key=? ORDER BY created_at DESC, id DESC LIMIT 12', [owner.key]);
     const history = historyRows.reverse().map((row) => ({ role: row.role, content: String(row.content || '').slice(0, 4000) }));
@@ -2078,21 +2791,6 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
     const kb = knowledge();
     const system = buildChatSystem({ profile, orgProfile, chunks, refs, calendar: kb.calendar, hooks: kb.hooks, memories });
     const messages = [{ role: 'system', content: system }, ...history];
-    // 附件（对齐原版 @图片N）：只支持图片走视觉；最后一条 user 消息变成 content blocks。
-    const attachmentIds = Array.isArray(ctx.body?.attachments) ? ctx.body.attachments.map((item) => text(item)).filter(Boolean).slice(0, 4) : [];
-    if (attachmentIds.length) {
-      const blocks = [{ type: 'text', text: message }];
-      for (const assetId of attachmentIds) {
-        const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, owner.key]).catch(() => null);
-        if (!assetRow || !/^image\//.test(String(assetRow.mime_type || ''))) continue;
-        try {
-          const buffer = await assetBytes(assetRow);
-          if (!buffer.length || buffer.length > 6 * 1024 * 1024) continue;
-          blocks.push({ type: 'image_url', image_url: { url: `data:${assetRow.mime_type};base64,${buffer.toString('base64')}` } });
-        } catch { /* 单张读取失败不影响整条消息 */ }
-      }
-      if (blocks.length > 1) messages[messages.length - 1] = { role: 'user', content: blocks };
-    }
 
     sseOpen(ctx);
     const controller = new AbortController();
@@ -2105,6 +2803,22 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
     try {
       sseSend(ctx, 'start', { userMessageId: userId, citations });
       sseSend(ctx, 'citations', citations);
+      if (attachmentBundle.items.length) {
+        sseSend(ctx, 'attachments', { items: attachmentRecords });
+        try {
+          const prepared = await prepareChatAttachments({
+            owner, items: attachmentBundle.items, skipped: attachmentBundle.skipped, message,
+            onStatus: (statusText) => sseSend(ctx, 'status', { text: statusText }),
+          });
+          if (prepared.blocks.length) {
+            messages[messages.length - 1] = { role: 'user', content: [{ type: 'text', text: message }, ...prepared.blocks] };
+          }
+        } catch (error) {
+          // 附件整体预处理失败也不阻断对话：把原因告诉用户，正文照常回答。
+          console.warn('[junshi chat] attachments failed:', error?.message || error);
+          sseSend(ctx, 'status', { text: `附件读取失败：${String(error?.message || error).slice(0, 120)}` });
+        }
+      }
       const providerMock = await textProviderIsMock().catch(() => false);
       // 模型档位（对齐原版 标准/快速 双档）：deep 取渠道里异于默认的另一个模型。
       let tierModel = '';
@@ -2213,30 +2927,10 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
     const style = text(ctx.body?.style) || '口语化';
     const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
     rateLimit(owner.key);
-    const job = jobStart(owner, '文案生成', `主题：${topic} · ${count} 条`);
+    const payload = { topic, count, style, accountId };
+    const job = jobStart(owner, '文案生成', `主题：${topic} · ${count} 条`, { entityType: 'copy', entityId: '', payload });
     await job.promise;
-    try {
-      const profile = (await readProfile(owner.key, accountId)).profile;
-      const orgProfile = await orgProfileText(owner.key);
-      const chunks = retrieve(topic, ['文案', '营销'], 4);
-      const copies = retrieveCopies(topic, 3);
-      const userPrompt = buildCopyPrompt({ profile, orgProfile, topic, count, style, chunks, copies });
-      const providerMock = await textProviderIsMock().catch(() => false);
-      const result = providerMock ? { text: '', provider: 'demo' } : await collectText(ctx, { system: WORKBENCH_SYSTEM, user: userPrompt });
-      const content = mockOrEmpty(result) ? demoCopy(profile, topic, count, style) : result.text;
-      const draftId = id('jwc');
-      const at = nowIso();
-      await aq('INSERT INTO junshi_workbench_copy_drafts (id,owner_key,org_id,account_id,topic,style,content,created_at) VALUES (?,?,?,?,?,?,?,?)',
-        [draftId, owner.key, owner.orgId, accountId, topic, style, content, at]);
-      await jobDone(job, 'succeeded', `已生成 ${count} 条文案`);
-      return {
-        draft: { id: draftId, topic, style, content, accountId, createdAt: at },
-        demo: mockOrEmpty(result),
-      };
-    } catch (error) {
-      await jobDone(job, 'failed', String(error?.message || error).slice(0, 1000));
-      throw error;
-    }
+    return await generateCopyDraft(owner, payload, job);
   }
   if (rest.startsWith('/copy/') && method === 'DELETE') {
     const draftId = decodeURIComponent(rest.slice('/copy/'.length));
@@ -2261,29 +2955,10 @@ export async function handleJunshiWorkbench(ctx, rest = '/', search = new URLSea
     const referenceText = text(ctx.body?.referenceText || ctx.body?.reference_text).slice(0, 4000);
     const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
     rateLimit(owner.key);
-    const job = jobStart(owner, '视频脚本', `${mode} · ${title}`);
+    const payload = { title, mode, brief, referenceText, accountId };
+    const job = jobStart(owner, '视频脚本', `${mode} · ${title}`, { entityType: 'video_script', entityId: '', payload });
     await job.promise;
-    try {
-      const profile = (await readProfile(owner.key, accountId)).profile;
-      const orgProfile = await orgProfileText(owner.key);
-      const chunks = retrieve(`${title} ${brief}`, ['营销', '转化', '续费', '文案'], 4);
-      const userPrompt = buildVideoPrompt({ profile, orgProfile, title, brief, referenceText, mode, chunks });
-      const providerMock = await textProviderIsMock().catch(() => false);
-      const result = providerMock ? { text: '', provider: 'demo' } : await collectText(ctx, { system: WORKBENCH_SYSTEM, user: userPrompt });
-      const script = mockOrEmpty(result) ? demoVideo(profile, title, brief, referenceText, mode) : result.text;
-      const projectId = id('jwv');
-      const at = nowIso();
-      await aq('INSERT INTO junshi_workbench_video_projects (id,owner_key,org_id,account_id,title,brief,reference_text,mode,script,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-        [projectId, owner.key, owner.orgId, accountId, title, brief, referenceText, mode, script, 'draft', at, at]);
-      await jobDone(job, 'succeeded', '分镜脚本已生成');
-      return {
-        project: { id: projectId, title, brief, referenceText, mode, script, status: 'draft', accountId, createdAt: at, updatedAt: at },
-        demo: mockOrEmpty(result),
-      };
-    } catch (error) {
-      await jobDone(job, 'failed', String(error?.message || error).slice(0, 1000));
-      throw error;
-    }
+    return await generateVideoProject(owner, payload, job);
   }
   if (rest.startsWith('/videos/') && method === 'GET' && !rest.endsWith('/export')) {
     const projectId = decodeURIComponent(rest.slice('/videos/'.length));
@@ -2403,6 +3078,7 @@ async function deepseekWebSearch({ query, count = 10 }) {
 async function runHotspotSearch(ctx, owner, { wfId, keyword, accountId }) {
   const fail = async (message) => {
     await wfUpdate(wfId, owner.key, { stage: 'search_failed', state: JSON.stringify({ keyword, searchError: String(message).slice(0, 500) }) }).catch(() => {});
+    return { ok: false, message: String(message) };
   };
   try {
     const after = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString().slice(0, 10);
@@ -2415,7 +3091,7 @@ async function runHotspotSearch(ctx, owner, { wfId, keyword, accountId }) {
     if (providerMock || !results.length) {
       // 渠道是 mock（本地开发）或搜索无结果：mock 时给演示热点；无结果时如实失败。
       if (providerMock) { hotspots = demoPickedHotspots(keyword); demo = true; }
-      else { await fail(`“${keyword.slice(0, 40)}”近 3 天没有搜到结果，换个关键词试试，或改用手动填写`); return; }
+      else { return await fail(`“${keyword.slice(0, 40)}”近 3 天没有搜到结果，换个关键词试试，或改用手动填写`); }
     } else {
       const generated = await generateOptions(ctx, owner, {
         prompt: buildHotspotPickPrompt({ profile, orgProfile, keyword, results }),
@@ -2423,11 +3099,12 @@ async function runHotspotSearch(ctx, owner, { wfId, keyword, accountId }) {
       });
       hotspots = generated.options.map((option, index) => ({ id: `h${index + 1}`, ...option }));
       demo = generated.demo;
-      if (!hotspots.length) { await fail('模型没有从搜索结果里挑出可用热点，请重试或改用手动填写'); return; }
+      if (!hotspots.length) return await fail('模型没有从搜索结果里挑出可用热点，请重试或改用手动填写');
     }
     await wfUpdate(wfId, owner.key, { stage: 'hotspots_ready', state: JSON.stringify({ keyword, hotspots, demo }) });
+    return { ok: true, message: `找到 ${hotspots.length} 个可用热点` };
   } catch (error) {
-    await fail(error?.message || '搜索失败');
+    return await fail(error?.message || '搜索失败');
   }
 }
 
@@ -2576,8 +3253,18 @@ async function runWfCopy(ctx, owner, wfId) {
 /** 后台启动一轮文案生成（不阻塞 action 响应）。 */
 function startWfCopy(ctx, owner, wfId, job = null) {
   void runWfCopy(ctx, owner, wfId)
-    .catch((error) => console.warn('[junshi workbench] 生成轮失败：', error?.message || error))
-    .finally(() => { if (job) jobDone(job, 'succeeded', '本轮生成结束').catch(() => {}); });
+    .then(async () => {
+      if (!job) return;
+      const row = await arow('SELECT state FROM junshi_workbench_workflows WHERE id=? AND owner_key=?', [wfId, owner.key]).catch(() => null);
+      let state = {};
+      try { state = row?.state ? JSON.parse(row.state) : {}; } catch { state = {}; }
+      const produced = Array.isArray(state.copyOptions) && state.copyOptions.length > 0;
+      await jobDone(job, produced ? 'succeeded' : 'failed', produced ? '本轮生成结束' : (state.message || '本轮没有生成出文案')).catch(() => {});
+    })
+    .catch((error) => {
+      if (job) jobDone(job, 'failed', String(error?.message || error).slice(0, 1000)).catch(() => {});
+      console.warn('[junshi workbench] 生成轮失败：', error?.message || error);
+    });
 }
 
 /* ───────────── 数字人口播（音色克隆 + 对口型）+ 截图回填 ───────────── */
@@ -2589,13 +3276,33 @@ function voiceOut(row) {
     accountId: row.account_id || 'default', createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
+function parseAvatarSegments(row) {
+  try {
+    const value = JSON.parse(row?.segments || '[]');
+    return Array.isArray(value) ? value : [];
+  } catch { return []; }
+}
 function avatarRunOut(row) {
   let steps = [];
   try { steps = JSON.parse(row.steps || '[]'); } catch { /* ignore */ }
-  const note = steps.filter((step) => step?.note).map((step) => String(step.note)).join('；');
+  const segments = parseAvatarSegments(row);
+  const note = [...steps.filter((step) => step?.note).map((step) => String(step.note)), ...segments.map((segment) => String(segment.note || '')).filter(Boolean)]
+    .filter(Boolean).join('；');
+  const speed = avatarSpeedProfile(row.speed);
+  const doneSegments = segments.filter((segment) => segment.status === 'done').length;
+  const failedSegments = segments.filter((segment) => segment.status === 'failed').length;
   return {
     id: row.id, voiceId: row.voice_id || null, speakerId: row.speaker_id || '',
     imageAssetId: row.image_asset_id || null, text: row.text || '', status: row.status,
+    speed: speed.value, speedLabel: speed.label,
+    segments: segments.map((segment) => ({
+      index: Number(segment.index || 0), text: String(segment.text || ''),
+      status: String(segment.status || 'pending'), error: String(segment.error || ''),
+      audioSeconds: Number(segment.audioSeconds || 0), durationSeconds: Number(segment.durationSeconds || 0),
+      note: String(segment.note || ''),
+    })),
+    segmentCount: segments.length, doneSegments, failedSegments,
+    durationSeconds: Number(row.duration_seconds || 0),
     error: row.error || '', note, steps, videoAssetId: row.video_asset_id || null,
     videoUrl: row.video_asset_id ? `/api/junshi/workbench/assets/${encodeURIComponent(row.video_asset_id)}/file` : null,
     accountId: row.account_id || 'default', createdAt: row.created_at, updatedAt: row.updated_at,
@@ -2603,6 +3310,12 @@ function avatarRunOut(row) {
 }
 async function avatarStepsUpdate(id, ownerKey, steps) {
   await aq('UPDATE junshi_workbench_avatar_runs SET steps=?, updated_at=? WHERE id=? AND owner_key=?', [JSON.stringify(steps), nowIso(), id, ownerKey]).catch(() => {});
+}
+async function avatarSegmentsUpdate(id, ownerKey, segments) {
+  await aq('UPDATE junshi_workbench_avatar_runs SET segments=?, updated_at=? WHERE id=? AND owner_key=?', [JSON.stringify(segments), nowIso(), id, ownerKey]).catch(() => {});
+}
+async function avatarMetaUpdate(id, ownerKey, meta) {
+  await aq('UPDATE junshi_workbench_avatar_runs SET meta=?, updated_at=? WHERE id=? AND owner_key=?', [JSON.stringify(meta), nowIso(), id, ownerKey]).catch(() => {});
 }
 
 /** 后台克隆音色：样本直链上传 → doubao/minimax 克隆 → speaker_id。
@@ -2659,114 +3372,351 @@ async function downloadUrlBuffer(url) {
   if (!response.ok) throw Object.assign(new Error(`素材下载失败（HTTP ${response.status}）`), { status: 502 });
   return Buffer.from(await response.arrayBuffer());
 }
-/** 上游对口型不可用时的降级：底片视频 + TTS 音轨。非精准对口型，UI 必须标注。 */
-async function muxAudioOntoVideo(baseUrl, audioUrl) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'jw-avatar-mux-'));
-  try {
-    const basePath = path.join(dir, 'base.mp4');
-    const audioPath = path.join(dir, 'voice.mp3');
-    const outPath = path.join(dir, 'out.mp4');
-    await writeFile(basePath, await downloadUrlBuffer(baseUrl));
-    await writeFile(audioPath, await downloadUrlBuffer(audioUrl));
-    await runCommand('ffmpeg', ['-y', '-i', basePath, '-i', audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-shortest', '-movflags', '+faststart', outPath], 180000);
-    return await readFile(outPath);
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-async function saveAvatarVideo(owner, runId, buffer) {
+async function saveAvatarVideo(owner, runId, buffer, accountId = 'default') {
   const stored = await persistSecureUpload({ fileName: `${runId}.mp4`, mimeType: 'video/mp4', buffer });
   const assetId = id('jwa');
   await aq('INSERT INTO junshi_workbench_assets (id,owner_key,org_id,account_id,file_name,storage_key,storage_backend,mime_type,kind,file_size,folder,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-    [assetId, owner.key, owner.orgId, 'default', stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || 'video/mp4', 'video', stored.fileSize || buffer.length, '数字人', nowIso()]);
+    [assetId, owner.key, owner.orgId, accountId, stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || 'video/mp4', 'video', stored.fileSize || buffer.length, '数字人', nowIso()]);
   return assetId;
 }
-
-/** 后台数字人合成：底片生成（形象照 i2v）→ TTS → 人脸分析 → 对口型 → 存素材库。
- *  合同细节与上游已知故障见 services/junshiAvatar.js 文件头。
- *  2026-10-25：克隆通道不可用时音色用参考音频直出；Kling session 过期时
- *  降级为「底片+配音」（非精准对口型），并在 steps 里带 note。 */
-async function runTalkingHead(owner, { runId, text, speakerId, voiceRow, imageAssetRow }) {
-  const steps = [
-    { key: 'base', label: '生成人物底片（形象照 → 视频）', status: 'running' },
-    { key: 'tts', label: '口播语音合成', status: 'pending' },
-    { key: 'face', label: '人脸分析', status: 'pending' },
-    { key: 'lipsync', label: '对口型合成视频', status: 'pending' },
-    { key: 'save', label: '存入素材库', status: 'pending' },
-  ];
-  const fail = async (message) => {
-    await aq('UPDATE junshi_workbench_avatar_runs SET status=?, error=?, updated_at=? WHERE id=? AND owner_key=?', ['failed', String(message).slice(0, 1000), nowIso(), runId, owner.key]).catch(() => {});
+/** 分段中间产物存进上传目录（不登记素材库），失败重试时还能复用已成功的段。 */
+async function storeAvatarRunBuffer(runId, suffix, buffer, mimeType) {
+  const stored = await persistSecureUpload({ fileName: `${runId}-${suffix}`, mimeType, buffer });
+  return {
+    storageKey: stored.storageKey,
+    storageBackend: stored.storageBackend || 'local',
+    mimeType: stored.mimeType || mimeType,
+    bytes: buffer.length,
   };
-  const mark = (key, status) => { const step = steps.find((s) => s.key === key); if (step) step.status = status; return avatarStepsUpdate(runId, owner.key, steps); };
+}
+function avatarSegmentPseudo(segment, kind = 'video') {
+  return {
+    storage_key: kind === 'video' ? segment.videoStorageKey : segment.audioStorageKey,
+    storage_backend: kind === 'video' ? segment.videoStorageBackend : segment.audioStorageBackend,
+  };
+}
+async function probeBufferDuration(buffer, fileName, mimeType) {
+  let dir = null;
   try {
-    const policy = await getAiProviderPolicy();
-    const config = await seedanceChannelConfig(policy?.channels);
-    if (!config) throw Object.assign(new Error('数字人渠道未配置（需要 seedance.nz 渠道 Key）'), { code: 'WORKBENCH_AVATAR_NOT_CONFIGURED' });
-    // ⓪ 底片：形象照 → 约 6 秒人物正面视频（kling 对口型吃视频不吃照片）
-    const imageBuffer = await assetBytes(imageAssetRow);
-    if (imageBuffer.length > 10 * 1024 * 1024) throw Object.assign(new Error('形象照超过 10MB，请压缩后重传'), { code: 'WORKBENCH_AVATAR_IMAGE_TOO_LARGE' });
-    const imageUrl = await uploadToSeedance({ ...config, buffer: imageBuffer, fileName: imageAssetRow.file_name || 'face.jpg', mimeType: imageAssetRow.mime_type || 'image/jpeg' });
-    // ⚠️ Seedance 2.0 i2v 要顶层 images；放 metadata.images 会报「image-to-video requires at least one input image」。
-    // 底片 6 秒：给 5 秒口播留出 lip-sync 需要的 700ms 安全余量（5 秒底片会只剩 4 秒可对口型）。
-    const baseTask = await submitVideoTask({ ...config, model: 'seedance-2.0-standard-i2v', images: [imageUrl], promptOverride: '一位教师正面面对镜头，微微点头，嘴唇自然开合像在讲话，背景不变，光线稳定', extra: { seconds: '6' } });
-    const base = await pollVideoTask({ ...config, taskId: baseTask, timeoutMs: 600000 });
-    if (!base.url) throw Object.assign(new Error('底片生成没有返回视频地址'), { code: 'WORKBENCH_BASE_NO_URL' });
-    await mark('base', 'done'); await mark('tts', 'running');
-    // ① TTS：有训练克隆音色就用克隆；否则用样本参考音频直出（克隆通道不可用时的兜底）。
-    let ttsTask = '';
-    if (!speakerId || speakerId === 'reference') {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'jw-avatar-probe-'));
+    const file = path.join(dir, path.extname(fileName || '') ? fileName : 'media.bin');
+    await writeFile(file, buffer);
+    return await probeVideoDuration(file);
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+async function ensureAvatarFaceSession(config, meta) {
+  if (meta.sessionId && meta.faceId) return meta;
+  if (!meta.baseUrl) throw new Error('底片地址缺失，无法做人脸分析');
+  const faceTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-identify-face', metadata: { video_url: meta.baseUrl } });
+  const face = await pollVideoTask({ ...config, taskId: faceTask, timeoutMs: 600000 });
+  const { sessionId, faceId, endTime } = parseFaceSession(face.resultText);
+  meta.sessionId = sessionId;
+  meta.faceId = faceId;
+  meta.faceEndTime = endTime;
+  return meta;
+}
+async function synthAvatarSegmentAudio({ config, owner, runId, segment, speakerId, voiceRow, speed, meta }) {
+  let sampleUrl = '';
+  if (!speakerId || speakerId === 'reference') {
+    sampleUrl = String(meta.sampleUrl || '');
+    if (!sampleUrl || Date.now() - Number(meta.sampleUrlAt || 0) > 20 * 60 * 60 * 1000) {
       const sampleAsset = voiceRow?.sample_asset_id
         ? await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [voiceRow.sample_asset_id, owner.key])
         : null;
       if (!sampleAsset) throw new Error('音色样本不存在，无法用参考音频直出');
       const sampleBuffer = await assetBytes(sampleAsset);
       if (sampleBuffer.length > 10 * 1024 * 1024) throw new Error('音色样本超过 10MB，请剪短一些');
-      const sampleUrl = await uploadToSeedance({ ...config, buffer: sampleBuffer, fileName: sampleAsset.file_name || 'voice-sample.mp3', mimeType: sampleAsset.mime_type || 'audio/mpeg' });
-      ttsTask = await submitAudioTask({ ...config, model: 'doubao-seed-audio-1.0', prompt: text, metadata: { audio_url: sampleUrl, format: 'mp3', sample_rate: '24000' } });
-      const ttsStep = steps.find((step) => step.key === 'tts');
-      if (ttsStep) ttsStep.label = '口播语音合成（参考音频直出）';
-    } else {
-      ttsTask = await submitAudioTask({ ...config, model: 'doubao-seed-icl-2.0', prompt: text, metadata: { speaker: speakerId, voice_model: 'seed-tts-2.0-standard', format: 'mp3' } });
+      sampleUrl = await uploadToSeedance({ ...config, buffer: sampleBuffer, fileName: sampleAsset.file_name || 'voice-sample.mp3', mimeType: sampleAsset.mime_type || 'audio/mpeg' });
+      meta.sampleUrl = sampleUrl;
+      meta.sampleUrlAt = Date.now();
     }
-    const tts = await pollAudioTask({ ...config, taskId: ttsTask, timeoutMs: 600000 });
-    if (!tts.url) throw Object.assign(new Error('语音合成没有返回音频地址'), { code: 'WORKBENCH_TTS_NO_URL' });
-    await mark('tts', 'done'); await mark('face', 'running');
-    // ②③ 人脸分析 + 对口型；上游 session 过期时降级为「底片+配音」，并明确标注。
-    let outputBuffer = null;
+  }
+  const ttsTask = (!speakerId || speakerId === 'reference')
+    ? await submitAudioTask({ ...config, model: 'doubao-seed-audio-1.0', prompt: segment.text, metadata: { audio_url: sampleUrl, format: 'mp3', sample_rate: '24000' } })
+    : await submitAudioTask({ ...config, model: 'doubao-seed-icl-2.0', prompt: segment.text, metadata: { speaker: speakerId, voice_model: 'seed-tts-2.0-standard', format: 'mp3' } });
+  const tts = await pollAudioTask({ ...config, taskId: ttsTask, timeoutMs: 600000 });
+  if (!tts.url) throw new Error('语音合成没有返回音频地址');
+  let audioBuffer = await downloadUrlBuffer(tts.url);
+  const atempo = Number(speed?.atempo || 1);
+  if (Math.abs(atempo - 1) > 0.01) {
+    let dir = null;
     try {
-      const faceTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-identify-face', metadata: { video_url: base.url } });
-      const face = await pollVideoTask({ ...config, taskId: faceTask, timeoutMs: 600000 });
-      const { sessionId, faceId, endTime } = parseFaceSession(face.resultText);
-      await mark('face', 'done'); await mark('lipsync', 'running');
-      // 上游的「session_id has expired」其实是 soundEndTime 太靠近底片末尾；
-      // 统一封顶 4000ms（生产同类型 6 秒底片实测安全），不随底片时长放大。
-      const soundEndTime = safeLipSyncEndTime(endTime, 4000);
-      const syncTask = await submitVideoTask({ ...config, model: 'kling-lip-sync-video', metadata: { sessionId, faceId, audio_url: tts.url, soundStartTime: 0, soundEndTime, soundInsertTime: 0, soundVolume: 1, originalAudioVolume: 0 } });
-      const synced = await pollVideoTask({ ...config, taskId: syncTask, timeoutMs: 900000 });
-      if (!synced.url) throw Object.assign(new Error('对口型完成但没有返回视频地址'), { code: 'WORKBENCH_LIPSYNC_NO_URL' });
-      outputBuffer = await downloadUrlBuffer(synced.url);
-      await mark('lipsync', 'done');
-    } catch (error) {
-      const message = String(error?.message || error);
-      const step = steps.find((item) => item.key === 'lipsync');
-      if (step) {
-        step.label = '对口型（上游不可用，改用底片+配音）';
-        step.note = `上游对口型失败，本次输出为底片+配音版本（非精准对口型）。原因：${message.slice(0, 160)}`;
-        step.status = 'done';
-      }
-      await avatarStepsUpdate(runId, owner.key, steps);
-      outputBuffer = await muxAudioOntoVideo(base.url, tts.url);
+      dir = await mkdtemp(path.join(os.tmpdir(), 'jw-avatar-tempo-'));
+      const input = path.join(dir, 'in.mp3');
+      const output = path.join(dir, 'out.mp3');
+      await writeFile(input, audioBuffer);
+      await runCommand('ffmpeg', ['-y', '-i', input, '-filter:a', `atempo=${atempo.toFixed(2)}`, '-b:a', '128k', output], 120000);
+      audioBuffer = await readFile(output);
+    } finally {
+      if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
-    await mark('save', 'running');
-    const assetId = await saveAvatarVideo(owner, runId, outputBuffer);
-    await aq('UPDATE junshi_workbench_avatar_runs SET status=?, video_asset_id=?, error="", updated_at=? WHERE id=? AND owner_key=?', ['succeeded', assetId, nowIso(), runId, owner.key]);
-    await mark('save', 'done');
-    return { ok: true, message: '数字人口播完成' };
-  } catch (error) {
-    const message = String(error?.message || '数字人合成失败').slice(0, 1000);
-    await fail(message);
+  }
+  let audioSeconds = await probeBufferDuration(audioBuffer, 'voice.mp3', 'audio/mpeg');
+  if (!(audioSeconds > 0)) throw new Error('没有读到语音时长');
+  // 分段是按语速估算切的，但实际 TTS 时长可能略超 4 秒。先用 atempo 把这一小段压到 3.95 秒内，
+  // 不截台词；只有压缩后仍超限才按 4 秒截取并明确标注。
+  if (audioSeconds > 4.15) {
+    const fit = Math.min(1.95, audioSeconds / 3.95);
+    if (fit > 1.01) {
+      let dir = null;
+      try {
+        dir = await mkdtemp(path.join(os.tmpdir(), 'jw-avatar-fit-'));
+        const input = path.join(dir, 'in.mp3');
+        const output = path.join(dir, 'out.mp3');
+        await writeFile(input, audioBuffer);
+        await runCommand('ffmpeg', ['-y', '-i', input, '-filter:a', `atempo=${fit.toFixed(3)}`, '-b:a', '128k', output], 120000);
+        audioBuffer = await readFile(output);
+        audioSeconds = await probeBufferDuration(audioBuffer, 'voice.mp3', 'audio/mpeg');
+        segment.note = `这段语音原长超过 4 秒，已自动微调语速到 ${audioSeconds.toFixed(1)} 秒以完整保留台词`;
+      } finally {
+        if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+  }
+  if (audioSeconds > 4.15) segment.note = `这段语音 ${audioSeconds.toFixed(1)} 秒，超过单次 4 秒对口型上限，已按 4 秒截取`;
+  const audioStorage = await storeAvatarRunBuffer(runId, `seg${segment.index}-voice.mp3`, audioBuffer, 'audio/mpeg');
+  const finalUrl = await uploadToSeedance({ ...config, buffer: audioBuffer, fileName: `${runId}-seg${segment.index}.mp3`, mimeType: 'audio/mpeg' });
+  return { url: finalUrl, audioSeconds, storage: audioStorage };
+}
+async function lipSyncAvatarSegment({ config, meta, audioUrl, audioSeconds, runId, segment }) {
+  const desiredMs = Math.max(1000, Math.min(AVATAR_LIPSYNC_MAX_MS, Math.floor((audioSeconds * 1000 - 120) / 100) * 100));
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const soundEndTime = safeLipSyncEndTime(meta.faceEndTime, desiredMs);
+      const syncTask = await submitVideoTask({
+        ...config, model: 'kling-lip-sync-video',
+        metadata: {
+          sessionId: meta.sessionId, faceId: meta.faceId, audio_url: audioUrl,
+          soundStartTime: 0, soundEndTime, soundInsertTime: 0, soundVolume: 1, originalAudioVolume: 0,
+        },
+      });
+      const synced = await pollVideoTask({ ...config, taskId: syncTask, timeoutMs: 900000 });
+      if (!synced.url) throw new Error('对口型完成但没有返回视频地址');
+      const videoBuffer = await downloadUrlBuffer(synced.url);
+      const videoSeconds = await probeBufferDuration(videoBuffer, `${runId}-seg${segment.index}.mp4`, 'video/mp4');
+      const videoStorage = await storeAvatarRunBuffer(runId, `seg${segment.index}.mp4`, videoBuffer, 'video/mp4');
+      return { videoBuffer, videoSeconds, videoStorage };
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0 && /expired|session/i.test(String(error?.message || error)) && meta.baseUrl) {
+        // 上游把 soundEndTime 越界误报成 session 过期；重新做一次人脸分析再试。
+        delete meta.sessionId; delete meta.faceId; delete meta.faceEndTime;
+        await ensureAvatarFaceSession(config, meta);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError || new Error('对口型失败');
+}
+async function concatAvatarSegments(segments) {
+  if (!segments.length) throw new Error('没有可合成的分段');
+  const segmentDuration = (segment) => {
+    const audioSeconds = Number(segment.audioSeconds || 0);
+    const storedSeconds = Number(segment.durationSeconds || 0);
+    return Math.max(0.6, Math.min(storedSeconds > 0 ? storedSeconds : audioSeconds + 0.12, audioSeconds + 0.12));
+  };
+  if (segments.length === 1) {
+    const segment = segments[0];
+    const buffer = await assetBytes(avatarSegmentPseudo(segment, 'video'));
+    let dir = null;
+    try {
+      dir = await mkdtemp(path.join(os.tmpdir(), 'jw-avatar-trim-'));
+      const input = path.join(dir, 'in.mp4');
+      const output = path.join(dir, 'out.mp4');
+      await writeFile(input, buffer);
+      await runCommand('ffmpeg', ['-y', '-i', input, '-t', segmentDuration(segment).toFixed(3), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac', '-movflags', '+faststart', output], 300000);
+      return await readFile(output);
+    } finally {
+      if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  let dir = null;
+  try {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'jw-avatar-concat-'));
+    const files = [];
+    const durations = [];
+    for (const segment of segments) {
+      const buffer = await assetBytes(avatarSegmentPseudo(segment, 'video'));
+      const file = path.join(dir, `seg-${segment.index}.mp4`);
+      await writeFile(file, buffer);
+      files.push(file);
+      durations.push(Number(segmentDuration(segment).toFixed(3)));
+    }
+    const args = ['-y'];
+    files.forEach((file) => args.push('-i', file));
+    const filters = [];
+    files.forEach((_, index) => {
+      filters.push(`[${index}:v]trim=0:${durations[index]},setpts=PTS-STARTPTS[v${index}]`);
+      filters.push(`[${index}:a]atrim=0:${durations[index]},asetpts=PTS-STARTPTS[a${index}]`);
+    });
+    filters.push(`${files.map((_, index) => `[v${index}][a${index}]`).join('')}concat=n=${files.length}:v=1:a=1[v][a]`);
+    const outPath = path.join(dir, 'out.mp4');
+    args.push('-filter_complex', filters.join(';'), '-map', '[v]', '-map', '[a]', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac', '-movflags', '+faststart', outPath);
+    await runCommand('ffmpeg', args, 300000);
+    return await readFile(outPath);
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * 数字人合成（支持语速四档 + 分段 + 失败分段重试）：
+ *   底片 i2v（6 秒）→ 每段 TTS（按语速 atempo 调整）→ 人脸分析 → 每段对口型 → 拼接 → 存素材库。
+ * 只把「真正失败」的段标 failed，已成功的段保留；重试不会重复扣已成功的段。
+ * 上游 soundEndTime 封顶 4000ms 的约束见 services/junshiAvatar.js。
+ */
+async function runTalkingHead(owner, { runId, text, speakerId, voiceRow, imageAssetRow, speed: speedInput = '', job = null, retry = false, segmentIndices = null }) {
+  const runRow = await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=? AND owner_key=?', [runId, owner.key]);
+  if (!runRow) {
+    const message = '数字人口播任务不存在';
+    if (job) await jobDone(job, 'failed', message).catch(() => {});
     return { ok: false, message };
   }
+  const accountId = runRow.account_id || 'default';
+  const speed = avatarSpeedProfile(speedInput || runRow.speed);
+  let segments = parseAvatarSegments(runRow);
+  if (!segments.length) {
+    segments = splitSpeechSegments(text, speed.value).map((part, index) => ({ index: index + 1, text: part, status: 'pending', error: '', note: '' }));
+  }
+  let meta = {};
+  try { meta = runRow.meta ? JSON.parse(runRow.meta) : {}; } catch { meta = {}; }
+  const selected = Array.isArray(segmentIndices) && segmentIndices.length
+    ? new Set(segmentIndices.map((value) => Number(value)).filter((value) => value > 0))
+    : null;
+  // 底片只要还在 20 小时有效期内就复用；即便第一段就失败、还没有 done 段，
+  // 也不该为同一条文案重新生成 6 秒底片（这是重复付费）。
+  const canReuseBase = Boolean(retry && meta.baseUrl
+    && Date.now() - Number(meta.baseAt || 0) < 20 * 60 * 60 * 1000);
+  const targets = canReuseBase
+    ? segments.filter((segment) => segment.status !== 'done' && (!selected || selected.has(Number(segment.index))))
+    : segments;
+  if (!canReuseBase) {
+    for (const segment of segments) { segment.status = 'pending'; segment.error = ''; }
+  }
+  const steps = [
+    { key: 'base', label: '生成人物底片（形象照 → 视频）', status: canReuseBase ? 'done' : 'running' },
+    { key: 'tts', label: `口播语音合成 · ${segments.length} 段`, status: 'pending' },
+    { key: 'face', label: '人脸分析', status: 'pending' },
+    { key: 'lipsync', label: `对口型合成视频 · ${segments.length} 段`, status: 'pending' },
+    ...(segments.length > 1 ? [{ key: 'concat', label: '拼接完整口播', status: 'pending' }] : []),
+    { key: 'save', label: '存入素材库', status: 'pending' },
+  ];
+  const mark = (key, status, extra = {}) => {
+    const step = steps.find((item) => item.key === key);
+    if (step) Object.assign(step, { status }, extra);
+    return avatarStepsUpdate(runId, owner.key, steps);
+  };
+  const fail = async (message) => {
+    const clean = String(message || '数字人合成失败').slice(0, 1000);
+    for (const step of steps) if (step.status === 'running') step.status = 'failed';
+    await avatarStepsUpdate(runId, owner.key, steps).catch(() => {});
+    await aq('UPDATE junshi_workbench_avatar_runs SET status=?, error=?, segments=?, meta=?, updated_at=? WHERE id=? AND owner_key=?',
+      ['failed', clean, JSON.stringify(segments), JSON.stringify(meta), nowIso(), runId, owner.key]).catch(() => {});
+    if (job) await jobDone(job, 'failed', clean).catch(() => {});
+    return { ok: false, message: clean };
+  };
+  try {
+    await aq("UPDATE junshi_workbench_avatar_runs SET status='running', error='', speed=?, segments=?, meta=?, steps=?, updated_at=? WHERE id=? AND owner_key=?",
+      [speed.value, JSON.stringify(segments), JSON.stringify(meta), JSON.stringify(steps), nowIso(), runId, owner.key]);
+    const policy = await getAiProviderPolicy();
+    const config = await seedanceChannelConfig(policy?.channels);
+    if (!config) throw Object.assign(new Error('数字人渠道未配置（需要 seedance.nz 渠道 Key）'), { code: 'WORKBENCH_AVATAR_NOT_CONFIGURED' });
+    // ⓪ 底片：只有整单重跑或重试时底片已丢失才重新生成。
+    if (!canReuseBase) {
+      if (!imageAssetRow) throw new Error('形象照不存在，无法生成底片');
+      const imageBuffer = await assetBytes(imageAssetRow);
+      if (imageBuffer.length > 10 * 1024 * 1024) throw new Error('形象照超过 10MB，请压缩后重传');
+      const imageUrl = await uploadToSeedance({ ...config, buffer: imageBuffer, fileName: imageAssetRow.file_name || 'face.jpg', mimeType: imageAssetRow.mime_type || 'image/jpeg' });
+      // ⚠️ Seedance 2.0 i2v 要顶层 images；放 metadata.images 会报「requires at least one input image」。
+      const baseTask = await submitVideoTask({ ...config, model: 'seedance-2.0-standard-i2v', images: [imageUrl], promptOverride: '一位教师正面面对镜头，微微点头，嘴唇自然开合像在讲话，背景不变，光线稳定', extra: { seconds: '6' } });
+      const base = await pollVideoTask({ ...config, taskId: baseTask, timeoutMs: 600000 });
+      if (!base.url) throw new Error('底片生成没有返回视频地址');
+      meta.baseUrl = base.url;
+      meta.baseAt = Date.now();
+      delete meta.sessionId; delete meta.faceId; delete meta.faceEndTime;
+      await avatarMetaUpdate(runId, owner.key, meta);
+      await mark('base', 'done');
+    }
+    // ① 人脸分析（复用已有会话；失败重试时若会话过期会在对口型里重建）
+    await mark('face', 'running');
+    await ensureAvatarFaceSession(config, meta);
+    await avatarMetaUpdate(runId, owner.key, meta);
+    await mark('face', 'done');
+    await mark('tts', 'running');
+    await mark('lipsync', 'running');
+    let failures = 0;
+    for (const segment of targets) {
+      if (segment.status === 'done') continue;
+      segment.status = 'running'; segment.error = ''; segment.note = '';
+      await avatarSegmentsUpdate(runId, owner.key, segments);
+      try {
+        const audio = await synthAvatarSegmentAudio({ config, owner, runId, segment, speakerId, voiceRow, speed, meta });
+        Object.assign(segment, {
+          audioSeconds: audio.audioSeconds, audioStorageKey: audio.storage.storageKey,
+          audioStorageBackend: audio.storage.storageBackend,
+        });
+        const video = await lipSyncAvatarSegment({ config, meta, audioUrl: audio.url, audioSeconds: audio.audioSeconds, runId, segment });
+        Object.assign(segment, {
+          status: 'done',
+          videoStorageKey: video.videoStorage.storageKey,
+          videoStorageBackend: video.videoStorage.storageBackend,
+          durationSeconds: video.videoSeconds,
+        });
+        await avatarMetaUpdate(runId, owner.key, meta);
+      } catch (error) {
+        failures += 1;
+        segment.status = 'failed';
+        segment.error = String(error?.message || error).slice(0, 500);
+      }
+      await avatarSegmentsUpdate(runId, owner.key, segments);
+    }
+    const remaining = segments.filter((segment) => segment.status !== 'done');
+    if (remaining.length) {
+      throw new Error(`还有 ${remaining.length} 段没有合成成功${remaining[0]?.error ? `：${remaining[0].error}` : ''}；已成功的段保留，可点「重试失败分段」`);
+    }
+    await mark('tts', 'done');
+    await mark('lipsync', 'done');
+    // ② 拼接（单段直接使用；多段按音频时长裁掉底片尾部）
+    await mark('concat', 'running');
+    const outputBuffer = await concatAvatarSegments(segments);
+    await mark('concat', 'done');
+    // ③ 入库
+    await mark('save', 'running');
+    const assetId = await saveAvatarVideo(owner, runId, outputBuffer, accountId);
+    const durationSeconds = Math.round(segments.reduce((sum, segment) => sum + Number(segment.audioSeconds || 0), 0) * 10) / 10;
+    await aq("UPDATE junshi_workbench_avatar_runs SET status='succeeded', video_asset_id=?, error='', duration_seconds=?, segments=?, meta=?, speed=?, updated_at=? WHERE id=? AND owner_key=?",
+      [assetId, durationSeconds, JSON.stringify(segments), JSON.stringify(meta), speed.value, nowIso(), runId, owner.key]);
+    await mark('save', 'done');
+    if (job) await jobDone(job, 'succeeded', `数字人口播完成：${segments.length} 段 / ${durationSeconds} 秒`).catch(() => {});
+    return { ok: true, message: '数字人口播完成', assetId, durationSeconds, segments: segments.length };
+  } catch (error) {
+    return await fail(error?.message || '数字人合成失败');
+  }
+}
+
+/** 失败重试入口：优先复用底片/人脸会话，只重跑失败分段；底片丢了才整单重跑。 */
+async function runAvatarRetry(owner, runRow, job, segmentIndices = null) {
+  const voiceRow = runRow.voice_id
+    ? await arow('SELECT * FROM junshi_workbench_voices WHERE id=? AND owner_key=?', [runRow.voice_id, owner.key])
+    : null;
+  if (!voiceRow) {
+    const message = '原音色已被删除，无法重试';
+    await aq('UPDATE junshi_workbench_avatar_runs SET status=?, error=?, updated_at=? WHERE id=? AND owner_key=?', ['failed', message, nowIso(), runRow.id, owner.key]).catch(() => {});
+    await jobDone(job, 'failed', message).catch(() => {});
+    return { ok: false, message };
+  }
+  const imageAssetRow = runRow.image_asset_id
+    ? await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [runRow.image_asset_id, owner.key])
+    : null;
+  await runTalkingHead(owner, {
+    runId: runRow.id, text: runRow.text, speakerId: runRow.speaker_id,
+    voiceRow, imageAssetRow, speed: runRow.speed,
+    job, retry: true, segmentIndices,
+  });
 }
 function transcriptOut(row, { withSegments = false } = {}) {
   let segments = [];
@@ -2930,10 +3880,13 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     await aq('INSERT INTO junshi_workbench_workflows (id,owner_key,org_id,account_id,kind,stage,input,state,status,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
       [wfId, owner.key, owner.orgId, accountId, kind, stage, JSON.stringify(input), JSON.stringify(state), 'active', '', at, at]);
     if (kind === 'hotspot' && stage === 'searching') {
-      const job = jobStart(owner, '热点搜索', String(state.keyword || '').slice(0, 60));
+      const job = jobStart(owner, '热点搜索', String(state.keyword || '').slice(0, 60), {
+        entityType: 'workflow', entityId: wfId, payload: { keyword: state.keyword || '', accountId },
+      });
       await job.promise;
       void runHotspotSearch(ctx, owner, { wfId, keyword: state.keyword || '', accountId })
-        .finally(() => jobDone(job, 'succeeded', '热点搜索完成').catch(() => {}));
+        .then((result) => jobDone(job, result?.ok ? 'succeeded' : 'failed', result?.message || '热点搜索结束', result?.ok ? '' : result?.message))
+        .catch((error) => jobDone(job, 'failed', String(error?.message || error)).catch(() => {}));
     }
     return { workflow: wfOut(await arow('SELECT * FROM junshi_workbench_workflows WHERE id=?', [wfId])) };
   }
@@ -2967,10 +3920,13 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     } else if (action === 'search_retry' && wf.kind === 'hotspot' && wf.stage === 'search_failed') {
       rateLimit(owner.key);
       await wfUpdate(wfId, owner.key, { stage: 'searching', state: JSON.stringify({ keyword: state.keyword || '' }) });
-      const job = jobStart(owner, '热点搜索', String(state.keyword || '').slice(0, 60));
+      const job = jobStart(owner, '热点搜索', String(state.keyword || '').slice(0, 60), {
+        entityType: 'workflow', entityId: wfId, payload: { keyword: state.keyword || '', accountId: wf.accountId },
+      });
       await job.promise;
       void runHotspotSearch(ctx, owner, { wfId, keyword: state.keyword || '', accountId: wf.accountId })
-        .finally(() => jobDone(job, 'succeeded', '热点搜索完成').catch(() => {}));
+        .then((result) => jobDone(job, result?.ok ? 'succeeded' : 'failed', result?.message || '热点搜索结束', result?.ok ? '' : result?.message))
+        .catch((error) => jobDone(job, 'failed', String(error?.message || error)).catch(() => {}));
       return { workflow: wfOut(await arow('SELECT * FROM junshi_workbench_workflows WHERE id=?', [wfId])) };
     } else if (action === 'search_switch_manual' && wf.kind === 'hotspot' && wf.stage === 'search_failed') {
       await wfUpdate(wfId, owner.key, { status: 'cancelled' });
@@ -3077,6 +4033,7 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
 
   /* ── 文案大脑 / 同行研究简报（蒸馏自转写档案） ── */
   if (rest === '/brains' && method === 'GET') {
+    await reapStale(owner.key);
     const kindFilter = text(search.get('kind'));
     const rows = kindFilter
       ? await arows('SELECT * FROM junshi_workbench_brains WHERE owner_key=? AND kind=? ORDER BY created_at DESC LIMIT 50', [owner.key, kindFilter])
@@ -3113,35 +4070,12 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     const at = nowIso();
     await aq('INSERT INTO junshi_workbench_brains (id,owner_key,org_id,account_id,kind,name,status,error,profile,sections,source_note,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
       [brainId, owner.key, owner.orgId, accountId, kind, name.slice(0, 100), 'running', '', '{}', '[]', `${transcripts.length} 条口播档案`, at, at]);
-    const job = jobStart(owner, kind === 'peer_report' ? '研究简报' : '蒸馏大脑', `${name} · ${transcripts.length} 条语料`);
-    void (async () => {
-      try {
-        const providerMock = await textProviderIsMock().catch(() => false);
-        let payload = null;
-        if (providerMock) {
-          payload = kind === 'peer_report' ? demoPeerReport(name) : demoBrain(name);
-        } else {
-          const prompt = kind === 'peer_report'
-            ? buildPeerReportPrompt({ name, transcripts })
-            : buildBrainDistillPrompt({ name, transcripts });
-          const result = await collectText(ctx, { system: WORKBENCH_SYSTEM, user: prompt });
-          payload = mockOrEmpty(result) ? null : parseLooseJsonObject(result.text);
-        }
-        if (!payload || typeof payload !== 'object') throw new Error('这次没有蒸馏出有效档案，重试一次');
-        const profile = payload.profile && typeof payload.profile === 'object' ? payload.profile : {};
-        const sections = Array.isArray(payload.sections) ? payload.sections : Array.isArray(payload.combined_rules) ? [{ title: '综合规则', content: payload.combined_rules.join('；') }] : [];
-        const extra = kind === 'copy_brain'
-          ? [{ title: '创作者明确讲授的方法', content: (payload.teaching_methods || []).map((item) => `${item.title}：${item.method}${item.applicability ? `（适用：${item.applicability}）` : ''}`).join('\n') || '' },
-             { title: '作品里反复出现的写作习惯', content: (payload.writing_patterns || []).map((item) => `${item.title}：${item.pattern}`).join('\n') || '' }].filter((item) => item.content)
-          : [];
-        await aq('UPDATE junshi_workbench_brains SET status=?, error=?, profile=?, sections=?, updated_at=? WHERE id=? AND owner_key=?',
-          ['ready', '', JSON.stringify(profile), JSON.stringify([...sections, ...extra]), nowIso(), brainId, owner.key]);
-        await jobDone(job, 'succeeded', '蒸馏完成');
-      } catch (error) {
-        await aq('UPDATE junshi_workbench_brains SET status=?, error=?, updated_at=? WHERE id=? AND owner_key=?', ['failed', String(error?.message || error).slice(0, 1000), nowIso(), brainId, owner.key]).catch(() => {});
-        await jobDone(job, 'failed', String(error?.message || error).slice(0, 1000)).catch(() => {});
-      }
-    })();
+    const job = jobStart(owner, kind === 'peer_report' ? '研究简报' : '蒸馏大脑', `${name} · ${transcripts.length} 条语料`, {
+      entityType: 'brain', entityId: brainId,
+      payload: { kind, name: name.slice(0, 100), transcriptIds, accountId },
+    });
+    await job.promise;
+    void runBrainDistill(owner, brainId, job);
     return { brain: { id: brainId, kind, name: name.slice(0, 100), status: 'running' } };
   }
   const brainDetailMatch = rest.match(/^\/brains\/([^/]+)$/);
@@ -3229,7 +4163,7 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     const title = (text(ctx.body?.title) || projectTitle || prompt).slice(0, 120);
     const renderId = id('jwrd');
     const at = nowIso();
-    const job = jobStart(owner, '视频渲染', title);
+    const job = jobStart(owner, '视频渲染', title, { entityType: 'render', entityId: renderId });
     await aq('INSERT INTO junshi_workbench_video_renders (id,owner_key,org_id,project_id,account_id,job_id,title,prompt,duration_seconds,aspect_ratio,status,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
       [renderId, owner.key, owner.orgId, projectId, accountId, job.id, title, prompt, durationSeconds, aspectRatio, 'running', '', at, at]);
     // 视频生成要几分钟：提交后在进程内异步跑，HTTP 立刻返回任务号，前端轮询 /video/renders。
@@ -3390,7 +4324,7 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
       const renderId = id('jwrd');
       const at = nowIso();
       const prompt = `${shot.renderPrompt || shot.scene || ''}\n口播：${shot.voiceover || ''}`.trim();
-      const job = jobStart(owner, '单镜渲染', `第 ${shotIndex} 镜 · ${String(parsed.data.title || '').slice(0, 40)}`);
+      const job = jobStart(owner, '单镜渲染', `第 ${shotIndex} 镜 · ${String(parsed.data.title || '').slice(0, 40)}`, { entityType: 'render', entityId: renderId });
       await aq('INSERT INTO junshi_workbench_video_renders (id,owner_key,org_id,project_id,account_id,job_id,title,prompt,duration_seconds,aspect_ratio,status,asset_id,error,work_id,shot_index,kind,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         [renderId, owner.key, owner.orgId, null, work.account_id, job.id, `第 ${shotIndex} 镜`, prompt, clampInt(shot.seconds, 3, 3, 60), work.ratio, 'running', null, '', workId, shotIndex, 'shot', at, at]);
       void runWorkbenchRender(owner, renderId, { job });
@@ -3542,6 +4476,7 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
       const info = generationProviderInfo(selection);
       const videoReady = !isMockProvider(info.provider) && info.mode !== 'mock'
         && info.configured && info.adapterAvailable && (info.capabilities || []).includes('VIDEO');
+      const estimate = estimateVideoCost(selection, { durationSeconds: plan.duration, resolution: plan.resolution, audio: plan.generateAudio });
       return {
         plan,
         notice: '确认后会创建视频任务并生成编导稿；成片渲染在「视频创作」里再确认一次，不会在这一步直接扣费。',
@@ -3554,7 +4489,8 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
         videoReady,
         provider: info.provider,
         model: info.model,
-        pricingNote: '编导稿阶段不扣费；渲染费用以平台视频渠道结算为准。',
+        estimate,
+        pricingNote: estimate.note,
       };
     }
     if (sub === 'submit' && method === 'POST') {
@@ -3987,12 +4923,69 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
   /* ── 任务 ── */
   if (rest === '/jobs' && method === 'GET') {
     await reapStale(owner.key);
-    const rows = await arows('SELECT * FROM junshi_workbench_jobs WHERE owner_key=? ORDER BY created_at DESC LIMIT 100', [owner.key]);
+    const conditions = ['owner_key=?'];
+    const params = [owner.key];
+    const kindFilter = text(search.get('kind'));
+    const statusFilter = text(search.get('status'));
+    if (kindFilter) { conditions.push('kind=?'); params.push(kindFilter.slice(0, 60)); }
+    if (statusFilter && ['running', 'succeeded', 'failed'].includes(statusFilter)) { conditions.push('status=?'); params.push(statusFilter); }
+    const limit = clampInt(search.get('limit'), 100, 1, 200);
+    const offset = clampInt(search.get('offset'), 0, 0, 100000);
+    const where = conditions.join(' AND ');
+    const [rows, totalRow, kindRows, statusRows] = await Promise.all([
+      arows(`SELECT * FROM junshi_workbench_jobs WHERE ${where} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`, params),
+      arow(`SELECT COUNT(*) AS n FROM junshi_workbench_jobs WHERE ${where}`, params),
+      arows('SELECT kind, COUNT(*) AS n FROM junshi_workbench_jobs WHERE owner_key=? GROUP BY kind ORDER BY n DESC', [owner.key]),
+      arows('SELECT status, COUNT(*) AS n FROM junshi_workbench_jobs WHERE owner_key=? GROUP BY status', [owner.key]),
+    ]);
     return {
-      items: rows.map((row) => ({
-        id: row.id, kind: row.kind, status: row.status, detail: row.detail, createdAt: row.created_at, updatedAt: row.updated_at,
-      })),
+      items: rows.map(jobOut),
+      total: Number(totalRow?.n || 0),
+      limit, offset,
+      kinds: kindRows.map((row) => ({ kind: row.kind, count: Number(row.n || 0) })),
+      statuses: statusRows.map((row) => ({ status: row.status, count: Number(row.n || 0) })),
     };
+  }
+  const jobDetailMatch = rest.match(/^\/jobs\/([^/]+)$/);
+  if (jobDetailMatch && method === 'GET') {
+    const jobId = decodeURIComponent(jobDetailMatch[1]);
+    const row = await arow('SELECT * FROM junshi_workbench_jobs WHERE id=? AND owner_key=?', [jobId, owner.key]);
+    if (!row) throw errors.notFound('任务不存在', 'NOT_FOUND');
+    const out = jobOut(row);
+    let resource = null;
+    if (row.entity_type === 'avatar_run' && row.entity_id) {
+      const run = await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=? AND owner_key=?', [row.entity_id, owner.key]).catch(() => null);
+      if (run) resource = { type: 'avatar_run', item: avatarRunOut(run) };
+    } else if (row.entity_type === 'render' && row.entity_id) {
+      const render = await arow('SELECT * FROM junshi_workbench_video_renders WHERE id=? AND owner_key=?', [row.entity_id, owner.key]).catch(() => null);
+      if (render) resource = { type: 'render', item: renderOut(render) };
+    } else if (row.entity_type === 'video_work' && row.entity_id) {
+      const work = await arow('SELECT * FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [row.entity_id, owner.key]).catch(() => null);
+      if (work) resource = { type: 'video_work', item: workOut(work) };
+    } else if (row.entity_type === 'transcript' && row.entity_id) {
+      const transcript = await arow('SELECT * FROM junshi_workbench_transcripts WHERE id=? AND owner_key=?', [row.entity_id, owner.key]).catch(() => null);
+      if (transcript) resource = { type: 'transcript', item: transcriptOut(transcript) };
+    } else if (row.entity_type === 'brain' && row.entity_id) {
+      const brain = await arow('SELECT id,name,kind,status,error,source_note,created_at,updated_at FROM junshi_workbench_brains WHERE id=? AND owner_key=?', [row.entity_id, owner.key]).catch(() => null);
+      if (brain) resource = { type: 'brain', item: { id: brain.id, name: brain.name, kind: brain.kind, status: brain.status, error: brain.error || '', sourceNote: brain.source_note || '', createdAt: brain.created_at, updatedAt: brain.updated_at } };
+    } else if (row.entity_type === 'copy' && row.entity_id) {
+      const draft = await arow('SELECT id,topic,style,content,created_at FROM junshi_workbench_copy_drafts WHERE id=? AND owner_key=?', [row.entity_id, owner.key]).catch(() => null);
+      if (draft) resource = { type: 'copy', item: { id: draft.id, topic: draft.topic, style: draft.style, content: String(draft.content || '').slice(0, 6000), createdAt: draft.created_at } };
+    } else if (row.entity_type === 'video_script' && row.entity_id) {
+      const project = await arow('SELECT id,title,mode,script,status,created_at FROM junshi_workbench_video_projects WHERE id=? AND owner_key=?', [row.entity_id, owner.key]).catch(() => null);
+      if (project) resource = { type: 'video_script', item: { id: project.id, title: project.title, mode: project.mode, script: String(project.script || '').slice(0, 6000), status: project.status, createdAt: project.created_at } };
+    }
+    return { job: out, resource, entityLabel: JOB_ENTITY_LABELS[row.entity_type] || '' };
+  }
+  const jobRetryMatch = rest.match(/^\/jobs\/([^/]+)\/retry$/);
+  if (jobRetryMatch && method === 'POST') {
+    const jobId = decodeURIComponent(jobRetryMatch[1]);
+    const row = await arow('SELECT * FROM junshi_workbench_jobs WHERE id=? AND owner_key=?', [jobId, owner.key]);
+    if (!row) throw errors.notFound('任务不存在', 'NOT_FOUND');
+    if (row.status === 'running') throw errors.badRequest('这个任务还在进行中，不用重试。', 'WORKBENCH_JOB_RUNNING');
+    rateLimit(owner.key);
+    const result = await retryFailedJob(owner, row);
+    return { ok: true, ...result };
   }
 
   /* ── 抖音采集（公开数据走 F2 隔离进程；自有账号登录在后续版本） ── */
@@ -4103,6 +5096,7 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
 
   /* ── 转写档案 ── */
   if (rest === '/transcripts' && method === 'GET') {
+    await reapStale(owner.key);
     const accountIdFilter = text(search.get('accountId'));
     const rows = accountIdFilter
       ? await arows('SELECT * FROM junshi_workbench_transcripts WHERE owner_key=? AND account_id=? ORDER BY created_at DESC LIMIT 50', [owner.key, accountIdFilter])
@@ -4160,6 +5154,7 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     return { ok: true };
   }
   if (rest === '/avatar/runs' && method === 'GET') {
+    await reapStale(owner.key);
     const accountIdFilter = text(search.get('accountId'));
     const rows = accountIdFilter
       ? await arows('SELECT * FROM junshi_workbench_avatar_runs WHERE owner_key=? AND account_id=? ORDER BY created_at DESC LIMIT 20', [owner.key, accountIdFilter])
@@ -4171,6 +5166,7 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     const speech = text(ctx.body?.text);
     if (!speech) throw errors.badRequest('请填写口播文案', 'VALIDATION_ERROR', { field: 'text' });
     if (speech.length > 3000) throw errors.badRequest('口播文案最多 3000 字', 'VALIDATION_ERROR', { field: 'text' });
+    const speed = avatarSpeedProfile(ctx.body?.speed).value;
     const voiceId = text(ctx.body?.voiceId);
     const voiceRow = await arow('SELECT * FROM junshi_workbench_voices WHERE id=? AND owner_key=?', [voiceId, owner.key]);
     if (!voiceRow) throw errors.notFound('音色不存在', 'NOT_FOUND');
@@ -4185,14 +5181,40 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
     const runId = id('jwav');
     const at = nowIso();
-    await aq('INSERT INTO junshi_workbench_avatar_runs (id,owner_key,org_id,account_id,voice_id,speaker_id,image_asset_id,text,status,error,steps,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
-      [runId, owner.key, owner.orgId, accountId, voiceId, voiceRow.speaker_id, imageAssetId, speech, 'running', '', '[]', at, at]);
-    const job = jobStart(owner, '数字人口播', speech.slice(0, 60));
-    void runTalkingHead(owner, { runId, text: speech, speakerId: voiceRow.speaker_id, voiceRow, imageAssetRow })
-      .then((result) => jobDone(job, result?.ok ? 'succeeded' : 'failed', result?.message || '数字人口播完成'))
-      .catch((error) => jobDone(job, 'failed', String(error?.message || error).slice(0, 1000)))
-      .catch(() => {});
+    const plan = estimateSpeechPlan(speech, speed);
+    if (plan.overLimit) {
+      throw errors.badRequest(`这段文案按当前语速约 ${plan.targetDuration} 秒、${plan.batchCount} 段，超过单次任务上限 ${AVATAR_MAX_SEGMENTS} 段；请拆成多条发布或缩短文案。`, 'WORKBENCH_AVATAR_TOO_LONG');
+    }
+    const segments = plan.segments.map((part, index) => ({ index: index + 1, text: part, status: 'pending', error: '', note: '' }));
+    await aq('INSERT INTO junshi_workbench_avatar_runs (id,owner_key,org_id,account_id,voice_id,speaker_id,image_asset_id,text,status,error,steps,segments,meta,speed,duration_seconds,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [runId, owner.key, owner.orgId, accountId, voiceId, voiceRow.speaker_id, imageAssetId, speech, 'running', '', '[]', JSON.stringify(segments), '{}', speed, 0, at, at]);
+    const job = jobStart(owner, '数字人口播', speech.slice(0, 60), { entityType: 'avatar_run', entityId: runId, payload: { speed } });
+    await job.promise;
+    void runTalkingHead(owner, { runId, text: speech, speakerId: voiceRow.speaker_id, voiceRow, imageAssetRow, speed, job })
+      .catch((error) => jobDone(job, 'failed', String(error?.message || error)).catch(() => {}));
     return { run: avatarRunOut(await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=?', [runId])) };
+  }
+  const avatarRetryMatch = rest.match(/^\/avatar\/runs\/([^/]+)\/retry$/);
+  if (avatarRetryMatch && method === 'POST') {
+    const runId = decodeURIComponent(avatarRetryMatch[1]);
+    const runRow = await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=? AND owner_key=?', [runId, owner.key]);
+    if (!runRow) throw errors.notFound('数字人口播任务不存在', 'NOT_FOUND');
+    if (runRow.status === 'running') throw errors.badRequest('这条口播还在合成中。', 'WORKBENCH_AVATAR_BUSY');
+    const segments = parseAvatarSegments(runRow);
+    const requested = Array.isArray(ctx.body?.segments) ? ctx.body.segments.map((value) => Number(value)).filter((value) => value > 0) : [];
+    const failed = segments.filter((segment) => segment.status !== 'done').map((segment) => Number(segment.index));
+    const targets = (requested.length ? requested : failed).filter((value) => segments.some((segment) => Number(segment.index) === value));
+    renderRateLimit(owner.key);
+    const previousJob = await arow("SELECT * FROM junshi_workbench_jobs WHERE owner_key=? AND entity_type='avatar_run' AND entity_id=? ORDER BY created_at DESC LIMIT 1", [owner.key, runId]).catch(() => null);
+    const job = jobStart(owner, '数字人口播（分段重试）', String(runRow.text || '').slice(0, 60), {
+      entityType: 'avatar_run', entityId: runId, payload: { segments: targets },
+      attempts: previousJob ? Number(previousJob.attempts || 0) + 1 : 0,
+      retryOf: previousJob?.id || '',
+    });
+    await job.promise;
+    void runAvatarRetry(owner, runRow, job, targets.length ? targets : null)
+      .catch((error) => jobDone(job, 'failed', String(error?.message || error)).catch(() => {}));
+    return { run: avatarRunOut(await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=?', [runId])), jobId: job.id, retriedSegments: targets };
   }
 
   /* ── 文案发布数据回填（截图 → 多模态识别） ── */
@@ -4204,32 +5226,45 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     const assetId = text(ctx.body?.assetId);
     const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, owner.key]);
     if (!assetRow) throw errors.notFound('截图素材不存在（请先上传到素材库）', 'NOT_FOUND');
-    if (!/^image\//.test(String(assetRow.mime_type || ''))) throw errors.badRequest('请上传图片截图', 'VALIDATION_ERROR');
     rateLimit(owner.key);
-    const buffer = await assetBytes(assetRow);
-    if (buffer.length > 8 * 1024 * 1024) throw errors.badRequest('截图超过 8MB，请压缩后重传', 'VALIDATION_ERROR');
-    const dataUrl = `data:${assetRow.mime_type};base64,${buffer.toString('base64')}`;
-    const messages = [{ role: 'user', content: [
-      { type: 'text', text: '这是一张抖音作者端的作品数据截图。只依据图中可见的数字提取：{"plays":播放,"likes":点赞,"comments":评论,"shares":分享,"saves":收藏,"publishedAt":"发布时间原文","note":"一句备注"}。数字看不清或没有的字段填 null。只输出这个 JSON，不要其他文字。' },
-      { type: 'image_url', image_url: { url: dataUrl } },
-    ] }];
-    let stats = null;
-    try {
-      const result = await collectText(ctx, { system: WORKBENCH_SYSTEM, messages });
-      const parsed = parseLooseJsonObject(result.text);
-      if (parsed) stats = parsed;
-    } catch (error) { /* 落到下面的失败分支 */ }
-    if (!stats) throw errors.badRequest('没能从截图里识别出数据；换一张更清晰的作者端数据截图试试', 'WORKBENCH_STATS_UNRECOGNIZED');
-    const cleaned = {};
-    for (const key of ['plays', 'likes', 'comments', 'shares', 'saves']) {
-      const value = Number(stats[key]);
-      cleaned[key] = Number.isFinite(value) && value >= 0 ? Math.round(value) : null;
-    }
-    cleaned.publishedAt = String(stats.publishedAt || '').slice(0, 60);
-    cleaned.note = String(stats.note || '').slice(0, 200);
-    cleaned.backfilledAt = nowIso();
+    const { stats: cleaned } = await extractStatsFromScreenshot(assetRow);
     await aq('UPDATE junshi_workbench_copy_drafts SET stats=?, created_at=created_at WHERE id=? AND owner_key=?', [JSON.stringify(cleaned), draftId, owner.key]);
     return { stats: cleaned };
+  }
+
+  /* ── 数据复盘 · 截图回填（独立留存；文案草稿页已删，不再依赖草稿） ── */
+  if (rest === '/reviews/backfill' && method === 'POST') {
+    const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
+    const assetId = text(ctx.body?.assetId);
+    const assetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, owner.key]);
+    if (!assetRow) throw errors.notFound('截图素材不存在（请先上传截图）', 'NOT_FOUND');
+    rateLimit(owner.key);
+    const { stats: cleaned } = await extractStatsFromScreenshot(assetRow);
+    const topic = text(ctx.body?.topic).slice(0, 200) || cleaned.note || '截图回填';
+    const snapshotId = text(ctx.body?.snapshotId);
+    const legacyDraftId = text(ctx.body?.draftId);
+    if (snapshotId) {
+      const row = await arow('SELECT * FROM junshi_workbench_review_snapshots WHERE id=? AND owner_key=?', [snapshotId, owner.key]);
+      if (!row) throw errors.notFound('这条截图回填记录不存在', 'NOT_FOUND');
+      await aq('UPDATE junshi_workbench_review_snapshots SET topic=?, asset_id=?, stats=?, updated_at=? WHERE id=? AND owner_key=?',
+        [text(ctx.body?.topic).slice(0, 200) || row.topic, assetId, JSON.stringify(cleaned), nowIso(), snapshotId, owner.key]);
+      const saved = await arow('SELECT * FROM junshi_workbench_review_snapshots WHERE id=?', [snapshotId]);
+      return { stats: cleaned, snapshot: { id: saved.id, topic: saved.topic, assetId: saved.asset_id, stats: cleaned, updatedAt: saved.updated_at } };
+    }
+    if (legacyDraftId) {
+      const draft = await arow('SELECT id FROM junshi_workbench_copy_drafts WHERE id=? AND owner_key=?', [legacyDraftId, owner.key]);
+      if (!draft) throw errors.notFound('原文案草稿不存在', 'NOT_FOUND');
+      await aq('UPDATE junshi_workbench_copy_drafts SET stats=?, created_at=created_at WHERE id=? AND owner_key=?', [JSON.stringify(cleaned), legacyDraftId, owner.key]);
+      return { stats: cleaned, draftId: legacyDraftId };
+    }
+    const newId = id('jwrs');
+    const at = nowIso();
+    await aq('INSERT INTO junshi_workbench_review_snapshots (id,owner_key,org_id,account_id,topic,asset_id,stats,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+      [newId, owner.key, owner.orgId, accountId, topic, assetId, JSON.stringify(cleaned), at, at]);
+    return {
+      stats: cleaned,
+      snapshot: { id: newId, topic, assetId, stats: cleaned, createdAt: at, updatedAt: at },
+    };
   }
 
   /* ── 十四期 · 数据复盘数据源（采集助手自己作品 + 五期截图回填） ── */
@@ -4260,7 +5295,7 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
     rateLimit(owner.key);
     const published = (await publishedForReports(owner.key, accountId)).items;
-    if (!published.length) throw errors.badRequest('还没有复盘数据；先用采集助手同步自己的主页，或在文案草稿里回填截图，再生成复盘。', 'WORKBENCH_REVIEWS_EMPTY');
+    if (!published.length) throw errors.badRequest('还没有复盘数据；先用采集助手同步自己的主页，或在数据复盘里用「截图回填」补一条，再生成复盘。', 'WORKBENCH_REVIEWS_EMPTY');
     const profile = (await readProfile(owner.key, accountId)).profile;
     const orgProfile = await orgProfileText(owner.key);
     const providerMock = await textProviderIsMock().catch(() => false);

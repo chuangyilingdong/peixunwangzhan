@@ -1281,6 +1281,22 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_published_works (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_junshi_wb_pub_aweme ON junshi_workbench_published_works(owner_key, aweme_id);
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_pub_owner ON junshi_workbench_published_works(owner_key, account_id, published_at DESC);
 
+-- 十七期：数据复盘「截图回填」独立留存（2026-10-25）。
+-- 文案草稿页删除后，截图回填不能继续依赖 copy_drafts（草稿可能永远不再新增）。
+-- stats 与五期同口径；历史 copy_drafts.stats 仍合并展示，不迁移、不删除。
+CREATE TABLE IF NOT EXISTS junshi_workbench_review_snapshots (
+  id          TEXT NOT NULL PRIMARY KEY,
+  owner_key   TEXT NOT NULL,
+  org_id      TEXT,
+  account_id  TEXT NOT NULL DEFAULT 'default',
+  topic       TEXT NOT NULL DEFAULT '',
+  asset_id    TEXT,
+  stats       TEXT NOT NULL DEFAULT '{}',
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_review_owner ON junshi_workbench_review_snapshots(owner_key, account_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS junshi_workbench_video_projects (
   id             TEXT NOT NULL PRIMARY KEY,
   owner_key      TEXT NOT NULL,
@@ -1677,6 +1693,30 @@ try { db.exec("ALTER TABLE junshi_workbench_messages ADD COLUMN plan_id TEXT NOT
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec("ALTER TABLE junshi_workbench_video_works ADD COLUMN plan_id TEXT NOT NULL DEFAULT ''"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
+// ── 十七期补列（2026-10-25）：对话附件 / 任务详情与重试 / 数字人语速与分段 ──────────
+try { db.exec("ALTER TABLE junshi_workbench_messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+for (const [column, ddl] of [
+  ['error', "TEXT NOT NULL DEFAULT ''"],
+  ['entity_type', "TEXT NOT NULL DEFAULT ''"],
+  ['entity_id', "TEXT NOT NULL DEFAULT ''"],
+  ['attempts', 'INTEGER NOT NULL DEFAULT 0'],
+  ['payload', "TEXT NOT NULL DEFAULT '{}'"],
+  ['retry_of', "TEXT NOT NULL DEFAULT ''"],
+]) {
+  try { db.exec(`ALTER TABLE junshi_workbench_jobs ADD COLUMN ${column} ${ddl}`); }
+  catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+}
+for (const [column, ddl] of [
+  ['speed', "TEXT NOT NULL DEFAULT 'natural'"],
+  ['segments', "TEXT NOT NULL DEFAULT '[]'"],
+  ['meta', "TEXT NOT NULL DEFAULT '{}'"],
+  ['duration_seconds', 'REAL NOT NULL DEFAULT 0'],
+]) {
+  try { db.exec(`ALTER TABLE junshi_workbench_avatar_runs ADD COLUMN ${column} ${ddl}`); }
+  catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+}
 
 // ── 七期补列：视频渲染行挂到视频工作台任务行（整片/单镜渲染复用同一管道） ──────────
 try { db.exec("ALTER TABLE junshi_workbench_video_renders ADD COLUMN work_id TEXT"); }

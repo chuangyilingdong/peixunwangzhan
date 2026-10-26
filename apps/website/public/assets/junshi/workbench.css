@@ -384,6 +384,21 @@
 #js-app .wb-flow-steps { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-3); margin: 4px 0 8px; }
 #js-app .wb-flow-steps .done { color: var(--green, #2f9e63); }
 #js-app .wb-flow-steps .current { color: var(--accent, #4b7bec); font-weight: 600; }
+#js-app .wb-avatar-estimate-head { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+#js-app .wb-avatar-estimate-items { margin-top: 6px; font-size: 11.5px; color: var(--text-3); }
+#js-app .wb-avatar-estimate-items span { display: block; margin: 2px 0; }
+#js-app .wb-job-error { max-width: 260px; color: #c0392b; word-break: break-all; }
+#js-app .wb-job-error:empty { color: var(--text-3); }
+#js-app .wb-job-detail p { margin: 6px 0; }
+#js-app .wb-job-errorbox { border: 1px solid #e6b8b7; background: rgba(192, 57, 43, 0.06); border-radius: 10px; padding: 8px 10px; margin: 8px 0; }
+#js-app .wb-job-errorbox p { color: #c0392b; word-break: break-all; }
+#js-app .wb-job-resource { border-top: 1px solid var(--hairline); margin-top: 10px; padding-top: 8px; }
+#js-app .wb-job-content { max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: var(--fill-2, rgba(0,0,0,0.03)); border-radius: 10px; padding: 10px; font-size: 12px; line-height: 1.7; }
+#js-app .wb-job-segments { margin: 8px 0; font-size: 12px; }
+#js-app .wb-job-segments p { margin: 6px 0; }
+#js-app .wb-job-segments .err { color: #c0392b; }
+#js-app .wb-table tr[data-job-row] { cursor: pointer; }
+#js-app .wb-table tr[data-job-row]:hover td { background: var(--fill-2, rgba(0,0,0,0.02)); }
 #js-app .wb-choice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
 #js-app .wb-choice {
   text-align: left; border: 1px solid var(--hairline); border-radius: var(--r-card); background: var(--surface);
@@ -428,8 +443,14 @@
 #js-app .wb-blueprint-grid p { margin: 4px 0; }
 #js-app .wb-viral-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin-top: 10px; }
 #js-app .wb-chat-attach { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 14px 6px; }
-#js-app .wb-attach-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--hairline); border-radius: var(--r-pill); padding: 4px 10px; font-size: 11.5px; color: var(--text-2); }
+#js-app .wb-attach-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--hairline); border-radius: var(--r-pill); padding: 4px 10px; font-size: 11.5px; color: var(--text-2); cursor: pointer; }
+#js-app .wb-attach-chip small { color: var(--text-4); font-size: 10.5px; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#js-app .wb-attach-chip.failed { border-color: #d9534f; color: #c0392b; }
 #js-app .wb-attach-chip button { border: 0; background: none; cursor: pointer; color: var(--text-3); font-size: 13px; padding: 0; }
+#js-app .wb-msg-attach { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+#js-app .wb-msg-attach .wb-attach-chip { background: var(--fill-2, rgba(0,0,0,0.03)); cursor: default; font-size: 11px; }
+#js-app .wb-msg-status { display: flex; align-items: center; gap: 5px; margin-top: 6px; font-size: 11.5px; color: var(--text-3); }
+#js-app .wb-chat.dragging { outline: 2px dashed var(--accent, #4b7bec); outline-offset: -8px; border-radius: 12px; }
 #js-app .wb-composer-foot { display: flex; gap: 6px; align-items: center; padding: 8px 14px 12px; }
 #js-app .wb-composer-foot .chip { padding: 4px 10px; font-size: 11.5px; }
 #js-app .wb-composer-foot .chip.on { background: var(--accent); color: #fff; }

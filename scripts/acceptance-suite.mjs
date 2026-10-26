@@ -92,6 +92,8 @@ const FAST = [
   'scripts/p152-junshi-plan-cards.mjs',
   // 2026-10-25 加：数字人上游适配（i2v 顶层 images、identify-face 数组解析、降级口径）。
   'scripts/p153-junshi-avatar.mjs',
+  // 2026-10-25 加：十七期（对话附件/@引用、任务详情与重试、提交前估价、截图回填、数字人分段）。
+  'scripts/p154-junshi-attachments-jobs.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));
