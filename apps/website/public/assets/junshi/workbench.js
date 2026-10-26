@@ -5239,15 +5239,22 @@
   }
   function wfOptionCard(wf, option, index, preview) {
     var isIdea = wf.stage === 'idea';
+    var canSelect = isIdea || wf.stage === 'copy' || wf.stage === 'ready';
+    var previewCount = ((wf.state || {}).copyOptions || []).filter(function (item) { return item.content || item.title; }).length;
+    var remaining = Math.max(0, 3 - previewCount);
     var body = isIdea
       ? '<p><b>' + esc(option.title || '') + '</b></p><p>钩子：' + esc(option.hook || '') + '</p><p class="wb-note">为什么今天发：' + esc(option.why || '') + '</p>'
       : '<h4>' + esc(option.title || '版本' + (index + 1)) + '</h4><div class="wb-copy-body">' + md(option.content || '') + '</div>';
-    var actions = '<div class="wb-actions">' +
-      '<button class="btn primary" type="button" data-wf-select="' + esc(option.id) + '">' + (isIdea ? '用这个选题' : '选择这个版本') + '</button>' +
+    var selectButton = canSelect
+      ? '<button class="btn primary" type="button" data-wf-select="' + esc(option.id) + '">' + (isIdea ? '用这个选题' : '选择这个版本') + '</button>'
+      : '<button class="btn" type="button" disabled>' + ic('loader', 11) + '等剩下 ' + remaining + ' 个版本生成完再选</button>';
+    var actions = '<div class="wb-actions">' + selectButton +
       (isIdea ? '<button class="btn" type="button" data-wf-inspire="' + esc(option.id) + '">存为灵感</button>' : '') +
       (!isIdea ? '<button class="btn" type="button" data-wf-copy-text="' + esc(option.id) + '">' + ic('copy', 12) + '复制</button>' : '') +
       '</div>';
-    var hint = preview ? '<small class="wb-option-hint">已成型，后续版本继续生成中；双击卡片可直接修改</small>' : '<small class="wb-option-hint">双击这张卡片可直接修改后使用</small>';
+    var hint = preview
+      ? '<small class="wb-option-hint">已成型，后续版本继续生成中；全部完成后才能选择，双击卡片可直接修改</small>'
+      : '<small class="wb-option-hint">双击这张卡片可直接修改后使用</small>';
     return '<article class="wb-item wb-flow-option" data-wf-option="' + esc(option.id) + '">' + body + hint + actions + '</article>';
   }
   function wfBlueprintHtml(blueprint) {
@@ -5269,7 +5276,12 @@
       body = '<p>' + esc(wf.state.message || '正在提取原视频口播文案…') + '</p><progress></progress>';
     } else if (wf.stage === 'extract_failed') {
       body = '<p class="err">' + ic('alert', 13) + '<span>' + esc(wf.state.extractError || '提取没有成功') + '</span></p>' +
-        '<div class="wb-actions"><button class="btn primary" type="button" data-wf-restart-viral>重新选择来源</button></div>';
+        '<p class="wb-note">这条参考没能提取出原文。抖音链接在生产还可能被 IP 风控拦截；可以改用现有文案、转写档案或上传视频。</p>' +
+        '<div class="wb-actions">' +
+        '<button class="btn primary" type="button" data-wf-viral-alt="text">改用现有文案</button>' +
+        '<button class="btn" type="button" data-wf-viral-alt="transcript">从转写档案</button>' +
+        '<button class="btn" type="button" data-wf-viral-alt="upload">上传视频</button>' +
+        '<button class="btn" type="button" data-wf-restart-viral>重新选择来源</button></div>';
     } else if (wf.stage === 'transcript') {
       body = '<label class="wb-note">提取到的原始文案（可直接修改错字、品牌名或转写错误；确认后才开始结合账号资料改写）</label>' +
         '<textarea id="wb-wf-transcript" class="wb-script" style="min-height:120px">' + esc(wf.state.transcript || '') + '</textarea>' +
@@ -5279,15 +5291,18 @@
       body = '<p class="wb-note">关键词：' + esc(wf.state.keyword || '') + ' · 正在用 DeepSeek 搜索近 3 天新闻并按你的账号挑热点，通常十几秒。</p><progress></progress>';
     } else if (wf.kind === 'hotspot' && wf.stage === 'hotspots_ready') {
       var found = wf.state.hotspots || [];
+      var demo = Boolean(wf.state.demo);
       body = '<h4>最值得这个账号结合的 ' + found.length + ' 个热点</h4>' +
-        '<p class="wb-note">来自 DeepSeek 联网搜索（近 3 天），已按账号相关性筛选。</p>' +
+        (demo
+          ? '<p class="err">' + ic('alert', 13) + '<span>这是演示样本，不是真实新闻。当前环境没有可用的真实热点结果，请不要把它当新闻引用。</span></p>'
+          : '<p class="wb-note">来自 DeepSeek 联网搜索（近 3 天），已按账号相关性筛选。</p>') +
         '<div class="wb-news-list">' + found.map(function (item) {
           return '<article class="wb-news-card"><div class="wb-news-head"><b>' + esc(item.title || '') + '</b>' +
             (item.recommendedAngle ? '<span class="wb-tag ok">建议：' + esc(item.recommendedAngle) + '</span>' : '') + '</div>' +
             '<p>' + esc(item.fact || '') + '</p>' +
             (item.relation ? '<p class="wb-note">与你的账号：' + esc(item.relation) + '</p>' : '') +
             '<small>' + esc(item.source || '') + (item.publishedAt ? ' · ' + esc(String(item.publishedAt).slice(0, 10)) : '') + '</small>' +
-            '<div class="wb-actions"><button class="btn primary" type="button" data-wf-hotspot="' + esc(item.id) + '">用这个热点创作</button>' +
+            '<div class="wb-actions"><button class="btn primary" type="button" data-wf-hotspot="' + esc(item.id) + '">' + (demo ? '用演示热点走流程（仅演示）' : '用这个热点创作') + '</button>' +
             (item.sourceUrl ? '<a class="btn" href="' + esc(item.sourceUrl) + '" target="_blank" rel="noopener noreferrer">查看来源 ↗</a>' : '') +
             '</div></article>';
         }).join('') + '</div>';
@@ -5368,6 +5383,21 @@
     renderMessages(true);
     ensureWfPolling();
   }
+  async function resetWorkflowAndOpenViral(source) {
+    var wf = state.workflow;
+    if (wf && wf.status === 'active') {
+      try {
+        await call('/workflows/' + encodeURIComponent(wf.id) + '/action', { method: 'POST', body: { action: 'cancel' } });
+      } catch (error) {
+        toast(error.message, 'error');
+        return;
+      }
+    }
+    state.workflow = null;
+    renderMessages(true);
+    if (source) openViralSourceInput(source);
+    else openViralSourceChooser();
+  }
   function bindWorkflowCard() {
     $$('[data-wf-cancel]').forEach(function (button) {
       button.onclick = async function () {
@@ -5378,7 +5408,10 @@
       };
     });
     $$('[data-wf-restart-viral]').forEach(function (button) {
-      button.onclick = function () { state.workflow = null; renderMessages(true); openViralSourceChooser(); };
+      button.onclick = function () { void resetWorkflowAndOpenViral(''); };
+    });
+    $$('[data-wf-viral-alt]').forEach(function (button) {
+      button.onclick = function () { void resetWorkflowAndOpenViral(button.dataset.wfViralAlt || ''); };
     });
     var actionButton = $('[data-wf-action]');
     if (actionButton) {

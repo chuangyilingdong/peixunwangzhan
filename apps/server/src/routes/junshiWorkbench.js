@@ -3462,6 +3462,8 @@ async function runHotspotSearch(ctx, owner, { wfId, keyword, accountId }) {
       });
       hotspots = generated.options.map((option, index) => ({ id: `h${index + 1}`, ...option }));
       demo = generated.demo;
+      // 真实渠道下模型没有返回可解析的热点：不能把演示样本当成搜索结果继续创作。
+      if (demo) return await fail('模型这次没有返回可解析的热点（可能是输出格式异常），请重试或改用手动填写');
       if (!hotspots.length) return await fail('模型没有从搜索结果里挑出可用热点，请重试或改用手动填写');
     }
     await wfUpdate(wfId, owner.key, { stage: 'hotspots_ready', state: JSON.stringify({ keyword, hotspots, demo }) });
