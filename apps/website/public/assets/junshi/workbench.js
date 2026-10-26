@@ -5352,7 +5352,8 @@
         '<div class="wb-cards">' + previews.map(function (option, index) { return wfOptionCard(wf, option, index, !isReady); }).join('') + '</div>' +
         (isReady ? '<div class="wb-actions"><button class="btn" type="button" data-wf-action="regenerate">' + ic('refresh', 12) + '换一批</button><small>不会做自动复刻校验；请人工看一遍再发布。</small></div>' : '');
     } else if (wf.stage === 'failed') {
-      body = '<p class="err">' + ic('alert', 13) + '<span>' + esc(wf.error || '这次没有正常完成。') + '</span></p>';
+      body = '<p class="err">' + ic('alert', 13) + '<span>' + esc(wf.error || '这次没有正常完成。') + '</span></p>' +
+        '<div class="wb-actions"><button class="btn primary" type="button" data-wf-action="regenerate">' + ic('refresh', 12) + '重新生成</button></div>';
     }
     if (!body) return '';
     return '<div class="wb-card wb-flow-card">' + head + body + '</div>';
@@ -5426,7 +5427,7 @@
         var original = actionButton.innerHTML;
         actionButton.disabled = true; actionButton.innerHTML = ic('loader', 12) + '提交中…';
         try {
-          if (action === 'regenerate' && state.workflow && ['rewriting', 'copy', 'ready'].includes(state.workflow.stage)) {
+          if (action === 'regenerate' && state.workflow && ['rewriting', 'copy', 'ready', 'failed'].includes(state.workflow.stage)) {
             await call('/workflows/' + encodeURIComponent(state.workflow.id) + '/action', { method: 'POST', body: { action: 'regenerate' } });
             state.workflow.stage = 'rewriting';
             state.workflow.state.copyOptions = [];

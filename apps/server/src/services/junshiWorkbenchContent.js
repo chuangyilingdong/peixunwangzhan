@@ -480,9 +480,10 @@ ${JSON_ONLY}
 格式：[{"title":"…","content":"…"}]，正好 3 个对象。`;
 }
 
-export function buildHotspotCopyPrompt({ profile, orgProfile, hotspot, angle, style }) {
+export function buildHotspotCopyPrompt({ profile, orgProfile, hotspot, angle, style, count = 1 }) {
   const angleRule = HOTSPOT_ANGLES.find((item) => item[0] === angle);
-  return `【任务】把下面的热点事实转化为这个内容账号的 3 个口播版本。
+  const n = Math.max(1, Number(count) || 1);
+  return `【任务】把下面的热点事实转化为这个内容账号的 ${n} 个口播版本。
 
 【热点事实（只能引用这里写的事实，不要编造细节）】
 标题：${clean(hotspot?.title)}
@@ -501,7 +502,7 @@ ${workbenchProfileBlock(profile)}
 【每个版本包含】title（标题，20 字内）、content（完整口播，180-320 字；热点只做引子/证据，主体回到账号自己的观点和课程场景；不承诺效果）。
 
 ${JSON_ONLY}
-格式：[{"title":"…","content":"…"}]，正好 3 个对象。`;
+${n === 1 ? '格式：只输出一个 JSON 对象 {"title":"…","content":"…"}，不要输出数组。' : `格式：[{"title":"…","content":"…"}]，正好 ${n} 个对象。`}`;
 }
 
 export function demoIdeas(profile, goal) {

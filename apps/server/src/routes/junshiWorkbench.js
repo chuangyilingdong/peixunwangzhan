@@ -3587,12 +3587,18 @@ async function runWfCopy(ctx, owner, wfId) {
           const hotspot = wf.kind === 'today'
             ? { title: idea.title || '', fact: `选题：${idea.title || ''}。钩子：${idea.hook || ''}。适合原因：${idea.why || ''}` }
             : (state.hotspot || {});
-          prompt = buildHotspotCopyPrompt({ profile: profileData, orgProfile: orgProfileTextValue, hotspot, angle: state.angle || '热点做引子', style: state.style || '口语化' });
+          prompt = buildHotspotCopyPrompt({ profile: profileData, orgProfile: orgProfileTextValue, hotspot, angle: state.angle || '热点做引子', style: state.style || '口语化', count: 1 });
           prompt += `\n【本次要求】这是第 ${index} 个版本。${WF_COPY_VARIATIONS[index - 1]}`;
         }
+        prompt += `\n【本次只输出 1 个 JSON 对象】不要输出数组，不要一次输出多个版本；只输出第 ${index} 个版本的 {"title":"…","content":"…"}。`;
         prompt += await wfBrainBlock(owner.key, state);
         const result = await collectText(ctx, { system: WORKBENCH_SYSTEM, user: prompt });
-        const parsed = mockOrEmpty(result) ? null : parseLooseJsonObject(result.text);
+        let parsed = null;
+        if (!mockOrEmpty(result)) {
+          const list = parseLooseJsonArray(result.text) || [];
+          const fromArray = list.length ? list[Math.min(index - 1, list.length - 1)] : null;
+          parsed = parseLooseJsonObject(result.text) || fromArray || null;
+        }
         if (!parsed || (!parsed.content && !parsed.title)) throw new Error('这次没有生成有效版本');
         if (index === 1 && wf.kind === 'viral' && parsed.blueprint && typeof parsed.blueprint === 'object') state.blueprint = parsed.blueprint;
         option = { title: String(parsed.title || '').slice(0, 200), content: String(parsed.content || '').trim() };
@@ -3611,7 +3617,11 @@ async function runWfCopy(ctx, owner, wfId) {
   if (state.copyOptions.length) {
     await wfUpdate(wfId, owner.key, { stage: 'ready', state: JSON.stringify({ ...state, message: '' }) });
   } else {
-    await wfUpdate(wfId, owner.key, { stage: 'rewriting', state: JSON.stringify({ ...state, message: failed ? '生成失败了，点「换一批」再试一次。' : '正在生成…' }) });
+    await wfUpdate(wfId, owner.key, {
+      stage: 'failed',
+      error: failed ? '这次没有生成有效版本，请重新生成或放弃' : '这次没有生成出文案，请重试或放弃',
+      state: JSON.stringify({ ...state, message: '' }),
+    });
   }
 }
 
@@ -4526,7 +4536,7 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
       await wfUpdate(wfId, owner.key, { stage: 'rewriting', state: JSON.stringify({ ...state, copyOptions: [], blueprint: null, message: `正在用「${state.style}」写 3 个版本…` }) });
       await job.promise;
       startWfCopy(ctx, owner, wfId, job);
-    } else if (action === 'regenerate' && (wf.stage === 'idea' || ['rewriting', 'copy', 'ready'].includes(wf.stage))) {
+    } else if (action === 'regenerate' && (wf.stage === 'idea' || ['rewriting', 'copy', 'ready', 'failed'].includes(wf.stage))) {
       rateLimit(owner.key);
       if (wf.stage === 'idea') {
         const job = jobStart(owner, wf.kindLabel, '换一批选题');
