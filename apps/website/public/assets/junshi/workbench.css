@@ -526,6 +526,12 @@
 #js-app .wb-peer-filter input { width: 92px; }
 #js-app .wb-peer-filter-box summary { cursor: pointer; font-size: 12px; color: var(--text-2); margin: 6px 0; }
 #js-app .wb-peer-sync { border: 1px solid var(--hairline); border-radius: 10px; padding: 8px 10px; margin: 8px 0; }
+#js-app .wb-peer-manual { margin-top: 12px; border-top: 1px solid var(--hairline); }
+#js-app .wb-peer-manual > summary { cursor: pointer; color: var(--text-2); font-size: 12px; padding: 10px 0 2px; }
+#js-app .wb-peer-section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 2px 2px 0; }
+#js-app .wb-peer-section-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+#js-app .wb-peer-section-head p { margin: 3px 0 0; color: var(--text-3); font-size: 11.5px; line-height: 1.55; }
+#js-app .wb-peer-section-head .wb-actions { margin-top: 0; }
 
 /* ───────────── 十二期 · 抖音账号连接 ───────────── */
 #js-app .wb-douyin-bar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid var(--hairline); border-radius: 12px; margin-bottom: 10px; background: var(--bg-2, rgba(0,0,0,0.02)); }
@@ -738,6 +744,56 @@
 #js-app .wb-v-tools > summary { cursor: pointer; color: var(--text-3); font-size: 12px; padding: 9px 2px; }
 #js-app .wb-v-tools[open] > summary { color: var(--text-2); }
 #js-app .wb-v-tools-body { display: flex; flex-direction: column; gap: 10px; }
+/* 二十二期 · 新建视频模式选择页 */
+#js-app .wb-mode-picker { max-width: 960px; margin: 0 auto; padding: 6px 0 28px; }
+#js-app .wb-mode-head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; padding: 8px 2px 18px; }
+#js-app .wb-mode-head h2 { margin: 4px 0 0; font-size: 22px; font-weight: 650; letter-spacing: -.02em; }
+#js-app .wb-mode-head p { margin: 6px 0 0; color: var(--text-3); font-size: 12.5px; line-height: 1.65; }
+#js-app .wb-mode-head .btn { margin-left: auto; }
+#js-app .wb-mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+#js-app .wb-mode-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  width: 100%;
+  padding: 18px;
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--t-press) var(--ease), background var(--t-press) var(--ease), transform var(--t-press) var(--ease);
+}
+#js-app .wb-mode-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--hairline));
+  background: var(--surface-hover, var(--hover));
+  transform: translateY(-1px);
+}
+#js-app .wb-mode-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: none;
+  border-radius: 13px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+#js-app .wb-mode-copy { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+#js-app .wb-mode-copy b { font-size: 15px; font-weight: 600; }
+#js-app .wb-mode-copy span { color: var(--text-3); font-size: 12px; line-height: 1.6; }
+#js-app .wb-mode-copy small { color: var(--accent); font-size: 10.5px; font-weight: 550; }
+#js-app .wb-mode-arrow { margin-left: auto; align-self: center; color: var(--text-3); font-size: 16px; }
+#js-app .wb-v-draft-row { cursor: default; }
+#js-app .wb-v-draft-row:hover { border-color: var(--hairline); background: var(--surface); }
+#js-app .wb-v-draft-row .wb-v-task-side { flex-direction: row; align-items: center; }
+#js-app .wb-v-draft-row .wb-v-task-side .btn:not(.primary) { color: var(--text-3); }
+@media (max-width: 760px) {
+  #js-app .wb-mode-grid { grid-template-columns: 1fr; }
+  #js-app .wb-mode-head .btn { margin-left: 0; }
+  #js-app .wb-v-draft-row .wb-v-task-side { flex-direction: column; align-items: flex-end; }
+}
 #js-app .wb-v-config { scroll-margin-top: 10px; }
 #js-app .wb-v-config > .wb-actions:last-of-type { margin-top: 4px; }
 #js-app .wb-v-config .wb-actions > .btn:not(.primary) { color: var(--text-2); }
