@@ -94,6 +94,12 @@ const FAST = [
   'scripts/p153-junshi-avatar.mjs',
   // 2026-10-25 加：十七期（对话附件/@引用、任务详情与重试、提交前估价、截图回填、数字人分段）。
   'scripts/p154-junshi-attachments-jobs.mjs',
+  // 2026-10-26 加：十九期视频包装与发布包（字幕/BGM/封面/标题/zip，真 ffmpeg）。
+  'scripts/p155-junshi-video-package.mjs',
+  // 2026-10-26 加：二十期口播成片简易模式（四步隐藏分镜、数字人链路回写、发布包衔接）。
+  'scripts/p191-junshi-talking-head.mjs',
+  // 2026-10-26 加：二十一期一键托管（免费步骤自动跑完、确认前不计费、成功后自动打包）。
+  'scripts/p192-junshi-auto-host.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));

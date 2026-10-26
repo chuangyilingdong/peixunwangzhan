@@ -63,6 +63,11 @@ cp -a apps/server/src/. "$RELEASE_DIR/apps/server/src/"
 #    少了这一行服务照样起得来、只有那几个接口会 500（ENOENT）。
 mkdir -p "$RELEASE_DIR/apps/server/data"
 cp -a apps/server/data/. "$RELEASE_DIR/apps/server/data/"
+# 十九期视频包装的中文字体（Noto Sans SC，封面 drawtext / ASS 烧字幕用）。
+# 它不在 src 下，但服务端按仓库相对路径读它；release 里必须保持 apps/server/assets/fonts。
+# 少了这一行：本地正常、生产发布包生成时抛「服务器缺少中文字体」。
+mkdir -p "$RELEASE_DIR/apps/server/assets"
+cp -a apps/server/assets/. "$RELEASE_DIR/apps/server/assets/"
 cp -a packages/database/src/. "$RELEASE_DIR/packages/database/src/"
 cp -a packages/shared/src/. "$RELEASE_DIR/packages/shared/src/"
 mkdir -p "$RELEASE_DIR/node_modules/@platform/database/src"

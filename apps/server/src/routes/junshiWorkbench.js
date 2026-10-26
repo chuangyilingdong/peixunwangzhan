@@ -85,6 +85,7 @@ import {
   buildAssetAnalysisPrompt,
   buildReviewsInsightPrompt,
   buildDirectorScriptPrompt,
+  buildTalkingHeadCopyPrompt,
   demoBrain,
   demoChat,
   demoCopy,
@@ -93,6 +94,7 @@ import {
   demoAssetAnalysis,
   demoReviewsInsight,
   demoDirectorScript,
+  demoTalkingHeadCopy,
   demoHotspotCopies,
   demoIdeas,
   demoPeerReport,
@@ -106,6 +108,26 @@ import {
   VIDEO_HOOKS,
   VIDEO_TYPES,
 } from '../services/junshiWorkbenchContent.js';
+import {
+  PACKAGE_SUBTITLE_STYLES,
+  buildDirectorSrt,
+  buildPublishCopy,
+  buildZip,
+  packageMarkdown,
+  probeMedia,
+  renderCover,
+  renderPackagedVideo,
+  srtToAss,
+} from '../services/junshiWorkbenchPackaging.js';
+import {
+  parseTalkingHeadConfig,
+  syncTalkingHeadWork,
+} from '../services/junshiTalkingHead.js';
+import {
+  newAutoHost,
+  parseAutoHost,
+  patchAutoHost,
+} from '../services/junshiWorkbenchHosting.js';
 
 const EMPTY_PROFILE = {
   name: '',
@@ -207,8 +229,10 @@ async function reapStale(ownerKey) {
     const staleBefore = new Date(cutoff).toISOString();
     const staleMessage = '超时未完成（可能服务重启中断）';
     await aq("UPDATE junshi_workbench_avatar_runs SET status='failed', error=?, updated_at=? WHERE owner_key=? AND status='running' AND updated_at<?", [staleMessage, nowIso(), ownerKey, staleBefore]).catch(() => {});
+    await aq("UPDATE junshi_workbench_video_works SET status='failed', output_asset_id=NULL, error=?, message=?, updated_at=? WHERE owner_key=? AND production_mode='talking_head' AND status='rendering' AND updated_at<?", [staleMessage, '口播合成超时（可能服务重启中断），可以重新合成。', nowIso(), ownerKey, staleBefore]).catch(() => {});
     await aq("UPDATE junshi_workbench_transcripts SET status='failed', error=?, updated_at=? WHERE owner_key=? AND status='running' AND updated_at<?", [staleMessage, nowIso(), ownerKey, staleBefore]).catch(() => {});
     await aq("UPDATE junshi_workbench_brains SET status='failed', error=?, updated_at=? WHERE owner_key=? AND status='running' AND updated_at<?", [staleMessage, nowIso(), ownerKey, staleBefore]).catch(() => {});
+    await aq("UPDATE junshi_workbench_video_packages SET status='failed', error=?, updated_at=? WHERE owner_key=? AND status='running' AND updated_at<?", [staleMessage, nowIso(), ownerKey, staleBefore]).catch(() => {});
   } catch { /* 回收失败不影响读列表 */ }
 }
 
@@ -338,6 +362,7 @@ async function jobDone(job, status, detail, error = '') {
 
 const JOB_ENTITY_LABELS = {
   video_work: '视频任务',
+  video_package: '视频包装',
   render: '视频渲染',
   transcript: '转写档案',
   avatar_run: '数字人口播',
@@ -567,9 +592,18 @@ async function retryFailedJob(owner, job) {
     const row = await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=? AND owner_key=?', [job.entity_id, owner.key]);
     if (!row) throw errors.notFound('原口播任务已被删除，无法重试', 'NOT_FOUND');
     if (row.status === 'running') throw errors.badRequest('这条口播还在合成中。', 'WORKBENCH_AVATAR_BUSY');
-    const retry = jobStart(owner, '数字人口播（重试）', String(row.text || job.detail).slice(0, 60), meta);
+    const linkedWork = await arow('SELECT id FROM junshi_workbench_video_works WHERE owner_key=? AND avatar_run_id=? ORDER BY created_at DESC LIMIT 1', [owner.key, row.id]).catch(() => null);
+    if (linkedWork && row.status === 'succeeded') throw errors.badRequest('这条口播已经合成完成，不需要重试。', 'WORKBENCH_VIDEO_DONE');
+    const retry = jobStart(owner, linkedWork ? '口播成片（重试）' : '数字人口播（重试）', String(row.text || job.detail).slice(0, 60), meta);
     await retry.promise;
-    void runAvatarRetry(owner, row, retry).catch((error) => jobDone(retry, 'failed', String(error?.message || error)).catch(() => {}));
+    if (linkedWork) {
+      await aq("UPDATE junshi_workbench_video_works SET status='rendering', output_asset_id=NULL, message='正在重试口播合成…', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), linkedWork.id, owner.key]).catch(() => {});
+    }
+    void runAvatarRetry(owner, row, retry).catch(async (error) => {
+      const message = String(error?.message || error);
+      await jobDone(retry, 'failed', message).catch(() => {});
+      await syncTalkingHeadWork(owner, row.id, { status: 'failed', error: message, text: row.text }).catch(() => {});
+    });
     return { jobId: retry.id, kind: 'avatar_run', runId: row.id };
   }
   if (type === 'brain') {
@@ -802,12 +836,40 @@ function renderOut(row) {
     updatedAt: row.updated_at,
   };
 }
+function packageOut(row) {
+  if (!row) return null;
+  let tags = [];
+  let options = {};
+  try { tags = JSON.parse(row.tags || '[]'); } catch { /* ignore */ }
+  try { options = JSON.parse(row.options || '{}'); } catch { /* ignore */ }
+  return {
+    id: row.id,
+    workId: row.work_id,
+    renderId: row.render_id || '',
+    status: row.status,
+    title: row.title || '',
+    description: row.description || '',
+    tags: Array.isArray(tags) ? tags : [],
+    options: options && typeof options === 'object' ? options : {},
+    videoAssetId: row.video_asset_id || null,
+    videoUrl: row.video_asset_id ? `/api/junshi/workbench/assets/${encodeURIComponent(row.video_asset_id)}/file` : null,
+    coverAssetId: row.cover_asset_id || null,
+    coverUrl: row.cover_asset_id ? `/api/junshi/workbench/assets/${encodeURIComponent(row.cover_asset_id)}/file` : null,
+    srtAssetId: row.srt_asset_id || null,
+    srtUrl: row.srt_asset_id ? `/api/junshi/workbench/assets/${encodeURIComponent(row.srt_asset_id)}/file` : null,
+    zipAssetId: row.zip_asset_id || null,
+    zipUrl: row.zip_asset_id ? `/api/junshi/workbench/assets/${encodeURIComponent(row.zip_asset_id)}/file` : null,
+    error: row.error || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
 
 /* ───────────── 七期 · 视频工作台辅助（对齐原版 video_workspace，作者本人授权复刻） ───────────── */
 const VIDEO_REF_ROLES = ['人物', '场景', '道具', '音色'];
 const VIDEO_SHOT_ROLES = ['hook', 'pain', 'proof', 'turn', 'cta'];
 
-function workOut(row) {
+function workOut(row, { avatarRun = null } = {}) {
   let assetRefs = [];
   let script = null;
   try { assetRefs = JSON.parse(row.asset_refs || '[]'); } catch { /* ignore */ }
@@ -820,10 +882,20 @@ function workOut(row) {
         : null,
     }));
   }
+  const productionMode = row.production_mode === 'talking_head' ? 'talking_head' : 'storyboard';
+  const talkingHeadConfig = productionMode === 'talking_head' ? parseTalkingHeadConfig(row.talking_head) : null;
+  const talkingHead = talkingHeadConfig
+    ? { ...talkingHeadConfig, plan: estimateSpeechPlan(talkingHeadConfig.text, talkingHeadConfig.speed) }
+    : null;
   return {
     id: row.id,
     accountId: row.account_id || 'default',
     planId: row.plan_id || '',
+    productionMode,
+    talkingHead,
+    autoHost: parseAutoHost(row.auto_host),
+    avatarRunId: row.avatar_run_id || '',
+    avatarRun: avatarRun ? avatarRunOut(avatarRun) : null,
     mode: row.mode || 'generate',
     title: row.title || '',
     type: row.type || 'ecommerce',
@@ -849,6 +921,63 @@ function workOut(row) {
     updatedAt: row.updated_at,
   };
 }
+
+/** 批量补上关联的口播任务：列表页轮询时也能看到分段进度，不用每条再发一次详情请求。 */
+async function loadVideoWorksOut(ownerKey, rows) {
+  const linkedIds = [...new Set(rows.map((row) => row.avatar_run_id).filter(Boolean))];
+  const runs = linkedIds.length
+    ? await arows(
+      `SELECT * FROM junshi_workbench_avatar_runs WHERE owner_key=? AND id IN (${linkedIds.map(() => '?').join(',')})`,
+      [ownerKey, ...linkedIds],
+    ).catch(() => [])
+    : [];
+  const byId = new Map(runs.map((run) => [run.id, run]));
+  return rows.map((row) => workOut(row, { avatarRun: byId.get(row.avatar_run_id) || null }));
+}
+async function loadVideoWorkOut(ownerKey, workId) {
+  const row = await arow('SELECT * FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [workId, ownerKey]);
+  if (!row) return null;
+  const runRow = row.avatar_run_id
+    ? await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=? AND owner_key=?', [row.avatar_run_id, ownerKey]).catch(() => null)
+    : null;
+  return workOut(row, { avatarRun: runRow });
+}
+
+/* 数字人口播的序列化必须放在模块级：视频任务列表/详情在 handler 外也要用它。
+   ⚠️ handler 内的同名函数模块级看不见（见交接文档坑 9）。 */
+function parseAvatarSegments(row) {
+  try {
+    const value = JSON.parse(row?.segments || '[]');
+    return Array.isArray(value) ? value : [];
+  } catch { return []; }
+}
+function avatarRunOut(row) {
+  let steps = [];
+  try { steps = JSON.parse(row.steps || '[]'); } catch { /* ignore */ }
+  const segments = parseAvatarSegments(row);
+  const note = [...steps.filter((step) => step?.note).map((step) => String(step.note)), ...segments.map((segment) => String(segment.note || '')).filter(Boolean)]
+    .filter(Boolean).join('；');
+  const speed = avatarSpeedProfile(row.speed);
+  const doneSegments = segments.filter((segment) => segment.status === 'done').length;
+  const failedSegments = segments.filter((segment) => segment.status === 'failed').length;
+  return {
+    id: row.id, voiceId: row.voice_id || null, speakerId: row.speaker_id || '',
+    imageAssetId: row.image_asset_id || null, text: row.text || '', status: row.status,
+    speed: speed.value, speedLabel: speed.label,
+    segments: segments.map((segment) => ({
+      index: Number(segment.index || 0), text: String(segment.text || ''),
+      status: String(segment.status || 'pending'), error: String(segment.error || ''),
+      audioSeconds: Number(segment.audioSeconds || 0), durationSeconds: Number(segment.durationSeconds || 0),
+      note: String(segment.note || ''),
+    })),
+    segmentCount: segments.length, doneSegments, failedSegments,
+    durationSeconds: Number(row.duration_seconds || 0),
+    error: row.error || '', note, steps, videoAssetId: row.video_asset_id || null,
+    videoUrl: row.video_asset_id ? `/api/junshi/workbench/assets/${encodeURIComponent(row.video_asset_id)}/file` : null,
+    accountId: row.account_id || 'default', createdAt: row.created_at, updatedAt: row.updated_at,
+  };
+}
+
 function voiceSampleOut(row, assetRow = null) {
   return {
     id: row.id,
@@ -957,14 +1086,18 @@ async function runDirectorScript(owner, workId, { reference = '', job: providedJ
     }
     const parsed = parseDirectorScript(scriptText);
     if (!parsed.ok) throw new Error(`编导稿解析失败：${parsed.message}`);
-    await aq("UPDATE junshi_workbench_video_works SET title=?, director_script=?, status='draft', message='编导稿已生成，确认后开始渲染；分镜可以逐镜修改。', error='', script_revision=script_revision+1, updated_at=? WHERE id=? AND owner_key=?",
-      [work.plan_id ? text(work.title) : String(parsed.data.title || '').slice(0, 200) || text(work.title), JSON.stringify(parsed.data), nowIso(), workId, owner.key]);
+    await aq("UPDATE junshi_workbench_video_works SET title=?, director_script=?, status='draft', message=?, error='', script_revision=script_revision+1, updated_at=? WHERE id=? AND owner_key=?",
+      [work.plan_id ? text(work.title) : String(parsed.data.title || '').slice(0, 200) || text(work.title), JSON.stringify(parsed.data), parseAutoHost(work.auto_host).enabled ? '托管已准备好编导稿，确认后才会渲染并计费。' : '编导稿已生成，确认后开始渲染；分镜可以逐镜修改。', nowIso(), workId, owner.key]);
+    if (parseAutoHost(work.auto_host).enabled) {
+      await patchAutoHost(owner.key, workId, { stage: 'awaiting_confirmation', error: '' }).catch(() => {});
+    }
     if (job) await jobDone(job, 'succeeded', '编导稿已生成').catch(() => {});
   } catch (error) {
     console.error('[video work] runDirectorScript failed:', error?.stack || error?.message || error);
     const message = error instanceof ApiError ? error.message : String(error?.message || error);
     await aq("UPDATE junshi_workbench_video_works SET status='failed', error=?, message=?, updated_at=? WHERE id=? AND owner_key=?",
       [String(message).slice(0, 1000), `编导稿生成失败：${String(message).slice(0, 200)}`, nowIso(), workId, owner.key]).catch(() => {});
+    await patchAutoHost(owner.key, workId, { stage: 'failed', error: String(message).slice(0, 1000) }).catch(() => {});
     if (job) await jobDone(job, 'failed', String(message).slice(0, 1000)).catch(() => {});
   }
 }
@@ -1152,6 +1285,7 @@ async function startWorkRender(owner, work, providedJob = null) {
   await aq('INSERT INTO junshi_workbench_video_renders (id,owner_key,org_id,project_id,account_id,job_id,title,prompt,duration_seconds,aspect_ratio,status,asset_id,error,work_id,shot_index,kind,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     [renderId, owner.key, owner.orgId, null, work.account_id, job.id, String(parsed.data.title || '整片').slice(0, 120), buildWorkRenderPrompt(parsed.data), clampInt(work.duration_seconds, 5, 5, 120), work.ratio, 'running', null, '', work.id, 0, 'main', at, at]);
   await aq("UPDATE junshi_workbench_video_works SET status='rendering', message='已提交视频生成，正在排队…', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), work.id, owner.key]);
+  await patchAutoHost(owner.key, work.id, { stage: 'submitted', confirmedAt: nowIso(), error: '' }).catch(() => {});
   void runWorkbenchRender(owner, renderId, { job });
   return { renderId };
 }
@@ -1227,6 +1361,7 @@ async function runWorkbenchRender(owner, renderId, { job = null } = {}) {
         const message = stored ? `视频已完成并保存到素材库（文件夹：成片）${costText}${refNote}` : note || '视频已完成';
         await aq('UPDATE junshi_workbench_video_works SET status=?, message=?, output_asset_id=?, updated_at=? WHERE id=? AND owner_key=?',
           [stored ? 'succeeded' : 'failed', message, assetId, nowIso(), row.work_id, owner.key]);
+        if (stored) void maybeAutoPackageHosted(owner, row.work_id).catch(() => {});
       } else {
         await aq('UPDATE junshi_workbench_video_works SET message=?, updated_at=? WHERE id=? AND owner_key=?',
           [`第 ${row.shot_index} 镜已完成${stored ? '，片段已入素材库' : ''}${costText}${refInputs.count ? `，用参考原帧 ${refInputs.count} 张` : ''}`, nowIso(), row.work_id, owner.key]);
@@ -1241,12 +1376,238 @@ async function runWorkbenchRender(owner, renderId, { job = null } = {}) {
       if (row.kind === 'main') {
         await aq("UPDATE junshi_workbench_video_works SET status='failed', message=?, error=?, updated_at=? WHERE id=? AND owner_key=?",
           [`视频生成失败：${String(message).slice(0, 200)}`, String(message).slice(0, 1000), nowIso(), row.work_id, owner.key]).catch(() => {});
+        await patchAutoHost(owner.key, row.work_id, { stage: 'failed', error: String(message).slice(0, 1000) }).catch(() => {});
       } else {
         await aq('UPDATE junshi_workbench_video_works SET message=?, updated_at=? WHERE id=? AND owner_key=?',
           [`第 ${row.shot_index} 镜生成失败：${String(message).slice(0, 160)}`, nowIso(), row.work_id, owner.key]).catch(() => {});
       }
     }
     if (job) await jobDone(job, 'failed', String(message).slice(0, 1000)).catch(() => {});
+  }
+}
+
+/* ───────────── 十九期 · 视频包装与发布包（字幕 / BGM / 封面 / 标题 / ZIP） ───────────── */
+async function insertPackageAsset(owner, accountId, stored, size, kind, folder) {
+  const assetId = id('jwa');
+  await aq('INSERT INTO junshi_workbench_assets (id,owner_key,org_id,account_id,file_name,storage_key,storage_backend,mime_type,kind,file_size,folder,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+    [assetId, owner.key, owner.orgId, accountId, stored.fileName, stored.storageKey, stored.storageBackend || 'local', stored.mimeType || '', kind, size, folder, nowIso()]);
+  return assetId;
+}
+
+async function deleteOwnedAsset(owner, assetId) {
+  if (!assetId) return;
+  const row = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, owner.key]).catch(() => null);
+  if (!row) return;
+  const pseudo = { storage_key: row.storage_key, metadata: JSON.stringify({ storageBackend: row.storage_backend }) };
+  if (rowStorageBackend(pseudo) === 'oss') {
+    await removeObject(pseudo).catch(() => {});
+  } else {
+    const root = uploadRoot();
+    const absolute = path.resolve(root, String(row.storage_key || ''));
+    if (absolute !== root && absolute.startsWith(root + path.sep)) await rm(absolute, { force: true }).catch(() => {});
+  }
+  await aq('DELETE FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [assetId, owner.key]).catch(() => {});
+}
+
+async function runVideoPackage(owner, packageId, options = {}) {
+  const pkg = await arow('SELECT * FROM junshi_workbench_video_packages WHERE id=? AND owner_key=?', [packageId, owner.key]);
+  if (!pkg) return;
+  const job = pkg.job_id ? { id: pkg.job_id } : null;
+  const work = await arow('SELECT * FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [pkg.work_id, owner.key]).catch(() => null);
+  const createdAssets = [];
+  let dir = null;
+  try {
+    if (!work) throw new Error('视频任务不存在。');
+    if (work.status !== 'succeeded' || !work.output_asset_id) throw new Error('成片还没有完成，先等渲染结束或重试渲染。');
+    const videoRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [work.output_asset_id, owner.key]);
+    if (!videoRow) throw new Error('成片素材不存在，可能已被删除。');
+    const parsed = parseDirectorScript(work.director_script);
+    const script = parsed.ok ? parsed.data : null;
+    const profile = (await readProfile(owner.key, pkg.account_id || work.account_id || 'default')).profile;
+    const copy = buildPublishCopy({
+      work: { ...work, typeLabel: videoTypeLabel(work.type) },
+      script,
+      profile,
+    });
+    const title = text(options.title).slice(0, 120) || copy.title;
+    const description = text(options.description).slice(0, 1000) || copy.description;
+    const tags = (Array.isArray(options.tags) && options.tags.length ? options.tags : copy.tags)
+      .map((tag) => text(tag).replace(/^#/, '').slice(0, 20)).filter(Boolean).slice(0, 10);
+    const coverSubtitle = text(options.coverSubtitle).slice(0, 60);
+    const subtitleStyle = PACKAGE_SUBTITLE_STYLES.includes(text(options.subtitleStyle)) ? text(options.subtitleStyle) : 'white';
+
+    dir = await mkdtemp(path.join(os.tmpdir(), 'jw-package-'));
+    const videoBuffer = await assetBytes(videoRow);
+    const inputExt = path.extname(String(videoRow.file_name || '')).slice(0, 8) || '.mp4';
+    const inputPath = path.join(dir, `input${inputExt}`);
+    await writeFile(inputPath, videoBuffer);
+    const meta = await probeMedia(inputPath);
+    const duration = meta.duration || Number(work.duration_seconds) || 15;
+
+    const srt = buildDirectorSrt(script, duration);
+    const srtPath = path.join(dir, 'subtitles.srt');
+    await writeFile(srtPath, srt, 'utf8');
+    let assPath = '';
+    if (subtitleStyle !== 'none') {
+      assPath = path.join(dir, 'subtitles.ass');
+      await writeFile(assPath, srtToAss(srt, { ratio: work.ratio, style: subtitleStyle }), 'utf8');
+    }
+
+    let bgmPath = '';
+    if (options.bgmAssetId) {
+      const bgmRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [options.bgmAssetId, owner.key]);
+      if (!bgmRow || bgmRow.kind !== 'audio') throw new Error('BGM 素材不存在或不是音频。');
+      const bgmBuffer = await assetBytes(bgmRow);
+      const bgmExt = path.extname(String(bgmRow.file_name || '')).slice(0, 8) || '.mp3';
+      bgmPath = path.join(dir, `bgm${bgmExt}`);
+      await writeFile(bgmPath, bgmBuffer);
+    }
+
+    const packagedPath = path.join(dir, 'packaged.mp4');
+    await renderPackagedVideo({
+      videoPath: inputPath, bgmPath, assPath, outputPath: packagedPath,
+      bgmVolume: options.bgmVolume, hasAudio: meta.hasAudio, duration, workDir: dir,
+    });
+    const packagedBuffer = await readFile(packagedPath);
+    const packagedStored = await persistSecureUpload({ fileName: `${work.id}-packaged.mp4`, mimeType: 'video/mp4', buffer: packagedBuffer });
+    const videoAssetId = await insertPackageAsset(owner, work.account_id || 'default', packagedStored, packagedBuffer.length, 'video', '发布包');
+    createdAssets.push(videoAssetId);
+
+    const coverPath = path.join(dir, 'cover.jpg');
+    await renderCover({
+      videoPath: inputPath, outputPath: coverPath, title, subtitle: coverSubtitle,
+      ratio: work.ratio, duration, workDir: dir,
+    });
+    const coverBuffer = await readFile(coverPath);
+    const coverStored = await persistSecureUpload({ fileName: `${work.id}-cover.jpg`, mimeType: 'image/jpeg', buffer: coverBuffer });
+    const coverAssetId = await insertPackageAsset(owner, work.account_id || 'default', coverStored, coverBuffer.length, 'image', '封面');
+    createdAssets.push(coverAssetId);
+
+    const srtBuffer = Buffer.from(srt, 'utf8');
+    const srtStored = await persistSecureUpload({ fileName: `${work.id}-subtitles.srt`, mimeType: 'text/plain', buffer: srtBuffer });
+    const srtAssetId = await insertPackageAsset(owner, work.account_id || 'default', srtStored, srtBuffer.length, 'file', '字幕');
+    createdAssets.push(srtAssetId);
+
+    const manifest = JSON.stringify({
+      workId: work.id, title, description, tags, subtitleStyle, bgmAssetId: options.bgmAssetId || '',
+      duration: Number(duration.toFixed(2)), ratio: work.ratio || '9:16', createdAt: nowIso(),
+    }, null, 2);
+    const zipBuffer = buildZip([
+      { name: 'video.mp4', data: packagedBuffer, compress: false },
+      { name: 'cover.jpg', data: coverBuffer, compress: false },
+      { name: 'subtitles.srt', data: srtBuffer },
+      { name: 'publish.md', data: Buffer.from(packageMarkdown({ work, title, description, tags, options: { ...options, subtitleStyle }, duration }), 'utf8') },
+      { name: 'manifest.json', data: Buffer.from(manifest, 'utf8') },
+    ]);
+    const zipStored = await persistSecureUpload({ fileName: `${work.id}-publish.zip`, mimeType: 'application/zip', buffer: zipBuffer });
+    const zipAssetId = await insertPackageAsset(owner, work.account_id || 'default', zipStored, zipBuffer.length, 'file', '发布包');
+    createdAssets.push(zipAssetId);
+
+    const latestRender = await arow("SELECT id FROM junshi_workbench_video_renders WHERE owner_key=? AND work_id=? AND kind='main' AND status='succeeded' ORDER BY created_at DESC LIMIT 1", [owner.key, work.id]).catch(() => null);
+    await aq('UPDATE junshi_workbench_video_packages SET status=?, render_id=?, title=?, description=?, tags=?, options=?, video_asset_id=?, cover_asset_id=?, srt_asset_id=?, zip_asset_id=?, error=?, updated_at=? WHERE id=? AND owner_key=?',
+      ['ready', latestRender?.id || '', title, description, JSON.stringify(tags), JSON.stringify({ ...options, subtitleStyle }), videoAssetId, coverAssetId, srtAssetId, zipAssetId, '', nowIso(), packageId, owner.key]);
+    if (parseAutoHost(work.auto_host).enabled) {
+      await patchAutoHost(owner.key, work.id, { stage: 'ready', packagedAt: nowIso(), error: '' }).catch(() => {});
+    }
+    if (job) await jobDone(job, 'succeeded', `发布包已生成（字幕、封面、标题和打包文件）`).catch(() => {});
+  } catch (error) {
+    const message = error instanceof ApiError ? error.message : String(error?.message || error).slice(0, 1000);
+    for (const assetId of createdAssets) await deleteOwnedAsset(owner, assetId);
+    await aq("UPDATE junshi_workbench_video_packages SET status='failed', error=?, updated_at=? WHERE id=? AND owner_key=?", [String(message).slice(0, 1000), nowIso(), packageId, owner.key]).catch(() => {});
+    if (work && parseAutoHost(work.auto_host).enabled) {
+      await patchAutoHost(owner.key, work.id, { stage: 'failed', error: String(message).slice(0, 1000) }).catch(() => {});
+    }
+    if (job) await jobDone(job, 'failed', String(message).slice(0, 1000), String(message).slice(0, 2000)).catch(() => {});
+    console.error('[video package] failed:', error?.stack || error?.message || error);
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** 发布包创建入口：手动「生成发布包」和托管自动打包共用同一套参数与任务流水。 */
+async function createVideoPackage(owner, work, body = {}) {
+  if (work.status !== 'succeeded' || !work.output_asset_id) {
+    throw errors.badRequest('成片还没有完成，先等渲染结束或重试渲染，再做发布包。', 'WORKBENCH_VIDEO_NOT_READY');
+  }
+  const running = await arow("SELECT * FROM junshi_workbench_video_packages WHERE owner_key=? AND work_id=? AND status='running' ORDER BY created_at DESC LIMIT 1", [owner.key, work.id]);
+  if (running) return running;
+  const subtitleStyle = PACKAGE_SUBTITLE_STYLES.includes(text(body.subtitleStyle)) ? text(body.subtitleStyle) : 'white';
+  const bgmAssetId = text(body.bgmAssetId).slice(0, 64);
+  if (bgmAssetId) {
+    const bgm = await arow('SELECT id, kind FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [bgmAssetId, owner.key]);
+    if (!bgm || bgm.kind !== 'audio') throw errors.badRequest('背景音乐不存在或不是音频素材。', 'VALIDATION_ERROR', { field: 'bgmAssetId' });
+  }
+  const tags = Array.isArray(body.tags)
+    ? body.tags.map((tag) => text(tag).replace(/^#/, '').slice(0, 20)).filter(Boolean).slice(0, 10)
+    : text(body.tags).split(/[\s,，#]+/).map((tag) => tag.replace(/^#/, '').slice(0, 20)).filter(Boolean).slice(0, 10);
+  const options = {
+    subtitleStyle,
+    bgmAssetId,
+    bgmVolume: 0.18,
+    title: text(body.title).slice(0, 120),
+    coverSubtitle: text(body.coverSubtitle).slice(0, 60),
+    description: text(body.description).slice(0, 1000),
+    tags,
+  };
+  const packageId = id('jwpkg');
+  const at = nowIso();
+  const job = jobStart(owner, '视频包装', `${String(work.title || '').slice(0, 50) || '视频任务'} · 字幕/封面/发布包`, {
+    entityType: 'video_package', entityId: packageId, payload: { subtitleStyle, bgmAssetId },
+  });
+  await job.promise;
+  const latestRender = await arow("SELECT id FROM junshi_workbench_video_renders WHERE owner_key=? AND work_id=? AND kind='main' AND status='succeeded' ORDER BY created_at DESC LIMIT 1", [owner.key, work.id]).catch(() => null);
+  await aq('INSERT INTO junshi_workbench_video_packages (id,owner_key,org_id,account_id,work_id,render_id,job_id,status,title,description,tags,options,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    [packageId, owner.key, owner.orgId, work.account_id || 'default', work.id, latestRender?.id || '', job.id, 'running', options.title, options.description, JSON.stringify(tags), JSON.stringify(options), at, at]);
+  if (parseAutoHost(work.auto_host).enabled) {
+    await patchAutoHost(owner.key, work.id, { stage: 'packaging', error: '' }).catch(() => {});
+  }
+  void runVideoPackage(owner, packageId, options);
+  return await arow('SELECT * FROM junshi_workbench_video_packages WHERE id=? AND owner_key=?', [packageId, owner.key]);
+}
+
+const hostedPackaging = new Set();
+
+/**
+ * 托管成功后自动生成默认发布包；幂等：已有 running/ready 包就不再重复，重启后由列表/详情拉取兜底。
+ * 打包失败不回滚成片，只把 auto_host.stage 标成 failed，用户可在第 4 步手动重试。
+ */
+async function maybeAutoPackageHosted(owner, workId) {
+  if (!owner?.key || !workId) return null;
+  const work = await arow('SELECT * FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [workId, owner.key]).catch(() => null);
+  if (!work) return null;
+  const host = parseAutoHost(work.auto_host);
+  if (!host.enabled || !host.autoPackage || !host.confirmedAt) return null;
+  // 打包失败后不在每次列表/详情刷新时自动重试；由用户在第 4 步手动重试。
+  if (host.stage === 'failed') return null;
+  if (work.status !== 'succeeded' || !work.output_asset_id) return null;
+  if (hostedPackaging.has(workId)) return null;
+  const existing = await arow("SELECT * FROM junshi_workbench_video_packages WHERE owner_key=? AND work_id=? AND status IN ('running','ready') ORDER BY created_at DESC LIMIT 1", [owner.key, workId]).catch(() => null);
+  if (existing) {
+    if (existing.status === 'ready' && host.stage !== 'ready') {
+      await patchAutoHost(owner.key, workId, { stage: 'ready', packagedAt: existing.updated_at || nowIso() }).catch(() => {});
+    }
+    return existing;
+  }
+  hostedPackaging.add(workId);
+  try {
+    await patchAutoHost(owner.key, workId, { stage: 'packaging', error: '' });
+    return await createVideoPackage(owner, work, { subtitleStyle: 'white' });
+  } catch (error) {
+    const message = String(error?.message || error).slice(0, 1000);
+    await patchAutoHost(owner.key, workId, { stage: 'failed', error: message }).catch(() => {});
+    console.error('[video host] auto package failed:', error?.stack || error);
+    return null;
+  } finally {
+    hostedPackaging.delete(workId);
+  }
+}
+
+/** 服务重启/页面重新拉取时补跑漏掉的托管打包（GET 只触发后台任务，不阻塞响应）。 */
+async function reconcileHostedPackages(owner) {
+  const rows = await arows("SELECT id, auto_host FROM junshi_workbench_video_works WHERE owner_key=? AND status='succeeded' ORDER BY updated_at DESC LIMIT 20", [owner.key]).catch(() => []);
+  for (const row of rows) {
+    const host = parseAutoHost(row.auto_host);
+    if (host.enabled && host.autoPackage && host.confirmedAt) void maybeAutoPackageHosted(owner, row.id);
   }
 }
 
@@ -3278,38 +3639,6 @@ function voiceOut(row) {
     accountId: row.account_id || 'default', createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
-function parseAvatarSegments(row) {
-  try {
-    const value = JSON.parse(row?.segments || '[]');
-    return Array.isArray(value) ? value : [];
-  } catch { return []; }
-}
-function avatarRunOut(row) {
-  let steps = [];
-  try { steps = JSON.parse(row.steps || '[]'); } catch { /* ignore */ }
-  const segments = parseAvatarSegments(row);
-  const note = [...steps.filter((step) => step?.note).map((step) => String(step.note)), ...segments.map((segment) => String(segment.note || '')).filter(Boolean)]
-    .filter(Boolean).join('；');
-  const speed = avatarSpeedProfile(row.speed);
-  const doneSegments = segments.filter((segment) => segment.status === 'done').length;
-  const failedSegments = segments.filter((segment) => segment.status === 'failed').length;
-  return {
-    id: row.id, voiceId: row.voice_id || null, speakerId: row.speaker_id || '',
-    imageAssetId: row.image_asset_id || null, text: row.text || '', status: row.status,
-    speed: speed.value, speedLabel: speed.label,
-    segments: segments.map((segment) => ({
-      index: Number(segment.index || 0), text: String(segment.text || ''),
-      status: String(segment.status || 'pending'), error: String(segment.error || ''),
-      audioSeconds: Number(segment.audioSeconds || 0), durationSeconds: Number(segment.durationSeconds || 0),
-      note: String(segment.note || ''),
-    })),
-    segmentCount: segments.length, doneSegments, failedSegments,
-    durationSeconds: Number(row.duration_seconds || 0),
-    error: row.error || '', note, steps, videoAssetId: row.video_asset_id || null,
-    videoUrl: row.video_asset_id ? `/api/junshi/workbench/assets/${encodeURIComponent(row.video_asset_id)}/file` : null,
-    accountId: row.account_id || 'default', createdAt: row.created_at, updatedAt: row.updated_at,
-  };
-}
 async function avatarStepsUpdate(id, ownerKey, steps) {
   await aq('UPDATE junshi_workbench_avatar_runs SET steps=?, updated_at=? WHERE id=? AND owner_key=?', [JSON.stringify(steps), nowIso(), id, ownerKey]).catch(() => {});
 }
@@ -3318,6 +3647,184 @@ async function avatarSegmentsUpdate(id, ownerKey, segments) {
 }
 async function avatarMetaUpdate(id, ownerKey, meta) {
   await aq('UPDATE junshi_workbench_avatar_runs SET meta=?, updated_at=? WHERE id=? AND owner_key=?', [JSON.stringify(meta), nowIso(), id, ownerKey]).catch(() => {});
+}
+
+/** 口播配置校验：音色/形象照/语速。托管写稿前允许文案为空，写完后走 resolveTalkingHeadDraft。 */
+async function resolveTalkingHeadAssets(owner, input = {}, current = null) {
+  const patch = input && typeof input.talkingHead === 'object' && input.talkingHead
+    ? input.talkingHead
+    : input;
+  const merged = { ...(current || {}), ...(patch || {}) };
+  const speech = String(merged.text ?? merged.speech ?? '').replace(/\r\n?/g, '\n').trim();
+  if (speech.length > 3000) throw errors.badRequest('口播文案最多 3000 字', 'VALIDATION_ERROR', { field: 'text' });
+  const speed = avatarSpeedProfile(merged.speed).value;
+  const voiceId = text(merged.voiceId);
+  const voiceRow = await arow('SELECT * FROM junshi_workbench_voices WHERE id=? AND owner_key=?', [voiceId, owner.key]);
+  if (!voiceRow) throw errors.notFound('音色不存在（先在音色库克隆或选择一条）', 'NOT_FOUND');
+  if (voiceRow.status !== 'ready' || !voiceRow.speaker_id) throw errors.badRequest('这个音色还没克隆完成（或克隆失败）', 'WORKBENCH_VOICE_NOT_READY');
+  const imageAssetId = text(merged.imageAssetId);
+  const imageAssetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [imageAssetId, owner.key]);
+  if (!imageAssetRow) throw errors.notFound('形象照素材不存在', 'NOT_FOUND');
+  if (!/^image\//.test(String(imageAssetRow.mime_type || '')) && imageAssetRow.kind !== 'image') {
+    throw errors.badRequest('形象照需要是图片素材（人脸清晰、正面）', 'VALIDATION_ERROR');
+  }
+  return {
+    config: {
+      text: speech,
+      voiceId,
+      imageAssetId,
+      speed,
+      voiceName: String(voiceRow.name || '').slice(0, 60),
+      imageFileName: String(imageAssetRow.file_name || '').slice(0, 120),
+    },
+    speech,
+    voiceRow,
+    imageAssetRow,
+  };
+}
+
+/** 口播草稿校验：文案/音色/形象照/语速。创建任务、改稿、确认合成共用同一套口径。 */
+async function resolveTalkingHeadDraft(owner, input = {}, current = null) {
+  const base = await resolveTalkingHeadAssets(owner, input, current);
+  const speech = base.speech;
+  if (!speech) throw errors.badRequest('请填写口播文案', 'VALIDATION_ERROR', { field: 'text' });
+  const plan = estimateSpeechPlan(speech, base.config.speed);
+  if (plan.overLimit) {
+    throw errors.badRequest(
+      `这段文案按当前语速约 ${plan.targetDuration} 秒、${plan.batchCount} 段，超过单次任务上限 ${AVATAR_MAX_SEGMENTS} 段；请拆成多条发布或缩短文案。`,
+      'WORKBENCH_AVATAR_TOO_LONG',
+    );
+  }
+  return { ...base, plan };
+}
+
+/**
+ * 一键托管的免费准备步骤：主题 → 口播稿 → 分段/时长。
+ * 只调用文本模型，不建 avatar_run、不调 TTS/对口型；完成后停在确认页。
+ */
+async function runHostedTalkingHeadScript(owner, workId, topic) {
+  try {
+    const work = await arow('SELECT * FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [workId, owner.key]);
+    if (!work || work.production_mode !== 'talking_head') return;
+    const config = parseTalkingHeadConfig(work.talking_head);
+    const profile = (await readProfile(owner.key, work.account_id)).profile;
+    const orgProfile = await orgProfileText(owner.key);
+    const providerMock = await textProviderIsMock().catch(() => false);
+    let scriptText = '';
+    if (!providerMock) {
+      const prompt = buildTalkingHeadCopyPrompt({
+        profile, orgProfile, type: work.type, subtype: work.subtype, topic, duration: Number(work.duration_seconds) || 30,
+      });
+      const result = await collectText(null, { system: WORKBENCH_SYSTEM, user: prompt });
+      scriptText = mockOrEmpty(result) ? '' : result.text;
+    }
+    if (!scriptText.trim()) {
+      scriptText = demoTalkingHeadCopy({ profile, type: work.type, subtype: work.subtype, topic });
+    }
+    let speech = String(scriptText || '').replace(/\r\n?/g, '\n').replace(/^#+\s*/gm, '').trim().slice(0, 3000);
+    if (!speech) throw new Error('口播稿生成结果为空');
+    let plan = estimateSpeechPlan(speech, config.speed);
+    let trimmed = false;
+    if (plan.overLimit) {
+      const keep = plan.segments.slice(0, AVATAR_MAX_SEGMENTS - 2).join('');
+      if (keep) {
+        speech = keep;
+        plan = estimateSpeechPlan(speech, config.speed);
+        trimmed = true;
+      }
+    }
+    if (!plan.segments.length) throw new Error('口播稿没有可用分段');
+    const title = text(work.title).slice(0, 200) || text(topic).slice(0, 40) || speech.replace(/\s+/g, ' ').slice(0, 40);
+    const durationSeconds = Math.max(5, Math.min(120, Math.ceil(plan.targetDuration) || 5));
+    const nextConfig = { ...config, text: speech };
+    await aq(
+      "UPDATE junshi_workbench_video_works SET title=?, talking_head=?, status='draft', duration_seconds=?, message=?, error='', script_revision=script_revision+1, updated_at=? WHERE id=? AND owner_key=? AND status='planning'",
+      [
+        title, JSON.stringify(nextConfig), durationSeconds,
+        trimmed ? '托管已写好口播稿，并按 30 段上限做了压缩；可以在第 2 步改稿，确认后才合成。' : '托管已写好口播稿和分段，核对后确认合成。',
+        nowIso(), workId, owner.key,
+      ],
+    );
+    await patchAutoHost(owner.key, workId, {
+      stage: 'awaiting_confirmation',
+      topic: text(topic).slice(0, 500),
+      error: '',
+    });
+  } catch (error) {
+    const message = String(error?.message || error).slice(0, 1000);
+    await aq(
+      "UPDATE junshi_workbench_video_works SET status='failed', message=?, error=?, updated_at=? WHERE id=? AND owner_key=? AND status='planning'",
+      [`托管写稿失败：${message.slice(0, 200)}`, message, nowIso(), workId, owner.key],
+    ).catch(() => {});
+    await patchAutoHost(owner.key, workId, { stage: 'failed', error: message }).catch(() => {});
+    console.error('[video host] runHostedTalkingHeadScript failed:', error?.stack || error);
+  }
+}
+
+/** 口播前置检查：渠道可用 + 文案可分段。失败时不建任务、不扣费。 */
+async function prepareAvatarRun(owner, draft, accountId) {
+  const policy = await getAiProviderPolicy();
+  const channel = await seedanceChannelConfig(policy?.channels);
+  if (!channel) throw errors.badRequest('数字人渠道未配置（需要 seedance.nz 渠道 Key）', 'WORKBENCH_AVATAR_NOT_CONFIGURED');
+  return {
+    speech: draft.config.text,
+    speed: draft.config.speed,
+    plan: draft.plan,
+    voiceRow: draft.voiceRow,
+    imageAssetRow: draft.imageAssetRow,
+    accountId: accountId || 'default',
+    channel,
+  };
+}
+
+/** 建数字人任务并起后台管线；workId 存在时把结果挂回同一条视频任务。 */
+async function createAvatarRun(owner, prepared, { jobKind = '数字人口播', jobDetail = '', payload = {}, workId = '' } = {}) {
+  const runId = id('jwav');
+  const at = nowIso();
+  const segments = prepared.plan.segments.map((part, index) => ({ index: index + 1, text: part, status: 'pending', error: '', note: '' }));
+  await aq(
+    'INSERT INTO junshi_workbench_avatar_runs (id,owner_key,org_id,account_id,voice_id,speaker_id,image_asset_id,text,status,error,steps,segments,meta,speed,duration_seconds,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    [runId, owner.key, owner.orgId, prepared.accountId, prepared.voiceRow.id, prepared.voiceRow.speaker_id, prepared.imageAssetRow.id, prepared.speech, 'running', '', '[]', JSON.stringify(segments), '{}', prepared.speed, 0, at, at],
+  );
+  let job;
+  try {
+    job = jobStart(owner, jobKind, (jobDetail || prepared.speech).slice(0, 60), {
+      entityType: 'avatar_run',
+      entityId: runId,
+      payload: { ...payload, speed: prepared.speed, ...(workId ? { workId } : {}) },
+    });
+    await job.promise;
+  } catch (error) {
+    const message = String(error?.message || error).slice(0, 1000);
+    await aq("UPDATE junshi_workbench_avatar_runs SET status='failed', error=?, updated_at=? WHERE id=? AND owner_key=?", [message, nowIso(), runId, owner.key]).catch(() => {});
+    throw error;
+  }
+  if (workId) {
+    const linked = await aq(
+      "UPDATE junshi_workbench_video_works SET avatar_run_id=?, status='rendering', output_asset_id=NULL, message=?, error='', updated_at=? WHERE id=? AND owner_key=?",
+      [runId, '口播合成中，完成后自动进入第 4 步包装。', nowIso(), workId, owner.key],
+    );
+    if (!linked.changes) {
+      const message = '关联的视频任务不存在';
+      await aq("UPDATE junshi_workbench_avatar_runs SET status='failed', error=?, updated_at=? WHERE id=? AND owner_key=?", [message, nowIso(), runId, owner.key]).catch(() => {});
+      await jobDone(job, 'failed', message).catch(() => {});
+      throw errors.notFound(message, 'NOT_FOUND');
+    }
+  }
+  void runTalkingHead(owner, {
+    runId,
+    text: prepared.speech,
+    speakerId: prepared.voiceRow.speaker_id,
+    voiceRow: prepared.voiceRow,
+    imageAssetRow: prepared.imageAssetRow,
+    speed: prepared.speed,
+    job,
+  }).catch(async (error) => {
+    const message = String(error?.message || error);
+    await jobDone(job, 'failed', message).catch(() => {});
+    await syncTalkingHeadWork(owner, runId, { status: 'failed', error: message, text: prepared.speech }).catch(() => {});
+  });
+  return { runId, job, segments };
 }
 
 /** 后台克隆音色：样本直链上传 → doubao/minimax 克隆 → speaker_id。
@@ -3598,6 +4105,7 @@ async function runTalkingHead(owner, { runId, text, speakerId, voiceRow, imageAs
   if (!runRow) {
     const message = '数字人口播任务不存在';
     if (job) await jobDone(job, 'failed', message).catch(() => {});
+    await syncTalkingHeadWork(owner, runId, { status: 'failed', error: message, text }).catch(() => {});
     return { ok: false, message };
   }
   const accountId = runRow.account_id || 'default';
@@ -3640,6 +4148,8 @@ async function runTalkingHead(owner, { runId, text, speakerId, voiceRow, imageAs
     await avatarStepsUpdate(runId, owner.key, steps).catch(() => {});
     await aq('UPDATE junshi_workbench_avatar_runs SET status=?, error=?, segments=?, meta=?, updated_at=? WHERE id=? AND owner_key=?',
       ['failed', clean, JSON.stringify(segments), JSON.stringify(meta), nowIso(), runId, owner.key]).catch(() => {});
+    const syncedFail = await syncTalkingHeadWork(owner, runId, { status: 'failed', error: clean, text }).catch(() => null);
+    if (syncedFail?.workId) await patchAutoHost(owner.key, syncedFail.workId, { stage: 'failed', error: clean }).catch(() => {});
     if (job) await jobDone(job, 'failed', clean).catch(() => {});
     return { ok: false, message: clean };
   };
@@ -3716,6 +4226,10 @@ async function runTalkingHead(owner, { runId, text, speakerId, voiceRow, imageAs
     const durationSeconds = Math.round(segments.reduce((sum, segment) => sum + Number(segment.audioSeconds || 0), 0) * 10) / 10;
     await aq("UPDATE junshi_workbench_avatar_runs SET status='succeeded', video_asset_id=?, error='', duration_seconds=?, segments=?, meta=?, speed=?, updated_at=? WHERE id=? AND owner_key=?",
       [assetId, durationSeconds, JSON.stringify(segments), JSON.stringify(meta), speed.value, nowIso(), runId, owner.key]);
+    const synced = await syncTalkingHeadWork(owner, runId, {
+      status: 'succeeded', assetId, durationSeconds, segments, text,
+    }).catch(() => null);
+    if (synced?.workId) void maybeAutoPackageHosted(owner, synced.workId).catch(() => {});
     await mark('save', 'done');
     if (job) await jobDone(job, 'succeeded', `数字人口播完成：${segments.length} 段 / ${durationSeconds} 秒`).catch(() => {});
     return { ok: true, message: '数字人口播完成', assetId, durationSeconds, segments: segments.length };
@@ -3732,6 +4246,8 @@ async function runAvatarRetry(owner, runRow, job, segmentIndices = null) {
   if (!voiceRow) {
     const message = '原音色已被删除，无法重试';
     await aq('UPDATE junshi_workbench_avatar_runs SET status=?, error=?, updated_at=? WHERE id=? AND owner_key=?', ['failed', message, nowIso(), runRow.id, owner.key]).catch(() => {});
+    const synced = await syncTalkingHeadWork(owner, runRow.id, { status: 'failed', error: message, text: runRow.text }).catch(() => null);
+    if (synced?.workId) await patchAutoHost(owner.key, synced.workId, { stage: 'failed', error: message }).catch(() => {});
     await jobDone(job, 'failed', message).catch(() => {});
     return { ok: false, message };
   }
@@ -4266,9 +4782,73 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     const rows = accountIdFilter
       ? await arows('SELECT * FROM junshi_workbench_video_works WHERE owner_key=? AND account_id=? ORDER BY created_at DESC LIMIT 50', [owner.key, accountIdFilter])
       : await arows('SELECT * FROM junshi_workbench_video_works WHERE owner_key=? ORDER BY created_at DESC LIMIT 50', [owner.key]);
-    return { items: rows.map(workOut) };
+    // 托管成片成功后若自动打包被重启打断，这里补跑（后台任务，不阻塞列表）。
+    void reconcileHostedPackages(owner);
+    return { items: await loadVideoWorksOut(owner.key, rows) };
   }
   if (rest === '/video/works' && method === 'POST') {
+    const productionMode = text(ctx.body?.productionMode) === 'talking_head' ? 'talking_head' : 'storyboard';
+    const autoHostRequested = ctx.body?.autoHost === true;
+    const hostedTopic = text(ctx.body?.topic || ctx.body?.brief).slice(0, 500);
+    if (productionMode === 'talking_head') {
+      const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
+      const type = VIDEO_TYPES[text(ctx.body?.type)] ? text(ctx.body?.type) : 'ecommerce';
+      const subtypeOk = (VIDEO_TYPES[type].subtypes || []).some(([name]) => name === text(ctx.body?.subtype));
+      const subtype = subtypeOk ? text(ctx.body?.subtype) : (VIDEO_TYPES[type].subtypes?.[0]?.[0] || '');
+      const speechInput = String(ctx.body?.speech ?? ctx.body?.talkingHead?.text ?? '').replace(/\r\n?/g, '\n').trim();
+      // 托管口播：只给主题，免费步骤负责写稿/分段；此时不能调用 resolveTalkingHeadDraft（它要求文案非空）。
+      if (autoHostRequested && !speechInput) {
+        if (!hostedTopic) throw errors.badRequest('托管需要先写一个主题，系统才能写口播稿', 'VALIDATION_ERROR', { field: 'topic' });
+        const assets = await resolveTalkingHeadAssets(owner, ctx.body || {});
+        rateLimit(owner.key);
+        const workId = id('jww');
+        const at = nowIso();
+        const title = text(ctx.body?.title).slice(0, 200) || hostedTopic.slice(0, 40);
+        const imageRefs = [{
+          assetId: assets.config.imageAssetId,
+          role: '人物',
+          label: assets.config.imageFileName,
+          notes: '数字人口播形象照',
+        }];
+        await aq(
+          'INSERT INTO junshi_workbench_video_works (id,owner_key,org_id,account_id,production_mode,talking_head,avatar_run_id,auto_host,mode,title,type,subtype,hook_strategy,model,duration_seconds,resolution,ratio,brief,asset_refs,status,message,director_script,script_revision,script_edited,output_asset_id,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+          [
+            workId, owner.key, owner.orgId, accountId, 'talking_head', JSON.stringify(assets.config), null,
+            JSON.stringify(newAutoHost({ topic: hostedTopic })),
+            'generate', title, type, subtype, 'auto', '', 30,
+            text(ctx.body?.resolution).slice(0, 16) || '480P', '9:16', hostedTopic, JSON.stringify(imageRefs),
+            'planning', '托管正在写口播稿和分段…', '', 1, 0, null, '', at, at,
+          ],
+        );
+        void runHostedTalkingHeadScript(owner, workId, hostedTopic);
+        return { work: await loadVideoWorkOut(owner.key, workId) };
+      }
+      const draft = await resolveTalkingHeadDraft(owner, ctx.body || {});
+      rateLimit(owner.key);
+      const workId = id('jww');
+      const at = nowIso();
+      const title = text(ctx.body?.title).slice(0, 200) || draft.config.text.replace(/\s+/g, ' ').slice(0, 40);
+      const imageRefs = [{
+        assetId: draft.config.imageAssetId,
+        role: '人物',
+        label: draft.config.imageFileName,
+        notes: '数字人口播形象照',
+      }];
+      const autoHost = autoHostRequested
+        ? { ...newAutoHost({ topic: hostedTopic }), stage: 'awaiting_confirmation' }
+        : parseAutoHost('{}');
+      await aq(
+        'INSERT INTO junshi_workbench_video_works (id,owner_key,org_id,account_id,production_mode,talking_head,avatar_run_id,auto_host,mode,title,type,subtype,hook_strategy,model,duration_seconds,resolution,ratio,brief,asset_refs,status,message,director_script,script_revision,script_edited,output_asset_id,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [
+          workId, owner.key, owner.orgId, accountId, 'talking_head', JSON.stringify(draft.config), null,
+          JSON.stringify(autoHost),
+          'generate', title, type, subtype, 'auto', '', Math.max(5, Math.min(120, Math.ceil(draft.plan.targetDuration) || 5)),
+          text(ctx.body?.resolution).slice(0, 16) || '480P', '9:16', hostedTopic, JSON.stringify(imageRefs),
+          'draft', autoHostRequested ? '托管已准备好口播稿，确认后才会合成并计费。' : '口播稿已就绪，核对分段和费用后再开始合成。', '', 1, 0, null, '', at, at,
+        ],
+      );
+      return { work: await loadVideoWorkOut(owner.key, workId) };
+    }
     const mode = ['generate', 'replicate'].includes(text(ctx.body?.mode)) ? text(ctx.body?.mode) : 'generate';
     const brief = text(ctx.body?.brief).slice(0, 4000);
     const type = VIDEO_TYPES[text(ctx.body?.type)] ? text(ctx.body?.type) : 'ecommerce';
@@ -4288,8 +4868,9 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     rateLimit(owner.key);
     const workId = id('jww');
     const at = nowIso();
-    await aq('INSERT INTO junshi_workbench_video_works (id,owner_key,org_id,account_id,mode,title,type,subtype,hook_strategy,model,duration_seconds,resolution,ratio,brief,asset_refs,status,message,director_script,script_revision,script_edited,output_asset_id,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-      [workId, owner.key, owner.orgId, accountId, mode, '', type, subtype, hookStrategy, model, durationSeconds, resolution, ratio, brief, JSON.stringify(assetRefs), 'planning', '正在写编导稿…', '', 0, 0, null, '', at, at]);
+    const autoHost = autoHostRequested ? newAutoHost({ topic: brief }) : parseAutoHost('{}');
+    await aq('INSERT INTO junshi_workbench_video_works (id,owner_key,org_id,account_id,auto_host,mode,title,type,subtype,hook_strategy,model,duration_seconds,resolution,ratio,brief,asset_refs,status,message,director_script,script_revision,script_edited,output_asset_id,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [workId, owner.key, owner.orgId, accountId, JSON.stringify(autoHost), mode, '', type, subtype, hookStrategy, model, durationSeconds, resolution, ratio, brief, JSON.stringify(assetRefs), 'planning', '正在写编导稿…', '', 0, 0, null, '', at, at]);
     void runDirectorScript(owner, workId, { reference });
     return { work: workOut(await arow('SELECT * FROM junshi_workbench_video_works WHERE id=?', [workId])) };
   }
@@ -4301,39 +4882,122 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     if (!work) throw errors.notFound('视频任务不存在', 'NOT_FOUND');
     if (!sub1 && method === 'GET') {
       const renders = await arows('SELECT * FROM junshi_workbench_video_renders WHERE owner_key=? AND work_id=? ORDER BY created_at DESC LIMIT 60', [owner.key, workId]);
-      return { work: workOut(work), renders: renders.map(renderOut) };
+      void maybeAutoPackageHosted(owner, workId);
+      const latestPackage = await arow('SELECT * FROM junshi_workbench_video_packages WHERE owner_key=? AND work_id=? ORDER BY created_at DESC LIMIT 1', [owner.key, workId]).catch(() => null);
+      return { work: await loadVideoWorkOut(owner.key, workId), renders: renders.map(renderOut), package: latestPackage ? packageOut(latestPackage) : null };
     }
     if (!sub1 && method === 'PUT') {
       const title = ctx.body?.title !== undefined ? text(ctx.body?.title).slice(0, 200) : work.title;
       let directorScript = work.director_script;
       let scriptEdited = Number(work.script_edited || 0);
       let revision = Number(work.script_revision || 0);
+      if (work.production_mode === 'talking_head') {
+        if (work.status === 'rendering') throw errors.badRequest('口播正在合成中，等这一轮结束再改稿。', 'WORKBENCH_AVATAR_BUSY');
+        const current = parseTalkingHeadConfig(work.talking_head);
+        const draft = await resolveTalkingHeadDraft(owner, ctx.body || {}, current);
+        await aq('DELETE FROM junshi_workbench_video_packages WHERE owner_key=? AND work_id=?', [owner.key, workId]).catch(() => {});
+        await aq(
+          "UPDATE junshi_workbench_video_works SET title=?, talking_head=?, status='draft', output_asset_id=NULL, avatar_run_id=NULL, duration_seconds=?, message=?, error='', script_revision=script_revision+1, updated_at=? WHERE id=? AND owner_key=?",
+          [
+            title || draft.config.text.replace(/\s+/g, ' ').slice(0, 40),
+            JSON.stringify(draft.config),
+            Math.max(5, Math.min(120, Math.ceil(draft.plan.targetDuration) || 5)),
+            '口播稿已更新，确认后重新合成。旧成片仍保留在素材库。',
+            nowIso(), workId, owner.key,
+          ],
+        );
+        return { work: await loadVideoWorkOut(owner.key, workId) };
+      }
       if (ctx.body?.directorScript !== undefined) {
         const parsed = parseDirectorScript(ctx.body?.directorScript);
         if (!parsed.ok) throw errors.badRequest(parsed.message, 'VALIDATION_ERROR', { field: 'directorScript' });
         directorScript = JSON.stringify(parsed.data);
         scriptEdited = ctx.body?.scriptEdited === false ? 0 : 1;
         revision += 1;
+        await aq('DELETE FROM junshi_workbench_video_packages WHERE owner_key=? AND work_id=?', [owner.key, workId]).catch(() => {});
       }
       await aq('UPDATE junshi_workbench_video_works SET title=?, director_script=?, script_revision=?, script_edited=?, updated_at=? WHERE id=? AND owner_key=?',
         [title, directorScript, revision, scriptEdited, nowIso(), workId, owner.key]);
-      return { work: workOut(await arow('SELECT * FROM junshi_workbench_video_works WHERE id=?', [workId])) };
+      return { work: await loadVideoWorkOut(owner.key, workId) };
     }
     if (!sub1 && method === 'DELETE') {
+      await aq('DELETE FROM junshi_workbench_video_packages WHERE owner_key=? AND work_id=?', [owner.key, workId]);
       await aq('DELETE FROM junshi_workbench_video_renders WHERE owner_key=? AND work_id=?', [owner.key, workId]);
       await aq('DELETE FROM junshi_workbench_video_works WHERE id=? AND owner_key=?', [workId, owner.key]);
       return { ok: true };
     }
     if (sub1 === 'regenerate' && method === 'POST') {
+      if (work.production_mode === 'talking_head') {
+        throw errors.badRequest('口播成片不需要编导稿；回到第 2 步改口播稿即可。', 'WORKBENCH_VIDEO_TALKING_HEAD');
+      }
       if (['planning', 'rendering'].includes(work.status)) throw errors.badRequest('当前正在生成中，请等这一版结束再换。', 'WORKBENCH_VIDEO_BUSY');
       rateLimit(owner.key);
+      await aq('DELETE FROM junshi_workbench_video_packages WHERE owner_key=? AND work_id=?', [owner.key, workId]).catch(() => {});
       await aq("UPDATE junshi_workbench_video_works SET status='planning', message='正在换一版编导稿…', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), workId, owner.key]);
       void runDirectorScript(owner, workId, { reference: text(ctx.body?.reference).slice(0, 4000) });
-      return { work: workOut(await arow('SELECT * FROM junshi_workbench_video_works WHERE id=?', [workId])) };
+      return { work: await loadVideoWorkOut(owner.key, workId) };
     }
     if (sub1 === 'confirm' && method === 'POST') {
+      await aq('DELETE FROM junshi_workbench_video_packages WHERE owner_key=? AND work_id=?', [owner.key, workId]).catch(() => {});
+      if (work.production_mode === 'talking_head') {
+        if (work.status === 'rendering') throw errors.badRequest('口播正在合成中，请等这一轮结束。', 'WORKBENCH_AVATAR_BUSY');
+        if (work.status === 'succeeded') throw errors.badRequest('这条口播已经合成完成；改口播稿后才会重新计费。', 'WORKBENCH_VIDEO_DONE');
+        renderRateLimit(owner.key);
+        const current = parseTalkingHeadConfig(work.talking_head);
+        const draft = await resolveTalkingHeadDraft(owner, current);
+        const prepared = await prepareAvatarRun(owner, draft, work.account_id || 'default');
+        const linkedRun = work.avatar_run_id
+          ? await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=? AND owner_key=?', [work.avatar_run_id, owner.key]).catch(() => null)
+          : null;
+        if (linkedRun && linkedRun.status === 'running') throw errors.badRequest('口播正在合成中，请等这一轮结束。', 'WORKBENCH_AVATAR_BUSY');
+        // 失败重试同一 run：复用底片/已成功分段；没有关联 run 时才新建。
+        if (linkedRun && linkedRun.status === 'failed') {
+          const job = jobStart(owner, '口播成片（重试）', String(work.title || current.text).slice(0, 60), {
+            entityType: 'avatar_run', entityId: linkedRun.id, payload: { workId: work.id, speed: current.speed },
+          });
+          await job.promise;
+          await aq("UPDATE junshi_workbench_video_works SET status='rendering', output_asset_id=NULL, message='正在重试口播合成…', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), work.id, owner.key]);
+          await patchAutoHost(owner.key, work.id, { stage: 'submitted', confirmedAt: nowIso(), error: '' }).catch(() => {});
+          void runAvatarRetry(owner, linkedRun, job)
+            .catch(async (error) => {
+              const message = String(error?.message || error);
+              await jobDone(job, 'failed', message).catch(() => {});
+              await syncTalkingHeadWork(owner, linkedRun.id, { status: 'failed', error: message, text: current.text }).catch(() => {});
+            });
+          return { work: await loadVideoWorkOut(owner.key, workId), runId: linkedRun.id, retried: true };
+        }
+        const claimed = await aq(
+          "UPDATE junshi_workbench_video_works SET status='rendering', message='正在创建口播合成任务…', error='' WHERE id=? AND owner_key=? AND status IN ('draft','failed')",
+          [work.id, owner.key],
+        );
+        if (!claimed.changes) throw errors.badRequest('口播任务状态已变化，请刷新后再试。', 'WORKBENCH_AVATAR_BUSY');
+        try {
+          const started = await createAvatarRun(owner, prepared, {
+            jobKind: '口播成片',
+            jobDetail: `口播成片 · ${work.title || current.text}`,
+            payload: { workId: work.id, speed: current.speed },
+            workId: work.id,
+          });
+          await patchAutoHost(owner.key, work.id, { stage: 'submitted', confirmedAt: nowIso(), error: '' }).catch(() => {});
+          return { work: await loadVideoWorkOut(owner.key, workId), runId: started.runId };
+        } catch (error) {
+          await aq(
+            "UPDATE junshi_workbench_video_works SET status=?, message=?, error=? WHERE id=? AND owner_key=? AND status='rendering'",
+            [work.status === 'failed' ? 'failed' : 'draft', work.message || '口播稿已就绪，可以重新合成。', String(error?.message || error).slice(0, 1000), work.id, owner.key],
+          ).catch(() => {});
+          throw error;
+        }
+      }
       const renderId = await startWorkRender(owner, work);
-      return { work: workOut(await arow('SELECT * FROM junshi_workbench_video_works WHERE id=?', [workId])), renderId };
+      return { work: await loadVideoWorkOut(owner.key, workId), renderId };
+    }
+    if (sub1 === 'package' && method === 'GET') {
+      const row = await arow('SELECT * FROM junshi_workbench_video_packages WHERE owner_key=? AND work_id=? ORDER BY created_at DESC LIMIT 1', [owner.key, workId]);
+      return { package: row ? packageOut(row) : null };
+    }
+    if (sub1 === 'package' && method === 'POST') {
+      const pkg = await createVideoPackage(owner, work, ctx.body || {});
+      return { package: packageOut(pkg) };
     }
     if (sub1 === 'extract-frames' && method === 'POST') {
       rateLimit(owner.key);
@@ -4369,6 +5033,14 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     if (row.work_id) await aq("UPDATE junshi_workbench_video_works SET status='rendering', message='正在重试渲染…', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), row.work_id, owner.key]).catch(() => {});
     void runWorkbenchRender(owner, renderId, { job });
     return { render: renderOut(await arow('SELECT * FROM junshi_workbench_video_renders WHERE id=?', [renderId])) };
+  }
+
+  /* ── 十九期 · 发布包查询（前端轮询用；素材下载仍走 /assets/:id/file） ── */
+  if (rest.startsWith('/video/packages/') && method === 'GET') {
+    const packageId = decodeURIComponent(rest.slice('/video/packages/'.length));
+    const row = await arow('SELECT * FROM junshi_workbench_video_packages WHERE id=? AND owner_key=?', [packageId, owner.key]);
+    if (!row) throw errors.notFound('发布包不存在', 'NOT_FOUND');
+    return { package: packageOut(row) };
   }
 
   /* ── 音色库（2–15 秒参考音频；先传素材库再登记名称，与五期克隆音色互不影响） ── */
@@ -5189,36 +5861,11 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
   }
   if (rest === '/avatar/run' && method === 'POST') {
     renderRateLimit(owner.key);
-    const speech = text(ctx.body?.text);
-    if (!speech) throw errors.badRequest('请填写口播文案', 'VALIDATION_ERROR', { field: 'text' });
-    if (speech.length > 3000) throw errors.badRequest('口播文案最多 3000 字', 'VALIDATION_ERROR', { field: 'text' });
-    const speed = avatarSpeedProfile(ctx.body?.speed).value;
-    const voiceId = text(ctx.body?.voiceId);
-    const voiceRow = await arow('SELECT * FROM junshi_workbench_voices WHERE id=? AND owner_key=?', [voiceId, owner.key]);
-    if (!voiceRow) throw errors.notFound('音色不存在', 'NOT_FOUND');
-    if (voiceRow.status !== 'ready' || !voiceRow.speaker_id) throw errors.badRequest('这个音色还没克隆完成（或克隆失败）', 'WORKBENCH_VOICE_NOT_READY');
-    const imageAssetId = text(ctx.body?.imageAssetId);
-    const imageAssetRow = await arow('SELECT * FROM junshi_workbench_assets WHERE id=? AND owner_key=?', [imageAssetId, owner.key]);
-    if (!imageAssetRow) throw errors.notFound('形象照素材不存在', 'NOT_FOUND');
-    if (!/^image\//.test(String(imageAssetRow.mime_type || ''))) throw errors.badRequest('形象照需要是图片素材（人脸清晰、正面）', 'VALIDATION_ERROR');
-    const policy = await getAiProviderPolicy();
-    const config = await seedanceChannelConfig(policy?.channels);
-    if (!config) throw errors.badRequest('数字人渠道未配置（需要 seedance.nz 渠道 Key）', 'WORKBENCH_AVATAR_NOT_CONFIGURED');
     const accountId = await resolveAccountId(owner.key, ctx.body?.accountId);
-    const runId = id('jwav');
-    const at = nowIso();
-    const plan = estimateSpeechPlan(speech, speed);
-    if (plan.overLimit) {
-      throw errors.badRequest(`这段文案按当前语速约 ${plan.targetDuration} 秒、${plan.batchCount} 段，超过单次任务上限 ${AVATAR_MAX_SEGMENTS} 段；请拆成多条发布或缩短文案。`, 'WORKBENCH_AVATAR_TOO_LONG');
-    }
-    const segments = plan.segments.map((part, index) => ({ index: index + 1, text: part, status: 'pending', error: '', note: '' }));
-    await aq('INSERT INTO junshi_workbench_avatar_runs (id,owner_key,org_id,account_id,voice_id,speaker_id,image_asset_id,text,status,error,steps,segments,meta,speed,duration_seconds,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-      [runId, owner.key, owner.orgId, accountId, voiceId, voiceRow.speaker_id, imageAssetId, speech, 'running', '', '[]', JSON.stringify(segments), '{}', speed, 0, at, at]);
-    const job = jobStart(owner, '数字人口播', speech.slice(0, 60), { entityType: 'avatar_run', entityId: runId, payload: { speed } });
-    await job.promise;
-    void runTalkingHead(owner, { runId, text: speech, speakerId: voiceRow.speaker_id, voiceRow, imageAssetRow, speed, job })
-      .catch((error) => jobDone(job, 'failed', String(error?.message || error)).catch(() => {}));
-    return { run: avatarRunOut(await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=?', [runId])) };
+    const draft = await resolveTalkingHeadDraft(owner, ctx.body || {});
+    const prepared = await prepareAvatarRun(owner, draft, accountId);
+    const started = await createAvatarRun(owner, prepared);
+    return { run: avatarRunOut(await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=?', [started.runId])) };
   }
   const avatarRetryMatch = rest.match(/^\/avatar\/runs\/([^/]+)\/retry$/);
   if (avatarRetryMatch && method === 'POST') {
@@ -5231,15 +5878,26 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
     const failed = segments.filter((segment) => segment.status !== 'done').map((segment) => Number(segment.index));
     const targets = (requested.length ? requested : failed).filter((value) => segments.some((segment) => Number(segment.index) === value));
     renderRateLimit(owner.key);
+    const linkedWork = await arow('SELECT id, production_mode FROM junshi_workbench_video_works WHERE owner_key=? AND avatar_run_id=? ORDER BY created_at DESC LIMIT 1', [owner.key, runId]).catch(() => null);
+    if (linkedWork && runRow.status === 'succeeded') {
+      throw errors.badRequest('这条口播已经合成完成；要重做请回到第 2 步改稿后重新合成。', 'WORKBENCH_VIDEO_DONE');
+    }
     const previousJob = await arow("SELECT * FROM junshi_workbench_jobs WHERE owner_key=? AND entity_type='avatar_run' AND entity_id=? ORDER BY created_at DESC LIMIT 1", [owner.key, runId]).catch(() => null);
-    const job = jobStart(owner, '数字人口播（分段重试）', String(runRow.text || '').slice(0, 60), {
-      entityType: 'avatar_run', entityId: runId, payload: { segments: targets },
+    const job = jobStart(owner, linkedWork ? '口播成片（分段重试）' : '数字人口播（分段重试）', String(runRow.text || '').slice(0, 60), {
+      entityType: 'avatar_run', entityId: runId, payload: { segments: targets, ...(linkedWork ? { workId: linkedWork.id } : {}) },
       attempts: previousJob ? Number(previousJob.attempts || 0) + 1 : 0,
       retryOf: previousJob?.id || '',
     });
     await job.promise;
+    if (linkedWork) {
+      await aq("UPDATE junshi_workbench_video_works SET status='rendering', output_asset_id=NULL, message='正在重试口播合成…', error='', updated_at=? WHERE id=? AND owner_key=?", [nowIso(), linkedWork.id, owner.key]).catch(() => {});
+    }
     void runAvatarRetry(owner, runRow, job, targets.length ? targets : null)
-      .catch((error) => jobDone(job, 'failed', String(error?.message || error)).catch(() => {}));
+      .catch(async (error) => {
+        const message = String(error?.message || error);
+        await jobDone(job, 'failed', message).catch(() => {});
+        await syncTalkingHeadWork(owner, runId, { status: 'failed', error: message, text: runRow.text }).catch(() => {});
+      });
     return { run: avatarRunOut(await arow('SELECT * FROM junshi_workbench_avatar_runs WHERE id=?', [runId])), jobId: job.id, retriedSegments: targets };
   }
 

@@ -35,7 +35,7 @@ const MIME_EXTENSIONS = new Map([
   //    （见 fileAssets.js 的三条读口）——`<img src>` 不受影响（照样渲染），
   //    而"直接在地址栏打开这个 svg"会变成下载、不会在我们的域里执行它的脚本。
   ['image/svg+xml', ['.svg']],
-  ['text/plain', ['.txt']],
+  ['text/plain', ['.txt', '.srt']],
   ['text/csv', ['.csv']],
   ['application/zip', ['.zip']],
   ['application/vnd.openxmlformats-officedocument.presentationml.presentation', ['.pptx']],

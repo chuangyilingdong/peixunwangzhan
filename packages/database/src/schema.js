@@ -1513,6 +1513,10 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_video_works (
   org_id           TEXT,
   account_id       TEXT NOT NULL DEFAULT 'default',
   plan_id          TEXT NOT NULL DEFAULT '',
+  production_mode  TEXT NOT NULL DEFAULT 'storyboard',
+  talking_head     TEXT NOT NULL DEFAULT '{}',
+  avatar_run_id    TEXT,
+  auto_host        TEXT NOT NULL DEFAULT '{}',
   mode             TEXT NOT NULL DEFAULT 'generate',
   title            TEXT NOT NULL DEFAULT '',
   type             TEXT NOT NULL DEFAULT 'ecommerce',
@@ -1535,6 +1539,32 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_video_works (
   updated_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_vwork_owner ON junshi_workbench_video_works(owner_key, created_at DESC);
+
+-- 内容工作台十九期（2026-10-26）：视频包装与发布包。
+-- 一条任务可以有多次包装；前端默认取最新一条。原成片保留，包装产物单独入库。
+CREATE TABLE IF NOT EXISTS junshi_workbench_video_packages (
+  id               TEXT NOT NULL PRIMARY KEY,
+  owner_key        TEXT NOT NULL,
+  org_id           TEXT,
+  account_id       TEXT NOT NULL DEFAULT 'default',
+  work_id          TEXT NOT NULL,
+  render_id        TEXT NOT NULL DEFAULT '',
+  job_id           TEXT NOT NULL DEFAULT '',
+  status           TEXT NOT NULL DEFAULT 'running',
+  title            TEXT NOT NULL DEFAULT '',
+  description      TEXT NOT NULL DEFAULT '',
+  tags             TEXT NOT NULL DEFAULT '[]',
+  options          TEXT NOT NULL DEFAULT '{}',
+  video_asset_id   TEXT,
+  cover_asset_id   TEXT,
+  srt_asset_id     TEXT,
+  zip_asset_id     TEXT,
+  error            TEXT NOT NULL DEFAULT '',
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_pkg_owner ON junshi_workbench_video_packages(owner_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_junshi_wb_pkg_work ON junshi_workbench_video_packages(work_id, created_at DESC);
 
 -- 七期：音色库（2–15 秒参考音频；与五期数字人克隆音色 junshi_workbench_voices 区分）。
 CREATE TABLE IF NOT EXISTS junshi_workbench_voice_samples (
@@ -1693,6 +1723,20 @@ try { db.exec("ALTER TABLE junshi_workbench_messages ADD COLUMN plan_id TEXT NOT
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec("ALTER TABLE junshi_workbench_video_works ADD COLUMN plan_id TEXT NOT NULL DEFAULT ''"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
+// ── 二十期补列（2026-10-26）：视频任务的口播成片简易模式 ───────────────
+// production_mode: storyboard=编导稿分镜；talking_head=数字人口播（隐藏分镜）。
+// talking_head 存口播配置快照（text/voiceId/imageAssetId/speed/展示名），不是编导稿。
+for (const [column, ddl] of [
+  ['production_mode', "TEXT NOT NULL DEFAULT 'storyboard'"],
+  ['talking_head', "TEXT NOT NULL DEFAULT '{}'"],
+  ['avatar_run_id', 'TEXT'],
+  // 二十一期：一键托管状态（enabled/autoPackage/stage/confirmedAt/packagedAt）。
+  ['auto_host', "TEXT NOT NULL DEFAULT '{}'"],
+]) {
+  try { db.exec(`ALTER TABLE junshi_workbench_video_works ADD COLUMN ${column} ${ddl}`); }
+  catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+}
 
 // ── 十七期补列（2026-10-25）：对话附件 / 任务详情与重试 / 数字人语速与分段 ──────────
 try { db.exec("ALTER TABLE junshi_workbench_messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'"); }

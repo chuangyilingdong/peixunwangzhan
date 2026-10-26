@@ -224,12 +224,22 @@
     voiceSamples: [],
     videoWorkTimer: null,
     videoEstimateTimer: null,
+    videoTalkingHeadTimer: null,
     videoShotEditing: null,
     videoShotEdits: {},
     shotFrameUrls: {},
     // 十八期：任务列表 → 单任务专注制作。只有视频页打开具体任务时才存在。
     videoFocus: null,
     videoStep: 1,
+    // 十九期：视频包装与发布包（字幕/BGM/封面/标题/zip）。
+    videoPackages: {},
+    videoPackageLoading: '',
+    videoPackageTimer: null,
+    videoPackageSweepTimer: null,
+    videoPackageSweepWork: '',
+    hostedAutoAdvanced: {},
+    packageMediaUrls: {},
+    videoAdvancedOpen: false,
     // 十六期 · 内容方案卡（对齐原版 renderPlans：聊天产出方案 → 查看/改/确认制作/导出）
     plans: [],
     // 内容计划内部两个子视图：创作方案 / 周期计划。文案草稿页已按用户口径删除。
@@ -297,6 +307,14 @@
   function stopRenderPolling() {
     if (state.renderTimer) { clearInterval(state.renderTimer); state.renderTimer = null; }
   }
+  function stopVideoPackagePolling() {
+    if (state.videoPackageTimer) { clearInterval(state.videoPackageTimer); state.videoPackageTimer = null; }
+    state.videoPackageLoading = '';
+  }
+  function stopVideoPackageSweep() {
+    if (state.videoPackageSweepTimer) { clearInterval(state.videoPackageSweepTimer); state.videoPackageSweepTimer = null; }
+    state.videoPackageSweepWork = '';
+  }
 
   /* 一级导航按当前口径：8 个内容目的地 + 独立「历史任务」。
      使用设置从界面隐藏；文案草稿页删除；历史任务不再并入数据复盘。 */
@@ -317,7 +335,7 @@
     state.tab = tab;
     // 离开视频页就退出单任务专注；目的地导航永远回到任务列表。
     if (tab !== 'video') { state.videoFocus = null; state.videoStep = 1; }
-    if (tab !== 'video') { stopRenderPolling(); stopAvatarPolling(); stopVideoWorkPolling(); }
+    if (tab !== 'video') { stopRenderPolling(); stopAvatarPolling(); stopVideoWorkPolling(); stopVideoPackagePolling(); stopVideoPackageSweep(); }
     if (tab !== 'chat') stopWfPolling();
     if (tab !== 'plan') stopCyclePolling();
     if (tab !== 'assets') stopAssetPolling();
@@ -2440,8 +2458,17 @@
     { key: 'brief', label: '选题与参考', desc: '目标、模式和参考内容' },
     { key: 'script', label: '编导稿与分镜', desc: '口播、分镜和逐镜修改' },
     { key: 'render', label: '确认与渲染', desc: '核对素材与参数，再提交' },
-    { key: 'output', label: '成片与交付', desc: '预览、下载和归档' },
+    { key: 'output', label: '包装与发布', desc: '字幕、封面、标题和发布包' },
   ];
+  var TALKING_HEAD_STEPS = [
+    { key: 'brief', label: '口播与出镜', desc: '文案、音色和形象照' },
+    { key: 'script', label: '口播稿与分段', desc: '检查分段、时长和费用' },
+    { key: 'render', label: '确认与合成', desc: '核对音色、形象与费用' },
+    { key: 'output', label: '包装与发布', desc: '字幕、封面、标题和发布包' },
+  ];
+  function videoStepsFor(item) {
+    return item && item.productionMode === 'talking_head' ? TALKING_HEAD_STEPS : VIDEO_STEPS;
+  }
 
   function wbWorkStatusText(value) { return WB_WORK_STATUS[value] || value || '—'; }
   function videoFocusItem() {
@@ -2457,14 +2484,43 @@
   }
   function videoStepForWork(work) {
     if (!work) return 1;
+    var hostedReady = Boolean(work.autoHost && work.autoHost.enabled && work.autoHost.stage === 'awaiting_confirmation');
+    if (work.productionMode === 'talking_head') {
+      if (work.status === 'succeeded') return 4;
+      if (work.status === 'rendering' || work.status === 'failed') return 3;
+      return hostedReady ? 3 : 2;
+    }
     if (work.status === 'planning') return 2;
     if (work.status === 'rendering' || work.status === 'succeeded') return 4;
     if (work.status === 'failed') return work.directorScript && (work.directorScript.shots || []).length ? 4 : 2;
-    return 2;
+    return hostedReady ? 3 : 2;
   }
+  /** 托管状态横幅：总是明确告诉用户现在免费/已提交/已打包，避免误以为自动扣费。 */
+  function hostedBannerHtml(work) {
+    var host = (work && work.autoHost) || {};
+    if (!host.enabled) return '';
+    var stage = host.stage || 'preparing';
+    var text = '';
+    if (stage === 'preparing') text = '托管正在跑免费步骤：写稿、校验音色形象、算分段和费用。';
+    else if (stage === 'awaiting_confirmation') text = '托管已跑完免费步骤：' + (work.productionMode === 'talking_head' ? '口播稿、分段和费用' : '编导稿和渲染参数') + '已准备。确认后才会提交' + (work.productionMode === 'talking_head' ? '数字人合成' : '视频渲染') + '并计费。';
+    else if (stage === 'submitted') text = '托管已提交付费步骤，完成后会自动生成发布包。';
+    else if (stage === 'packaging') text = '成片已完成，托管正在自动生成字幕、封面和发布包。';
+    else if (stage === 'ready') text = '托管已完成：发布包已生成，可以直接下载。';
+    else if (stage === 'failed') text = '托管中断：' + (host.error || work.error || '请检查后重试') + '。';
+    if (!text) return '';
+    return '<div class="wb-host-banner' + (stage === 'failed' ? ' warn' : '') + '">' + ic('sparkle', 13) +
+      '<div><b>一键托管</b><p>' + esc(text) + '</p></div></div>';
+  }
+
   function videoStepAvailable(item, step) {
     if (!item) return false;
     if (state.videoFocus && state.videoFocus.kind === 'draft') return step === 1;
+    if (item.productionMode === 'talking_head') {
+      if (step === 1 || step === 2) return true;
+      if (step === 3) return item.status !== 'planning';
+      if (step === 4) return item.status === 'succeeded';
+      return false;
+    }
     if (step === 1 || step === 2) return true;
     if (step === 3) return item.status !== 'planning';
     if (step === 4) return ['rendering', 'succeeded', 'failed'].indexOf(item.status) >= 0;
@@ -2476,11 +2532,12 @@
     if (work.status === 'rendering') return 75;
     if (work.status === 'planning') return 50;
     if (work.status === 'draft') return 50;
-    if (work.status === 'failed') return (work.directorScript && (work.directorScript.shots || []).length) ? 75 : 50;
+    if (work.status === 'failed') return work.productionMode === 'talking_head' ? 75 : ((work.directorScript && (work.directorScript.shots || []).length) ? 75 : 50);
     return 25;
   }
-  function videoStepLabel(step) {
-    var row = VIDEO_STEPS[Number(step) - 1] || VIDEO_STEPS[0];
+  function videoStepLabel(step, item) {
+    var rows = videoStepsFor(item);
+    var row = rows[Number(step) - 1] || rows[0];
     return row.label;
   }
   function videoDraftTitle(draft) {
@@ -2492,6 +2549,8 @@
   function openVideoFocus(kind, id, step) {
     if (!kind || !id) return;
     if (state.tab !== 'video') setTab('video');
+    stopVideoPackagePolling();
+    if (kind === 'work') delete state.videoPackages[id];
     state.videoFocus = { kind: kind, id: id };
     if (kind === 'work') {
       var work = state.videoWorks.filter(function (item) { return item.id === id; })[0] || null;
@@ -2507,6 +2566,7 @@
     state.videoFocus = null;
     state.videoStep = 1;
     state.videoShotEditing = null;
+    stopVideoPackagePolling();
     renderTopbar();
     if (state.tab === 'video') renderVideo();
     syncVideoChrome();
@@ -2524,7 +2584,7 @@
     var sub = $('#wb-title-sub');
     if (active && item) {
       if (crumb) crumb.textContent = '视频创作 / ' + (state.videoFocus.kind === 'draft' ? videoDraftTitle(item) : videoWorkTitle(item));
-      if (sub) sub.textContent = '第 ' + state.videoStep + '/4 步 · ' + videoStepLabel(state.videoStep);
+      if (sub) sub.textContent = '第 ' + state.videoStep + '/4 步 · ' + videoStepLabel(state.videoStep, item);
     } else {
       if (crumb) crumb.textContent = TAB_META.video.label;
       if (sub) sub.textContent = TAB_META.video.sub;
@@ -2544,8 +2604,9 @@
     }
     var isDraft = state.videoFocus.kind === 'draft';
     var work = isDraft ? null : item;
+    var talking = Boolean(item.productionMode === 'talking_head');
     if (sub) sub.textContent = isDraft ? videoDraftTitle(item) : videoWorkTitle(item);
-    stepsBox.innerHTML = VIDEO_STEPS.map(function (row, index) {
+    stepsBox.innerHTML = videoStepsFor(item).map(function (row, index) {
       var step = index + 1;
       var available = videoStepAvailable(item, step);
       var done = step < state.videoStep || Boolean(work && work.status === 'succeeded' && step !== state.videoStep);
@@ -2559,7 +2620,7 @@
       button.onclick = function () {
         var step = Number(button.dataset.wbStep);
         if (!videoStepAvailable(item, step)) {
-          toast(step === 4 ? '完成编导稿并确认渲染后，这里会出现成片。' : '先完成前面的步骤。', 'error');
+          toast(step === 4 ? (talking ? '口播合成完成后，这里才能包装发布。' : '完成编导稿并确认渲染后，这里会出现成片。') : '先完成前面的步骤。', 'error');
           return;
         }
         state.videoStep = step;
@@ -2570,12 +2631,18 @@
     });
     var status = isDraft ? '待配置' : wbWorkStatusText(item.status);
     var hint = isDraft
-      ? '先写清目标、模式和参考，再生成编导稿。'
-      : item.status === 'planning' ? '正在写编导稿，完成后可在第 2 步修改。'
-        : item.status === 'failed' ? '这一步失败了，原因会显示在当前步骤。'
-          : item.status === 'succeeded' ? '成片已完成，可以预览和下载。'
-            : item.status === 'rendering' ? '正在渲染，完成后自动出现在第 4 步。'
-              : '核对编导稿和费用后再提交渲染。';
+      ? (talking ? '写清口播文案，选好音色和形象照，再核对分段。' : '先写清目标、模式和参考，再生成编导稿。')
+      : talking
+        ? (item.status === 'draft' ? '先核对口播分段，再确认合成；这一步不扣费。'
+          : item.status === 'planning' ? '正在准备口播稿。'
+            : item.status === 'failed' ? '口播合成失败了，原因会显示在当前步骤。'
+              : item.status === 'succeeded' ? '口播成片已完成，可以包装发布了。'
+                : '正在分段合成口播，完成后自动进入第 4 步。')
+        : item.status === 'planning' ? '正在写编导稿，完成后可在第 2 步修改。'
+          : item.status === 'failed' ? '这一步失败了，原因会显示在当前步骤。'
+            : item.status === 'succeeded' ? '成片已完成，可以预览和下载。'
+              : item.status === 'rendering' ? '正在渲染，完成后自动出现在第 4 步。'
+                : '核对编导稿和费用后再提交渲染。';
     foot.innerHTML = '<b>' + esc(status) + '</b><span>' + esc(hint) + '</span>';
   }
   function wbTypeMeta(type) { return WB_VIDEO_TYPES[type] || WB_VIDEO_TYPES.ecommerce; }
@@ -2593,18 +2660,22 @@
   function loadVideoDrafts() {
     try {
       var rows = JSON.parse(localStorage.getItem(videoDraftKey()) || '[]');
-      state.videoDrafts = Array.isArray(rows) ? rows : [];
+      state.videoDrafts = Array.isArray(rows) ? rows.map(function (row) {
+        return Object.assign({ productionMode: 'storyboard', speech: '', voiceId: '', imageAssetId: '', speed: 'natural', autoHost: false, topic: '' }, row);
+      }) : [];
     } catch (e) { state.videoDrafts = []; }
   }
   function saveVideoDrafts() {
     try { localStorage.setItem(videoDraftKey(), JSON.stringify(state.videoDrafts.slice(-8))); } catch (e) { /* 隐私模式忽略 */ }
   }
-  function newVideoDraft(mode) {
+  function newVideoDraft(mode, productionMode, options) {
     var draft = {
       id: 'draft-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6), mode: mode, status: 'configuring',
+      productionMode: productionMode || 'storyboard',
+      autoHost: Boolean(options && options.autoHost), topic: '',
       type: 'ecommerce', subtype: '口播带货', hookStrategy: 'auto', model: '', durationSeconds: 15,
       resolution: '768P', ratio: '9:16', brief: '', assetRefs: [], reference: '', sourceKind: 'text',
-      sourceId: '',
+      sourceId: '', speech: '', voiceId: '', imageAssetId: '', speed: 'natural',
     };
     state.videoDrafts.push(draft);
     saveVideoDrafts();
@@ -2641,14 +2712,18 @@
       call('/video/works?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [] }; }),
       call('/video/renders').catch(function () { return { items: [] }; }),
       call('/voice-samples?accountId=' + encodeURIComponent(accountId)).catch(function () { return { items: [] }; }),
+      call('/voices').catch(function () { return { items: [] }; }),
     ]);
     if (state.accountId !== accountId) return;
+    var previousWorks = state.videoWorks;
     state.videoWorks = results[0].items || [];
     state.videoQueue = results[1].items || [];
     state.voiceSamples = results[2].items || [];
+    state.voices = results[3].items || state.voices;
     var bucket = {};
     state.videoQueue.forEach(function (item) { if (item.workId) { (bucket[item.workId] = bucket[item.workId] || []).push(item); } });
     state.workRenders = bucket;
+    maybeAdvanceHostedFocus(previousWorks);
     if (state.tab === 'video' && !state.videoShotEditing) { renderVideo(); hydrateWorkVideos(); }
     startVideoWorkPolling();
   }
@@ -2657,13 +2732,34 @@
       call('/video/works?accountId=' + encodeURIComponent(state.accountId)).catch(function () { return { items: [] }; }),
       call('/video/renders').catch(function () { return { items: [] }; }),
     ]);
+    var previousWorks = state.videoWorks;
     state.videoWorks = results[0].items || [];
     state.videoQueue = results[1].items || [];
     var bucket = {};
     state.videoQueue.forEach(function (item) { if (item.workId) { (bucket[item.workId] = bucket[item.workId] || []).push(item); } });
     state.workRenders = bucket;
+    maybeAdvanceHostedFocus(previousWorks);
     if (state.tab === 'video' && !state.videoShotEditing) { renderVideo(); hydrateWorkVideos(); }
     startVideoWorkPolling();
+  }
+  /** 托管免费步骤刚完成/成片刚完成时，自动把用户带到确认页或包装页；只推进一次。 */
+  function maybeAdvanceHostedFocus(previousWorks) {
+    if (state.tab !== 'video' || !state.videoFocus || state.videoFocus.kind !== 'work') return;
+    var workId = state.videoFocus.id;
+    var prev = (previousWorks || []).filter(function (item) { return item.id === workId; })[0] || null;
+    var next = state.videoWorks.filter(function (item) { return item.id === workId; })[0] || null;
+    if (!next || !next.autoHost || !next.autoHost.enabled) return;
+    var key = workId + ':' + String(next.autoHost.stage || '');
+    if (state.hostedAutoAdvanced[key]) return;
+    if (prev && prev.status === 'planning' && next.status === 'draft' && state.videoStep < 3) {
+      state.hostedAutoAdvanced[key] = true;
+      state.videoStep = 3;
+      toast('托管已准备好文案、分段和费用；确认后才会提交并计费', 'success');
+    } else if (prev && prev.status === 'rendering' && next.status === 'succeeded' && state.videoStep === 3) {
+      state.hostedAutoAdvanced[key] = true;
+      state.videoStep = 4;
+      toast('成片已完成，托管正在自动生成发布包', 'success');
+    }
   }
   function startVideoWorkPolling() {
     var busy = state.videoWorks.some(function (item) { return item.status === 'planning' || item.status === 'rendering'; });
@@ -2687,6 +2783,36 @@
         var blob = await fetchBlob(API + '/assets/' + encodeURIComponent(video.dataset.workVideo) + '/file');
         video.src = URL.createObjectURL(blob);
       } catch (e) { /* 视频加载失败保留外壳 */ }
+    }
+  }
+  async function hydratePackageMedia() {
+    var images = $$('[data-pkg-cover]');
+    for (var i = 0; i < images.length; i++) {
+      var img = images[i];
+      var coverId = img.dataset.pkgCover;
+      if (!coverId || img.dataset.loaded) continue;
+      img.dataset.loaded = '1';
+      if (state.packageMediaUrls[coverId]) { img.src = state.packageMediaUrls[coverId]; continue; }
+      try {
+        var coverBlob = await fetchBlob(API + '/assets/' + encodeURIComponent(coverId) + '/file');
+        var coverUrl = URL.createObjectURL(coverBlob);
+        state.packageMediaUrls[coverId] = coverUrl;
+        img.src = coverUrl;
+      } catch (e) { /* 封面加载失败保留占位 */ }
+    }
+    var videos = $$('[data-pkg-video]');
+    for (var j = 0; j < videos.length; j++) {
+      var video = videos[j];
+      var videoId = video.dataset.pkgVideo;
+      if (!videoId || video.dataset.loaded) continue;
+      video.dataset.loaded = '1';
+      if (state.packageMediaUrls[videoId]) { video.src = state.packageMediaUrls[videoId]; continue; }
+      try {
+        var videoBlob = await fetchBlob(API + '/assets/' + encodeURIComponent(videoId) + '/file');
+        var videoUrl = URL.createObjectURL(videoBlob);
+        state.packageMediaUrls[videoId] = videoUrl;
+        video.src = videoUrl;
+      } catch (e) { /* 包装视频加载失败保留外壳 */ }
     }
   }
   async function hydrateShotFrames() {
@@ -2767,6 +2893,22 @@
       var node = nodes[i];
       var work = state.videoWorks.filter(function (item) { return item.id === node.dataset.wbVWorkEstimate; })[0];
       if (!work || (work.status !== 'draft' && work.status !== 'failed')) continue;
+      if (work.productionMode === 'talking_head') {
+        var th = work.talkingHead || {};
+        if (!th.text) continue;
+        try {
+          var thEstimate = await estimateTalkingHead(th.text, th.speed);
+          var thPlan = thEstimate.plan || {};
+          var thRange = thEstimate.minFen === thEstimate.maxFen
+            ? (Number(thEstimate.totalFen || 0) / 100).toFixed(2) + ' 元'
+            : (Number(thEstimate.minFen || 0) / 100).toFixed(2) + '–' + (Number(thEstimate.maxFen || 0) / 100).toFixed(2) + ' 元';
+          node.innerHTML = '<span class="wb-note">' + ic('bulb', 11) + ' 口播合成预估 <b>' + thRange + '</b>（预计 ' + esc(thPlan.targetDuration || 0) + ' 秒 · ' + esc(thPlan.batchCount || 1) + ' 段）</span>' +
+            '<details class="wb-avatar-estimate-items"><summary>口径</summary><span>' + esc(thEstimate.note || '') + '</span></details>';
+        } catch (error) {
+          node.innerHTML = '<span class="wb-muted">暂时估不出价格：' + esc(error.message || '渠道未配置') + '</span>';
+        }
+        continue;
+      }
       try {
         var result = await call('/estimate/video', {
           method: 'POST',
@@ -2783,17 +2925,228 @@
       }
     }
   }
+  /* ── 二十期 · 口播成片简易模式（复用数字人链路，隐藏分镜） ── */
+  function talkingHeadSpeeds() {
+    return [
+      ['natural', '自然 · 约50字/10秒'],
+      ['slightly_fast', '稍快 · 约60字/10秒'],
+      ['fast', '较快 · 约75字/10秒'],
+      ['extreme', '极快 · 约90字/10秒'],
+    ];
+  }
+  function videoReadyVoices() {
+    return (state.voices || []).filter(function (item) { return item.status === 'ready'; });
+  }
+  function videoImageAssets() {
+    return (state.assets || []).filter(function (item) { return item.kind === 'image'; });
+  }
+  function talkingHeadSegmentsHtml(plan) {
+    var segments = (plan && plan.segments) || [];
+    if (!segments.length) return '<p class="wb-muted">填入口播文案后，这里会按标点和语速预览分段。</p>';
+    var cps = Number(plan.charsPerSecond || 5);
+    return '<div class="wb-th-segments">' + segments.map(function (text, index) {
+      var chars = String(text || '').replace(/\s/g, '').length;
+      var seconds = cps > 0 ? chars / cps : 0;
+      return '<div class="wb-th-segment"><b>第 ' + (index + 1) + ' 段</b><span>约 ' + seconds.toFixed(1) + ' 秒</span><p>' + esc(text) + '</p></div>';
+    }).join('') + '</div>';
+  }
+  function talkingHeadEstimateHtml(estimate, plan, label) {
+    var items = (estimate.items || []).map(function (item) {
+      return '<span>' + esc(item.label) + '：约 ' + (Number(item.fen || 0) / 100).toFixed(2) + ' 元</span>';
+    }).join('');
+    var range = estimate.minFen === estimate.maxFen
+      ? (Number(estimate.totalFen || 0) / 100).toFixed(2) + ' 元'
+      : (Number(estimate.minFen || 0) / 100).toFixed(2) + '–' + (Number(estimate.maxFen || 0) / 100).toFixed(2) + ' 元';
+    return '<div class="wb-avatar-estimate-head"><b>预计 ' + esc(plan.targetDuration || 0) + ' 秒 · ' + esc(plan.batchCount || 1) + ' 段</b>' +
+      '<span class="wb-tag">' + esc(label || '预估') + ' ' + range + '</span></div>' +
+      (plan.overLimit ? '<p class="err">超过单次 ' + esc(plan.maxSegments || 30) + ' 段上限，请拆成多条或缩短文案。</p>' : '') +
+      '<p class="wb-note">' + esc(estimate.note || '') + '</p>' +
+      (items ? '<details class="wb-avatar-estimate-items"><summary>费用明细与口径</summary>' + items + '</details>' : '');
+  }
+  async function estimateTalkingHead(text, speed) {
+    var result = await call('/estimate/avatar', { method: 'POST', body: { text: text, speed: speed || 'natural' } });
+    return result.estimate || {};
+  }
+  function scheduleTalkingHeadDraftEstimate(draftId) {
+    if (state.videoTalkingHeadTimer) clearTimeout(state.videoTalkingHeadTimer);
+    state.videoTalkingHeadTimer = setTimeout(function () {
+      void updateTalkingHeadDraftEstimate(draftId);
+    }, 350);
+  }
+  async function updateTalkingHeadDraftEstimate(draftId) {
+    var draft = findVideoDraft(draftId);
+    var node = $('[data-wb-th-draft-estimate="' + draftId + '"]');
+    if (!draft || !node) return;
+    var speech = String(draft.speech || '').trim();
+    if (!speech) {
+      node.innerHTML = '<span class="wb-muted">填入口播文案后，这里会显示预计时长、分段数和参考费用。</span>';
+      return;
+    }
+    node.innerHTML = '<span class="wb-muted">' + ic('loader', 11) + ' 正在按语速估算…</span>';
+    try {
+      var estimate = await estimateTalkingHead(speech, draft.speed);
+      if (!findVideoDraft(draftId)) return;
+      node.innerHTML = talkingHeadEstimateHtml(estimate, estimate.plan || {}, '预估');
+    } catch (error) {
+      node.innerHTML = '<span class="wb-muted">暂时估不出价格：' + esc(error.message || '渠道未配置') + '；确认合成时以上游实际扣费为准。</span>';
+    }
+  }
+  function refreshTalkingHeadDraftEstimates() {
+    $$('[data-wb-th-draft-estimate]').forEach(function (node) {
+      void updateTalkingHeadDraftEstimate(node.dataset.wbThDraftEstimate);
+    });
+  }
+  function refreshTalkingHeadWorkEstimates() {
+    $$('[data-wb-th-work-estimate]').forEach(function (node) {
+      var work = state.videoWorks.filter(function (item) { return item.id === node.dataset.wbThWorkEstimate; })[0];
+      var th = (work && work.talkingHead) || {};
+      if (work && th.text) void updateTalkingHeadWorkEstimate(work.id, th.text, th.speed);
+    });
+  }
+  function scheduleTalkingHeadWorkEstimate(workId, text, speed) {
+    if (state.videoTalkingHeadTimer) clearTimeout(state.videoTalkingHeadTimer);
+    state.videoTalkingHeadTimer = setTimeout(function () {
+      void updateTalkingHeadWorkEstimate(workId, text, speed);
+    }, 350);
+  }
+  async function updateTalkingHeadWorkEstimate(workId, text, speed) {
+    var node = $('[data-wb-th-work-estimate="' + workId + '"]');
+    var segmentsNode = $('[data-wb-th-segments="' + workId + '"]');
+    if (!node) return;
+    if (!String(text || '').trim()) {
+      node.innerHTML = '<span class="wb-muted">填入口播文案后显示预计时长和费用。</span>';
+      if (segmentsNode) segmentsNode.innerHTML = '<p class="wb-muted">还没有分段。</p>';
+      return;
+    }
+    node.innerHTML = '<span class="wb-muted">' + ic('loader', 11) + ' 正在按语速估算…</span>';
+    try {
+      var estimate = await estimateTalkingHead(text, speed);
+      var plan = estimate.plan || {};
+      node.innerHTML = talkingHeadEstimateHtml(estimate, plan, '确认前预估');
+      if (segmentsNode) segmentsNode.innerHTML = talkingHeadSegmentsHtml(plan);
+    } catch (error) {
+      node.innerHTML = '<span class="wb-muted">暂时估不出价格：' + esc(error.message || '渠道未配置') + '</span>';
+    }
+  }
+  function talkingHeadVoiceOptions(selected) {
+    var voices = videoReadyVoices();
+    return voices.length ? voices.map(function (voice) {
+      return '<option value="' + esc(voice.id) + '"' + (selected === voice.id ? ' selected' : '') + '>' + esc(voice.name || '我的音色') +
+        (voice.mode === 'reference' ? '（参考直出）' : '') + '</option>';
+    }).join('') : '<option value="">（先克隆一个音色）</option>';
+  }
+  function talkingHeadImageOptions(selected) {
+    var images = videoImageAssets();
+    return images.length ? images.slice(0, 50).map(function (asset) {
+      return '<option value="' + esc(asset.id) + '"' + (selected === asset.id ? ' selected' : '') + '>' + esc(asset.fileName || '形象照') + '</option>';
+    }).join('') : '<option value="">（素材库里还没有图片）</option>';
+  }
+  function renderTalkingHeadDraftCard(draft, options) {
+    var focus = Boolean(options && options.focus);
+    var voices = videoReadyVoices();
+    var images = videoImageAssets();
+    if (!voices.some(function (item) { return item.id === draft.voiceId; })) draft.voiceId = voices[0] ? voices[0].id : '';
+    if (!images.some(function (item) { return item.id === draft.imageAssetId; })) draft.imageAssetId = images[0] ? images[0].id : '';
+    saveVideoDrafts();
+    var missing = !voices.length || !images.length;
+    var typeSummary = (wbTypeMeta(draft.type).label || '内容方向') + ' · ' + (draft.subtype || '未选细分');
+    var types = '<details class="wb-v-advanced"' + (state.videoAdvancedOpen ? ' open' : '') + '><summary><span>内容方向（可选，影响标签建议）</span><small>' + esc(typeSummary) + '</small></summary>' +
+      '<div class="wb-form" style="margin-top:8px">' +
+      '<div class="wb-field full"><span>内容方向</span><div class="wb-chips">' + wbTypeTabs(draft) + '</div></div>' +
+      '<div class="wb-field full"><span>细分方向</span><div class="wb-chips">' + wbSubtypeChips(draft) + '</div></div>' +
+      '</div></details>';
+    var readiness = '';
+    if (!voices.length) readiness += '<p class="wb-note">还没有可用音色。可以先克隆一段 10–30 秒人声；上游克隆不可用时会自动降级为参考音频直出。</p>';
+    if (!images.length) readiness += '<p class="wb-note">素材库里还没有图片。上传一张正面、人脸清晰的形象照就能用。</p>';
+    return '<article class="wb-card wb-v-config" data-wb-v-draft-card="' + esc(draft.id) + '">' +
+      '<div class="wb-card-head"><div><span class="wb-step-kicker">第 1 步 · 口播与出镜</span><h3>口播成片 · 新任务</h3><p>不用写分镜：把口播稿粘进来，选音色和形象照，系统会按语速自动分段、逐段对口型，最后拼成一条完整视频。</p></div>' +
+      '<button class="btn" type="button" data-wb-v-draft="discard" data-id="' + esc(draft.id) + '">取消</button></div>' +
+      '<label class="wb-field full"><span>口播文案（会自动分段，不用自己切）</span><textarea data-wb-v-field="speech" data-draft="' + esc(draft.id) + '" maxlength="3000" rows="7" placeholder="把要口播的完整文案粘进来，例如：暑期班报名开始了，前 20 名送两节体验课…">' + esc(draft.speech || '') + '</textarea></label>' +
+      '<div class="wb-form">' +
+      '<label class="wb-field"><span>音色</span><select data-wb-v-field="voiceId" data-draft="' + esc(draft.id) + '">' + talkingHeadVoiceOptions(draft.voiceId) + '</select></label>' +
+      '<label class="wb-field"><span>形象照（正面人脸清晰）</span><select data-wb-v-field="imageAssetId" data-draft="' + esc(draft.id) + '">' + talkingHeadImageOptions(draft.imageAssetId) + '</select></label>' +
+      '<label class="wb-field"><span>语速</span><select data-wb-v-field="speed" data-draft="' + esc(draft.id) + '">' + talkingHeadSpeeds().map(function (row) {
+        return '<option value="' + row[0] + '"' + (draft.speed === row[0] ? ' selected' : '') + '>' + row[1] + '</option>';
+      }).join('') + '</select></label>' +
+      '</div>' + readiness + types +
+      '<div class="wb-field full wb-v-estimate" data-wb-th-draft-estimate="' + esc(draft.id) + '"><span class="wb-muted">填入口播文案后显示预计时长和费用。</span></div>' +
+      '<div class="wb-field full wb-actions">' +
+      '<button class="btn primary" type="button" data-wb-v-action="start" data-id="' + esc(draft.id) + '"' + (missing ? ' disabled' : '') + '>' + ic('video', 13) + '生成口播稿 →</button>' +
+      '<button class="btn" type="button" data-th-clone-voice>克隆新音色</button>' +
+      '<button class="btn" type="button" data-th-refresh-voices>刷新音色</button>' +
+      '<button class="btn" type="button" data-th-goto-assets>去素材库上传形象照</button>' +
+      '<span class="wb-note">这一步不扣费；下一步核对分段和费用后才开始合成。</span></div></article>';
+  }
+
+  /** 二十一期 · 一键托管：只写主题，免费步骤自动跑完并停在确认页。 */
+  function renderHostedDraftCard(draft) {
+    var talking = draft.productionMode === 'talking_head';
+    var voices = videoReadyVoices();
+    var images = videoImageAssets();
+    if (talking) {
+      if (!voices.some(function (item) { return item.id === draft.voiceId; })) draft.voiceId = voices[0] ? voices[0].id : '';
+      if (!images.some(function (item) { return item.id === draft.imageAssetId; })) draft.imageAssetId = images[0] ? images[0].id : '';
+      saveVideoDrafts();
+    }
+    var missing = talking && (!voices.length || !images.length);
+    var typeSummary = (wbTypeMeta(draft.type).label || '内容方向') + ' · ' + (draft.subtype || '未选细分');
+    var modeChips = '<div class="wb-chips">' +
+      '<button type="button" class="chip' + (talking ? ' on' : '') + '" data-wb-v-choice="productionMode" data-draft="' + esc(draft.id) + '" data-value="talking_head">' + ic('video', 11) + '口播成片</button>' +
+      '<button type="button" class="chip' + (!talking ? ' on' : '') + '" data-wb-v-choice="productionMode" data-draft="' + esc(draft.id) + '" data-value="storyboard">' + ic('sparkle', 11) + '分镜成片</button>' +
+      '</div>';
+    var assetFields = talking
+      ? '<div class="wb-form">' +
+        '<label class="wb-field"><span>音色</span><select data-wb-v-field="voiceId" data-draft="' + esc(draft.id) + '">' + talkingHeadVoiceOptions(draft.voiceId) + '</select></label>' +
+        '<label class="wb-field"><span>形象照（正面人脸清晰）</span><select data-wb-v-field="imageAssetId" data-draft="' + esc(draft.id) + '">' + talkingHeadImageOptions(draft.imageAssetId) + '</select></label>' +
+        '<label class="wb-field"><span>语速</span><select data-wb-v-field="speed" data-draft="' + esc(draft.id) + '">' + talkingHeadSpeeds().map(function (row) {
+          return '<option value="' + row[0] + '"' + (draft.speed === row[0] ? ' selected' : '') + '>' + row[1] + '</option>';
+        }).join('') + '</select></label></div>'
+      : '<div class="wb-form">' +
+        '<label class="wb-field"><span>目标时长</span><select data-wb-v-field="durationSeconds" data-draft="' + esc(draft.id) + '">' +
+        [10, 15, 30, 45, 60].map(function (n) { return '<option value="' + n + '"' + (Number(draft.durationSeconds) === n ? ' selected' : '') + '>' + n + ' 秒</option>'; }).join('') +
+        '</select></label>' +
+        '<label class="wb-field"><span>清晰度</span><select data-wb-v-field="resolution" data-draft="' + esc(draft.id) + '">' +
+        [['480P', '480P（更快）'], ['768P', '768P（推荐）'], ['1080P', '1080P（更清晰）']].map(function (row) {
+          return '<option value="' + row[0] + '"' + (draft.resolution === row[0] ? ' selected' : '') + '>' + row[1] + '</option>';
+        }).join('') + '</select></label></div>';
+    var readiness = '';
+    if (talking && !voices.length) readiness += '<p class="wb-note">还没有可用音色。先克隆一段 10–30 秒人声；上游克隆不可用时会自动降级为参考音频直出。</p>';
+    if (talking && !images.length) readiness += '<p class="wb-note">素材库里还没有图片。上传一张正面、人脸清晰的形象照就能用。</p>';
+    var types = '<details class="wb-v-advanced"' + (state.videoAdvancedOpen ? ' open' : '') + '><summary><span>内容方向（可选，影响写稿口径）</span><small>' + esc(typeSummary) + '</small></summary>' +
+      '<div class="wb-form" style="margin-top:8px">' +
+      '<div class="wb-field full"><span>内容方向</span><div class="wb-chips">' + wbTypeTabs(draft) + '</div></div>' +
+      '<div class="wb-field full"><span>细分方向</span><div class="wb-chips">' + wbSubtypeChips(draft) + '</div></div>' +
+      '</div></details>';
+    return '<article class="wb-card wb-v-config wb-host-config" data-wb-v-draft-card="' + esc(draft.id) + '">' +
+      '<div class="wb-card-head"><div><span class="wb-step-kicker">一键托管 · 自动准备</span><h3>' + (talking ? '口播成片' : '分镜成片') + ' · 托管新任务</h3>' +
+      '<p>只写一个主题：托管会自动写' + (talking ? '口播稿' : '编导稿') + '、选音色和形象照、算分段和费用，然后停在确认页。确认之前不会提交渲染或数字人合成，也不会计费。</p></div>' +
+      '<button class="btn" type="button" data-wb-v-draft="discard" data-id="' + esc(draft.id) + '">取消</button></div>' +
+      '<div class="wb-field full"><span>制作方式</span>' + modeChips + '</div>' +
+      '<label class="wb-field full"><span>这次想讲什么（主题、卖点、家长痛点都可以）</span><textarea data-wb-v-field="topic" data-draft="' + esc(draft.id) + '" maxlength="500" rows="4" placeholder="例如：暑假班体验课怎么跟家长讲清楚；主打美术课，家长总说课程贵">' + esc(draft.topic || '') + '</textarea></label>' +
+      assetFields + readiness + types +
+      '<div class="wb-field full wb-actions" style="margin-top:10px">' +
+      '<button class="btn primary" type="button" data-wb-v-action="start" data-id="' + esc(draft.id) + '"' + (missing ? ' disabled' : '') + '>' + ic('sparkle', 13) + '开始托管 →</button>' +
+      '<button class="btn" type="button" data-th-clone-voice data-draft="' + esc(draft.id) + '">克隆新音色</button>' +
+      '<button class="btn" type="button" data-th-refresh-voices data-draft="' + esc(draft.id) + '">刷新音色</button>' +
+      '<button class="btn" type="button" data-th-goto-assets data-draft="' + esc(draft.id) + '">去素材库上传形象照</button>' +
+      '<span class="wb-note">免费步骤跑完会自动跳到确认页；只有一次付费确认。</span></div></article>';
+  }
+
   function renderVideoDraftCard(draft, options) {
     var focus = Boolean(options && options.focus);
-    var head = '<div class="wb-card-head"><div><span class="wb-step-kicker">第 1 步 · 选题与参考</span><h3>' + esc(WB_VIDEO_MODES[draft.mode] || '生成') + '模式 · 新任务</h3><p>内容方向、开场方式和参数一次选完；素材和音色从下方添加。</p></div>' +
+    var head = '<div class="wb-card-head"><div><span class="wb-step-kicker">第 1 步 · 选题与参考</span><h3>' + esc(WB_VIDEO_MODES[draft.mode] || '生成') + '模式 · 新任务</h3><p>先写想做什么；内容方向、开场方式和参数已按账号预选，展开「高级设置」可改。</p></div>' +
       '<button class="btn" type="button" data-wb-v-draft="discard" data-id="' + esc(draft.id) + '">取消</button></div>';
-    var types = '<div class="wb-field full"><span>内容方向</span><div class="wb-chips">' + wbTypeTabs(draft) + '</div></div>' +
+    var typeSummary = (wbTypeMeta(draft.type).label || '内容方向') + ' · ' + (draft.subtype || '未选细分') + ' · ' + wbHookLabel(draft.hookStrategy);
+    var types = '<details class="wb-v-advanced"' + (state.videoAdvancedOpen ? ' open' : '') + '><summary><span>高级设置</span><small>' + esc(typeSummary) + '</small></summary>' +
+      '<div class="wb-form" style="margin-top:8px">' +
+      '<div class="wb-field full"><span>内容方向</span><div class="wb-chips">' + wbTypeTabs(draft) + '</div></div>' +
       '<div class="wb-field full"><span>细分方向</span><div class="wb-chips">' + wbSubtypeChips(draft) + '</div></div>' +
-      '<div class="wb-field full"><span>开场方式（只控制前段切入）</span><div class="wb-chips">' + wbHookChips(draft) + '</div></div>';
+      '<div class="wb-field full"><span>开场方式（只控制前段切入）</span><div class="wb-chips">' + wbHookChips(draft) + '</div></div>' +
+      '</div></details>';
     var body = '';
     if (draft.mode === 'generate') {
-      body = head + types +
-        '<label class="wb-field full"><span>想做什么（卖点、人物、台词、画面要求）</span><textarea data-wb-v-field="brief" data-draft="' + esc(draft.id) + '" placeholder="例如：主打美术体验课，妈妈带孩子出镜，结尾引导评论区领体验名额">' + esc(draft.brief || '') + '</textarea></label>';
+      body = head +
+        '<label class="wb-field full"><span>想做什么（卖点、人物、台词、画面要求）</span><textarea data-wb-v-field="brief" data-draft="' + esc(draft.id) + '" placeholder="例如：主打美术体验课，妈妈带孩子出镜，结尾引导评论区领体验名额">' + esc(draft.brief || '') + '</textarea></label>' + types;
     } else if (draft.mode === 'replicate') {
       var transcriptOptions = state.transcripts.map(function (item) {
         return '<option value="' + esc(item.id) + '"' + (draft.sourceId === item.id ? ' selected' : '') + '>' + esc(item.title || item.nickname || '转写档案') + '（' + esc(fmtDate(item.createdAt)) + '）</option>';
@@ -2801,12 +3154,12 @@
       var sourceBody = draft.sourceKind === 'transcript'
         ? '<select data-wb-v-field="sourceId" data-draft="' + esc(draft.id) + '">' + (transcriptOptions || '<option value="">（还没有转写档案，先去「素材」采集或上传）</option>') + '</select>'
         : '<textarea data-wb-v-field="reference" data-draft="' + esc(draft.id) + '" placeholder="粘贴抖音分享内容/作品链接，或参考视频的口播文字与结构说明">' + esc(draft.reference || '') + '</textarea>';
-      body = head + types +
+      body = head +
         '<div class="wb-field full"><span>参考来源</span><div class="wb-chips">' +
         '<button type="button" class="chip' + (draft.sourceKind === 'transcript' ? ' on' : '') + '" data-wb-v-choice="sourceKind" data-draft="' + esc(draft.id) + '" data-value="transcript">转写档案</button>' +
         '<button type="button" class="chip' + (draft.sourceKind === 'text' ? ' on' : '') + '" data-wb-v-choice="sourceKind" data-draft="' + esc(draft.id) + '" data-value="text">链接 / 文字</button></div></div>' +
         '<label class="wb-field full"><span>' + (draft.sourceKind === 'transcript' ? '选择已转写的参考视频' : '参考内容') + '</span>' + sourceBody + '</label>' +
-        '<label class="wb-field full"><span>补充要求（可选：要替换的产品、必须保留的内容）</span><textarea data-wb-v-field="brief" data-draft="' + esc(draft.id) + '" placeholder="把参考里的产品换成我们的体验课；开头钩子保持原样">' + esc(draft.brief || '') + '</textarea></label>';
+        '<label class="wb-field full"><span>补充要求（可选：要替换的产品、必须保留的内容）</span><textarea data-wb-v-field="brief" data-draft="' + esc(draft.id) + '" placeholder="把参考里的产品换成我们的体验课；开头钩子保持原样">' + esc(draft.brief || '') + '</textarea></label>' + types;
     }
     return '<article class="wb-card wb-v-config" data-wb-v-draft-card="' + esc(draft.id) + '">' + body +
       '<div class="wb-field full"><span>参考素材（@人物/@场景/@道具）与音色</span>' + wbRefChips(draft.assetRefs, true, draft.id) +
@@ -3132,6 +3485,12 @@
     return '<span class="wb-tag' + cls + '">' + esc(wbWorkStatusText(work.status)) + '</span>';
   }
   function wbWorkMetaLine(work) {
+    if (work.productionMode === 'talking_head') {
+      var th = work.talkingHead || {};
+      return '口播成片' + (th.voiceName ? ' · ' + esc(th.voiceName) : '') +
+        ' · ' + work.durationSeconds + ' 秒 · ' + esc(work.ratio || '9:16') +
+        ' · ' + esc(accountName(work.accountId));
+    }
     return esc(WB_VIDEO_MODES[work.mode] || work.mode) +
       (work.mode === 'replicate' ? ' · 复刻参考' : ' · ' + esc(work.typeLabel || '') + (work.subtype ? ' · ' + esc(wbSubtypeName(work.type, work.subtype)) : '')) +
       ' · ' + work.durationSeconds + ' 秒 · ' + esc(work.ratio || '9:16') + (work.resolution ? ' · ' + esc(work.resolution) : '') +
@@ -3141,14 +3500,19 @@
     var step = videoStepForWork(work);
     var pct = videoStepProgress(work);
     var done = work.status === 'succeeded';
-    var next = done ? '看成片' : work.status === 'rendering' ? '看进度' : '继续制作';
+    var talking = work.productionMode === 'talking_head';
+    var hosted = Boolean(work.autoHost && work.autoHost.enabled);
+    var next = hosted
+      ? (done ? '看发布包' : work.status === 'rendering' ? '看进度' : work.status === 'planning' ? '看准备' : (work.autoHost.stage === 'awaiting_confirmation' ? '去确认' : '继续制作'))
+      : done ? (talking ? '去包装' : '看成片') : work.status === 'rendering' ? '看进度' : (talking && work.status === 'failed' ? '重试合成' : '继续制作');
+    var hostBadge = hosted ? '<span class="wb-tag ok">托管</span>' : '';
     var estimate = (work.status === 'draft' || work.status === 'failed')
-      ? '<div class="wb-v-task-estimate" data-wb-v-work-estimate="' + esc(work.id) + '">正在估算渲染费用…</div>'
+      ? '<div class="wb-v-task-estimate" data-wb-v-work-estimate="' + esc(work.id) + '">' + (talking ? '正在估算口播费用…' : '正在估算渲染费用…') + '</div>'
       : '';
     return '<article class="wb-v-task" data-wb-v-work-card="' + esc(work.id) + '" data-wb-v-open="' + esc(work.id) + '" tabindex="0" role="button" aria-label="打开视频任务：' + esc(videoWorkTitle(work)) + '">' +
       '<span class="wb-v-task-index">' + (done ? '✓' : step + '/4') + '</span>' +
       '<div class="wb-v-task-main">' +
-      '<div class="wb-v-task-title"><b>' + esc(videoWorkTitle(work)) + '</b>' + wbWorkStatusChip(work) + '</div>' +
+      '<div class="wb-v-task-title"><b>' + esc(videoWorkTitle(work)) + '</b>' + hostBadge + wbWorkStatusChip(work) + '</div>' +
       '<div class="wb-v-task-meta">' + wbWorkMetaLine(work) + ' · ' + esc(fmtDate(work.updatedAt || work.createdAt)) + '</div>' +
       '<div class="wb-v-task-progress" aria-hidden="true"><i style="width:' + pct + '%"></i></div>' +
       '</div>' +
@@ -3160,13 +3524,102 @@
   function renderVideoFocusHead(item, isDraft, work) {
     var title = isDraft ? videoDraftTitle(item) : videoWorkTitle(work);
     var status = isDraft ? '<span class="wb-tag">待配置</span>' : wbWorkStatusChip(work);
+    if (!isDraft && work.autoHost && work.autoHost.enabled) status = '<span class="wb-tag ok">托管</span>' + status;
+    var talking = Boolean(item && item.productionMode === 'talking_head');
     return '<div class="wb-focus-head"><div><span class="wb-step-kicker">第 ' + state.videoStep + ' / 4 步</span>' +
-      '<h2>' + esc(videoStepLabel(state.videoStep)) + '</h2>' +
-      '<p>' + esc(title) + ' · ' + (isDraft ? '先写清目标和参考，再生成编导稿' : wbWorkStatusText(work.status)) + '</p></div>' +
+      '<h2>' + esc(videoStepLabel(state.videoStep, item)) + '</h2>' +
+      '<p>' + esc(title) + ' · ' + (isDraft ? (talking ? '写口播稿，选音色和形象照' : '先写清目标和参考，再生成编导稿') : wbWorkStatusText(work.status)) + '</p></div>' +
       '<div class="wb-actions">' + status + '</div></div>';
   }
+  function renderTalkingHeadFocusBrief(work) {
+    var th = work.talkingHead || {};
+    var plan = th.plan || {};
+    return '<div class="wb-step-card"><div class="wb-card-head"><div><h3>这条口播的基本信息</h3><p>口播稿、音色和形象照在任务创建时锁定；第 2 步可以改稿，改稿后需要重新合成。</p></div></div>' +
+      '<div class="wb-step-summary">' +
+      '<div><small>任务</small><b>' + esc(videoWorkTitle(work)) + '</b></div>' +
+      '<div><small>音色</small><b>' + esc(th.voiceName || '未记录') + '</b></div>' +
+      '<div><small>形象照</small><b>' + esc(th.imageFileName || '未记录') + '</b></div>' +
+      '<div><small>语速</small><b>' + esc({ natural: '自然', slightly_fast: '稍快', fast: '较快', extreme: '极快' }[th.speed] || '自然') + '</b></div>' +
+      '<div><small>预计时长 / 分段</small><b>' + esc(plan.targetDuration || work.durationSeconds || 0) + ' 秒 · ' + esc(plan.batchCount || 0) + ' 段</b></div>' +
+      '<div><small>账号</small><b>' + esc(accountName(work.accountId)) + '</b></div>' +
+      '</div>' +
+      '<div class="wb-field full" style="margin-top:12px"><span>口播文案</span><p class="wb-v-message" style="margin-top:4px;white-space:pre-wrap">' + esc(th.text || '—') + '</p></div>' +
+      '<div class="wb-actions" style="margin-top:12px"><button class="btn primary" type="button" data-wb-v-goto="2">去检查口播稿 →</button>' +
+      '<button class="btn" type="button" data-wb-v-work="delete" data-id="' + esc(work.id) + '">删除任务</button>' +
+      '<span class="wb-note">删除任务不会影响已经生成的成片素材。</span></div></div>';
+  }
+  function renderTalkingHeadScriptStep(work) {
+    var th = work.talkingHead || {};
+    var plan = th.plan || {};
+    var busy = work.status === 'rendering';
+    var succeeded = work.status === 'succeeded';
+    var error = work.status === 'failed' && work.error ? '<p class="wb-v-error">' + esc(work.error) + '</p>' : '';
+    if (work.status === 'planning' && work.autoHost && work.autoHost.enabled) {
+      return '<div class="wb-step-card"><div class="wb-card-head"><div><h3>托管正在写口播稿…</h3><p>按账号档案和主题写 120–220 字，再自动分段、算时长和费用。这一步不扣费。</p></div></div>' +
+        hostedBannerHtml(work) +
+        '<p class="wb-note">' + ic('loader', 12) + ' 通常十几秒到一分钟；完成后会自动跳到确认页，只有点确认才会提交合成。</p></div>';
+    }
+    return '<div class="wb-step-card"><div class="wb-card-head"><div><h3>口播文案与分段</h3><p>系统按标点和语速自动分段，每段单独对口型后拼接。这里不需要写分镜。</p></div></div>' +
+      hostedBannerHtml(work) +
+      (busy ? '<p class="wb-note">' + ic('loader', 12) + ' 正在合成，暂时不能改稿；完成后可以改稿重新合成。</p>' : '') +
+      (succeeded ? '<p class="wb-note">这条已经合成完成。改稿会清空当前任务的成片关联，旧成片仍保留在素材库；需要重新合成才会扣费。</p>' : '') +
+      error +
+      '<div class="wb-form">' +
+      '<label class="wb-field"><span>音色</span><input value="' + esc(th.voiceName || '') + '" disabled></label>' +
+      '<label class="wb-field"><span>形象照</span><input value="' + esc(th.imageFileName || '') + '" disabled></label>' +
+      '<label class="wb-field"><span>语速</span><input value="' + esc({ natural: '自然', slightly_fast: '稍快', fast: '较快', extreme: '极快' }[th.speed] || '自然') + '" disabled></label>' +
+      '</div>' +
+      '<label class="wb-field full"><span>口播文案（可改）</span><textarea id="wb-th-speech" maxlength="3000" rows="8"' + (busy ? ' disabled' : '') + ' data-th-speech="' + esc(work.id) + '">' + esc(th.text || '') + '</textarea></label>' +
+      '<div class="wb-field full"><span>分段预览</span><div data-wb-th-segments="' + esc(work.id) + '">' + talkingHeadSegmentsHtml(plan) + '</div></div>' +
+      '<div class="wb-field full wb-v-estimate" data-wb-th-work-estimate="' + esc(work.id) + '"><span class="wb-muted">正在按语速估算…</span></div>' +
+      '<div class="wb-actions"><button class="btn" type="button" data-wb-v-work="save-talking-head" data-id="' + esc(work.id) + '"' + (busy ? ' disabled' : '') + '>保存口播稿修改</button>' +
+      '<span class="wb-note">保存后进入第 3 步确认；这一步不会扣费。字幕会在第 4 步按实际分段时长生成。</span></div></div>';
+  }
+  function renderTalkingHeadRenderStep(work) {
+    var th = work.talkingHead || {};
+    var plan = th.plan || {};
+    var run = work.avatarRun || null;
+    var error = work.status === 'failed' && work.error ? '<p class="wb-v-error">' + esc(work.error) + '</p>' : '';
+    var progress = '';
+    if (run) {
+      var steps = run.steps || [];
+      var failedSegments = (run.segments || []).filter(function (segment) { return segment.status === 'failed'; });
+      progress = '<div class="wb-th-run">' +
+        (steps.length ? '<div class="wb-flow-steps">' + steps.map(avatarStepHtml).join('') + '</div>' : '') +
+        (run.segmentCount ? '<p class="wb-note">已完成 ' + run.doneSegments + ' / ' + run.segmentCount + ' 段' + (run.failedSegments ? ' · 失败 ' + run.failedSegments + ' 段' : '') + (run.durationSeconds ? ' · 成片 ' + run.durationSeconds + ' 秒' : '') + '</p>' : '') +
+        (failedSegments.length ? '<div class="wb-job-segments">' + failedSegments.map(function (segment) {
+          return '<p><b>第 ' + segment.index + ' 段</b>：' + esc(segment.text) + '<br><span class="err">' + esc(segment.error || '失败') + '</span></p>';
+        }).join('') + '</div>' : '') +
+        '</div>';
+    }
+    var notice = work.status === 'rendering'
+      ? '<p class="wb-note">' + ic('loader', 12) + ' 正在分段合成口播，通常 3–6 分钟；这一页会自动刷新，完成后进入第 4 步。</p>'
+      : work.status === 'succeeded'
+        ? '<p class="wb-note">合成已完成，去第 4 步包装发布。</p>'
+        : work.status === 'failed'
+          ? '<p class="wb-note">已成功的分段会保留，重新合成只重试失败分段。</p>'
+          : '<p class="wb-note">确认后会按底片、语音、人脸分析和逐段对口型计费；这一步才会真正提交。</p>';
+    var speechPreview = th.text
+      ? '<div class="wb-field full" style="margin-top:10px"><span>确认前检查口播稿</span><p class="wb-v-message" style="margin-top:4px;white-space:pre-wrap">' + esc(th.text) + '</p>' +
+        (plan && plan.batchCount ? '<p class="wb-note" style="margin-top:4px">按当前语速自动分 ' + esc(plan.batchCount) + ' 段，逐段对口型后拼接。</p>' : '') + '</div>'
+      : '';
+    return '<div class="wb-step-card"><div class="wb-card-head"><div><h3>核对音色、形象与费用</h3><p>确认后会创建一个数字人合成任务，并把成片自动挂回这条视频任务。</p></div></div>' +
+      hostedBannerHtml(work) +
+      '<div class="wb-step-summary">' +
+      '<div><small>音色</small><b>' + esc(th.voiceName || '未记录') + '</b></div>' +
+      '<div><small>形象照</small><b>' + esc(th.imageFileName || '未记录') + '</b></div>' +
+      '<div><small>语速</small><b>' + esc({ natural: '自然', slightly_fast: '稍快', fast: '较快', extreme: '极快' }[th.speed] || '自然') + '</b></div>' +
+      '<div><small>预计时长 / 分段</small><b>' + esc((th.plan || {}).targetDuration || work.durationSeconds || 0) + ' 秒 · ' + esc((th.plan || {}).batchCount || 0) + ' 段</b></div>' +
+      '<div><small>账号</small><b>' + esc(accountName(work.accountId)) + '</b></div>' +
+      '</div>' + speechPreview +
+      '<div class="wb-field full wb-v-estimate" data-wb-v-work-estimate="' + esc(work.id) + '"><span class="wb-muted">' + (work.status === 'succeeded' ? '已合成完成。' : work.status === 'rendering' ? '正在合成，完成后可重新查看。' : '正在估算这次口播费用…') + '</span></div>' +
+      error + notice + progress +
+      '<div class="wb-actions" style="margin-top:10px"><button class="btn" type="button" data-wb-v-goto="2">回到口播稿</button>' +
+      '<span class="wb-note">' + (work.avatarRunId ? '已关联口播任务，可重试失败分段。' : '还没有提交过合成。') + '</span></div></div>';
+  }
   function renderVideoFocusStepBrief(item, isDraft, work) {
-    if (isDraft) return renderVideoDraftCard(item, { focus: true });
+    if (isDraft) return item.productionMode === 'talking_head' ? renderTalkingHeadDraftCard(item, { focus: true }) : renderVideoDraftCard(item, { focus: true });
+    if (work.productionMode === 'talking_head') return renderTalkingHeadFocusBrief(work);
     var refs = wbRefChips(work.assetRefs, false, '');
     return '<div class="wb-step-card"><div class="wb-card-head"><div><h3>任务目标与参考</h3><p>这些内容在任务创建时已经锁定；需要换方向请新建任务。</p></div></div>' +
       '<div class="wb-step-summary">' +
@@ -3183,7 +3636,8 @@
       '<span class="wb-note">删除后不会影响已生成的素材；正在渲染的任务请先等结束。</span></div></div>';
   }
   function renderVideoFocusStepScript(item, isDraft, work) {
-    if (isDraft) return renderVideoDraftCard(item, { focus: true });
+    if (isDraft) return item.productionMode === 'talking_head' ? renderTalkingHeadDraftCard(item, { focus: true }) : renderVideoDraftCard(item, { focus: true });
+    if (work.productionMode === 'talking_head') return renderTalkingHeadScriptStep(work);
     var script = work.directorScript;
     var busy = work.status === 'planning' || work.status === 'rendering';
     var head = '<div class="wb-card-head"><div><h3>' + esc(videoWorkTitle(work)) + '</h3><p>' + wbWorkMetaLine(work) + '</p></div></div>';
@@ -3199,7 +3653,7 @@
         script.shots.map(function (shot) { return wbShotCard(work, shot, shotRendersByKey[shot.index]); }).join('') +
         (script.notes ? '<p class="wb-v-shot-line muted">' + esc(script.notes) + '</p>' : '') + '</div>';
     } else if (work.status === 'planning') {
-      body = '<p class="wb-muted">' + ic('loader', 12) + ' 编导稿生成中，通常十几秒到一分钟；完成后会自动出现在这里。</p>';
+      body = '<p class="wb-muted">' + ic('loader', 12) + (work.autoHost && work.autoHost.enabled ? ' 托管正在写编导稿，通常十几秒到一分钟；完成后会自动跳到确认页。' : ' 编导稿生成中，通常十几秒到一分钟；完成后会自动出现在这里。') + '</p>';
     } else {
       body = '<p class="wb-muted">还没有可用的编导稿。' + (work.status === 'failed' ? '可以重新生成一版。' : '') + '</p>';
     }
@@ -3210,35 +3664,240 @@
         (work.mode === 'replicate' ? '<button class="btn" type="button" data-wb-v-work="extract-frames" data-id="' + esc(work.id) + '">' + ic('image', 12) + ((script.shots || []).some(function (shot) { return shot.referenceFrameAssetId; }) ? '重新抽取原帧' : '抽取参考原帧') + '</button>' : '') +
         '<button class="btn" type="button" data-wb-v-work="save-script" data-id="' + esc(work.id) + '">保存编导稿修改</button></div>';
     }
-    return '<div class="wb-step-card">' + head + message + error + body + actions +
+    return '<div class="wb-step-card">' + head + hostedBannerHtml(work) + message + error + body + actions +
       '<p class="wb-note" style="margin-top:10px">逐镜检查口播和画面。确认后只需核对素材与费用，不会在写稿阶段扣渲染费。</p></div>';
   }
   function renderVideoFocusStepRender(item, isDraft, work) {
-    if (isDraft) return renderVideoDraftCard(item, { focus: true });
+    if (isDraft) return item.productionMode === 'talking_head' ? renderTalkingHeadDraftCard(item, { focus: true }) : renderVideoDraftCard(item, { focus: true });
+    if (work.productionMode === 'talking_head') return renderTalkingHeadRenderStep(work);
     var refs = wbRefChips(work.assetRefs, false, '');
     var error = work.status === 'failed' && work.error ? '<p class="wb-v-error">' + esc(work.error) + '</p>' : '';
+    var script = work.directorScript || {};
+    var shotList = Array.isArray(script.shots) ? script.shots : [];
+    var scriptPreview = shotList.length
+      ? '<div class="wb-v-script wb-host-confirm-script"><div class="wb-v-script-head"><b>确认前检查编导稿</b><span>' + esc(script.strategy || '按账号档案和任务目标生成') + '</span></div>' +
+        shotList.map(function (shot) {
+          return '<div class="wb-v-shot"><div class="wb-v-shot-head"><b>镜 ' + esc(shot.index) + ' · ' + esc(wbShotRoleLabel(shot.role)) + '</b><span>' + esc(shot.seconds) + ' 秒</span></div>' +
+            (shot.scene ? '<p class="wb-v-shot-line">' + esc(shot.scene) + '</p>' : '') +
+            (shot.voiceover ? '<p class="wb-v-shot-line voice">「' + esc(shot.voiceover) + '」</p>' : '') + '</div>';
+        }).join('') + '</div>'
+      : '';
     var notice = work.status === 'rendering' ? '<p class="wb-note">' + ic('loader', 12) + ' 已提交渲染，这一页会自动刷新进度。</p>'
       : work.status === 'succeeded' ? '<p class="wb-note">渲染已完成，去第 4 步预览和下载成片。</p>'
         : work.status === 'planning' ? '<p class="wb-note">' + ic('loader', 12) + ' 编导稿还在生成，完成后才能确认渲染。</p>'
           : '<p class="wb-note">确认后才会提交视频渲染；这一步会按秒数和清晰度计费。</p>';
     return '<div class="wb-step-card"><div class="wb-card-head"><div><h3>核对素材与渲染参数</h3><p>确认后会创建渲染任务；之后仍可在渲染队列看进度。</p></div></div>' +
+      hostedBannerHtml(work) +
       '<div class="wb-step-summary">' +
       '<div><small>时长</small><b>' + work.durationSeconds + ' 秒</b></div>' +
       '<div><small>清晰度</small><b>' + esc(work.resolution || '默认') + '</b></div>' +
       '<div><small>画幅</small><b>' + esc(work.ratio || '9:16') + '</b></div>' +
       '<div><small>账号</small><b>' + esc(accountName(work.accountId)) + '</b></div>' +
-      '</div>' +
+      '</div>' + scriptPreview +
       '<div class="wb-field full" style="margin-top:10px"><span>本任务引用的素材 / 音色</span>' + (refs || '<p class="wb-muted">没有额外引用素材。</p>') + '</div>' +
       '<div class="wb-field full wb-v-estimate" data-wb-v-work-estimate="' + esc(work.id) + '"><span class="wb-muted">正在估算这次渲染费用…</span></div>' +
       error + notice + '</div>';
   }
+  function packageSubtitleLabel(value) {
+    return { none: '不烧字幕', white: '白字黑边', yellow: '黄字黑边', bold: '大字报' }[value] || '白字黑边';
+  }
+  function packageDefaultDescription(work, script) {
+    var voice = ((script && script.shots) || []).map(function (shot) { return shot.voiceover || ''; }).filter(Boolean).slice(0, 2).join(' ');
+    return [script && script.strategy, voice].filter(Boolean).join('\n').slice(0, 300);
+  }
+  function packageDefaultTags(work, script) {
+    var tags = [];
+    [work.typeLabel, work.subtype, (state.profile || {}).product, '教育', '招生', '家长必看'].forEach(function (raw) {
+      var value = String(raw || '').replace(/^#/, '').trim().slice(0, 16);
+      if (value && tags.indexOf(value) < 0) tags.push(value);
+    });
+    return tags.slice(0, 6);
+  }
+  function renderPackageForm(work, pkg) {
+    var opts = (pkg && pkg.options) || {};
+    var script = work.directorScript || {};
+    var title = (pkg && pkg.title) || script.title || videoWorkTitle(work);
+    var description = (pkg && pkg.description) || packageDefaultDescription(work, script);
+    var tags = ((pkg && pkg.tags) || packageDefaultTags(work, script)).join(' ');
+    var coverSubtitle = opts.coverSubtitle || '';
+    var packageSource = work.productionMode === 'talking_head' ? '口播分段' : '编导稿分镜';
+    var audioAssets = (state.assets || []).filter(function (item) { return item.kind === 'audio'; });
+    var bgmOptions = '<option value="">不加背景音乐</option>' + audioAssets.map(function (item) {
+      return '<option value="' + esc(item.id) + '"' + (opts.bgmAssetId === item.id ? ' selected' : '') + '>' + esc(item.fileName || '音频素材') + '</option>';
+    }).join('');
+    return '<p class="wb-note" style="margin:0 0 8px">不想逐项改？直接点底部「生成发布包」，字幕、封面和发布文案会按' + esc(packageSource) + '自动生成。</p>' +
+      '<div class="wb-form">' +
+      '<label class="wb-field"><span>字幕</span><select data-pkg-field="subtitleStyle">' +
+      [['white', '白字黑边'], ['yellow', '黄字黑边'], ['bold', '大字报'], ['none', '不烧字幕']].map(function (row) {
+        return '<option value="' + row[0] + '"' + (row[0] === (opts.subtitleStyle || 'white') ? ' selected' : '') + '>' + row[1] + '</option>';
+      }).join('') + '</select></label>' +
+      '<label class="wb-field"><span>背景音乐</span><select data-pkg-field="bgmAssetId">' + bgmOptions + '</select></label>' +
+      '<label class="wb-field full"><span>标题（封面和发布共用）</span><input data-pkg-field="title" maxlength="60" value="' + esc(title) + '" placeholder="例如：家长总说课程贵，应该怎么解释"></label>' +
+      '<label class="wb-field full"><span>封面副标题（可选）</span><input data-pkg-field="coverSubtitle" maxlength="30" value="' + esc(coverSubtitle) + '" placeholder="例如：3-8岁家长必看"></label>' +
+      '<details class="wb-pkg-advanced"><summary>发布文案（可选，默认自动生成）</summary><div class="wb-form" style="margin-top:8px">' +
+      '<label class="wb-field full"><span>发布描述</span><textarea data-pkg-field="description" rows="3" maxlength="300">' + esc(description) + '</textarea></label>' +
+      '<label class="wb-field full"><span>话题标签（空格或逗号分隔）</span><input data-pkg-field="tags" value="' + esc(tags) + '" placeholder="教育 招生 家长必看"></label>' +
+      '</div></details>' +
+      '</div>' +
+      '<div class="wb-actions" style="margin-top:10px"><button class="btn primary" type="button" data-wb-v-pkg="create" data-id="' + esc(work.id) + '">' + (pkg ? '重新生成发布包' : '生成发布包') + '</button>' +
+      '<span class="wb-note">会生成包装后的 mp4、封面 jpg、字幕 srt、发布说明和 zip；原片保留。字幕按' + esc(packageSource) + '时长生成本地 SRT。</span></div>';
+  }
+  function renderPackageSection(work) {
+    var pkg = state.videoPackages[work.id];
+    if (pkg === undefined && state.videoPackageLoading === work.id) {
+      return '<div class="wb-step-card"><p class="wb-muted">' + ic('loader', 12) + ' 正在读取发布包…</p></div>';
+    }
+    if (pkg && pkg.status === 'running') {
+      return '<div class="wb-step-card"><div class="wb-card-head"><div><h3>正在生成发布包…</h3><p>烧字幕、混 BGM、生成封面和 zip；通常几十秒，可以离开这一页。</p></div></div>' +
+        '<p class="wb-note">' + ic('loader', 12) + ' 生成完会自动显示封面和下载按钮。</p></div>';
+    }
+    if (pkg && pkg.status === 'failed') {
+      return '<div class="wb-step-card"><div class="wb-card-head"><div><h3>发布包生成失败</h3><p>原片还在，改一下设置可以重试。</p></div></div>' +
+        '<p class="wb-v-error">' + esc(pkg.error || '生成失败') + '</p>' + renderPackageForm(work, pkg) + '</div>';
+    }
+    if (pkg && pkg.status === 'ready') {
+      var cover = pkg.coverAssetId
+        ? '<img data-pkg-cover="' + esc(pkg.coverAssetId) + '" alt="发布封面">'
+        : '<div class="wb-pkg-cover-empty">封面未生成</div>';
+      var tagText = (pkg.tags || []).map(function (tag) { return '#' + tag; }).join(' ');
+      var packagedVideo = pkg.videoAssetId
+        ? '<div class="wb-pkg-video"><video class="wb-render-video" controls preload="metadata" data-pkg-video="' + esc(pkg.videoAssetId) + '"></video></div>'
+        : '';
+      return '<div class="wb-step-card"><div class="wb-card-head"><div><h3>发布包已生成</h3><p>成片、封面、字幕和发布文案都在这一个 zip 里；原片仍保留在素材库。</p></div></div>' +
+        '<div class="wb-pkg-grid"><div class="wb-pkg-cover">' + cover + '</div><div class="wb-pkg-info">' +
+        '<div class="wb-pkg-title">' + esc(pkg.title || videoWorkTitle(work)) + '</div>' +
+        '<p class="wb-pkg-desc">' + esc(pkg.description || '—').replace(/\n/g, '<br>') + '</p>' +
+        '<p class="wb-pkg-tags">' + esc(tagText || '—') + '</p>' +
+        '<div class="wb-actions"><button class="btn primary" type="button" data-wb-v-pkg="download" data-id="' + esc(work.id) + '">' + ic('download', 12) + '下载发布包</button>' +
+        '<button class="btn" type="button" data-wb-v-pkg="copy" data-id="' + esc(work.id) + '">复制发布文案</button></div>' +
+        '<ul class="wb-pkg-checks"><li>字幕：' + esc(packageSubtitleLabel((pkg.options || {}).subtitleStyle)) + '</li>' +
+        '<li>封面：已生成，可在下载后替换</li>' +
+        '<li>发布包：video.mp4 / cover.jpg / subtitles.srt / publish.md / manifest.json</li>' +
+        '<li>发布前请核对标题错别字、合规承诺、发布账号和时间</li></ul>' +
+        '</div></div>' + packagedVideo +
+        '<details class="wb-pkg-settings"><summary>修改包装设置并重新生成</summary>' + renderPackageForm(work, pkg) + '</details></div>';
+    }
+    return '<div class="wb-step-card"><div class="wb-card-head"><div><h3>包装与发布</h3><p>把成片补成可直接发布的一套：字幕、BGM、封面、标题/描述/标签和 zip。原片保留。</p></div></div>' +
+      renderPackageForm(work, null) + '</div>';
+  }
+  async function ensureVideoPackage(workId) {
+    if (!workId || state.videoPackages[workId] !== undefined || state.videoPackageLoading === workId) return;
+    state.videoPackageLoading = workId;
+    var work = state.videoWorks.filter(function (item) { return item.id === workId; })[0] || null;
+    try {
+      // 详情接口会顺带触发服务端托管打包补偿（重启/竞态后也能自己恢复）。
+      var data = await call('/video/works/' + encodeURIComponent(workId));
+      if (data.work) {
+        work = data.work;
+        state.videoWorks = state.videoWorks.map(function (item) { return item.id === workId ? data.work : item; });
+      }
+      state.videoPackages[workId] = data.package || null;
+    } catch (e) {
+      state.videoPackages[workId] = null;
+    }
+    state.videoPackageLoading = '';
+    if (state.tab === 'video' && state.videoFocus && state.videoFocus.id === workId && state.videoStep === 4) renderVideo();
+    var pkg = state.videoPackages[workId];
+    if (pkg && pkg.status === 'running') startVideoPackagePolling(pkg.id, workId);
+    else if (!pkg && work && work.autoHost && work.autoHost.enabled && work.autoHost.confirmedAt
+      && work.autoHost.stage !== 'failed' && work.status === 'succeeded') {
+      startVideoPackageSweep(workId);
+    }
+  }
+  /** 托管成片刚完成、发布包还没落库时的短轮询；最多 60 秒，失败后交给第 4 步重试。 */
+  function startVideoPackageSweep(workId) {
+    if (state.videoPackageSweepWork === workId && state.videoPackageSweepTimer) return;
+    stopVideoPackageSweep();
+    state.videoPackageSweepWork = workId;
+    var tries = 0;
+    state.videoPackageSweepTimer = setInterval(async function () {
+      tries += 1;
+      if (tries > 30) { stopVideoPackageSweep(); return; }
+      var work = state.videoWorks.filter(function (item) { return item.id === workId; })[0] || null;
+      if (!work || !work.autoHost || !work.autoHost.enabled) { stopVideoPackageSweep(); return; }
+      if (work.autoHost.stage === 'failed') {
+        stopVideoPackageSweep();
+        if (state.tab === 'video' && state.videoFocus && state.videoFocus.id === workId && state.videoStep === 4) renderVideo();
+        return;
+      }
+      try {
+        var data = await call('/video/works/' + encodeURIComponent(workId));
+        if (data.work) {
+          state.videoWorks = state.videoWorks.map(function (item) { return item.id === workId ? data.work : item; });
+          work = data.work;
+        }
+        var pkg = data.package;
+        if (pkg) {
+          state.videoPackages[workId] = pkg;
+          stopVideoPackageSweep();
+          if (pkg.status === 'running') startVideoPackagePolling(pkg.id, workId);
+          else if (pkg.status === 'ready') toast('托管发布包已生成', 'success');
+          else if (pkg.status === 'failed') toast(pkg.error || '托管发布包生成失败', 'error');
+          if (state.tab === 'video' && state.videoFocus && state.videoFocus.id === workId && state.videoStep === 4) renderVideo();
+          return;
+        }
+        if (state.tab === 'video' && state.videoFocus && state.videoFocus.id === workId && state.videoStep === 4) renderVideo();
+      } catch (e) { /* 下一轮继续 */ }
+    }, 2000);
+  }
+  function startVideoPackagePolling(packageId, workId) {
+    stopVideoPackagePolling();
+    var tries = 0;
+    state.videoPackageTimer = setInterval(async function () {
+      tries += 1;
+      if (tries > 120) { stopVideoPackagePolling(); return; }
+      try {
+        var data = await call('/video/packages/' + encodeURIComponent(packageId));
+        var pkg = data.package;
+        if (!pkg) return;
+        state.videoPackages[workId] = pkg;
+        if (pkg.status !== 'running') {
+          stopVideoPackagePolling();
+          if (state.tab === 'video' && state.videoFocus && state.videoFocus.id === workId && state.videoStep === 4) renderVideo();
+          if (pkg.status === 'ready') toast('发布包已生成', 'success');
+          else if (pkg.status === 'failed') toast(pkg.error || '发布包生成失败', 'error');
+          return;
+        }
+        if (state.tab === 'video' && state.videoFocus && state.videoFocus.id === workId && state.videoStep === 4) renderVideo();
+      } catch (e) { /* 轮询失败继续等下一次 */ }
+    }, 2000);
+  }
+  function readPackageForm() {
+    function field(name) {
+      var node = $('[data-pkg-field="' + name + '"]');
+      return node ? node.value : '';
+    }
+    return {
+      subtitleStyle: field('subtitleStyle') || 'white',
+      bgmAssetId: field('bgmAssetId') || '',
+      title: field('title') || '',
+      coverSubtitle: field('coverSubtitle') || '',
+      description: field('description') || '',
+      tags: field('tags') || '',
+    };
+  }
+  function packageCopyText(pkg, work) {
+    var tags = (pkg.tags || []).map(function (tag) { return '#' + tag; }).join(' ');
+    return [pkg.title || videoWorkTitle(work), '', pkg.description || '', '', tags].join('\n').trim();
+  }
+  async function copyText(value) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(value);
+    var area = document.createElement('textarea');
+    area.value = value;
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+  }
   function renderVideoFocusStepOutput(item, isDraft, work) {
     if (isDraft) return renderVideoDraftCard(item, { focus: true });
     var renders = state.workRenders[work.id] || [];
-    var main = renders.filter(function (row) { return row.kind === 'main'; })[0] || null;
     var output = work.status === 'succeeded' && work.outputAssetId
-      ? '<div class="wb-step-card"><div class="wb-card-head"><div><h3>成片</h3><p>成片已经保存到素材库，预览后可下载。</p></div></div>' +
-        '<video class="wb-render-video" controls preload="metadata" data-work-video="' + esc(work.outputAssetId) + '"></video></div>'
+      ? '<div class="wb-step-card"><div class="wb-card-head"><div><h3>成片</h3><p>成片已经保存到素材库，预览后可下载；下面再补字幕、封面和发布包。</p></div></div>' +
+        '<video class="wb-render-video" controls preload="metadata" data-work-video="' + esc(work.outputAssetId) + '"></video>' +
+        '<div class="wb-actions" style="margin-top:8px"><button class="btn" type="button" data-wb-v-download="' + esc(work.id) + '">' + ic('download', 12) + '下载原片</button></div></div>'
       : '';
     var progress = work.status === 'rendering'
       ? '<div class="wb-step-card"><p class="wb-note">' + ic('loader', 12) + ' 正在渲染整片，通常几分钟；可离开这一页，回来后仍会继续显示进度。</p></div>'
@@ -3248,33 +3907,71 @@
           ? '<div class="wb-step-card"><p class="wb-muted">还没有提交渲染。回到上一步核对参数后确认。</p></div>' : '';
     var renderList = renders.length ? '<div class="wb-step-card"><div class="wb-card-head"><div><h3>渲染记录</h3><p>整片和单镜的提交记录；失败的可直接重试。</p></div></div>' +
       renders.map(wbRenderRow).join('') + '</div>' : '';
-    return output + progress + renderList;
+    var packageSection = '';
+    if (work.status === 'succeeded' && work.outputAssetId) {
+      if (state.videoPackages[work.id] === undefined && state.videoPackageLoading !== work.id) void ensureVideoPackage(work.id);
+      packageSection = renderPackageSection(work);
+    }
+    return hostedBannerHtml(work) + packageSection + output + progress + renderList;
   }
   function renderVideoFocusFooter(item, isDraft) {
     var work = isDraft ? null : item;
     var step = state.videoStep;
+    var talking = !isDraft && item.productionMode === 'talking_head';
+    var hosted = Boolean(work && work.autoHost && work.autoHost.enabled);
+    var hostedReady = Boolean(hosted && work.autoHost.stage === 'awaiting_confirmation');
+    var hostedDraft = Boolean(isDraft && item.autoHost);
     var prev = '<button class="btn" type="button" id="wb-video-prev"' + (step <= 1 ? ' disabled' : '') + '>上一步</button>';
-    var status = isDraft ? '配置好后生成编导稿' : wbWorkStatusText(work.status);
-    var hint = isDraft ? '先写清目标和参考' : step === 2 ? '检查分镜，确认后进入渲染确认' : step === 3 ? '确认后才会提交渲染并计费' : step === 4 ? '成片可预览和下载' : '任务创建后不能直接改目标和参考';
+    var status = isDraft ? (talking ? '配置好后生成口播稿' : '配置好后生成编导稿') : wbWorkStatusText(work.status);
+    var hint = hostedDraft
+      ? '只写主题，托管自动写稿；确认前不扣费'
+      : isDraft
+        ? (talking ? '写清口播文案，选音色和形象照' : '先写清目标和参考')
+        : talking
+          ? (step === 2 ? (hosted ? '托管会自动写稿并跳到确认页；这一步不扣费' : '检查分段和时长；保存后进入确认合成')
+            : step === 3 ? (hostedReady ? '托管只在这里停一次；确认后才提交合成并计费' : '确认后才会提交数字人合成并计费')
+              : step === 4 ? (hosted ? '成片完成后托管会自动生成字幕/封面/发布包' : '字幕/封面/发布包生成完就能直接发布')
+                : '口播稿在第 2 步可以修改')
+          : step === 2 ? (hosted ? '托管会自动写编导稿并跳到确认页；这一步不扣费' : '检查分镜，确认后进入渲染确认')
+            : step === 3 ? (hostedReady ? '托管只在这里停一次；确认后才提交渲染并计费' : '确认后才会提交渲染并计费')
+              : step === 4 ? (hosted ? '成片完成后托管会自动生成字幕/封面/发布包' : '字幕/封面/发布包生成完就能直接发布')
+                : '任务创建后不能直接改目标和参考';
     var primary = '';
     if (isDraft) {
-      primary = '<button class="btn primary" type="button" data-wb-v-action="start" data-id="' + esc(item.id) + '">生成编导稿 →</button>';
+      primary = '<button class="btn primary" type="button" data-wb-v-action="start" data-id="' + esc(item.id) + '">' + (hostedDraft ? '开始托管 →' : (talking ? '生成口播稿 →' : '生成编导稿 →')) + '</button>';
     } else if (step === 1) {
-      primary = '<button class="btn primary" type="button" data-wb-v-goto="2">下一步：看编导稿 →</button>';
+      primary = '<button class="btn primary" type="button" data-wb-v-goto="2">' + (talking ? '下一步：检查口播稿 →' : '下一步：看编导稿 →') + '</button>';
     } else if (step === 2) {
-      if (work.status === 'planning') primary = '<button class="btn primary" type="button" disabled>' + ic('loader', 12) + ' 编导稿生成中…</button>';
+      if (talking) {
+        var hasSpeech = Boolean((work.talkingHead || {}).text);
+        primary = work.status === 'rendering'
+          ? '<button class="btn primary" type="button" data-wb-v-goto="3">查看合成进度 →</button>'
+          : '<button class="btn primary" type="button" data-wb-v-work="save-talking-head-next" data-id="' + esc(work.id) + '"' + (hasSpeech ? '' : ' disabled') + '>下一步：确认合成 →</button>';
+      } else if (work.status === 'planning') primary = '<button class="btn primary" type="button" disabled>' + ic('loader', 12) + ' 编导稿生成中…</button>';
       else if (work.status === 'failed' && !(work.directorScript && (work.directorScript.shots || []).length)) {
         primary = '<button class="btn primary" type="button" data-wb-v-work="regenerate" data-id="' + esc(work.id) + '">重新生成编导稿</button>';
       } else primary = '<button class="btn primary" type="button" data-wb-v-goto="3">下一步：确认渲染 →</button>';
     } else if (step === 3) {
-      if (work.status === 'planning') primary = '<button class="btn primary" type="button" disabled>等待编导稿…</button>';
+      if (talking) {
+        if (work.status === 'rendering') primary = '<button class="btn primary" type="button" data-wb-v-refresh="' + esc(work.id) + '">' + ic('refresh', 12) + '刷新进度</button>';
+        else if (work.status === 'succeeded') primary = '<button class="btn primary" type="button" data-wb-v-goto="4">去包装发布 →</button>';
+        else if (work.status === 'failed') primary = '<button class="btn primary" type="button" data-wb-v-work="confirm" data-id="' + esc(work.id) + '">重新合成 →</button>';
+        else primary = '<button class="btn primary" type="button" data-wb-v-work="confirm" data-id="' + esc(work.id) + '">' + (hostedReady ? '确认托管并合成 →' : '确认并合成 →') + '</button>';
+      } else if (work.status === 'planning') primary = '<button class="btn primary" type="button" disabled>等待编导稿…</button>';
       else if (work.status === 'rendering') primary = '<button class="btn primary" type="button" data-wb-v-goto="4">查看渲染进度 →</button>';
       else if (work.status === 'succeeded') primary = '<button class="btn primary" type="button" data-wb-v-goto="4">查看成片 →</button>';
-      else primary = '<button class="btn primary" type="button" data-wb-v-work="confirm" data-id="' + esc(work.id) + '">确认并渲染 →</button>';
+      else primary = '<button class="btn primary" type="button" data-wb-v-work="confirm" data-id="' + esc(work.id) + '">' + (hostedReady ? '确认托管并渲染 →' : '确认并渲染 →') + '</button>';
     } else {
       var main = (state.workRenders[work.id] || []).filter(function (row) { return row.kind === 'main'; })[0] || null;
-      if (work.status === 'succeeded') primary = '<button class="btn primary" type="button" data-wb-v-download="' + esc(work.id) + '">' + ic('download', 12) + '下载成片</button>';
-      else if (work.status === 'rendering') primary = '<button class="btn primary" type="button" data-wb-v-refresh="' + esc(work.id) + '">' + ic('refresh', 12) + '刷新进度</button>';
+      var pkg = state.videoPackages[work.id];
+      if (work.status === 'succeeded') {
+        if (pkg && pkg.status === 'ready') primary = '<button class="btn primary" type="button" data-wb-v-pkg="download" data-id="' + esc(work.id) + '">' + ic('download', 12) + '下载发布包</button>';
+        else if (pkg && pkg.status === 'running' || state.videoPackageLoading === work.id) primary = '<button class="btn primary" type="button" disabled>' + ic('loader', 12) + ' 发布包生成中…</button>';
+        else if (pkg && pkg.status === 'failed') primary = '<button class="btn primary" type="button" data-wb-v-pkg="create" data-id="' + esc(work.id) + '">重新生成发布包</button>';
+        else if (hosted && work.autoHost.stage !== 'failed') primary = '<button class="btn primary" type="button" disabled>' + ic('loader', 12) + ' 托管自动打包中…</button>';
+        else primary = '<button class="btn primary" type="button" data-wb-v-pkg="create" data-id="' + esc(work.id) + '">生成发布包 →</button>';
+      } else if (work.status === 'rendering') primary = '<button class="btn primary" type="button" data-wb-v-refresh="' + esc(work.id) + '">' + ic('refresh', 12) + '刷新进度</button>';
+      else if (work.status === 'failed' && hosted) primary = '<button class="btn primary" type="button" data-wb-v-goto="3">回到托管确认页</button>';
       else if (work.status === 'failed' && main) primary = '<button class="btn primary" type="button" data-wb-v-retry="' + esc(main.id) + '">重试渲染</button>';
       else if (work.status === 'failed') primary = '<button class="btn primary" type="button" data-wb-v-goto="3">回到确认页</button>';
       else primary = '<button class="btn primary" type="button" data-wb-v-goto="3">去确认渲染 →</button>';
@@ -3305,24 +4002,32 @@
       renderVideoFocusFooter(item, isDraft) + '</div>';
     syncVideoChrome();
     hydrateWorkVideos();
+    hydratePackageMedia();
     void hydrateShotFrames();
     void refreshVideoEstimates();
     void refreshWorkEstimates();
+    refreshTalkingHeadWorkEstimates();
+    refreshTalkingHeadDraftEstimates();
     return true;
   }
   function renderVideoList() {
     loadVideoDrafts();
-    var draftCards = state.videoDrafts.map(function (draft) { return renderVideoDraftCard(draft); }).join('');
+    var draftCards = state.videoDrafts.map(function (draft) {
+      if (draft.autoHost) return renderHostedDraftCard(draft);
+      return draft.productionMode === 'talking_head' ? renderTalkingHeadDraftCard(draft) : renderVideoDraftCard(draft);
+    }).join('');
     var activeWorks = state.videoWorks.filter(function (work) { return work.status !== 'succeeded'; });
     var doneWorks = state.videoWorks.filter(function (work) { return work.status === 'succeeded'; });
-    var launcher = '<div class="wb-card"><div class="wb-v-list-head"><div><h2>视频创作</h2><p>先选一个任务继续，或新建一条。每个任务只在打开后显示当前这一步，不再把所有工具堆在同一屏。</p></div>' +
+    var launcher = '<div class="wb-card"><div class="wb-v-list-head"><div><h2>视频创作</h2><p>一键托管只写主题：自动写稿、选音色/形象照、算分段和费用，停在确认页；确认后才计费，成功后自动生成发布包。想自己逐步改稿也可以选口播成片或分镜模式。</p></div>' +
       '<div class="wb-actions">' +
-      '<button class="btn primary" type="button" data-wb-v-launch="generate">' + ic('sparkle', 13) + '生成模式</button>' +
+      '<button class="btn primary" type="button" data-wb-v-launch="hosted">' + ic('sparkle', 13) + '一键托管</button>' +
+      '<button class="btn" type="button" data-wb-v-launch="talking_head">' + ic('video', 13) + '口播成片</button>' +
+      '<button class="btn" type="button" data-wb-v-launch="generate">' + ic('sparkle', 13) + '生成模式</button>' +
       '<button class="btn" type="button" data-wb-v-launch="replicate">' + ic('copy', 13) + '复刻模式</button>' +
       '<button class="btn" type="button" data-wb-v-action="open-voices" data-id="">' + ic('music', 13) + '音色库</button>' +
       '</div></div></div>';
     var drafts = state.videoDrafts.length
-      ? '<div class="wb-v-section"><div class="wb-v-section-head"><b>待配置草稿</b><span>' + state.videoDrafts.length + ' 条 · 先完成配置再生成编导稿</span></div>' + draftCards + '</div>'
+      ? '<div class="wb-v-section"><div class="wb-v-section-head"><b>待配置草稿</b><span>' + state.videoDrafts.length + ' 条 · 提交前不会扣费</span></div>' + draftCards + '</div>'
       : '';
     var active = activeWorks.length
       ? '<div class="wb-v-section"><div class="wb-v-section-head"><b>进行中的任务</b><span>' + activeWorks.length + ' 条</span></div><div class="wb-v-task-grid">' + activeWorks.map(renderVideoTaskRow).join('') + '</div></div>'
@@ -3331,7 +4036,7 @@
       ? '<div class="wb-v-section"><div class="wb-v-section-head"><b>已完成</b><span>' + doneWorks.length + ' 条</span></div><div class="wb-v-task-grid">' + doneWorks.map(renderVideoTaskRow).join('') + '</div></div>'
       : '';
     var empty = !state.videoWorks.length && !state.videoDrafts.length
-      ? '<div class="wb-v-empty">还没有视频任务。选「生成模式」从需求开始，或选「复刻模式」参考一条现有内容。</div>' : '';
+      ? '<div class="wb-v-empty">还没有视频任务。想省步骤就选「一键托管」；想自己写稿选「口播成片」；需要画面分镜选「生成模式」或「复刻模式」。</div>' : '';
     $('#wb-view').innerHTML = '<div class="wb-page"><div class="wb-scroll">' + launcher + drafts + active + done + empty +
       '<details class="wb-v-tools" id="wb-avatar-tools"><summary>数字人口播（独立工具）</summary>' +
       '<div class="wb-card" style="margin-top:6px"><div id="wb-avatar-panel"></div></div></details>' +
@@ -3343,6 +4048,7 @@
     void hydrateShotFrames();
     void refreshVideoEstimates();
     void refreshWorkEstimates();
+    refreshTalkingHeadDraftEstimates();
     syncVideoChrome();
   }
   /* ── 页面组装 ── */
@@ -3353,10 +4059,16 @@
     } else {
       renderVideoList();
     }
+    $$('.wb-v-advanced').forEach(function (node) {
+      node.addEventListener('toggle', function () { state.videoAdvancedOpen = node.open; });
+    });
 
     $$('[data-wb-v-launch]').forEach(function (button) {
       button.onclick = function () {
-        var draft = newVideoDraft(button.dataset.wbVLaunch);
+        var value = button.dataset.wbVLaunch;
+        var draft = value === 'hosted'
+          ? newVideoDraft('generate', 'talking_head', { autoHost: true })
+          : value === 'talking_head' ? newVideoDraft('generate', 'talking_head') : newVideoDraft(value, 'storyboard');
         renderVideo();
         requestAnimationFrame(function () {
           var card = $('[data-wb-v-draft-card="' + draft.id + '"]');
@@ -3385,9 +4097,31 @@
         if (['durationSeconds', 'intervalDays', 'count'].indexOf(field) >= 0) value = Number(value);
         updateVideoDraft(draft.id, (function () { var patch = {}; patch[field] = value; return patch; })());
         if (field === 'durationSeconds' || field === 'resolution') scheduleVideoEstimates();
+        if (draft.productionMode === 'talking_head' && (field === 'speech' || field === 'speed')) scheduleTalkingHeadDraftEstimate(draft.id);
       };
       if (control.tagName === 'TEXTAREA' || control.tagName === 'INPUT') control.addEventListener('input', handler);
       else control.addEventListener('change', handler);
+    });
+    $$('[data-th-speech]').forEach(function (control) {
+      control.addEventListener('input', function () {
+        var work = state.videoWorks.filter(function (item) { return item.id === control.dataset.thSpeech; })[0];
+        var th = (work && work.talkingHead) || {};
+        scheduleTalkingHeadWorkEstimate(control.dataset.thSpeech, control.value, th.speed);
+      });
+    });
+    $$('[data-th-clone-voice]').forEach(function (button) {
+      button.onclick = function () { openCloneVoiceDialog(); };
+    });
+    $$('[data-th-refresh-voices]').forEach(function (button) {
+      button.onclick = async function () {
+        button.disabled = true;
+        await refreshAvatarRuns(true);
+        renderVideo();
+        toast('音色列表已刷新', 'success');
+      };
+    });
+    $$('[data-th-goto-assets]').forEach(function (button) {
+      button.onclick = function () { setTab('assets'); };
     });
     $$('[data-wb-v-unref]').forEach(function (button) {
       button.onclick = function () {
@@ -3413,8 +4147,64 @@
         var draft = findVideoDraft(draftId);
         if (!draft) return;
         var original = button.innerHTML;
-        button.disabled = true; button.innerHTML = ic('loader', 12) + '提交中…';
+        button.disabled = true; button.innerHTML = ic('loader', 12) + '托管准备中…';
         try {
+          if (draft.autoHost) {
+            var hostedTopic = String(draft.topic || '').trim();
+            if (!hostedTopic) throw new Error('先写一个主题，托管才能写稿');
+            var hostedBody;
+            if (draft.productionMode === 'talking_head') {
+              if (!draft.voiceId) throw new Error('先选一个音色；没有的话点「克隆新音色」');
+              if (!draft.imageAssetId) throw new Error('先选一张形象照；素材库没有图片时先上传');
+              hostedBody = {
+                productionMode: 'talking_head', autoHost: true, topic: hostedTopic,
+                voiceId: draft.voiceId, imageAssetId: draft.imageAssetId, speed: draft.speed,
+                type: draft.type, subtype: draft.subtype, accountId: state.accountId,
+              };
+            } else {
+              hostedBody = {
+                mode: 'generate', autoHost: true, brief: hostedTopic,
+                type: draft.type, subtype: draft.subtype, hookStrategy: 'auto',
+                durationSeconds: draft.durationSeconds, resolution: draft.resolution, ratio: draft.ratio,
+                accountId: state.accountId,
+              };
+            }
+            var hostedResult = await call('/video/works', { method: 'POST', body: hostedBody });
+            state.videoWorks.unshift(hostedResult.work);
+            removeVideoDraft(draft.id);
+            var hostedStep = hostedResult.work && hostedResult.work.status === 'draft' ? 3 : 2;
+            openVideoFocus('work', hostedResult.work.id, hostedStep);
+            startVideoWorkPolling();
+            toast(hostedResult.work.productionMode === 'talking_head'
+              ? '托管正在写口播稿，完成后自动停在确认页'
+              : '托管正在写编导稿，完成后自动停在确认页', 'success');
+            return;
+          }
+          if (draft.productionMode === 'talking_head') {
+            var speech = String(draft.speech || '').trim();
+            if (!speech) {
+              toast('先把口播文案粘进来', 'error'); button.disabled = false; button.innerHTML = original; return;
+            }
+            if (!draft.voiceId) {
+              toast('先选一个音色；没有的话点「克隆新音色」', 'error'); button.disabled = false; button.innerHTML = original; return;
+            }
+            if (!draft.imageAssetId) {
+              toast('先选一张形象照；素材库没有图片时先上传', 'error'); button.disabled = false; button.innerHTML = original; return;
+            }
+            var thResult = await call('/video/works', {
+              method: 'POST',
+              body: {
+                productionMode: 'talking_head', speech: speech, voiceId: draft.voiceId,
+                imageAssetId: draft.imageAssetId, speed: draft.speed,
+                type: draft.type, subtype: draft.subtype, accountId: state.accountId,
+              },
+            });
+            state.videoWorks.unshift(thResult.work);
+            removeVideoDraft(draft.id);
+            openVideoFocus('work', thResult.work.id, 2);
+            toast('口播稿已就绪，核对分段和费用后再开始合成', 'success');
+            return;
+          }
           if (draft.mode === 'replicate' && draft.sourceKind === 'transcript' && !draft.sourceId) {
             toast('先选一条转写档案作为参考', 'error'); button.disabled = false; button.innerHTML = original; return;
           }
@@ -3456,9 +4246,29 @@
         button.disabled = true;
         try {
           if (action === 'confirm') {
-            await call('/video/works/' + encodeURIComponent(workId) + '/confirm', { method: 'POST', body: {} });
-            state.videoStep = 4;
-            toast('已提交视频渲染，第 4 步会自动刷新进度', 'success');
+            var confirmed = await call('/video/works/' + encodeURIComponent(workId) + '/confirm', { method: 'POST', body: {} });
+            var confirmedWork = confirmed.work || null;
+            var talkingConfirm = confirmedWork && confirmedWork.productionMode === 'talking_head';
+            if (confirmedWork) state.videoWorks = state.videoWorks.map(function (item) { return item.id === workId ? confirmedWork : item; });
+            state.videoStep = talkingConfirm ? 3 : 4;
+            toast(talkingConfirm ? '已提交口播合成，这一页会自动刷新进度' : '已提交视频渲染，第 4 步会自动刷新进度', 'success');
+          } else if (action === 'save-talking-head' || action === 'save-talking-head-next') {
+            var thWork = state.videoWorks.filter(function (item) { return item.id === workId; })[0];
+            if (!thWork) throw new Error('任务不存在，请刷新后再试');
+            var speechInput = $('#wb-th-speech');
+            var newSpeech = speechInput ? String(speechInput.value || '').trim() : '';
+            if (!newSpeech) throw new Error('口播稿不能为空');
+            var thChanged = newSpeech !== String((thWork.talkingHead || {}).text || '');
+            if (thChanged && thWork.status === 'succeeded' && !window.confirm('改稿会断开当前成片关联，旧成片仍保留在素材库；需要重新合成才会扣费。继续？')) {
+              button.disabled = false; button.innerHTML = original; return;
+            }
+            if (thChanged) {
+              var thSaved = await call('/video/works/' + encodeURIComponent(workId), { method: 'PUT', body: { talkingHead: { text: newSpeech } } });
+              state.videoWorks = state.videoWorks.map(function (item) { return item.id === workId ? thSaved.work : item; });
+              delete state.videoPackages[workId];
+              toast('口播稿已保存；确认分段后可以合成', 'success');
+            }
+            state.videoStep = action === 'save-talking-head-next' ? 3 : 2;
           } else if (action === 'regenerate') {
             await call('/video/works/' + encodeURIComponent(workId) + '/regenerate', { method: 'POST', body: {} });
             state.videoStep = 2;
@@ -3484,6 +4294,7 @@
               return;
             }
           }
+          if (['confirm', 'regenerate', 'save-script', 'save-talking-head', 'save-talking-head-next', 'delete'].indexOf(action) >= 0) delete state.videoPackages[workId];
         } catch (error) { toast(error.message, 'error'); }
         button.disabled = false; button.innerHTML = original;
         void loadVideoWorks();
@@ -3519,6 +4330,7 @@
           try {
             var result = await call('/video/works/' + encodeURIComponent(workId), { method: 'PUT', body: { directorScript: work.directorScript, scriptEdited: true } });
             state.videoWorks = state.videoWorks.map(function (item) { return item.id === workId ? result.work : item; });
+            delete state.videoPackages[workId];
             renderVideo();
             toast('本镜已保存', 'success');
           } catch (error) { toast(error.message, 'error'); }
@@ -3608,6 +4420,63 @@
           setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
         } catch (error) { toast(error.message, 'error'); }
         button.disabled = false; button.innerHTML = original;
+      };
+    });
+    $$('[data-wb-v-pkg]').forEach(function (button) {
+      button.onclick = async function () {
+        var action = button.dataset.wbVPkg;
+        var workId = button.dataset.id;
+        var work = state.videoWorks.filter(function (item) { return item.id === workId; })[0];
+        if (!work) return;
+        if (action === 'download') {
+          var pkg = state.videoPackages[workId];
+          if (!pkg || !pkg.zipAssetId) return;
+          button.disabled = true; var original = button.innerHTML; button.innerHTML = ic('loader', 12) + '准备下载…';
+          try {
+            var blob = await fetchBlob(API + '/assets/' + encodeURIComponent(pkg.zipAssetId) + '/file');
+            var url = URL.createObjectURL(blob);
+            var link = document.createElement('a');
+            link.href = url;
+            link.download = String(pkg.title || videoWorkTitle(work) || '视频发布包').replace(/[\\/:*?"<>|]/g, '_') + '-发布包.zip';
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+          } catch (error) { toast(error.message, 'error'); }
+          button.disabled = false; button.innerHTML = original;
+          return;
+        }
+        if (action === 'copy') {
+          var copyPkg = state.videoPackages[workId];
+          if (!copyPkg) return;
+          try {
+            await copyText(packageCopyText(copyPkg, work));
+            toast('发布文案已复制', 'success');
+          } catch (error) { toast('复制失败，请手动选择文案', 'error'); }
+          return;
+        }
+        if (action === 'create') {
+          var payload = readPackageForm();
+          button.disabled = true; var label = button.innerHTML; button.innerHTML = ic('loader', 12) + '提交中…';
+          try {
+            var data = await call('/video/works/' + encodeURIComponent(workId) + '/package', { method: 'POST', body: payload });
+            if (data.package) {
+              state.videoPackages[workId] = data.package;
+              state.videoPackageLoading = '';
+              renderVideo();
+              if (data.package.status === 'running') {
+                startVideoPackagePolling(data.package.id, workId);
+                toast('发布包生成中，通常几十秒', 'success');
+              } else if (data.package.status === 'ready') {
+                toast('发布包已生成', 'success');
+              }
+            }
+          } catch (error) {
+            toast(error.message, 'error');
+            button.disabled = false; button.innerHTML = label;
+          }
+          return;
+        }
       };
     });
   }

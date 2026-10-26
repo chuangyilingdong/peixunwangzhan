@@ -730,6 +730,34 @@ ${workbenchProfileBlock(profile)}
 - 不承诺效果，不使用绝对化用语。`;
 }
 
+// 二十一期 · 一键托管：只写口播稿正文（不是分镜 JSON），直接给数字人合成用。
+export function buildTalkingHeadCopyPrompt({ profile, orgProfile, type, subtype, topic, duration = 30 }) {
+  return `你是教培机构的口播文案策划。根据机构档案和这次的主题，写一条可以直接对着镜头说的口播稿。
+
+【这次主题】${topic || videoTypeLabel(type)}
+【内容方向】${videoTypeLabel(type)} · ${videoSubtypeName(type, subtype)}
+【目标时长】约 ${duration} 秒
+【机构画像】
+${orgProfile || '未填写'}
+【内容账号档案】
+${workbenchProfileBlock(profile)}
+
+输出要求：
+- 只输出口播正文，不要标题、序号、markdown、括号备注、镜头说明或解释。
+- 120-220 个汉字；短句，口语化，像真人对着家长说话。
+- 开头 15 个字内给一个具体钩子；中间只讲一个误区或痛点；结尾给一个今天就能做的动作。
+- 不承诺提分/收益/效果，不使用「保证」「第一」「最」「全网最低」等绝对化用语。
+- 档案里没有的价格、师资、数据不要编造；不确定就不写具体数字。`;
+}
+
+// 演示口播稿：模型未接入/返回空时兜底，保证托管链路可走通。
+export function demoTalkingHeadCopy({ profile, type, subtype, topic }) {
+  const subject = subjectOf(profile);
+  const audience = audienceOf(profile);
+  const topicText = clean(topic).slice(0, 40) || `${videoTypeLabel(type)} · ${subtype || '口播带货'}`;
+  return `很多${audience}一提到${subject}，第一反应就是先比价格。其实更该先看孩子坐不坐得住、愿不愿意主动开口。${topicText}这件事，先别急着做决定，带孩子做一次简单的现状评估：他哪里卡住、愿不愿意再来第二次。看完这两点，再决定要不要报，心里会踏实很多。想领评估表的，可以在评论区留一句“评估”。`;
+}
+
 // 演示编导稿：模型未接入/返回空时兜底，保证链路可走通。
 export function demoDirectorScript({ profile, type, subtype, duration = 15, brief = '' }) {
   const subject = subjectOf(profile);
