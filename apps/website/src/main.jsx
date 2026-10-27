@@ -249,7 +249,10 @@ const plOpenKind = (w) => {
   // ⭐ 托管的可运行网页作品（入口页在我们自己的 `/media/` 下）→ 在**沙箱**里跑。
   //    判据放在最前面：这类作品的 `contentUrls` 是空的、`externalUrl` 是 null，
   //    只有 `entryUrl` 有值 —— 不加这一支它会掉到 'none'（点开什么都不发生）。
-  if (w.entryUrl) return 'webwork';
+  //    ⭐ 2026-10-27 用户口径：「每件作品都要有像 /works/vbt_… 这样能单独分享的地址」——
+  //    所以有 `publicUrl` 的走**作品详情页**（整页展示，地址栏就是分享链接）；
+  //    只有拿不到分享码的才退回原来的查看层。
+  if (w.entryUrl) return w.publicUrl ? 'detail' : 'webwork';
   if (plIsVideo(w) && (w.contentUrls || []).length) return 'video';
   if (plIsAudio(w)) return 'audio';
   if (plImageUrls(w).length) return 'image';

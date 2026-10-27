@@ -23,6 +23,23 @@ function withContent(item, files) {
   return { ...item, content: String(files?.[item.name] ?? '') };
 }
 
+/** 复制当前作品页地址 —— 分享出去的链接就是地址栏这一条。 */
+function CopyLinkButton() {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    const url = window.location.href;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // 非安全上下文 / 浏览器拒绝剪贴板权限：退回系统输入框，用户自己复制。
+      window.prompt('复制这个作品链接', url);
+    }
+  }
+  return <button type="button" className="button soft" onClick={copy}>{copied ? '✓ 已复制' : '复制链接'}</button>;
+}
+
 /**
  * ⭐ 2026-09-27：这一页现在有**两条入口**，靠路由参数自己分辨（不用调用方传标志位）：
  *   · `/works/:token`（作品广场）—— 按作品分享码取数（只可能是已公开的）；
@@ -52,7 +69,13 @@ export function WorkDetailPage({ api }) {
       ? `public/creators/${encodeURIComponent(token)}/works/${encodeURIComponent(String(source || 'CANVAS').toUpperCase())}/${encodeURIComponent(id)}`
       : (vibe ? 'public/vibecoding-works/' : 'public/works/') + encodeURIComponent(token);
     api.get(path)
-      .then((payload) => { if (live) setState({ loading: false, error: null, work: payload || null }); })
+      .then((payload) => {
+        if (!live) return;
+        setState({ loading: false, error: null, work: payload || null });
+        // 分享出去的链接，浏览器标签上应当是**作品名**而不是「作品详情」。
+        // 放在请求回调里（而不是 useEffect 里）是因为 App 的标题 effect 会随后运行，必须晚于它。
+        if (payload?.title) document.title = payload.title;
+      })
       .catch((error) => { if (live) setState({ loading: false, error: error.message, work: null }); });
     return () => { live = false; };
   }, [api, token, source, id, creatorScoped, vibe]);
@@ -72,6 +95,15 @@ export function WorkDetailPage({ api }) {
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [api, work]);
+
+  // 网页作品的独立页是整屏 fixed 层：锁住背后的官网页面滚动，离开时恢复。
+  useEffect(() => {
+    if (!work?.entryUrl) return undefined;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
+  }, [work?.entryUrl]);
+
   // 媒体网格的地址解析表（2026-09-27 修「图片已失效」）：
   //   公开作品的 `media` 里，服务端**已经把站内素材换成了这份作品专属的公开代理地址**
   //   （见 routes/communication/public.js），但这里原来只认 `imageUrls` 那份映射 ——
@@ -246,6 +278,36 @@ export function WorkDetailPage({ api }) {
           </div>
         </> : null}
       </ReplayShell>
+    </main>;
+  }
+
+  // ⭐ 2026-10-27 用户口径：每件网页作品都要有 `/works/<分享码>` 这样能单独转发的地址。
+  //    这类作品的“内容”是托管在 `/media/web-works/…` 的整页 HTML，不是画布/媒体清单，
+  //    所以给它们一条**独立作品页**：地址栏就是分享链接，作品在沙箱 iframe 里**整屏**运行。
+  //    顶栏只留作品名 + 复制链接 + 返回广场，不再套官网导航/页脚 —— 打开就是作品本身，
+  //    与“直接打开这个 HTML”一致（原有 9 件 aimagc 导入件也走这里）。
+  if (work?.entryUrl) {
+    return <main className="work-live-page" aria-label={work.title}>
+      <header className="work-live-bar">
+        <div className="work-live-bar__info">
+          <span className="pl-badge">{work.workTypeLabel || '网页'}</span>
+          <div>
+            <h1>{work.title}</h1>
+            <p>{work.studentName}{work.orgName ? ` · ${work.orgName}` : ''}{work.submittedAt ? ` · ${formatDate(work.submittedAt)}` : ''}</p>
+          </div>
+        </div>
+        <div className="work-live-bar__actions">
+          <CopyLinkButton />
+          <Link className="work-live-back" to="/works">← 返回作品广场</Link>
+        </div>
+      </header>
+      <iframe
+        className="work-live__frame"
+        src={work.entryUrl}
+        title={work.title}
+        loading="eager"
+        sandbox="allow-scripts allow-modals allow-forms allow-popups allow-downloads"
+      />
     </main>;
   }
 
