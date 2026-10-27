@@ -1177,7 +1177,17 @@ function Works(){
     Promise.allSettled([publicApi.get('public/works?limit=500'), publicApi.get('public/vibecoding-works?limit=100')]).then(([canvas, vibe])=>{
       const canvasItems = canvas.status === 'fulfilled' && Array.isArray(canvas.value?.items) ? canvas.value.items : [];
       const vibeItems = vibe.status === 'fulfilled' && Array.isArray(vibe.value?.items) ? vibe.value.items : [];
-      const merged = [...vibeItems, ...canvasItems].sort((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured)));
+      // ⚠️ 只按 featured 排是不够的：两类列表拼接后所有非精选项比较结果都是 0，
+      //    稳定排序会保持「VibeCoding 全部在前、画布/导入件全部在后」——新上传的导入件
+      //    会被压到第 5 页之后（用户看到的就是「上传了但首页没有」）。
+      //    这里补上提交时间倒序：精选优先，其余按最新提交排。
+      const merged = [...vibeItems, ...canvasItems].sort((left, right) => {
+        const featured = Number(Boolean(right.featured)) - Number(Boolean(left.featured));
+        if (featured) return featured;
+        const rightAt = String(right.submittedAt || right.createdAt || '');
+        const leftAt = String(left.submittedAt || left.createdAt || '');
+        return rightAt.localeCompare(leftAt);
+      });
       if (merged.length) setItems(merged);
       else if (canvas.status === 'rejected' && vibe.status === 'rejected') setError(canvas.reason?.message || t('works.loadFail'));
       setLoaded(true);

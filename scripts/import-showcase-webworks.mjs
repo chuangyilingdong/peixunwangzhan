@@ -21,7 +21,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { aq, arow } from '../packages/database/src/store.js';
+import { aq, arow, closePool } from '../packages/database/src/store.js';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const MEDIA_ROOT = process.env.PLAZA_MEDIA_ROOT || '/srv/ai-kids-platform/public-media';
@@ -201,7 +201,12 @@ async function main() {
   log(`广场地址：${process.env.PUBLIC_SITE_URL || 'https://aicyld.com'}/works`);
 }
 
-await main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error('[showcase] 失败：', error);
-  process.exit(1);
-});
+  process.exitCode = 1;
+} finally {
+  // MySQL 连接池会一直握着事件循环；不关的话脚本跑完不退出（只能等 ssh 超时）。
+  await closePool().catch(() => {});
+}
