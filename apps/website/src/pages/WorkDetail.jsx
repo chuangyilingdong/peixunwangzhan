@@ -96,14 +96,6 @@ export function WorkDetailPage({ api }) {
     return () => { cancelled = true; };
   }, [api, work]);
 
-  // 网页作品的独立页是整屏 fixed 层：锁住背后的官网页面滚动，离开时恢复。
-  useEffect(() => {
-    if (!work?.entryUrl) return undefined;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = previous; };
-  }, [work?.entryUrl]);
-
   // 媒体网格的地址解析表（2026-09-27 修「图片已失效」）：
   //   公开作品的 `media` 里，服务端**已经把站内素材换成了这份作品专属的公开代理地址**
   //   （见 routes/communication/public.js），但这里原来只认 `imageUrls` 那份映射 ——
@@ -147,6 +139,18 @@ export function WorkDetailPage({ api }) {
   );
   // （原来这里还有一个 `sourceDefault`：「它是怎么写出来的」那个源码清单默认停在哪个文件。
   //   2026-09-27 用户口径把那块删掉之后它没有调用方了，一并删。）
+  // ⭐ 2026-10-27 用户口径：「以前的这些作品还是需要用滚轮，是不是可以以现在最近的几个 html
+  //    展示效果一样」——VibeCoding 的**单网页**作品也走整屏作品页（与导入型网页同一套外壳）。
+  //    多产物（网页 + PPT/Word/Excel）仍保留原来的信息页 + 产物切换条，别把切换入口弄丢。
+  const isSingleWebVibe = isVibeToken && views.length === 1 && Boolean(current) && !current.document;
+  const liveFullscreen = Boolean(work?.entryUrl) || isSingleWebVibe;
+  // 整屏作品页是 fixed 层：锁住背后的官网页面滚动，离开时恢复。
+  useEffect(() => {
+    if (!liveFullscreen) return undefined;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
+  }, [liveFullscreen]);
 
   // ⭐ 2026-10-03（§九十九）：`--screen` 舞台的高度是 `calc(100dvh - var(--wd-chrome, 232px))`，
   //    而 232 只是**默认值** —— 这一页"舞台上面的头/操作区"真实高度随路由与文案变
@@ -179,6 +183,27 @@ export function WorkDetailPage({ api }) {
 
   if (isVibeToken) {
     const label = current?.document ? artifactGroup(current.kind).label : '互动网页';
+    // 单网页作品：整屏作品页（与导入型网页同款），地址仍是 `/works/vbt_…`，可直接分享。
+    if (isSingleWebVibe) {
+      return <main className="work-live-page" aria-label={work?.title || '学生作品'}>
+        <header className="work-live-bar">
+          <div className="work-live-bar__info">
+            <span className="pl-badge">互动网页</span>
+            <div>
+              <h1>{work?.title || '学生作品'}</h1>
+              <p>{work?.studentName}{work?.orgName ? ` · ${work.orgName}` : ''}{work?.submittedAt ? ` · ${formatDate(work.submittedAt)}` : ''}</p>
+            </div>
+          </div>
+          <div className="work-live-bar__actions">
+            <CopyLinkButton />
+            <Link className="work-live-back" to="/works">← 返回作品广场</Link>
+          </div>
+        </header>
+        <div className="work-live-preview">
+          <ReplayPreview html={buildPreviewDocument(files, current.name)} title={work?.title || '作品预览'} chrome={false} fill />
+        </div>
+      </main>;
+    }
     return <main className="inner">
       <ReplayShell
         embedded

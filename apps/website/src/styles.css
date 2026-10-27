@@ -411,6 +411,11 @@ nav a{position:relative;white-space:nowrap;color:#7b7490;font-size:12.5px;paddin
 .work-live-back{color:#cfcaff;font-size:12.5px;font-weight:800;text-decoration:none;white-space:nowrap}
 .work-live-back:hover{color:#fff}
 .work-live__frame{position:static;flex:1 1 auto;min-height:0;width:100%;height:auto;border:0;border-radius:0;background:#fff;display:block}
+/* VibeCoding 单网页作品走同一套整屏外壳：ReplayPreview 的 fill 舞台吃满剩余高度。
+   `height:100%` 是给 `.c-preview__stage--fill` 的（它自己只写了 height:100%），
+   外层必须有确定高度 —— 下面这条 flex 布局就是。 */
+.work-live-preview{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:#fff}
+.work-live-preview > .c-preview__stage--fill{flex:1 1 auto;min-height:0;height:100%}
 @media(max-width:640px){
   .work-live-bar{min-height:46px;padding:5px 10px;gap:8px}
   .work-live-bar__info .pl-badge,.work-live-bar__info p{display:none}
