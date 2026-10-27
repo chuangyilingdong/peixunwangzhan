@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:;">
+  <title>招生军师</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-logo">军</span>
+        <div><b>招生军师</b><small>CONTENT STUDIO</small></div>
+      </div>
+
+      <nav class="main-nav" aria-label="主菜单">
+        <button type="button" data-page="home" class="nav-item active">
+          <svg viewBox="0 0 24 24"><path d="M3 10.5L12 3l9 7.5V21h-6v-6H9v6H3z"/></svg><span>首页</span>
+        </button>
+        <button type="button" data-page="create" class="nav-item">
+          <svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></svg><span>做内容</span>
+        </button>
+        <button type="button" data-page="peers" class="nav-item">
+          <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.2 2.7-6 6-6s6 2.8 6 6"/><circle cx="17.5" cy="9.5" r="2.5"/><path d="M15.5 14.5c3 .2 5.5 2.5 5.5 5.5"/></svg><span>同行采集</span>
+        </button>
+        <button type="button" data-page="reports" class="nav-item">
+          <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>我的数据</span>
+        </button>
+        <button type="button" data-page="settings" class="nav-item">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.6v.2h-4V21a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 00.3-1.9A1.7 1.7 0 003 14H2.8v-4H3a1.7 1.7 0 001.6-1 1.7 1.7 0 00-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 009 4.6 1.7 1.7 0 0010 3V2.8h4V3a1.7 1.7 0 001 1.6 1.7 1.7 0 001.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 00-.3 1.9 1.7 1.7 0 001.6 1h.2v4H21a1.7 1.7 0 00-1.6 1z"/></svg><span>设置</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <button type="button" class="collector-shortcut" id="sidebar-collector">
+          <span class="pulse-dot" id="collector-dot"></span>
+          <span><b>本地抖音采集</b><small id="collector-shortcut-text">打开内置浏览器</small></span>
+          <span>↗</span>
+        </button>
+        <div class="user-card">
+          <span class="avatar" id="user-avatar">军</span>
+          <div><b id="user-name">正在读取…</b><small id="org-name"></small></div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div><span class="eyebrow" id="page-eyebrow">CONTENT STUDIO</span><h1 id="page-title">首页</h1></div>
+        <div class="topbar-actions">
+          <span class="status-chip" id="global-status"><i></i><span>准备就绪</span></span>
+          <button type="button" class="btn ghost small" id="refresh-page">刷新</button>
+        </div>
+      </header>
+      <section class="view" id="view">
+        <div class="loading-block"><span class="spinner"></span><b>正在准备你的工作台…</b></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <div class="modal-backdrop hidden" id="guide-modal">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="guide-title">
+      <h3 id="guide-title">同行采集怎么用</h3>
+      <p>只需要做一次设置，以后点“去采集”就行。</p>
+      <div class="modal-steps">
+        <div class="modal-step"><span>1</span><div><b>添加同行</b><p>把同行的抖音主页链接粘贴到输入框，点“添加同行”。</p></div></div>
+        <div class="modal-step"><span>2</span><div><b>点“去采集”</b><p>客户端会打开这个同行的主页。需要登录或验证码时，按抖音页面提示自己完成。</p></div></div>
+        <div class="modal-step"><span>3</span><div><b>点“采集当前主页（同行）”</b><p>在右侧抖音页面的采集工具栏点这个按钮。客户端会读取作品，服务器自动下载和转写。</p></div></div>
+      </div>
+      <div class="modal-actions"><button type="button" class="btn primary" id="guide-close">知道了</button></div>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
+

@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+  <title>招生军师 · 客户端登录</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#69748a; --line:#e5e9f2; --blue:#1465e7; --blue-2:#0d4fca; --rail:#0f172a; --rail-2:#131d33; --rail-text:#8f9bb3; --surface:#f4f6fa; }
+    * { box-sizing:border-box; }
+    html,body { width:100%; height:100%; margin:0; overflow:hidden; }
+    body { display:grid; grid-template-columns:272px minmax(0,1fr); background:var(--surface); color:var(--ink); font:14px/1.55 "Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif; }
+    button,input { font:inherit; }
+    aside { position:relative; display:flex; flex-direction:column; padding:25px 18px 18px; color:white; background:radial-gradient(circle at 15% 0%,rgba(52,120,255,.24),transparent 32%),linear-gradient(180deg,var(--rail-2),var(--rail)); }
+    .brand { display:flex; align-items:center; gap:12px; padding:0 8px 22px; }
+    .brand img { width:42px; height:42px; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.24); }
+    .brand b { display:block; font-size:18px; letter-spacing:.02em; }
+    .brand small { display:block; margin-top:2px; color:#7f8ba3; font-size:11px; letter-spacing:.12em; }
+    .rail-caption { padding:9px 11px 7px; color:#66728a; font-size:10px; font-weight:700; letter-spacing:.16em; }
+    nav { display:flex; flex-direction:column; gap:4px; }
+    .nav-item { display:flex; align-items:center; gap:10px; min-height:40px; padding:0 12px; border:0; border-radius:10px; color:var(--rail-text); background:transparent; text-align:left; }
+    .nav-item .icon { width:20px; color:#6f7d98; text-align:center; font-size:16px; }
+    .nav-item.active { color:#fff; background:linear-gradient(90deg,rgba(32,104,244,.32),rgba(32,104,244,.1)); box-shadow:inset 0 0 0 1px rgba(104,155,255,.16); }
+    .nav-item.active .icon { color:#7fb0ff; }
+    .nav-item.muted { opacity:.52; }
+    .rail-foot { margin-top:auto; padding:16px 10px 2px; border-top:1px solid rgba(255,255,255,.07); color:#647086; font-size:11px; }
+    .rail-foot .dot { display:inline-block; width:7px; height:7px; margin-right:7px; border-radius:50%; background:#37c98b; box-shadow:0 0 0 4px rgba(55,201,139,.1); }
+    main { display:grid; grid-template-rows:66px minmax(0,1fr); min-width:0; }
+    header { display:flex; align-items:center; justify-content:space-between; padding:0 30px; border-bottom:1px solid var(--line); background:rgba(255,255,255,.86); }
+    .crumb { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12.5px; }
+    .crumb b { color:var(--ink); font-weight:600; }
+    .crumb i { color:#aab2c1; font-style:normal; }
+    .secure { display:flex; align-items:center; gap:7px; color:#4f5d75; font-size:12px; }
+    .secure::before { content:""; width:7px; height:7px; border-radius:50%; background:#2fba7b; }
+    .content { position:relative; display:grid; place-items:center; padding:38px; overflow:auto; }
+    .content::before { content:""; position:absolute; inset:0; background-image:linear-gradient(rgba(20,101,231,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(20,101,231,.035) 1px,transparent 1px); background-size:34px 34px; mask-image:linear-gradient(to bottom,transparent,#000 18%,#000 82%,transparent); pointer-events:none; }
+    .login-card { position:relative; width:min(520px,100%); padding:34px 36px 31px; border:1px solid #e0e6f1; border-radius:22px; background:rgba(255,255,255,.96); box-shadow:0 24px 70px rgba(26,42,72,.12); }
+    .eyebrow { color:var(--blue); font-size:11px; font-weight:700; letter-spacing:.16em; }
+    h1 { margin:10px 0 7px; font-size:30px; line-height:1.2; letter-spacing:-.035em; }
+    .sub { margin:0 0 27px; color:var(--muted); font-size:13px; }
+    .field { display:block; margin:16px 0; }
+    .field > span { display:block; margin-bottom:7px; color:#34405a; font-size:12.5px; font-weight:600; }
+    input { width:100%; height:46px; padding:0 13px; border:1px solid #dbe1ec; border-radius:11px; outline:none; color:var(--ink); background:#f8faff; transition:border-color .15s,box-shadow .15s,background .15s; }
+    input:hover { border-color:#c7d2e5; }
+    input:focus { border-color:#6e9cf0; background:#fff; box-shadow:0 0 0 4px rgba(20,101,231,.09); }
+    .mfa[hidden] { display:none; }
+    .mfa-hint { margin:-5px 0 4px; color:#8a6680; font-size:11.5px; }
+    .submit { width:100%; height:48px; margin-top:22px; border:0; border-radius:11px; color:#fff; background:linear-gradient(180deg,#2275f1,var(--blue)); box-shadow:0 10px 22px rgba(20,101,231,.25); font-weight:650; cursor:pointer; transition:transform .15s,box-shadow .15s,opacity .15s; }
+    .submit:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 13px 28px rgba(20,101,231,.3); }
+    .submit:disabled { opacity:.58; cursor:wait; }
+    .status { min-height:20px; margin-top:13px; color:#b33b42; font-size:12px; }
+    .status.success { color:#23845b; }
+    .foot-note { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-top:20px; padding-top:17px; border-top:1px solid #edf0f5; color:#8a94a8; font-size:11px; }
+    .foot-note b { color:#59657a; font-weight:600; }
+    @media (max-width:900px) { body { grid-template-columns:220px minmax(0,1fr); } aside { padding-left:13px; padding-right:13px; } .login-card { padding:28px; } }
+  </style>
+</head>
+<body>
+  <aside>
+    <div class="brand">
+      <img src="../assets/icon.png" alt="">
+      <div><b>招生军师</b><small>CONTENT DESKTOP</small></div>
+    </div>
+    <div class="rail-caption">创作</div>
+    <nav aria-label="客户端导航预览">
+      <button class="nav-item active" type="button"><span class="icon">◈</span><span>内容工作台</span></button>
+      <button class="nav-item muted" type="button" disabled><span class="icon">◎</span><span>账号档案</span></button>
+      <button class="nav-item muted" type="button" disabled><span class="icon">⌕</span><span>同行观察</span></button>
+      <button class="nav-item muted" type="button" disabled><span class="icon">✦</span><span>文案大脑</span></button>
+      <button class="nav-item muted" type="button" disabled><span class="icon">▶</span><span>视频创作</span></button>
+      <button class="nav-item muted" type="button" disabled><span class="icon">▧</span><span>素材库</span></button>
+      <button class="nav-item muted" type="button" disabled><span class="icon">↗</span><span>数据复盘</span></button>
+    </nav>
+    <div class="rail-foot"><span class="dot"></span>平台安全登录 · <span id="version">v--</span></div>
+  </aside>
+  <main>
+    <header>
+      <div class="crumb"><span>招生军师</span><i>/</i><b>账号登录</b></div>
+      <div class="secure">与网站账号互通</div>
+    </header>
+    <section class="content">
+      <form class="login-card" id="login-form" autocomplete="on">
+        <div class="eyebrow">JUNSHI DESKTOP</div>
+        <h1>登录内容工作台</h1>
+        <p class="sub">使用招生军师网站上的机构账号登录，账号权限、机构数据和历史内容与网页端一致。</p>
+        <label class="field"><span>机构账号</span><input id="login" name="login" autocomplete="username" placeholder="请输入登录账号" required></label>
+        <label class="field"><span>登录密码</span><input id="password" name="password" type="password" autocomplete="current-password" placeholder="请输入登录密码" required></label>
+        <label class="field mfa" id="mfa-field" hidden><span>二次验证</span><input id="mfa-code" name="mfaCode" inputmode="numeric" autocomplete="one-time-code" placeholder="动态验证码或恢复码"></label>
+        <p class="mfa-hint" id="mfa-hint" hidden>该账号已开启二次验证，请输入验证器中的动态验证码或恢复码。</p>
+        <button class="submit" id="submit" type="submit">登录并打开内容工作台</button>
+        <div class="status" id="status" role="alert"></div>
+        <div class="foot-note"><span>账号由平台统一开通</span><span id="site-label">aicyld.com</span></div>
+      </form>
+    </section>
+  </main>
+  <script>
+    const api = window.junshiDesktop;
+    const form = document.getElementById('login-form');
+    const loginInput = document.getElementById('login');
+    const passwordInput = document.getElementById('password');
+    const mfaField = document.getElementById('mfa-field');
+    const mfaCodeInput = document.getElementById('mfa-code');
+    const mfaHint = document.getElementById('mfa-hint');
+    const submit = document.getElementById('submit');
+    const statusEl = document.getElementById('status');
+
+    try { loginInput.value = localStorage.getItem('junshi.desktop.lastLogin') || ''; } catch {}
+
+    api.bootstrap().then((info) => {
+      document.getElementById('version').textContent = 'v' + info.appVersion;
+      try { document.getElementById('site-label').textContent = new URL(info.siteUrl).hostname; } catch {}
+    }).catch(() => {});
+
+    function setStatus(text, kind = '') {
+      statusEl.textContent = text;
+      statusEl.className = 'status' + (kind ? ' ' + kind : '');
+    }
+
+    function setBusy(busy) {
+      submit.disabled = busy;
+      submit.textContent = busy ? '正在验证账号…' : '登录并打开内容工作台';
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const login = loginInput.value.trim();
+      const password = passwordInput.value;
+      const mfaCode = mfaCodeInput.value.trim();
+      if (!login || !password) { setStatus('请输入账号和密码'); return; }
+      if (!mfaField.hidden && !mfaCode) { setStatus('请输入二次验证码'); mfaCodeInput.focus(); return; }
+      setBusy(true);
+      setStatus('正在连接招生军师平台…');
+      try {
+        const result = await api.login(login, password, mfaCode);
+        if (result?.ok) {
+          try { localStorage.setItem('junshi.desktop.lastLogin', login); } catch {}
+          setStatus('登录成功，正在打开内容工作台…', 'success');
+          return;
+        }
+        if (result?.mfaRequired) {
+          mfaField.hidden = false;
+          mfaHint.hidden = false;
+          mfaCodeInput.focus();
+          setStatus(result.mfaInvalid ? '验证码不正确，请重新输入' : '请输入二次验证码后再次登录');
+        } else {
+          setStatus(result?.message || '登录失败');
+        }
+      } catch (error) {
+        setStatus(String(error?.message || error));
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    loginInput.focus();
+  </script>
+</body>
+</html>

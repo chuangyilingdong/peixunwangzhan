@@ -14,6 +14,8 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
+import { promises as fsp } from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { getProviderApiKey } from './providerSecret.js';
 import { AI_PROVIDER_API_KEY } from '../config.js';
@@ -81,6 +83,8 @@ export function runDouyinWorker(payload, { timeoutMs = 45000 } = {}) {
 
 /* ── 分享文本 / 链接解析（纯 Node：跟 302，不进 worker） ── */
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+/** 单条抖音视频上限：默认 200MB，与生产上传上限一致；可用 JUNSHI_DOUYIN_MAX_BYTES 调整。 */
+const MAX_DOUYIN_VIDEO_BYTES = Math.max(120 * 1024 * 1024, Math.min(200 * 1024 * 1024, Number(process.env.JUNSHI_DOUYIN_MAX_BYTES) || 200 * 1024 * 1024));
 
 /** 从一段分享文本里取出目标：短链 v.douyin.com/xxx、/video/{19位id}、/user/{sec_uid}。 */
 export async function resolveDouyinTarget(raw) {
@@ -200,10 +204,10 @@ export async function downloadDouyinVideo(url) {
   const response = await fetch(url, { headers: { 'user-agent': UA, referer: 'https://www.douyin.com/' }, signal: AbortSignal.timeout(180000) });
   if (!response.ok) throw Object.assign(new Error(`视频下载失败（HTTP ${response.status}）`), { status: 502 });
   const declared = Number(response.headers.get('content-length') || 0);
-  if (declared > 120 * 1024 * 1024) throw Object.assign(new Error('这条视频超过 120MB，暂不支持自动转写'), { status: 413 });
+  if (declared > MAX_DOUYIN_VIDEO_BYTES) throw Object.assign(new Error(`这条视频超过 ${Math.floor(MAX_DOUYIN_VIDEO_BYTES / 1024 / 1024)}MB，超出平台单素材上限`), { status: 413 });
   const buffer = Buffer.from(await response.arrayBuffer());
   if (!buffer.length) throw Object.assign(new Error('视频下载为空'), { status: 502 });
-  if (buffer.length > 120 * 1024 * 1024) throw Object.assign(new Error('这条视频超过 120MB，暂不支持自动转写'), { status: 413 });
+  if (buffer.length > MAX_DOUYIN_VIDEO_BYTES) throw Object.assign(new Error(`这条视频超过 ${Math.floor(MAX_DOUYIN_VIDEO_BYTES / 1024 / 1024)}MB，超出平台单素材上限`), { status: 413 });
   return buffer;
 }
 
@@ -222,18 +226,107 @@ export async function seedanceAsrConfig(policyChannels) {
   return null;
 }
 
+function readableAsrError(text) {
+  const cleaned = String(text || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&[a-z#0-9]+;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.slice(0, 180) || '上游没有返回可读错误';
+}
+
+function runMediaCommand(command, args, timeoutMs = 180000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error); else resolve(value);
+    };
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch {}
+      finish(Object.assign(new Error(`${command} 处理超时`), { status: 504 }));
+    }, timeoutMs);
+    timer.unref?.();
+    child.stdout?.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
+    child.stderr?.on('data', (chunk) => { stderr = (stderr + chunk.toString('utf8')).slice(-6000); });
+    child.on('error', (error) => finish(Object.assign(new Error(`${command} 启动失败：${error.message}`), { status: 503 })));
+    child.on('close', (code) => {
+      if (code === 0) finish(null, { stdout, stderr });
+      else finish(Object.assign(new Error(`${command} 处理失败${stderr ? `：${stderr.split(/\r?\n/).filter(Boolean).slice(-2).join(' ').slice(0, 260)}` : `（退出码 ${code}）`}`), { status: 502 }));
+    });
+  });
+}
+
+async function probeMediaDuration(file) {
+  const { stdout } = await runMediaCommand('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file], 30000);
+  return Math.max(0, Number(String(stdout).trim()) || 0);
+}
+
+/**
+ * 先把视频抽成 16k 单声道低码率音频，再按 5 分钟切片。
+ * Whisper 对整段大视频经常 fetch failed / timeout / 524；音频分片能显著降低单次上传和处理时间。
+ */
+export async function prepareAudioChunks({ buffer, fileName = 'source.mp4', chunkSeconds = 300 }) {
+  if (!buffer?.length) throw Object.assign(new Error('转写素材为空'), { status: 400 });
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'junshi-asr-'));
+  try {
+    const rawExt = path.extname(String(fileName || '')).toLowerCase();
+    const ext = /^\.[a-z0-9]{1,8}$/.test(rawExt) ? rawExt : '.mp4';
+    const input = path.join(dir, `source${ext}`);
+    await fsp.writeFile(input, buffer);
+    const duration = await probeMediaDuration(input).catch(() => 0);
+    const pattern = path.join(dir, 'chunk-%03d.mp3');
+    try {
+      await runMediaCommand('ffmpeg', [
+        '-hide_banner', '-loglevel', 'error', '-y',
+        '-i', input,
+        '-map', '0:a:0', '-vn', '-ac', '1', '-ar', '16000', '-b:a', '24k',
+        '-f', 'segment', '-segment_time', String(Math.max(30, Number(chunkSeconds) || 300)), '-reset_timestamps', '1',
+        pattern,
+      ], 180000);
+    } catch (error) {
+      if (/does not contain any stream|matches no streams|Stream map|Failed to configure output pad/i.test(String(error?.message || error))) {
+        throw Object.assign(new Error('这条素材没有可用音轨，无法转写'), { status: 422 });
+      }
+      throw error;
+    }
+    const chunks = (await fsp.readdir(dir))
+      .filter((name) => /^chunk-\d{3}\.mp3$/.test(name))
+      .sort()
+      .map((name) => path.join(dir, name));
+    if (!chunks.length) throw Object.assign(new Error('这条素材没有可用音轨，无法转写'), { status: 422 });
+    return { dir, chunks, duration };
+  } catch (error) {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+function asrErrorRetryable(error) {
+  const message = String(error?.message || error);
+  const status = Number(error?.status) || 0;
+  return status === 429 || status >= 500 || /fetch failed|timed? ?out|aborted|ECONN|UND_ERR|socket|network|524/i.test(message);
+}
+
 /** 同步转写：multipart 上传音频/视频字节，verbose_json 拿时间码分段。 */
-export async function transcribeMedia({ endpoint, apiKey, buffer, fileName, mimeType }) {
+export async function transcribeMedia({ endpoint, apiKey, buffer, fileName, mimeType, timeoutMs = 300000 }) {
   const form = new FormData();
   form.append('file', new Blob([buffer], { type: mimeType || 'video/mp4' }), fileName);
   form.append('model', 'whisper-1');
   form.append('response_format', 'verbose_json');
   const response = await fetch(`${endpoint}/v1/audio/transcriptions`, {
-    method: 'POST', headers: { authorization: `Bearer ${apiKey}` }, body: form, signal: AbortSignal.timeout(300000),
+    method: 'POST', headers: { authorization: `Bearer ${apiKey}` }, body: form, signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await response.text();
   if (!response.ok) {
-    throw Object.assign(new Error(`转写服务返回 HTTP ${response.status}：${text.slice(0, 160)}`), { status: 502 });
+    throw Object.assign(new Error(`转写服务返回 HTTP ${response.status}：${readableAsrError(text)}`), { status: response.status === 429 ? 429 : 502 });
   }
   let payload;
   try { payload = JSON.parse(text); } catch {
@@ -251,4 +344,55 @@ export async function transcribeMedia({ endpoint, apiKey, buffer, fileName, mime
     duration: Number(payload.duration) || (segments.length ? segments[segments.length - 1].end : 0),
     language: String(payload.language || ''),
   };
+}
+
+/** 视频 → 低码率音频分片 → 逐片转写并合并时间码；单片失败自动重试 3 次。 */
+export async function transcribeMediaReliable({ endpoint, apiKey, buffer, fileName, mimeType, chunkSeconds = 300, attempts = 3, transcribeImpl = transcribeMedia }) {
+  const prepared = await prepareAudioChunks({ buffer, fileName, chunkSeconds });
+  try {
+    const mergedSegments = [];
+    const texts = [];
+    let duration = 0;
+    let language = '';
+    for (let index = 0; index < prepared.chunks.length; index += 1) {
+      const chunkPath = prepared.chunks[index];
+      const chunkBuffer = await fsp.readFile(chunkPath);
+      let result = null;
+      let lastError = null;
+      for (let attempt = 1; attempt <= Math.max(1, Number(attempts) || 1); attempt += 1) {
+        try {
+          result = await transcribeImpl({
+            endpoint, apiKey, buffer: chunkBuffer,
+            fileName: `chunk-${String(index + 1).padStart(3, '0')}.mp3`,
+            mimeType: 'audio/mpeg', timeoutMs: 180000,
+          });
+          break;
+        } catch (error) {
+          lastError = error;
+          if (!asrErrorRetryable(error) || attempt >= attempts) break;
+          await new Promise((resolve) => setTimeout(resolve, 1200 * (2 ** (attempt - 1))));
+        }
+      }
+      if (!result) {
+        const detail = String(lastError?.message || lastError || '未知错误');
+        throw Object.assign(new Error(`音频分片 ${index + 1}/${prepared.chunks.length} 转写失败：${detail}`), { status: lastError?.status || 502 });
+      }
+      const offset = index * Math.max(30, Number(chunkSeconds) || 300);
+      for (const segment of result.segments || []) {
+        mergedSegments.push({ start: offset + (Number(segment.start) || 0), end: offset + (Number(segment.end) || 0), text: segment.text });
+      }
+      if (result.text) texts.push(result.text.trim());
+      duration = Math.max(duration, offset + (Number(result.duration) || 0));
+      if (!language && result.language) language = result.language;
+    }
+    return {
+      text: texts.filter(Boolean).join('\n').trim(),
+      segments: mergedSegments,
+      duration: duration || prepared.duration,
+      language,
+      chunkCount: prepared.chunks.length,
+    };
+  } finally {
+    await fsp.rm(prepared.dir, { recursive: true, force: true }).catch(() => {});
+  }
 }

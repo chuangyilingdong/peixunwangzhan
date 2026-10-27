@@ -87,6 +87,65 @@ function searchValues(value, predicate, found = []) {
 }
 
 const HTTP_URL = /^https?:\/\/\S+$/;
+const GENERIC_AUDIO_STATUS = new Set(['success', 'succeeded', 'completed', 'complete', 'ok', 'done', 'failed', 'failure', 'running', 'pending', 'processing']);
+
+function cleanSpeakerId(value) {
+  const text = String(value ?? '').trim();
+  if (!text || text.length > 200) return '';
+  if (GENERIC_AUDIO_STATUS.has(text.toLowerCase())) return '';
+  if (/^https?:\/\//i.test(text)) return '';
+  return text;
+}
+
+/** 从音频任务响应里只提取明确的音色 ID；不要把 success / request_data 里的自定义 ID 当成 speaker_id。 */
+export function extractSpeakerId(value) {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return '';
+    if (text.startsWith('{') || text.startsWith('[')) {
+      try { return extractSpeakerId(JSON.parse(text)); } catch { /* ignore */ }
+    }
+    return '';
+  }
+  if (!value || typeof value !== 'object') return '';
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = extractSpeakerId(item);
+      if (found) return found;
+    }
+    return '';
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (/^(speaker_?id|custom_?speaker_?id|voice_?id|custom_?voice_?id)$/i.test(key)) {
+      const found = cleanSpeakerId(child);
+      if (found) return found;
+    }
+  }
+  const outputType = String(value.outputType || value.output_type || value.type || '').toLowerCase();
+  if (outputType === 'text' || !outputType) {
+    const textCandidate = value.text || value.content || value.result || value.result_text;
+    if (typeof textCandidate === 'string') {
+      const found = extractSpeakerId(textCandidate);
+      if (found) return found;
+    }
+  }
+  for (const key of ['result', 'results', 'output', 'response', 'data', 'upstream']) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      const found = extractSpeakerId(value[key]);
+      if (found) return found;
+    }
+  }
+  return '';
+}
+
+/** 解析音频任务结果：音频 URL 与明确的音色 ID 分开返回。 */
+export function parseAudioTaskResult(json) {
+  const urls = searchValues(json, (v) => typeof v === 'string' && HTTP_URL.test(v) && /\.(mp3|wav|ogg|m4a|aac)(\?|$)/i.test(v));
+  const anyUrl = urls[0] || searchValues(json, (v) => typeof v === 'string' && HTTP_URL.test(v) && /audio/i.test(v))[0] || '';
+  const explicitText = String(json?.result_text || json?.data?.result_text || '').trim();
+  const resultText = extractSpeakerId(explicitText) || cleanSpeakerId(explicitText) || extractSpeakerId([json?.result_text, json?.data?.result_text, json?.data?.data, json?.data?.upstream?.response?.results, json?.data?.results, json?.output, json?.data?.output]);
+  return { url: anyUrl, resultText };
+}
 
 /** 轮询音频任务：SUCCESS → {url, resultText}；FAILURE → 抛错；未完成 → {status}。 */
 export async function pollAudioTask({ endpoint, apiKey, taskId, timeoutMs = 600000, intervalMs = 5000 }) {
@@ -95,11 +154,9 @@ export async function pollAudioTask({ endpoint, apiKey, taskId, timeoutMs = 6000
     const json = await apiFetch({ endpoint, apiKey, path: `/v1/audio/generations/${taskId}` });
     const status = String(json?.status || json?.data?.status || json?.data?.data?.status || '').toUpperCase();
     if (status === 'SUCCESS' || status === 'COMPLETED' || status === 'SUCCEEDED') {
-      const urls = searchValues(json, (v) => typeof v === 'string' && HTTP_URL.test(v) && /\.(mp3|wav|ogg|m4a|aac)(\?|$)/i.test(v));
-      const anyUrl = urls[0] || searchValues(json, (v) => typeof v === 'string' && HTTP_URL.test(v) && /audio/i.test(v))[0] || '';
-      const resultText = String(json?.result_text || json?.data?.result_text || searchValues(json, (v) => typeof v === 'string' && /^[A-Za-z0-9_-]{6,120}$/.test(v))[0] || '');
-      if (!anyUrl && !resultText) throw Object.assign(new Error('音频任务成功但没解析出结果'), { status: 502 });
-      return { done: true, url: anyUrl, resultText };
+      const { url, resultText } = parseAudioTaskResult(json);
+      if (!url && !resultText) throw Object.assign(new Error('音频任务成功但没解析出结果'), { status: 502 });
+      return { done: true, url, resultText };
     }
     if (status === 'FAILURE' || status === 'FAILED') {
       const reason = String(json?.fail_reason || json?.data?.fail_reason || '').slice(0, 200);

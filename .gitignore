@@ -56,3 +56,6 @@ var/uploads/
 # 本地构建产物 / 发布目录（服务器上的 release 在 /srv，不进仓库；留着会污染全仓搜索）
 deploy/releases/
 __pycache__/
+
+# junshi desktop build output
+apps/junshi-desktop/release*/

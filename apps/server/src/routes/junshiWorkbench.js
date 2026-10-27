@@ -29,6 +29,7 @@ import {
   downloadDouyinVideo,
   seedanceAsrConfig,
   transcribeMedia,
+  transcribeMediaReliable,
 } from '../services/junshiDouyin.js';
 import {
   seedanceChannelConfig,
@@ -387,12 +388,47 @@ function jobRetryable(row) {
   if (type === 'workflow') return row.kind === '热点搜索' && Boolean(row.entity_id);
   return false;
 }
+function jobErrorForUser(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/transcribeMediaReliable is not defined/i.test(raw)) return '转写服务升级异常（已修复，可重试）';
+  if (/转写服务返回 HTTP 524/i.test(raw)) return '转写服务超时（HTTP 524），请重试';
+  if (/The operation was aborted due to timeout/i.test(raw)) return '处理超时，请重试';
+  if (/fetch failed/i.test(raw)) return '外部服务连接失败，请重试';
+  const cleaned = raw
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&[a-z#0-9]+;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (cleaned || '处理失败，请重试').slice(0, 240);
+}
+function userFacingSyncMessage(value) {
+  let text = String(value || '').trim();
+  if (!text) return '';
+  text = text
+    .replace(/The operation was aborted due to timeout/gi, '处理超时')
+    .replace(/fetch failed/gi, '网络连接失败')
+    .replace(/这条视频超过 120MB，暂不支持自动转写/g, '旧版单视频上限 120MB，可重新同步')
+    .replace(/转写服务返回 HTTP 524[：:]?[sS]*/gi, '转写服务超时')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/s+/g, ' ')
+    .trim();
+  return text.slice(0, 240);
+}
 function jobOut(row) {
+  const payload = jobPayload(row);
+  let detail = row.detail || '';
+  if (row.status === 'failed') {
+    const label = String(payload.title || payload.topic || payload.name || '').trim().slice(0, 120);
+    detail = label || (row.detail && row.detail !== row.error ? jobErrorForUser(row.detail) : '任务失败');
+  }
   return {
-    id: row.id, kind: row.kind, status: row.status, detail: row.detail || '',
-    error: row.error || '', entityType: row.entity_type || '', entityId: row.entity_id || '',
+    id: row.id, kind: row.kind, status: row.status, detail,
+    error: jobErrorForUser(row.error), entityType: row.entity_type || '', entityId: row.entity_id || '',
     attempts: Number(row.attempts || 0), retryOf: row.retry_of || '',
-    retryable: jobRetryable(row), payload: jobPayload(row),
+    retryable: jobRetryable(row), payload,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
@@ -2124,7 +2160,7 @@ async function assetBytes(row) {
   if (rowStorageBackend(pseudo) === 'oss') {
     const url = ossRedirectUrl(pseudo, { expires: 600 });
     if (!url) throw Object.assign(new Error('素材签名地址生成失败'), { status: 502 });
-    const response = await fetch(url, { signal: AbortSignal.timeout(180000) });
+    const response = await fetch(url, { signal: AbortSignal.timeout(600000) });
     if (!response.ok) throw Object.assign(new Error(`素材读取失败（HTTP ${response.status}）`), { status: 502 });
     return Buffer.from(await response.arrayBuffer());
   }
@@ -2616,7 +2652,7 @@ async function runTranscriptionPipeline(owner, transcriptId, job) {
     const asr = await seedanceAsrConfig(policy?.channels);
     if (!asr) throw Object.assign(new Error('转写渠道未配置（需要 seedance.nz 渠道 Key 或 JUNSHI_ASR_ENDPOINT/KEY）'), { code: 'WORKBENCH_ASR_NOT_CONFIGURED' });
     const buffer = await assetBytes(assetRow);
-    const result = await transcribeMedia({ endpoint: asr.endpoint, apiKey: asr.apiKey, buffer, fileName: assetRow.file_name || `${transcriptId}.mp4`, mimeType: assetRow.mime_type || 'video/mp4' });
+    const result = await transcribeMediaReliable({ endpoint: asr.endpoint, apiKey: asr.apiKey, buffer, fileName: assetRow.file_name || `${transcriptId}.mp4`, mimeType: assetRow.mime_type || 'video/mp4' });
     if (!result.text.trim()) throw Object.assign(new Error('这条内容没有识别出语音（可能是纯音乐或时长太短）'), { code: 'WORKBENCH_ASR_EMPTY' });
     await aq('UPDATE junshi_workbench_transcripts SET status=?, text=?, segments=?, duration_seconds=?, error="", updated_at=? WHERE id=?',
       ['succeeded', result.text.slice(0, 100000), JSON.stringify(result.segments.slice(0, 2000)), Number(result.duration) || 0, nowIso(), transcriptId]);
@@ -5538,7 +5574,7 @@ async function workflowsRoute(ctx, rest, search, method, owner) {
         downloadFilter: (() => { try { return row.download_filter ? JSON.parse(row.download_filter) : null; } catch { return null; } })(),
         lastSyncAt: row.last_sync_at || null,
         lastSyncStatus: row.last_sync_status || null,
-        lastSyncMessage: row.last_sync_message || null,
+        lastSyncMessage: userFacingSyncMessage(row.last_sync_message) || null,
       })),
     };
   }

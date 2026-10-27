@@ -1,0 +1,385 @@
+/* 招生军师桌面客户端 · 工作台深色主题
+ * 只由 Electron 客户端注入，不影响网页端。布局参考 XiaoLingDang：
+ * 226px 深色侧栏 / 64px 顶栏 / 深蓝内容区 / 大圆角蓝色主按钮。
+ */
+html, body { background: #06111e !important; }
+#js-app.screen-workbench {
+  --bg: #06111e;
+  --surface: #0d2033;
+  --hover: #122c44;
+  --fill: #10263b;
+  --fill-2: #0b1b2c;
+  --track: #17334b;
+  --text: #edf7ff;
+  --text-2: #a7bfd3;
+  --text-3: #7893aa;
+  --text-4: #526b80;
+  --faint: #284158;
+  --hairline: #19324a;
+  --glass: rgba(7, 20, 33, .88);
+  --accent: #17a4ee;
+  --accent-soft: rgba(23, 164, 238, .15);
+  --accent-link: #46beff;
+  --heat: #ffb347;
+  --heat-bg: rgba(255, 179, 71, .14);
+  --live: #3ddc97;
+  --red: #ff7b8b;
+  --red-bg: rgba(255, 83, 107, .13);
+  --green: #48d597;
+  --brand: #17a4ee;
+  --brand-soft: rgba(23, 164, 238, .15);
+  --warm: #ffb347;
+  --warm-soft: rgba(255, 179, 71, .14);
+  --red-soft: rgba(255, 83, 107, .13);
+  --line: #19324a;
+  --line-soft: #142b40;
+  --surface-2: #10263b;
+  --surface-3: #0b1b2c;
+  --r-pill: 999px;
+  --r-chip: 7px;
+  --r-thumb: 10px;
+  --r-sheet: 12px;
+  --r-card: 12px;
+  --r-panel: 12px;
+  --r-hero: 16px;
+  --sh-card: none;
+  --sh-panel: none;
+  --sh-lift: 0 12px 32px rgba(0, 0, 0, .24);
+  --sh-overlay: 0 2px 8px rgba(0, 0, 0, .3), 0 30px 80px rgba(0, 0, 0, .45);
+  min-height: 100vh;
+  background: #06111e !important;
+  color: var(--text);
+}
+#js-app.screen-workbench .topbar,
+#js-app.screen-workbench .side { display: none !important; }
+#js-app.screen-workbench .body,
+#js-app.screen-workbench .main { min-height: 100vh; background: #06111e; }
+#js-app.screen-workbench .body { display: block; }
+#js-app.screen-workbench .main { padding: 0; overflow: hidden; }
+#js-app.screen-workbench .screen { height: 100vh; padding: 0; }
+#js-app.screen-workbench .wb {
+  grid-template-columns: 226px minmax(0, 1fr);
+  gap: 0;
+  height: 100vh;
+  background: #06111e;
+}
+#js-app.screen-workbench .wb-side {
+  padding: 20px 14px 17px;
+  border: 0;
+  border-right: 1px solid #162d43;
+  border-radius: 0;
+  background: linear-gradient(180deg, #071522 0%, #06121f 100%);
+  box-shadow: none;
+}
+#js-app.screen-workbench .wb-back { display: none !important; }
+#js-app.screen-workbench .wb-title {
+  position: relative;
+  min-height: 57px;
+  padding: 2px 10px 28px 58px;
+}
+#js-app.screen-workbench .wb-title::before {
+  position: absolute;
+  top: 0;
+  left: 4px;
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 11px;
+  color: #fff;
+  background: linear-gradient(145deg, #238bff, #1266e8);
+  box-shadow: 0 8px 22px rgba(25, 128, 245, .3);
+  content: '军';
+  font-size: 22px;
+  font-weight: 700;
+}
+#js-app.screen-workbench .wb-title b {
+  display: block;
+  padding-top: 1px;
+  color: #f1f9ff;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -.03em;
+}
+#js-app.screen-workbench .wb-title span {
+  display: block;
+  margin-top: 1px;
+  color: #4ea7df;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+}
+#js-app.screen-workbench .wb-nav-group { display: none; }
+#js-app.screen-workbench .wb-tabs { gap: 4px; padding-top: 2px; }
+#js-app.screen-workbench .wb-tab {
+  min-height: 41px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: #91a8bc;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+  gap: 12px;
+}
+#js-app.screen-workbench .wb-tab svg.ic { width: 17px; height: 17px; opacity: .75; }
+#js-app.screen-workbench .wb-tab:hover { color: #eaf7ff; background: #0d2235; }
+#js-app.screen-workbench .wb-tab[aria-current="true"] {
+  border-color: #118bcc;
+  color: #fff;
+  background: linear-gradient(90deg, #0b5d93, #0b416c);
+  box-shadow: inset 0 0 0 1px rgba(77, 190, 255, .08);
+  font-weight: 650;
+}
+#js-app.screen-workbench .wb-tab[aria-current="true"] svg.ic { color: #6ed1ff; opacity: 1; }
+#js-app.screen-workbench .wb-side-foot { border-color: #132a3e; padding: 14px 8px 0; }
+#js-app.screen-workbench .wb-main { gap: 0; background: #06111e; }
+#js-app.screen-workbench .wb-topbar {
+  min-height: 64px;
+  padding: 0 28px;
+  border-bottom: 1px solid #162d43;
+  background: #081522;
+}
+#js-app.screen-workbench .wb-crumb { gap: 10px; color: #809aaf; font-size: 14px; }
+#js-app.screen-workbench .wb-crumb::before {
+  margin-right: 4px;
+  color: #d9e9f5;
+  content: '☰';
+  font-size: 20px;
+  line-height: 1;
+}
+#js-app.screen-workbench .wb-crumb b { color: #eff8ff; font-size: 15px; font-weight: 600; }
+#js-app.screen-workbench .wb-crumb i { color: #506b82; }
+#js-app.screen-workbench .wb-top-actions { gap: 8px; }
+#js-app.screen-workbench .wb-top-actions .btn {
+  min-height: 38px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: #d5e8f5;
+  background: #0c263c;
+  font-size: 13px;
+  font-weight: 600;
+}
+#js-app.screen-workbench .wb-top-actions .btn.primary {
+  border-color: #18aaf2;
+  color: #fff;
+  background: linear-gradient(180deg, #139feb, #0a83ce);
+  box-shadow: 0 5px 14px rgba(0, 132, 211, .25);
+}
+#js-app.screen-workbench .wb-top-actions #wb-clear-chat {
+  border-color: #3b263b;
+  color: #ff8394;
+  background: rgba(255, 70, 96, .05);
+}
+#js-app.screen-workbench .wb-top-account { color: #7e97ac; }
+#js-app.screen-workbench .wb-top-account select {
+  border-color: #1b3b55;
+  color: #dcecf7;
+  background: #0b1d2e;
+}
+#js-app.screen-workbench .wb-body { padding: 0; background: #06111e; }
+#js-app.screen-workbench .wb-page { gap: 0; padding: 0; background: #06111e; }
+#js-app.screen-workbench .wb-scroll { padding: 24px 28px 30px; }
+#js-app.screen-workbench .desktop-page-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0 4px 18px;
+}
+#js-app.screen-workbench .desktop-page-head span {
+  color: #4c9dca;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .16em;
+}
+#js-app.screen-workbench .desktop-page-head h1 {
+  margin: 0;
+  color: #edf8ff;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -.035em;
+}
+#js-app.screen-workbench .wb-card,
+#js-app.screen-workbench .wb-item,
+#js-app.screen-workbench .panel,
+#js-app.screen-workbench .wb-render {
+  border: 1px solid #18344c;
+  border-radius: 12px;
+  color: #e6f3fb;
+  background: #0d2033;
+  box-shadow: none;
+}
+#js-app.screen-workbench .wb-card { padding: 18px 20px; margin-bottom: 12px; }
+#js-app.screen-workbench .wb-card-head { margin-bottom: 12px; }
+#js-app.screen-workbench .wb-card-head h3 { color: #eff8ff; font-size: 19px; font-weight: 650; }
+#js-app.screen-workbench .wb-card-head p,
+#js-app.screen-workbench .wb-note,
+#js-app.screen-workbench .wb-muted,
+#js-app.screen-workbench .lead { color: #8ca9bf; }
+#js-app.screen-workbench .wb-inline,
+#js-app.screen-workbench .wb-field > span { color: #a5bbcc; }
+#js-app.screen-workbench .wb-field input,
+#js-app.screen-workbench .wb-field textarea,
+#js-app.screen-workbench .wb-field select,
+#js-app.screen-workbench .wb-mem-add input,
+#js-app.screen-workbench .wb-inline select,
+#js-app.screen-workbench .wb-inline input {
+  border: 1px solid #1b3c56;
+  color: #eaf6ff;
+  background: #0a1b2b;
+}
+#js-app.screen-workbench .wb-field input:focus,
+#js-app.screen-workbench .wb-field textarea:focus,
+#js-app.screen-workbench .wb-field select:focus {
+  border-color: #168ece;
+  box-shadow: 0 0 0 3px rgba(23, 164, 238, .14);
+}
+#js-app.screen-workbench .btn,
+#js-app.screen-workbench .chip,
+#js-app.screen-workbench .wb-mini-btn {
+  border-color: #1b3b54;
+  color: #c8dfef;
+  background: #0b2133;
+}
+#js-app.screen-workbench .btn:hover,
+#js-app.screen-workbench .chip:hover { background: #12344f; color: #fff; }
+#js-app.screen-workbench .btn.primary {
+  border-color: #19aaf2;
+  color: #fff;
+  background: linear-gradient(180deg, #139feb, #087dc7);
+  box-shadow: 0 5px 14px rgba(0, 132, 211, .24);
+}
+#js-app.screen-workbench .btn.stop { color: #ff8797; background: #1a2434; }
+#js-app.screen-workbench .chip.on { border-color: #159ddf; color: #fff; background: #0d75ac; }
+#js-app.screen-workbench .wb-tag { color: #66cfff; background: rgba(23, 164, 238, .13); }
+#js-app.screen-workbench .wb-table { color: #dcecf7; }
+#js-app.screen-workbench .wb-table th { color: #8da9bd; background: #0a1b2a; border-color: #19334a; }
+#js-app.screen-workbench .wb-table td { border-color: #162e44; }
+#js-app.screen-workbench .wb-table tr:hover td { background: rgba(18, 52, 79, .36); }
+#js-app.screen-workbench .wb-chat {
+  border: 0;
+  border-radius: 0;
+  background: #06111e;
+  box-shadow: none;
+}
+#js-app.screen-workbench .wb-chat-head {
+  min-height: 54px;
+  padding: 0 24px;
+  border-color: #162d43;
+  background: #081522;
+}
+#js-app.screen-workbench .wb-chat-head b { color: #eef9ff; font-size: 15px; }
+#js-app.screen-workbench .wb-msgs { padding: 24px 28px 30px; gap: 16px; }
+#js-app.screen-workbench .wb-bubble {
+  border: 1px solid #183b58;
+  color: #dcecf7;
+  background: #10283f;
+  font-size: 14px;
+  line-height: 1.75;
+}
+#js-app.screen-workbench .wb-msg.me .wb-bubble { border-color: #0d719f; color: #fff; background: #0b486b; }
+#js-app.screen-workbench .wb-msg-meta { color: #58768e; }
+#js-app.screen-workbench .wb-src { color: #76bde6; }
+#js-app.screen-workbench .wb-composer {
+  gap: 10px;
+  padding: 12px 18px;
+  border-color: #18334a;
+  background: #081522;
+}
+#js-app.screen-workbench .wb-composer textarea {
+  min-height: 48px;
+  border: 1px solid #1a3b56;
+  color: #e8f6ff;
+  background: #0b1d2e;
+}
+#js-app.screen-workbench .wb-composer textarea::placeholder { color: #607d93; }
+#js-app.screen-workbench .wb-composer-foot {
+  padding: 10px 18px 13px;
+  border-top: 1px solid #152d42;
+  background: #081522;
+}
+#js-app.screen-workbench .wb-suggest .orb { background: #137fc5; }
+#js-app.screen-workbench .wb-suggestion { color: #a7bfd1; background: #0d2033; }
+#js-app.screen-workbench .wb-attach-chip { border-color: #21425e; color: #a7c2d6; background: #0c2032; }
+#js-app.screen-workbench .wb-dialog-card { border: 1px solid #21415e; background: #0d2033; box-shadow: 0 30px 80px rgba(0, 0, 0, .5); }
+#js-app.screen-workbench .wb-dialog-close { color: #8da6ba; }
+#js-app.screen-workbench .wb-loading .loading,
+#js-app.screen-workbench .loading { color: #8da8bc; }
+#js-app.screen-workbench .wb-v-empty,
+#js-app.screen-workbench .wb-empty,
+#js-app.screen-workbench .wb-suggestion,
+#js-app.screen-workbench .wb-news-card,
+#js-app.screen-workbench .wb-choice {
+  border-color: #18354d;
+  color: #a5bfd2;
+  background: #0c1e30;
+}
+#js-app.screen-workbench .wb-mode-card {
+  border-color: #183b55;
+  color: #e8f5ff;
+  background: #0d2033;
+}
+#js-app.screen-workbench .wb-mode-card:hover { border-color: #1b9fe2; background: #102940; }
+#js-app.screen-workbench .wb-flow-card { border-color: #147eaf; }
+#js-app.screen-workbench .wb-focus-body,
+#js-app.screen-workbench .wb-flow-side { color: #dcecf7; background: #071522; }
+#js-app.screen-workbench .wb-flow-side { border-color: #162d43; }
+#js-app.screen-workbench ::selection { color: #fff; background: #126e9f; }
+#js-app.screen-workbench ::-webkit-scrollbar { width: 9px; height: 9px; }
+#js-app.screen-workbench ::-webkit-scrollbar-track { background: #071420; }
+#js-app.screen-workbench ::-webkit-scrollbar-thumb { border: 2px solid #071420; border-radius: 999px; background: #29465e; }
+#js-app.screen-workbench ::-webkit-scrollbar-thumb:hover { background: #3b607d; }
+@media (max-width: 1000px) {
+  #js-app.screen-workbench .wb { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  #js-app.screen-workbench .wb-side { min-height: 54px; padding: 7px 10px; border-right: 0; border-bottom: 1px solid #162d43; }
+  #js-app.screen-workbench .wb-title { display: none; }
+  #js-app.screen-workbench .wb-tabs { flex-direction: row; overflow-x: auto; }
+  #js-app.screen-workbench .wb-tab { width: auto; min-height: 38px; padding: 0 12px; }
+  #js-app.screen-workbench .wb-topbar { padding: 8px 16px; }
+  #js-app.screen-workbench .wb-scroll { padding: 18px; }
+}
+
+/* 本地抖音采集入口：仅桌面客户端注入。 */
+#js-app.screen-workbench .desktop-collector-button {
+  display: flex;
+  width: 100%;
+  min-height: 42px;
+  margin-top: 8px;
+  padding: 0 13px;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid #17415f;
+  border-radius: 9px;
+  color: #a9d8f4;
+  background: linear-gradient(180deg, #0b263c, #091d2f);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+#js-app.screen-workbench .desktop-collector-button:hover {
+  border-color: #1d6798;
+  color: #e9f8ff;
+  background: linear-gradient(180deg, #0d304c, #0a2338);
+}
+#js-app.screen-workbench .desktop-collector-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #53748b;
+}
+#js-app.screen-workbench .desktop-collector-dot.ready {
+  background: #3ddc97;
+  box-shadow: 0 0 0 4px rgba(61, 220, 151, .08);
+}
+#js-app.screen-workbench .desktop-collector-dot.running {
+  background: #29b2f7;
+  box-shadow: 0 0 0 4px rgba(41, 178, 247, .1);
+  animation: desktop-collector-pulse 1.2s ease-in-out infinite;
+}
+#js-app.screen-workbench .desktop-collector-text { flex: 1; }
+#js-app.screen-workbench .desktop-collector-spark { color: #4da6d9; font-size: 13px; }
+@keyframes desktop-collector-pulse { 50% { opacity: .4; } }
