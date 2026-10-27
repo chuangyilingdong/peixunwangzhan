@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('junshiApp', {
   api: (path, options = {}) => ipcRenderer.invoke('junshi:app-api', { path, options }),
   downloadAsset: (payload) => ipcRenderer.invoke('junshi:app-download-asset', payload),
   uploadAsset: (payload) => ipcRenderer.invoke('junshi:app-upload-asset', payload),
+  resolveDouyinLink: (shareText) => ipcRenderer.invoke('junshi:app-resolve-douyin-link', { shareText }),
   chat: (payload) => ipcRenderer.invoke('junshi:app-chat', payload),
   cancelChat: (requestId) => ipcRenderer.invoke('junshi:app-chat-cancel', { requestId }),
   onChatEvent: (callback) => {

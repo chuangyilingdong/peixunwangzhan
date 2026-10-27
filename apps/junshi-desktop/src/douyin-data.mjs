@@ -1,6 +1,7 @@
 /** 抖音主页响应解析与本地采集的纯函数。 */
 
 export const DOUYIN_PROFILE_ENDPOINT = '/aweme/v1/web/aweme/post';
+export const DOUYIN_DETAIL_ENDPOINT = '/aweme/v1/web/aweme/detail';
 
 function asArray(value) {
   if (Array.isArray(value)) return value;
@@ -55,12 +56,43 @@ export function isDouyinProfileResponse(url) {
   }
 }
 
+export function isDouyinDetailResponse(url) {
+  try {
+    const parsed = new URL(String(url || ''), 'https://www.douyin.com');
+    return parsed.pathname.replace(/\/+$/, '') === DOUYIN_DETAIL_ENDPOINT;
+  } catch {
+    return false;
+  }
+}
+
 export function secUserIdFromResponseUrl(url) {
   try {
     return new URL(String(url || '')).searchParams.get('sec_user_id') || '';
   } catch {
     return '';
   }
+}
+
+function workFromItem(item) {
+  if (!item || !item.aweme_id) return null;
+  const video = item.video || {};
+  const playUrl = playUrlOf(video);
+  if (!playUrl) return null;
+  const stats = item.statistics || {};
+  return {
+    awemeId: String(item.aweme_id).replace(/[^0-9]/g, '').slice(0, 25),
+    desc: String(item.desc || '').slice(0, 300),
+    playUrl: playUrl.slice(0, 2000),
+    durationMs: Number(video.duration) || null,
+    createTime: Number(item.create_time) || null,
+    stats: {
+      plays: Number(stats.play_count) || 0,
+      digg: Number(stats.digg_count) || 0,
+      comment: Number(stats.comment_count) || 0,
+      share: Number(stats.share_count) || 0,
+      collect: Number(stats.collect_count) || 0,
+    },
+  };
 }
 
 /** 把一页 /aweme/post JSON 转成平台 ingest 可接收的精简作品。 */
@@ -78,28 +110,27 @@ export function extractDouyinWorks(payload, options = {}) {
     if (expectedSecUserId && authorId && authorId !== expectedSecUserId) continue;
     if (!secUserId && authorId) secUserId = authorId;
     if (!nickname && author.nickname) nickname = String(author.nickname).slice(0, 120);
-
-    const video = item.video || {};
-    const playUrl = playUrlOf(video);
-    if (!playUrl) continue;
-    const stats = item.statistics || {};
-    works.push({
-      awemeId: String(item.aweme_id).replace(/[^0-9]/g, '').slice(0, 25),
-      desc: String(item.desc || '').slice(0, 300),
-      playUrl: playUrl.slice(0, 2000),
-      durationMs: Number(video.duration) || null,
-      createTime: Number(item.create_time) || null,
-      stats: {
-        plays: Number(stats.play_count) || 0,
-        digg: Number(stats.digg_count) || 0,
-        comment: Number(stats.comment_count) || 0,
-        share: Number(stats.share_count) || 0,
-        collect: Number(stats.collect_count) || 0,
-      },
-    });
+    const work = workFromItem(item);
+    if (work) works.push(work);
   }
 
   return { secUserId, nickname, works };
+}
+
+/** 从单条作品详情响应中提取一个可直接 ingest 的作品。 */
+export function extractDouyinWorkDetail(payload, expectedAwemeId = '') {
+  const item = payload?.aweme_detail || payload;
+  if (!item || !item.aweme_id) return null;
+  const awemeId = String(item.aweme_id).replace(/[^0-9]/g, '').slice(0, 25);
+  if (expectedAwemeId && awemeId !== String(expectedAwemeId)) return null;
+  const work = workFromItem(item);
+  if (!work) return null;
+  const author = item.author || {};
+  return {
+    secUserId: String(author.sec_uid || ''),
+    nickname: String(author.nickname || author.unique_id || '').slice(0, 120),
+    work,
+  };
 }
 
 /** 合并分页结果；同一作品只保留一份，并按发布时间从新到旧排序。 */

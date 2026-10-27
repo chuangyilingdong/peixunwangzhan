@@ -421,7 +421,10 @@ function renderWorkflowComposer() {
         : readyTranscripts.length
           ? `<label class="production-field full"><span>选择一条已转写作品</span><select id="workflow-viral-transcript">${readyTranscripts.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title || item.nickname || '未命名作品')}</option>`).join('')}</select></label>`
           : `<div class="workflow-warning">还没有可用的转写档案。先去「同行采集」或「我的数据」采集一条作品。</div>`;
-    form = `${sourceTabs}${sourceInput}<div class="workflow-composer-tip">只学习结构、节奏和表达方法；不会照抄原文，也不会冒充原作者。</div>`;
+    const sourceTip = source === 'link'
+      ? '链接会先在本机抖音浏览器打开并读取作品，再上传视频进入转写；如遇登录或验证码，请先在「本地抖音采集」窗口完成。'
+      : '只学习结构、节奏和表达方法；不会照抄原文，也不会冒充原作者。';
+    form = `${sourceTabs}${sourceInput}<div class="workflow-composer-tip">${sourceTip}</div>`;
   } else {
     const mode = composer.mode || 'keyword';
     form = `<div class="workflow-mode-switch"><button type="button" class="choice-chip${mode === 'keyword' ? ' active' : ''}" data-action="workflow-hotspot-mode" data-mode="keyword">关键词联网搜索</button><button type="button" class="choice-chip${mode === 'manual' ? ' active' : ''}" data-action="workflow-hotspot-mode" data-mode="manual">手动填写热点</button></div>${mode === 'keyword' ? `<label class="production-field full"><span>搜索关键词</span><input id="workflow-hotspot-keyword" maxlength="120" placeholder="例如：寒假托管 / 素质教育新政 / 校外培训监管"></label>` : `<label class="production-field full"><span>热点标题</span><input id="workflow-hotspot-title" maxlength="200" placeholder="例如：多地推行寒假托管"></label><label class="production-field full"><span>事实描述</span><textarea id="workflow-hotspot-fact" rows="4" maxlength="2000" placeholder="只写你已核对的事实，1–3 句即可"></textarea></label><label class="production-field full"><span>来源链接（可空）</span><input id="workflow-hotspot-url" maxlength="500" placeholder="https://…"></label>`}<div class="workflow-composer-tip">关键词模式会调用 DeepSeek 搜索；手动模式只引用你填写的事实，不编造新闻细节。</div>`;
@@ -929,7 +932,12 @@ async function launchWorkflow(kind) {
   state.workflowBusy = true;
   renderCreateOnly();
   try {
-    if (kind === 'viral' && input.sourceType === 'upload') {
+    if (kind === 'viral' && input.sourceType === 'link') {
+      const imported = await app.resolveDouyinLink(input.shareText);
+      if (imported?.ok === false) throw new Error(imported.message || '抖音链接解析失败');
+      if (!imported?.asset?.id) throw new Error('抖音链接解析后没有拿到视频素材');
+      input = { sourceType: 'upload', assetId: imported.asset.id };
+    } else if (kind === 'viral' && input.sourceType === 'upload') {
       const uploaded = await app.uploadAsset({ kind: 'video', folder: '复刻参考' });
       if (uploaded?.ok === false) throw new Error(uploaded.message || '上传视频失败');
       if (uploaded?.canceled) { state.workflowBusy = false; renderCreateOnly(); return; }

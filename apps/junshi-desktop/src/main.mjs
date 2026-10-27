@@ -17,7 +17,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   douyinProfileUrl,
+  extractDouyinWorkDetail,
   extractDouyinWorks,
+  isDouyinDetailResponse,
   isDouyinProfileResponse,
   mergeDouyinSnapshots,
   normalizeSecUserId,
@@ -39,6 +41,7 @@ const START_HIDDEN = process.argv.includes('--hidden');
 const TEST_OPEN_COLLECTOR = !app.isPackaged && process.env.JUNSHI_TEST_OPEN_COLLECTOR === '1';
 const WORKBENCH_THEME_CSS = await readFile(new URL('./workbench-dark.css', import.meta.url), 'utf8');
 const DOUYIN_USER_AGENT = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
+const MAX_DOUYIN_VIDEO_BYTES = Math.max(120 * 1024 * 1024, Math.min(200 * 1024 * 1024, Number(process.env.JUNSHI_DOUYIN_MAX_BYTES) || 200 * 1024 * 1024));
 
 app.setName(APP_NAME);
 if (process.platform === 'win32') app.setAppUserModelId('com.aicyld.junshi');
@@ -51,6 +54,7 @@ let workbenchWindow = null;
 let collectorWindow = null;
 let collectorGuest = null;
 let syncWindow = null;
+let linkResolveWindow = null;
 let tray = null;
 let storedSession = null;
 let assistantCredential = null;
@@ -387,6 +391,7 @@ function captureStateFor(webContents) {
       secUserId: '',
       nickname: '',
       expectedSecUserId: '',
+      expectedAwemeId: '',
       updatedAt: 0,
       requestUrls: new Map(),
       attached: false,
@@ -409,7 +414,7 @@ async function attachCaptureDebugger(webContents, state) {
       webContents.debugger.on('message', (_event, method, params) => {
         if (method === 'Network.responseReceived') {
           const url = String(params?.response?.url || '');
-          if (isDouyinProfileResponse(url)) state.requestUrls.set(String(params.requestId || ''), url);
+          if (isDouyinProfileResponse(url) || isDouyinDetailResponse(url)) state.requestUrls.set(String(params.requestId || ''), url);
           return;
         }
         if (method === 'Network.loadingFailed') {
@@ -445,6 +450,14 @@ async function readCapturedResponse(webContents, state, requestId, url) {
     const raw = result?.base64Encoded ? Buffer.from(result.body || '', 'base64').toString('utf8') : String(result?.body || '');
     if (!raw) return;
     const payload = JSON.parse(raw);
+    if (isDouyinDetailResponse(url)) {
+      const detail = extractDouyinWorkDetail(payload, state.expectedAwemeId);
+      if (!detail?.work) return;
+      mergeDouyinSnapshots(state, { secUserId: detail.secUserId, nickname: detail.nickname, works: [detail.work] });
+      state.updatedAt = Date.now();
+      updateVisibleCaptureStatus();
+      return;
+    }
     const responseSecUserId = secUserIdFromResponseUrl(url);
     const expected = state.expectedSecUserId || state.secUserId;
     if (expected && responseSecUserId && responseSecUserId !== expected) return;
@@ -466,6 +479,7 @@ function resetCapture(webContents, expectedSecUserId = '') {
   state.secUserId = String(expectedSecUserId || '');
   state.nickname = '';
   state.expectedSecUserId = String(expectedSecUserId || '');
+  state.expectedAwemeId = '';
   state.updatedAt = 0;
   state.requestUrls.clear();
   return state;
@@ -669,6 +683,100 @@ async function getSyncBrowser() {
 function destroySyncBrowser() {
   if (syncWindow && !syncWindow.isDestroyed()) syncWindow.destroy();
   syncWindow = null;
+}
+
+function destroyLinkResolveBrowser() {
+  if (linkResolveWindow && !linkResolveWindow.isDestroyed()) linkResolveWindow.destroy();
+  linkResolveWindow = null;
+}
+
+async function getLinkResolveBrowser() {
+  if (linkResolveWindow && !linkResolveWindow.isDestroyed()) return linkResolveWindow;
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 860,
+    show: false,
+    skipTaskbar: true,
+    backgroundColor: '#ffffff',
+    webPreferences: {
+      partition: DOUYIN_PARTITION,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      backgroundThrottling: false,
+    },
+  });
+  linkResolveWindow = win;
+  win.on('closed', () => { if (linkResolveWindow === win) linkResolveWindow = null; });
+  configureDouyinContents(win.webContents, { visible: false });
+  return win;
+}
+
+async function resolveDouyinLinkWork(raw) {
+  const candidates = String(raw || '').match(/https?:\/\/[^\s]+/g) || [];
+  const targetUrl = candidates.find((value) => isAllowedDouyinUrl(value));
+  if (!targetUrl) throw new Error('请粘贴完整的抖音作品链接或分享内容');
+  const win = await getLinkResolveBrowser();
+  const state = resetCapture(win.webContents, '');
+  state.expectedAwemeId = '';
+  try {
+    void win.webContents.loadURL(targetUrl).catch(() => {});
+    const deadline = Date.now() + 60000;
+    while (!state.works.size && Date.now() < deadline) await delay(500);
+    const pageUrl = win.webContents.getURL();
+    const pageAwemeId = (pageUrl.match(/\/video\/(\d{6,25})/) || [])[1] || '';
+    const work = Array.from(state.works.values()).find((item) => !pageAwemeId || item.awemeId === pageAwemeId) || Array.from(state.works.values())[0];
+    if (!work) {
+      let pageText = '';
+      try {
+        pageText = await Promise.race([
+          win.webContents.executeJavaScript('document.body?.innerText || ""'),
+          delay(3000).then(() => ''),
+        ]);
+      } catch {}
+      if (/验证|登录后|请登录|访问受限/.test(pageText)) {
+        throw new Error('抖音要求登录或安全验证，请先在「本地抖音采集」窗口完成登录/验证后再试');
+      }
+      throw new Error('没有读到这条抖音作品的详情，请确认链接可公开访问后再试');
+    }
+    if (!/^https?:\/\//i.test(work.playUrl || '')) throw new Error('抖音没有返回可下载的视频地址');
+    return { work, pageUrl };
+  } finally {
+    destroyLinkResolveBrowser();
+  }
+}
+
+async function importDouyinLink(raw) {
+  if (!sessionIsUsable(storedSession)) throw new Error('机构登录已过期，请重新登录');
+  const { work, pageUrl } = await resolveDouyinLinkWork(raw);
+  const assetList = await apiFetch('/assets?accountId=default', { auth: 'session' });
+  const cacheName = `douyin-${work.awemeId}.mp4`;
+  const cached = (assetList?.items || []).find((item) => item.kind === 'video' && (item.fileName === cacheName || item.file_name === cacheName));
+  if (cached) return { ok: true, work: { ...work, pageUrl }, asset: cached, message: '已复用这条链接之前上传的视频素材' };
+  const response = await fetch(work.playUrl, {
+    headers: { 'user-agent': DOUYIN_USER_AGENT, referer: 'https://www.douyin.com/' },
+    signal: AbortSignal.timeout(180000),
+  });
+  if (!response.ok) throw new Error(`抖音视频下载失败（HTTP ${response.status}）`);
+  const declared = Number(response.headers.get('content-length') || 0);
+  if (declared > MAX_DOUYIN_VIDEO_BYTES) throw new Error(`这条视频超过 ${Math.floor(MAX_DOUYIN_VIDEO_BYTES / 1024 / 1024)}MB，超出平台单素材上限`);
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (!buffer.length) throw new Error('抖音视频下载为空');
+  if (buffer.length > MAX_DOUYIN_VIDEO_BYTES) throw new Error(`这条视频超过 ${Math.floor(MAX_DOUYIN_VIDEO_BYTES / 1024 / 1024)}MB，超出平台单素材上限`);
+  const form = new FormData();
+  form.append('file', new Blob([buffer], { type: 'video/mp4' }), `douyin-${work.awemeId}.mp4`);
+  form.append('accountId', 'default');
+  form.append('folder', '复刻参考');
+  const uploaded = await fetch(`${API_BASE}/api/junshi/workbench/assets`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${storedSession.token}` },
+    body: form,
+    signal: AbortSignal.timeout(600000),
+  });
+  const data = await parseApiResponse(uploaded);
+  if (!data?.asset?.id) throw new Error('链接视频上传后没有返回素材编号');
+  return { ok: true, work: { ...work, pageUrl, nickname: work.nickname || '' }, asset: data.asset, message: '已从本地浏览器读取链接视频并上传素材' };
 }
 
 async function collectPeerWithHiddenBrowser(ref) {
@@ -1503,6 +1611,14 @@ function registerIpc() {
       return { ok: true, data };
     } catch (error) {
       return { ok: false, message: String(error?.message || error), status: Number(error?.status) || 0, code: String(error?.code || '') };
+    }
+  });
+  ipcMain.handle('junshi:app-resolve-douyin-link', async (event, payload) => {
+    if (!isAppSender(event)) throw new Error('无权解析抖音链接');
+    try {
+      return await importDouyinLink(payload?.shareText);
+    } catch (error) {
+      return { ok: false, message: String(error?.message || error) };
     }
   });
   ipcMain.handle('junshi:app-upload-asset', async (event, payload) => {
