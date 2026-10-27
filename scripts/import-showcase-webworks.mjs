@@ -41,6 +41,12 @@ const AUTHOR = '官方课堂';
  */
 const WORKS = [
   {
+    slug: 'spinning-blades-game',
+    title: '旋转刀刀刀小游戏',
+    description: '按住拖动走位，飞刀环绕切割，升级三选一——看你能撑到第几波。',
+    workType: 'miniGame',
+  },
+  {
     slug: 'travel-english-helper',
     title: '旅行英语应急助手',
     description: '输入英文自动纠错、按场景推荐句型，还能常速/慢速跟读——出门在外也能开口说。',
@@ -174,11 +180,13 @@ async function main() {
     if (existingWork) {
       if (!DRY_RUN) {
         await aq(
+          // ⚠️ 不更新 submitted_at：重跑脚本是为了改标题/封面，不该把已有作品重新顶到广场前面；
+          //    只有**新插入**的作品用本轮的 submittedAt（因此新作品会出现在最前面）。
           `UPDATE works SET project_id=?, student_id=?, org_id=?, title=?, description=?, canvas_snapshot=?,
-             status='PUBLISHED', submitted_at=?, is_public=1, share_token=?, copyright_confirmed_at=?,
+             status='PUBLISHED', is_public=1, share_token=?, copyright_confirmed_at=?,
              unpublish_reason=NULL, unpublished_at=NULL
            WHERE id=?`,
-          [projectId, userId, orgId, work.title, work.description, snapshot, submittedAt, shareToken, now, workId],
+          [projectId, userId, orgId, work.title, work.description, snapshot, shareToken, now, workId],
         );
       }
       log(`  ↻ ${work.title}`);
