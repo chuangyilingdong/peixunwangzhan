@@ -813,6 +813,25 @@ nav a{position:relative;white-space:nowrap;color:#7b7490;font-size:12.5px;paddin
 /* transform-origin 必须是左上：缩放后的盒子尺寸就等于量出来的可用尺寸，正好贴住这块空间。
    兜底的 width/height:100% 是 JS 还没量到时用的（按原生尺寸铺满），量到后立刻被行内样式覆盖。 */
 .pl-frame-fit .pl-frame{position:absolute;left:0;top:0;width:100%;height:100%;border-radius:0;transform-origin:top left}
+/* ⭐ 托管的网页作品（`/media/web-works/…`）：**整屏原生视口**，不缩放、不套内框。
+   用户 2026-10-27 口径：「浏览体验要和直接打开这个文件差不多」——原来那个 640×768 逻辑视口
+   + 等比缩放会把它压成弹窗里的小窗口，页面里的媒体查询全按 640 宽走，长页面还得在内层滚动。
+   现在：查看层铺满浏览器，只留一条 40 来像素的标题栏，iframe 吃满剩余高度。 */
+.pl-viewer--webwork{--pl-viewer-pad:0px;padding:0;display:block;background:#0b0a10;backdrop-filter:none}
+.pl-viewer--webwork .pl-viewer-box{width:100%;height:100vh;height:100dvh;max-height:none;border-radius:0;box-shadow:none;background:#fff}
+.pl-viewer--webwork .pl-viewer-body{flex:1;min-height:0;padding:0;overflow:hidden;background:#fff}
+.pl-viewer--webwork .pl-viewer-head{flex:0 0 auto;padding:7px 14px;background:#0b0a10;border-bottom:1px solid #ffffff1f}
+.pl-viewer--webwork .pl-viewer-head h3{color:#fff;margin:3px 0 0;font-size:15px;line-height:1.3}
+.pl-viewer--webwork .pl-viewer-head .pl-badge{background:#7c5cff;color:#fff}
+.pl-viewer--webwork .pl-viewer-close{background:#ffffff1a;color:#fff}
+.pl-viewer--webwork .pl-viewer-close:hover{background:#ffffff2e}
+.pl-frame--web{display:block;width:100%;height:100%;border:0;border-radius:0;background:#fff}
+@media(max-width:640px){
+  .pl-viewer--webwork .pl-viewer-head{padding:6px 10px}
+  .pl-viewer--webwork .pl-viewer-head h3{font-size:13.5px;margin:1px 0 0}
+  .pl-viewer--webwork .pl-viewer-head .pl-badge{display:none}
+  .pl-viewer--webwork .pl-viewer-close{width:30px;height:30px;font-size:18px}
+}
 /* 矮屏（笔记本默认窗口、手机横屏）：把查看层自己的头/尾压紧，省下的高度全给这块空间，
    缩放倍数就能大一点、作品看得更清楚。 */
 @media(max-height:780px){

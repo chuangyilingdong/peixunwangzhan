@@ -292,11 +292,14 @@ function WorkViewer({ work, onClose }) {
   // ⭐ 把内层页面等比缩放到这块可用空间：量出可用宽高 → 算出"至少 PL_FRAME_MIN"的逻辑视口 → 整体缩放。
   //    这样无论屏幕多小，学生页都是**完整可见**的（缩放到装下为止），不会出现任何滚动条。
   //    有空间时不放大（scale 封顶 1）；量不到（DOM 桩里没有 ResizeObserver）就退回 CSS 的 100% 铺满。
+  //    ⚠️ 2026-10-27：这套缩放只留给**外链作品**。托管在我们 `/media/` 下的网页作品改走
+  //    「整屏原生视口」（见 isWebWork 分支）——缩放会把页面压成 640×768 的小窗口，
+  //    与用户口径「浏览体验要和直接打开这个文件差不多」相反。
   const frameBoxRef = useRef(null);
   const [frameFit, setFrameFit] = useState(null);
   useLayoutEffect(() => {
     const box = frameBoxRef.current;
-    if (!box || !hasFrame || typeof ResizeObserver !== 'function') return undefined;
+    if (!box || !isEmbed || typeof ResizeObserver !== 'function') return undefined;
     const measure = () => {
       const w = box.clientWidth;
       const h = box.clientHeight;
@@ -308,12 +311,12 @@ function WorkViewer({ work, onClose }) {
     const observer = new ResizeObserver(measure);
     observer.observe(box);
     return () => observer.disconnect();
-  }, [hasFrame, work]);
+  }, [isEmbed, work]);
   const frameStyle = frameFit
     ? { width: `${Math.round(frameFit.w)}px`, height: `${Math.round(frameFit.h)}px`, transform: `scale(${frameFit.scale})` }
     : undefined;
-  return <div className="pl-viewer" role="dialog" aria-modal="true" aria-label={t('works.viewerAria', { title: work.title })} onClick={onClose}>
-    <div className={'pl-viewer-box' + (hasFrame ? ' has-frame' : '')} onClick={(event) => event.stopPropagation()}>
+  return <div className={'pl-viewer' + (isWebWork ? ' pl-viewer--webwork' : '')} role="dialog" aria-modal="true" aria-label={t('works.viewerAria', { title: work.title })} onClick={onClose}>
+    <div className={'pl-viewer-box' + (hasFrame ? ' has-frame' : '') + (isWebWork ? ' has-webwork' : '')} onClick={(event) => event.stopPropagation()}>
       <div className="pl-viewer-head">
         <div><span className="pl-badge">{(PL_TYPE_META[plTypeOf(work)] || {}).label || ''}</span><h3>{work.title}</h3></div>
         <button type="button" className="pl-viewer-close" onClick={onClose} aria-label={t('works.close')}>×</button>
@@ -323,24 +326,25 @@ function WorkViewer({ work, onClose }) {
           ? <video className="pl-video" src={work.contentUrls[0]} controls autoPlay playsInline />
           : isAudio
             ? <audio className="pl-audio" src={(work.contentUrls || [])[0]} controls autoPlay />
-            : hasFrame
-              // ⭐ 跑网页作品 / 外链作品：内层页面按"不小于 PL_FRAME_MIN 的逻辑视口"渲染，
-              //    再整体缩放到这块空间（见 PL_FRAME_MIN 的注释）—— 保证任何屏幕都**完整可见、没有滚动条**。
-              ? <div className="pl-frame-fit" ref={frameBoxRef}>
-                {isWebWork
-                  // ⭐ 托管在**我们自己源**上的可运行网页作品（`/media/web-works/…`）。
-                  //    ⚠️ 这里的 sandbox **绝不能**带 `allow-same-origin`：它与主站同源，
-                  //    带上以后学生 HTML 就能读我们的 cookie / localStorage、甚至以我们的身份发请求。
-                  //    不带时文档是 opaque origin，作品里的 three.js / p5 / CDN 依赖照样能加载，
-                  //    相对路径资源也照常解析（sandbox 不影响 base URL）。
-                  //    ⚠️ 同理**不给**「在新窗口打开」的出口（见下方 foot）——那等于把学生代码
-                  //    提到我们源上当顶层页面跑，正好绕过这层沙箱。
-                  ? <iframe className="pl-frame" src={work.entryUrl} title={work.title} loading="lazy" sandbox="allow-scripts allow-modals allow-forms allow-popups" style={frameStyle} />
-                  // 外链作品的"在我们页面里打开"：能嵌的嵌进来（对方 CSP 挡掉时这里是空白，
-                  // 所以下面永远跟着一个「在新窗口打开」的出口）
-                  : <iframe className="pl-frame" src={work.externalUrl} title={work.title} sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" referrerPolicy="no-referrer" style={frameStyle} />}
-              </div>
-              : images.length ? <img className="pl-image" src={images[active]} alt={work.title} /> : null}
+            : isWebWork
+              // ⭐ 托管在**我们自己源**上的可运行网页作品（`/media/web-works/…`）。
+              //    2026-10-27 用户口径：「浏览体验要和直接打开这个文件差不多」——所以这里**不缩放**，
+              //    iframe 直接吃满整屏（外层查看层也是全屏、无留白）：内层按真实视口排版，
+              //    手机端的媒体查询因此真正生效；页面自己有多长就滚多长，和浏览器直接打开一致。
+              //    ⚠️ 这里的 sandbox **绝不能**带 `allow-same-origin`：它与主站同源，
+              //    带上以后学生 HTML 就能读我们的 cookie / localStorage、甚至以我们的身份发请求。
+              //    不带时文档是 opaque origin，作品里的相对路径资源照常解析（sandbox 不影响 base URL）。
+              //    ⚠️ 同理**不给**「在新窗口打开」的出口（见下方 foot）——那等于把学生代码
+              //    提到我们源上当顶层页面跑，正好绕过这层沙箱。
+              ? <iframe className="pl-frame pl-frame--web" src={work.entryUrl} title={work.title} loading="eager" sandbox="allow-scripts allow-modals allow-forms allow-popups allow-downloads" />
+              : isEmbed
+                // 外链作品：内层页面按"不小于 PL_FRAME_MIN 的逻辑视口"渲染，再整体缩放到这块空间
+                // （见 PL_FRAME_MIN 的注释）—— 保证任何屏幕都**完整可见、没有滚动条**。
+                // 能嵌的嵌进来（对方 CSP 挡掉时这里是空白，所以下面永远跟着一个「在新窗口打开」的出口）
+                ? <div className="pl-frame-fit" ref={frameBoxRef}>
+                  <iframe className="pl-frame" src={work.externalUrl} title={work.title} sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" referrerPolicy="no-referrer" style={frameStyle} />
+                </div>
+                : images.length ? <img className="pl-image" src={images[active]} alt={work.title} /> : null}
         {/* 缩略图只给「看图片」那条分支：框体件（hasFrame）里放的是一整个可运行页面，
             它的 contentUrls 是空的（见 plOpenKind 注释），而且那块空间被绝对定位的缩放容器占满 ——
             真渲染出来也只会藏在它后面。 */}
@@ -350,13 +354,15 @@ function WorkViewer({ work, onClose }) {
           </button>)}
         </div> : null}
       </div>
-      <div className="pl-viewer-foot">
+      {/* 网页作品是"整屏直接打开"，底部这条作者/机构栏会白占一截高度，直接不渲染；
+          作者信息在广场卡片上已经有了。外链/图片/视频仍保留。 */}
+      {isWebWork ? null : <div className="pl-viewer-foot">
         <span>{work.studentName || t('works.creator')}{work.orgName ? ` · ${work.orgName}` : ''}</span>
         {/* 出口只给**外链**作品（新窗口打开的是别人的域名，不涉及我们的源）。
             ⭐ 托管的网页作品（entryUrl）刻意没有出口：它的入口页在我们自己源上，
             在新窗口打开就是拿我们的源跑学生代码，等于绕开上面那层沙箱。 */}
         {work.externalUrl ? <a className="pl-outlink" href={work.externalUrl} target="_blank" rel="noreferrer">{t('works.openInNew')}</a> : <span>{work.orgName || ''}</span>}
-      </div>
+      </div>}
     </div>
   </div>;
 }

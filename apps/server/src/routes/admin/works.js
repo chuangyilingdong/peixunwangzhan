@@ -105,7 +105,9 @@ const MEDIA_ROOT = process.env.PLAZA_MEDIA_ROOT || '/srv/ai-kids-platform/public
 async function quarantineImportedMedia(work) {
   const imported = parseJson(work.canvas_snapshot, {})?.imported;
   const sourceId = imported ? String(imported.sourceId || '') : '';
-  const dirName = imported?.source === 'ltai' ? 'ltai-works' : imported?.source === 'webworks' ? 'web-works' : null;
+  const dirName = imported?.source === 'ltai' ? 'ltai-works'
+    : (imported?.source === 'webworks' || imported?.source === 'showcase') ? 'web-works'
+      : null;
   if (!dirName || !sourceId) return null;
   const relative = `${dirName}/${sourceId}`;
   const from = path.join(MEDIA_ROOT, relative);
