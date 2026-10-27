@@ -416,6 +416,8 @@ nav a{position:relative;white-space:nowrap;color:#7b7490;font-size:12.5px;paddin
    外层必须有确定高度 —— 下面这条 flex 布局就是。 */
 .work-live-preview{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:#fff}
 .work-live-preview > .c-preview__stage--fill{flex:1 1 auto;min-height:0;height:100%}
+/* fitContent 档（只比一屏高一点的作品）：舞台必须吃满整屏，PreviewFrame 才有正确的高度去算缩放。 */
+.work-live-preview > .c-replay__stage{flex:1 1 auto;min-height:0;height:100%}
 @media(max-width:640px){
   .work-live-bar{min-height:46px;padding:5px 10px;gap:8px}
   .work-live-bar__info .pl-badge,.work-live-bar__info p{display:none}

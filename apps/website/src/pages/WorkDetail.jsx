@@ -152,6 +152,38 @@ export function WorkDetailPage({ api }) {
     return () => { document.body.style.overflow = previous; };
   }, [liveFullscreen]);
 
+  // ⭐ 2026-10-27：单网页 VibeCoding 作品如果只比一屏高一点（不超过 1.5 屏），就整页缩放到一屏内 ——
+  //    用户报的「还是需要用滚轮」正是这类：内容 1086px、屏幕可用 948px，只差一小截。
+  //    明显是长页的（如 MyPokedex 2500px）仍按原生尺寸铺满，滚动条留在作品内部（与直接打开一致），
+  //    不做"缩成邮票"。高度由预览壳转发上来的 `vibecoding-preview-height` 得到。
+  const [contentHeight, setContentHeight] = useState(0);
+  const [wideScreen, setWideScreen] = useState(() => (
+    typeof window === 'undefined' || typeof window.matchMedia !== 'function'
+      ? true
+      : window.matchMedia('(min-width: 900px)').matches
+  ));
+  useEffect(() => {
+    setContentHeight(0);
+    if (!isSingleWebVibe) return undefined;
+    const onMessage = (event) => {
+      const payload = event?.data;
+      if (!payload || payload.source !== 'vibecoding-preview-height') return;
+      const height = Number(payload.height);
+      if (Number.isFinite(height) && height > 0) setContentHeight(height);
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [isSingleWebVibe, work?.id]);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const media = window.matchMedia('(min-width: 900px)');
+    const onChange = () => setWideScreen(media.matches);
+    media.addEventListener?.('change', onChange);
+    return () => media.removeEventListener?.('change', onChange);
+  }, []);
+  const stageHeight = Math.max(600, (typeof window === 'undefined' ? 1000 : window.innerHeight) - 60);
+  const fitToOneScreen = isSingleWebVibe && wideScreen && contentHeight > 0 && contentHeight <= stageHeight * 1.5;
+
   // ⭐ 2026-10-03（§九十九）：`--screen` 舞台的高度是 `calc(100dvh - var(--wd-chrome, 232px))`，
   //    而 232 只是**默认值** —— 这一页"舞台上面的头/操作区"真实高度随路由与文案变
   //    （实测 `/my-home/…` 这条路上是 298px），差出来那 66px 就是"作品底部掉到首屏外"，
@@ -200,7 +232,13 @@ export function WorkDetailPage({ api }) {
           </div>
         </header>
         <div className="work-live-preview">
-          <ReplayPreview html={buildPreviewDocument(files, current.name)} title={work?.title || '作品预览'} chrome={false} fill />
+          <ReplayPreview
+            html={buildPreviewDocument(files, current.name)}
+            title={work?.title || '作品预览'}
+            chrome={false}
+            fill={!fitToOneScreen}
+            fitContent={fitToOneScreen}
+          />
         </div>
       </main>;
     }
