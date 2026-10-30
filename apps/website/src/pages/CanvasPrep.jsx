@@ -19,6 +19,35 @@ const EMPTY_SNAPSHOT = { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 }
 /** 备课草稿的存档键：按课时存，互不干扰（画布那边也按它读写）。 */
 export const prepDraftKey = (lessonId) => `lesson-prep-canvas:${lessonId}`;
 
+/**
+ * 2026-10-30 用户报：老师端「画布备课」点「素材1」图片失效，学生端正常。
+ *
+ * 根因：课时素材上传时存的是**学生域地址**
+ * `/api/student/file-assets/<id>/download`（见 admin 的 CourseManagement.uploadMaterial），
+ * 而备课页用的是**机构端 token**。学生域路由 `requireRole(['STUDENT'])` 会直接 403，
+ * 画布里的 `<img>` 于是裂图；学生端自己带 STUDENT 身份取同一地址就正常。
+ *
+ * 文件本身是 `PUBLIC_PLATFORM`，机构端 `/api/org/file-assets/<id>/download` 是可读的
+ * （authorizeFileAccess 对 PUBLIC_PLATFORM 放行）。平台后台的 MaterialPreview 早就用
+ * 「student/org → admin」的读取时改写解决同一件事，这里按同一口径改成 student → org。
+ *
+ * ⚠️ 必须**递归**改写：素材地址既在 `materialGroups[].materials[].assetUrl`，
+ * 也可能在画布草稿节点的 `data.assetUrl` / `previewUrl` 里（老师上次保存的草稿）。
+ */
+function rewriteStudentAssetUrls(value) {
+  if (typeof value === 'string') {
+    return value.replace(
+      /^\/api\/student\/file-assets\/([\w-]+)\/download(\?.*)?$/,
+      (_, fileId, query = '') => `/api/org/file-assets/${fileId}/download${query}`,
+    );
+  }
+  if (Array.isArray(value)) return value.map(rewriteStudentAssetUrls);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, rewriteStudentAssetUrls(item)]));
+  }
+  return value;
+}
+
 export function CanvasPrepPage() {
   const { lessonId } = useParams();
   const [state, setState] = useState({ loading: true, error: '', data: null });
@@ -52,7 +81,7 @@ export function CanvasPrepPage() {
     let saved = null;
     try { saved = JSON.parse(window.localStorage.getItem(prepDraftKey(lessonId)) || 'null'); } catch { saved = null; }
     const template = state.data.canvasSnapshot;
-    const snapshot = saved && Array.isArray(saved.nodes) && saved.nodes.length
+    const chosen = saved && Array.isArray(saved.nodes) && saved.nodes.length
       ? saved
       : (template && Array.isArray(template.nodes) && template.nodes.length ? template : EMPTY_SNAPSHOT);
     return {
@@ -61,9 +90,9 @@ export function CanvasPrepPage() {
         id: `prep:${lessonId}`,
         title: state.data.lesson?.title || '备课画布',
         status: 'DRAFT',                    // 让画布"可编辑"（isCanvasEditableProjectStatus 只认 DRAFT/SUBMITTED）
-        canvasSnapshot: snapshot,
-        materialGroups: state.data.materialGroups || [],
-        generationBoxes: state.data.generationBoxes || [],
+        canvasSnapshot: rewriteStudentAssetUrls(chosen),
+        materialGroups: rewriteStudentAssetUrls(state.data.materialGroups || []),
+        generationBoxes: rewriteStudentAssetUrls(state.data.generationBoxes || []),
         capabilities: state.data.lesson?.capabilities || ['text'],
         lessonTitle: state.data.lesson?.title || '',
         seriesTitle: state.data.lesson?.seriesTitle || '',
