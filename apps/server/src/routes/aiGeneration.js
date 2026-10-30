@@ -42,7 +42,19 @@ const LESSON_CAPABILITY_BY_MODALITY = { TEXT: 'text', IMAGE: 'image', VIDEO: 'vi
 const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'GENERATION_FIRST_FRAME_REQUIRED', 'MODALITY_DISABLED']);
 const GENERATION_PAGE_SIZE = 20;
 const asyncGenerationQueue = [];
-let asyncGenerationWorkerRunning = false;
+/**
+ * 2026-10-30 用户口径：「上游都是无限并发，不存在 1 路问题」。
+ *
+ * 原来这里是一个**全局 worker**（`asyncGenerationWorkerRunning` 布尔），所有生成任务
+ * 不分模态、不分用户排成一条队。生产实测：8 个学生同时点 MiniMax-H3，每条要 8-9 分钟，
+ * 任务按 16:42 → 16:50 → 16:59 → … → 17:39 依次开始，最后一位等了 65 分钟。
+ *
+ * 现在改成可配置的并发 worker 池（默认 8 路，上限 16）。上游既然不限并发，平台侧就不该
+ * 再人为串行；仍保留单进程内的队列 + DB 原子认领（见 processAsyncGeneration 的 claimed.changes），
+ * 重复入队的任务只会有一个 worker 真正跑。
+ */
+const ASYNC_GENERATION_CONCURRENCY = Math.max(1, Math.min(16, Number(process.env.AI_GENERATION_CONCURRENCY) || 8));
+let asyncGenerationActive = 0;
 // Seedance video tasks can remain queued for several minutes before the
 // provider exposes the final URL. Keep the job alive long enough for normal
 // queue latency instead of reporting a false generation failure at 120s.
@@ -537,6 +549,7 @@ export async function interruptOwnJobsOnShutdown() {
 
 export async function initializeAsyncGenerationQueue() {
   const now = nowIso();
+  console.log(`[生成队列] 并发 ${ASYNC_GENERATION_CONCURRENCY} 路（AI_GENERATION_CONCURRENCY 可覆盖，默认 8）`);
   // 本进程刚起来：此刻任何 RUNNING 都属于**已经没了**的那个 worker → 全部收掉（含只跑了 94 秒的那种）。
   const interrupted = await interruptOrphanedJobs();
   if (interrupted) console.warn(`[生成队列] 回收了 ${interrupted} 条被中断的生成任务（服务重启，上游结果未知）`);
@@ -1156,7 +1169,11 @@ async function processAsyncGeneration(item) {
     });
     const current = await arow('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
-    await aq("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
+    // 多 worker 并发后，两个 worker 可能同时拿到同一条 QUEUED（重复入队/重试定时器）。
+    // 只有真正把状态从 QUEUED 改成 RUNNING 的那个 worker 才能继续，另一个直接退出，
+    // 绝不能让同一条任务向上游提交两次（会双扣费）。
+    const claimed = await aq("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
+    if (!claimed?.changes) return;
     // 发上游前把提示词里的中文引用芯片翻成上游认的写法（@Image N / @Video N）——
     // 只改发给上游的这份，库里与界面上仍是学生写的中文芯片。
     const upstreamPrompt = upstreamPromptWithReferences(prompt, { originalReferences: referenceAssets, sentReferences: options.referenceAssets || [] });
@@ -1176,10 +1193,16 @@ async function processAsyncGeneration(item) {
 }
 
 function drainAsyncGenerationQueue() {
-  if (asyncGenerationWorkerRunning || !asyncGenerationQueue.length) return;
-  asyncGenerationWorkerRunning = true;
-  const item = asyncGenerationQueue.shift();
-  processAsyncGeneration(item).finally(() => { asyncGenerationWorkerRunning = false; drainAsyncGenerationQueue(); });
+  while (asyncGenerationActive < ASYNC_GENERATION_CONCURRENCY && asyncGenerationQueue.length) {
+    const item = asyncGenerationQueue.shift();
+    asyncGenerationActive += 1;
+    processAsyncGeneration(item)
+      .catch((error) => console.error('[GENERATION WORKER ERROR]', error))
+      .finally(() => {
+        asyncGenerationActive -= 1;
+        drainAsyncGenerationQueue();
+      });
+  }
 }
 
 function validPage(value) {
