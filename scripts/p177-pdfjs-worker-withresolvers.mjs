@@ -25,6 +25,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 import { createServer } from 'vite';
 
@@ -59,6 +61,33 @@ for (const [label, source] of [['org', orgWorker], ['shared', sharedWorker]]) {
     polyfillAt >= 0 && workerAt > polyfillAt, `polyfill@${polyfillAt} worker@${workerAt}`);
 }
 
+// Safari 17.0 实际报错：worker 里 `ArrayBuffer.prototype.transferToFixedLength` 不存在。
+// pdf.worker 的 compileFontInfo/compileSystemFontInfo 用它，缺了会被 pdf.js 当 warning 吞掉 → 白屏。
+const orgPolyfillFile = path.join(root, 'apps/org/src/components/pdfWorkerPromiseWithResolvers.js');
+const sharedPolyfillFile = path.join(root, 'packages/shared/src/console/pdfWorkerPromiseWithResolvers.js');
+for (const [label, file] of [['org', orgPolyfillFile], ['shared', sharedPolyfillFile]]) {
+  check(`① ${label} worker polyfill 覆盖 ArrayBuffer.transferToFixedLength`,
+    /transferToFixedLength/.test(fs.readFileSync(file, 'utf8')));
+}
+const polyfillProbe = spawnSync(process.execPath, ['--input-type=module', '-e', `
+delete ArrayBuffer.prototype.transferToFixedLength;
+await import(${JSON.stringify(pathToFileURL(orgPolyfillFile).href)});
+const cut = new Uint8Array([1, 2, 3, 4]).buffer.transferToFixedLength(2);
+const pad = new Uint8Array([7, 8]).buffer.transferToFixedLength(4);
+console.log(JSON.stringify({
+  type: typeof ArrayBuffer.prototype.transferToFixedLength,
+  cut: [...new Uint8Array(cut)],
+  pad: [...new Uint8Array(pad)],
+}));
+`], { encoding: 'utf8' });
+let polyfillResult = null;
+try { polyfillResult = JSON.parse(String(polyfillProbe.stdout || '').trim().split('\n').pop()); } catch { /* 下面报 */ }
+check('① transferToFixedLength 补丁真能截断/补零（否则 pdf.worker 的字体编译还会白屏）',
+  polyfillResult?.type === 'function'
+  && JSON.stringify(polyfillResult?.cut) === '[1,2]'
+  && JSON.stringify(polyfillResult?.pad) === '[7,8,0,0]',
+  JSON.stringify(polyfillProbe.stdout || polyfillProbe.stderr).slice(0, 300));
+
 /* ── ②/③ 真浏览器：反向对照 + 修复路径（含像素） ─────────────────── */
 console.log('\n②/③ 真浏览器：worker 缺 withResolvers 必炸；补上后必须画出像素');
 const harnessDir = path.join(root, '.tmp', 'p177-pdfjs-worker');
@@ -87,24 +116,15 @@ fs.copyFileSync(path.join(root, 'node_modules/pdfjs-dist/legacy/build/pdf.worker
   path.join(harnessDir, 'public/pdf.worker.raw.mjs'));
 // 反向对照：worker 模块求值完（会发 ready）后把 withResolvers 删掉
 fs.writeFileSync(path.join(harnessDir, 'public/old-worker.mjs'),
-  'import "/pdf.worker.raw.mjs";\ndelete Promise.withResolvers;\n');
+  'import "/pdf.worker.raw.mjs";\ndelete Promise.withResolvers;\ndelete ArrayBuffer.prototype.transferToFixedLength;\n');
 
-// 修复路径的 worker entry：删掉原生 withResolvers（模拟 Safari 17.0），再按生产顺序补 polyfill。
-fs.writeFileSync(path.join(harnessDir, 'worker/delete-with-resolvers.js'), 'delete Promise.withResolvers;\n');
-fs.writeFileSync(path.join(harnessDir, 'worker/polyfill.js'), `
-if (typeof Promise.withResolvers !== 'function') {
-  const withResolvers = function withResolvers() {
-    let resolve;
-    let reject;
-    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
-    return { promise, resolve, reject };
-  };
-  withResolvers.__platformPreviewPolyfill = true;
-  Promise.withResolvers = withResolvers;
-}
-`);
+// 修复路径的 worker entry：删掉 Safari 17.0 缺的两个 API，再按生产顺序补 polyfill。
+fs.writeFileSync(path.join(harnessDir, 'worker/delete-with-resolvers.js'),
+  'delete Promise.withResolvers;\ndelete ArrayBuffer.prototype.transferToFixedLength;\n');
+// 直接用生产文件，避免测试里的补丁和生产漂移
+fs.copyFileSync(orgPolyfillFile, path.join(harnessDir, 'worker/polyfill.js'));
 fs.writeFileSync(path.join(harnessDir, 'worker/entry.js'),
-  "import './delete-with-resolvers.js';\nimport './polyfill.js';\nimport 'pdfjs-dist/legacy/build/pdf.worker.min.mjs';\n");
+  "import './delete-with-resolvers.js';\nimport './polyfill.js';\nimport 'pdfjs-dist/legacy/build/pdf.worker.min.mjs';\nconsole.log('[p177 worker] transferToFixedLength=' + typeof ArrayBuffer.prototype.transferToFixedLength);\n");
 
 fs.writeFileSync(path.join(harnessDir, 'index.html'), `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8" /><title>p177 harness</title></head>
@@ -170,6 +190,8 @@ try {
   await vite.listen();
   browser = await chromium.launch({ executablePath: CHROME, headless: true });
   const page = await browser.newPage();
+  const workerLogs = [];
+  page.on('console', (msg) => { if (msg.text().includes('[p177 worker]')) workerLogs.push(msg.text()); });
   await page.goto(`http://127.0.0.1:${port}/.tmp/p177-pdfjs-worker/index.html`, { waitUntil: 'load', timeout: 60000 });
   await page.waitForFunction(() => (document.getElementById('out')?.textContent || '').startsWith('REPORT '), null, { timeout: 60000 });
   const raw = await page.locator('#out').innerText();
@@ -181,6 +203,8 @@ try {
     /numPages=1/.test(String(report.fixed)), String(report.fixed));
   check('③ ⭐ 而且真的画出了像素（白屏回归的口径）',
     Number(report.darkPixels) > 100, `darkPixels=${report.darkPixels}`);
+  check('③ ⭐ worker 里 transferToFixedLength 已被补上',
+    workerLogs.some((line) => /transferToFixedLength=function/.test(line)), workerLogs.join(' | ').slice(0, 300));
 } catch (error) {
   failures += 1;
   console.error('P177 浏览器那一段抛错：', error?.message || error);
