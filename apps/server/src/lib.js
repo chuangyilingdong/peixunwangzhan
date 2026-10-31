@@ -1357,9 +1357,29 @@ export function canvasMediaFrom(canvasSnapshot) {
   for (const node of nodes) {
     const data = node?.data || {};
     const url = String(data.assetUrl || data.previewUrl || data.referenceUrl || '').trim();
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
     const type = String(node?.type || '').toLowerCase();
+    if (!url) {
+      // 2026-10-31（老师报「有些作品没有」）：画布里的 AI 文字产出只有 generatedText、没有 assetUrl，
+      // 过去在作品读面完全消失（9 张图都在，唯独文字那件没了）。只认**生成结果**；
+      // 纯输入提示词（data.text）不算产出，别把学生的问题当成作品展示。
+      const text = String(data.generatedText || '').trim();
+      if (text) {
+        const key = `TEXT:${text.slice(0, 80)}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push({
+            url: '',
+            modality: 'TEXT',
+            fileId: null,
+            caption: String(data.title || 'AI 文字').trim() || null,
+            text,
+          });
+        }
+      }
+      continue;
+    }
+    if (seen.has(url)) continue;
+    seen.add(url);
     const modality = type === 'video' || type === 'animation' ? 'VIDEO' : (type === 'audio' || type === 'music') ? 'AUDIO' : 'IMAGE';
     out.push({
       url,

@@ -893,9 +893,10 @@ export async function handleOrg(ctx) {
       const signed = row ? ossRedirectUrl(row, { expires: 7200 }) : null;
       if (signed) ossUrls[fileId] = signed;
     }
-    // 作品页要展示的**媒体**（图/视频/音频）——老师端预览也要看"做出来的东西"，不是画布
+    // 作品页要展示的**媒体**（图/视频/音频/文字）——老师端预览也要看"做出来的东西"，不是画布
     // （用户 2026-09-21：「应该显示的是图片/视频/音频等等，而不是画布」）。
-    if (source === 'CANVAS') return { ...base, canvasSnapshot, imageUrls, ossUrls, media: canvasMediaFrom(canvasSnapshot).map((item) => ({ ...item, pieceKey: `media:${item.fileId || item.url}` })) };
+    // 文字产出没有 fileId/url，不能给它 `media:` 空键（否则分享面板会出现一件发不出码的"产出"）。
+    if (source === 'CANVAS') return { ...base, canvasSnapshot, imageUrls, ossUrls, media: canvasMediaFrom(canvasSnapshot).map((item) => ({ ...item, pieceKey: item.fileId || item.url ? `media:${item.fileId || item.url}` : null })) };
     const content = normalizeSubmission(work, { includeContent: true });
     // 真文件产物（学生创作环境交上来的 PPT/Word/Excel）的取用地址也在服务端拼好：
     // 前端不该自己去拼路由（前缀/编码错一处就是 404，而且两边都没法测）。
@@ -1356,7 +1357,7 @@ export async function handleOrg(ctx) {
       // ⭐ 2026-09-30：每件产出物带 `pieceKey` —— 机构/老师端在这个列表上点"查看作品"后要**逐件分享**
       //    （键由服务端算，与 `services/workShare.js` 同一套；前端别自己拼）
       media: canvasMediaFrom(parseJson(work.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }))
-        .map((item) => ({ ...item, pieceKey: `media:${item.fileId || item.url}` })),
+        .map((item) => ({ ...item, pieceKey: item.fileId || item.url ? `media:${item.fileId || item.url}` : null })),
     }));
 
     // VibeCoding 提交（2026-09-20）：**这个列表原来只读 `works`（画布）**，于是学生从创作环境交上来的

@@ -896,7 +896,8 @@ async function publicWorkRow(row, { mediaBase = '', openUrl = '' } = {}) {
     media: canvasMediaFrom(canvas).map((item) => ({
       ...item,
       ...(item.fileId && urlFor(item.fileId) ? { url: urlFor(item.fileId) } : {}),
-      pieceKey: `media:${item.fileId || item.url}`,
+      // 文字产出没有 fileId/url，不能给它 `media:` 空键（分享面板会出现一件发不出码的"产出"）。
+      pieceKey: item.fileId || item.url ? `media:${item.fileId || item.url}` : null,
     })),
     featured: Boolean(row.featured_at),
     submittedAt: row.submitted_at,

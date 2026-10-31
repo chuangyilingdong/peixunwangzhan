@@ -22,6 +22,7 @@
 //    这是物理限制，不是实现没做到。界面上做到的是：没有下载入口、快捷键被拦、右键没菜单、打印出白纸。
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Empty, Notice } from '@platform/shared';
+import PdfWorkerWithPolyfill from './pdfWorkerWithPolyfill.js?worker';
 
 // pdf.js 只在**真的打开素材**时才加载（动态 import → 单独的 chunk），
 // 免得每个进机构端的老师都为它付带宽。worker 是个静态 URL，很小。
@@ -48,11 +49,12 @@ let pdfjsPromise = null;
  * **pdf.js 的 worker 是独立作用域**，主线程的补丁进不去；worker 里 `WorkerTask` /
  * `ChunkedStreamManager`（预览地址走 Range 请求时必建）都会调 `Promise.withResolvers`，
  * 于是在 worker 里抛错、经 MessageHandler 包装成 `UnknownErrorException` 回到界面。
- * 实测（Chromium 里把主线程和 worker 的 withResolvers 都删掉）：主线程补丁 + 真 worker
- * 在 URL+Range 下必炸；worker 模块 import 到主线程（pdf.js 自动改用 fake worker）后正常。
  *
- * 因此：浏览器**原生**没有 withResolvers 时，把 worker 模块 import 到主线程，
- * 让 pdf.js 走 fake worker（与主线程共用同一份 polyfill）；新浏览器仍用真 worker。
+ * 第一次改法是把 worker 模块 import 到主线程走 fake worker；老师那台 Safari 17.0 上
+ * **不报错了但整页白屏**（PDF 有内容，Chromium/WebKit 都能画出来）。所以改成：
+ * **真 worker + 自定义 worker entry**（`pdfWorkerWithPolyfill.js` 里先补 polyfill 再加载
+ * `pdf.worker`），渲染仍走浏览器原生的 worker 路径，只是 worker 里多了一份补丁。
+ * 新浏览器不用自定义 worker，仍旧用 `?url` 的官方 worker。
  * 用 `__platformPreviewPolyfill` 标记区分“原生支持”和“被我们补过”，否则第二处
  * 加载器（PreviewFrame）先补过之后，这里会误判成原生支持。
  */
@@ -80,11 +82,6 @@ function loadPdfjs() {
   ensurePromiseWithResolvers();
   if (!pdfjsPromise) {
     pdfjsPromise = (async () => {
-      if (!nativeWithResolvers) {
-        // 老 Safari：worker 作用域缺 withResolvers。先把它 import 到主线程 —— 模块顶部的
-        // `globalThis.pdfjsWorker` 会让 pdf.js 直接走 fake worker，不再 new Worker。
-        await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs');
-      }
       // ⚠️⚠️ 必须走 **legacy 构建**（2026-09-30 用户报：同事的电脑上预览报「文档解析失败：Iterator is not defined」）。
       //    两份构建里都有同一行 `if (typeof Iterator.prototype.join !== "function") { Iterator.prototype.join = … }`，
       //    而 `Iterator` 是 **Chrome 122 / Safari 17.4 / Firefox 129 才有的新全局** —— 区别在于：
@@ -96,6 +93,10 @@ function loadPdfjs() {
       if (nativeWithResolvers) {
         const worker = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url');
         lib.GlobalWorkerOptions.workerSrc = worker.default;
+      } else {
+        // 老 Safari：用自定义 worker entry（worker 内先补 withResolvers 再加载 pdf.worker）。
+        // 这里**不要**再 import worker 模块到主线程 —— 那会走 fake worker，Safari 17.0 上白屏。
+        lib.GlobalWorkerOptions.workerPort = new PdfWorkerWithPolyfill();
       }
       return lib;
     })();

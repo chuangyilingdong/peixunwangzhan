@@ -5,6 +5,7 @@
 // /vibe-preview.html（nginx 单独给它的宽松 CSP），由它写进内层 sandbox iframe。
 // 这条路径依赖服务器上的 `location = /vibe-preview.html`，改路径要同步改 nginx。
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import PdfWorkerWithPolyfill from './pdfWorkerWithPolyfill.js?worker';
 
 export const PREVIEW_SHELL_URL = '/vibe-preview.html';
 
@@ -58,8 +59,9 @@ let pdfjsPromise = null;
  * 「undefined is not a function (near '...')」——老师端教案 DOCX 预览报的就是这个。
  *
  * 只补主线程不够：pdf.js 的 **worker 是独立作用域**，即使主线程补了，worker 里的
- * `WorkerTask` / `ChunkedStreamManager` 仍会炸。所以原生不支持时把 worker 模块 import 到主线程，
- * pdf.js 会改用 fake worker，与主线程共用同一份 polyfill（见 TeachingAssetViewer 的同名注释，两处同源）。
+ * `WorkerTask` / `ChunkedStreamManager` 仍会炸。所以原生不支持时用自定义 worker entry
+ * （`pdfWorkerWithPolyfill.js` 在 worker 内先补 polyfill 再加载 pdf.worker），仍走真 worker；
+ * 不走 fake worker（Safari 17.0 上 fake worker 白屏，见 TeachingAssetViewer 的同名注释）。
  */
 const PROMISE_POLYFILL_MARK = '__platformPreviewPolyfill';
 
@@ -85,13 +87,12 @@ function loadPdfjs() {
   ensurePromiseWithResolvers();
   if (!pdfjsPromise) {
     pdfjsPromise = (async () => {
-      if (!nativeWithResolvers) {
-        await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs');
-      }
       const lib = await import('pdfjs-dist/legacy/build/pdf.mjs');
       if (nativeWithResolvers) {
         const worker = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url');
         lib.GlobalWorkerOptions.workerSrc = worker.default;
+      } else {
+        lib.GlobalWorkerOptions.workerPort = new PdfWorkerWithPolyfill();
       }
       return lib;
     })();

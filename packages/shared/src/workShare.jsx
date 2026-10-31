@@ -116,6 +116,10 @@ export function shareablePiecesOf(detail, source) {
       .filter((item) => item?.pieceKey && item.shareable !== false)
       .map((item) => ({ pieceKey: item.pieceKey, label: item.name || '这一件' }));
   }
-  const labels = { IMAGE: '图片', VIDEO: '视频', AUDIO: '音频' };
-  return (detail?.media || []).filter((item) => item?.pieceKey).map((item) => ({ pieceKey: item.pieceKey, label: item.caption || labels[item.modality] || '这一件' }));
+  const labels = { IMAGE: '图片', VIDEO: '视频', AUDIO: '音频', TEXT: '文字' };
+  // 没有 fileId/url 的产出（例如画布里的 AI 文字）没有可发码的键；空键 `media:` 要挡掉，
+  // 否则分享面板会出现一件"看得见但发不了"的条目（服务端 assertSharePiece 会拒）。
+  return (detail?.media || [])
+    .filter((item) => item?.pieceKey && !String(item.pieceKey).endsWith(':'))
+    .map((item) => ({ pieceKey: item.pieceKey, label: item.caption || labels[item.modality] || '这一件' }));
 }
