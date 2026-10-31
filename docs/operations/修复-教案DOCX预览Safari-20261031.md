@@ -103,6 +103,9 @@ function ensurePromiseWithResolvers() {
 
 > fake worker 会把 PDF 解析放在主线程：只对老浏览器生效，教案 DOCX 这类小文件足够；
 > 若以后有老 Safari 打开超大 PDF 卡顿，再改为「自定义 worker entry 里注入 polyfill」以保留 worker。
+>
+> ⚠️ **2026-10-31 晚更新**：Safari 17.0 上 fake worker **白屏**，这一条已被推翻 ——
+> 现已改为「自定义 worker entry + 真 worker」，见文末「第三次修正」。
 
 ### 发布
 
@@ -120,3 +123,46 @@ function ensurePromiseWithResolvers() {
   `[教学素材] 文档解析失败` 里的 `nativeWithResolvers` 是否为 `false`。
 - **Safari 17.4+**：说明不是 `Promise.withResolvers` 缺失，转做服务端 PDF→页面图片兜底
   （poppler/`pdftoppm` 或等价渲染器），不再依赖浏览器 pdf.js。
+
+---
+
+## 第三次修正（2026-10-31 晚）：fake worker 在 Safari 17.0 白屏
+
+### 现象
+
+第二次发布后老师反馈：**不报错了，但教案整页白屏**（工具栏显示「第 3 / 共 11 页」、
+「正在渲染第 5 页…」，画布纯白）。
+
+### 排查
+
+- 服务端转出来的 PDF **本身有内容**：11 页都有文字（pdf.js 在 Node 里提取正常），
+  文件 338KB，不是空文档；
+- 用 Chromium 的 fake worker 渲染真实 PDF 能画出像素（darkPixels≈69776），
+  WebKit 26 也能画出（≈65250）—— 所以不是 fake worker 的通用 bug，而是
+  **Safari 17.0 这一版的 fake worker 路径**（LoopbackPort / structuredClone 等）在真机上白屏；
+- 不再赌 fake worker：回到 **真 worker**，只在 worker 里补 withResolvers。
+
+### 修复
+
+- 新增 worker entry（org 与 shared 各一份）：
+  - `pdfWorkerPromiseWithResolvers.js`：worker 作用域内的最小 polyfill；
+  - `pdfWorkerWithPolyfill.js`：先 import polyfill 模块、再 import
+    `pdfjs-dist/legacy/build/pdf.worker.min.mjs`（两个 import 的先后就是求值顺序）。
+- 两个加载器在**原生不支持** withResolvers 时：
+  ```js
+  lib.GlobalWorkerOptions.workerPort = new PdfWorkerWithPolyfill();
+  ```
+  不再把 worker 模块 import 到主线程；现代浏览器仍用 `?url` 的官方 worker。
+- 主线程的 polyfill 保留（`PDFWorker` 构造里的 `Promise.withResolvers` 仍要用）。
+- 守卫 `p177` 增加**像素断言**：用生产构建出的 worker（前置 `delete Promise.withResolvers`）
+  解析真实 11 页教案，必须 `darkPixels > 100`；反向对照仍是「真 worker 缺 API 必失败」。
+
+### 发布
+
+- 代码提交：`8fce63e7`
+- release：`20261031T044923Z`（从 `8fce63e7` 构建），active / health 200 / 四端入口 200
+- 回滚点：`20261031T042609Z`（该版 fake worker 在 Safari 17.0 白屏，仅作技术回滚点）
+- 发布前 MySQL `generation_jobs` 无 `QUEUED/RUNNING`（FAILED 98 / SUCCEEDED 355）
+
+> 第二次修复（fake worker）的 release `20261031T042609Z` 已由本次取代；历史保留，
+> 不要回退到它来解决老 Safari 的教案预览。
