@@ -15,6 +15,7 @@ import { errorText } from '@platform/shared';
 // 画布「可提交产出」的判定与提交/保存互斥的闸门 —— 与服务端**同一份算法**
 // （服务端直接 import packages/shared/src/canvasOutput.js，见 apps/server/src/routes/student.js）。
 import { canvasOutputSignature, createSaveGate, hasUnsubmittedOutput, isCanvasEditableProjectStatus } from './canvasOutput.js';
+import { normalizeGenerationErrorMessage, normalizeSnapshotGenerationErrors } from './generationErrors.js';
 
 /**
  * 「哪些框体能接收一条提示词（课堂素材里的提示词/文本）」。与 canvas/index.jsx 的 supportsPrompt
@@ -234,7 +235,7 @@ export function CanvasWorkspace({ api, prep = null, ...props }) {
 
   useEffect(() => {
     if (!project.data) return;
-    const snapshot = project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
+    const snapshot = normalizeSnapshotGenerationErrors(project.data.canvasSnapshot) || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
     setCanvasSnapshot(snapshot);
     setCanvasVersion(project.data.latestVersion);
     setDraft(snapshot);
@@ -387,7 +388,7 @@ export function CanvasWorkspace({ api, prep = null, ...props }) {
       // 已失败：把「生成中」翻成失败并带上原因
       if (status === 'FAILED' && node.data.generationStatus === 'PENDING') {
         touched = true;
-        return { ...node, data: { ...node.data, generationStatus: 'FAILED', generationError: job.errorMessage || '生成失败' } };
+        return { ...node, data: { ...node.data, generationStatus: 'FAILED', generationError: normalizeGenerationErrorMessage(job.errorMessage) || '生成失败' } };
       }
       return node;
     });

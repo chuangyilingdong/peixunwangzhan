@@ -5,6 +5,7 @@ export * from './ui.jsx';
 export * from './account.jsx';
 export * from './siteDefaults.js';
 export * from './notice.js';
+export * from './generationErrors.js';
 export * from './worksState.js';
 export * from './worksState.jsx';
 // 头像的 8 个预设键 + 显示字符（2026-09-27）。服务端直接 import 那个文件去校验白名单，前端用这里这份渲染。

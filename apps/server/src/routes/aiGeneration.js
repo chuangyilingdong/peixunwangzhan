@@ -3,7 +3,7 @@ import { resolveProjectUsageContext } from '../services/studentContext.js';
 // 画布「增量提交」：提交之后画布不锁（SUBMITTED 也能继续生成），课堂结束由 canUseNow 拦
 import { isCanvasEditableProjectStatus } from '../../../../packages/shared/src/canvasOutput.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
-import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
+import { assertExternalAiAllowed, assertProviderCapability, normalizeGenerationErrorMessage, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
 import { effectiveCapabilities, acceptsFirstFrame, acceptsLastFrame, inputModeShortLabel, normalizeInputModeValue, normalizeAudioRole, requestTemplateFor } from '../services/modelCapabilities.js';
 import { PUBLIC_SITE_URL } from '../config.js';
@@ -224,7 +224,7 @@ function normalizeJob(value, { assets = [] } = {}) {
     modalityLabel: MODALITY_LABELS[value.modality] || value.modality,
     provider: value.provider, model: value.model, prompt: value.prompt, status: value.status,
     retryOfJobId: value.retry_of_job_id || null, retryCount: Number(value.retry_count || 0), maxRetries: Number(value.max_retries ?? ASYNC_GENERATION_MAX_RETRIES),
-    errorCode: value.error_code || null, errorMessage: value.error_message || null,
+    errorCode: value.error_code || null, errorMessage: normalizeGenerationErrorMessage(value.error_message) || null,
     createdAt: value.created_at, startedAt: value.started_at || null, completedAt: value.completed_at || null,
     assets,
   };

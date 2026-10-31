@@ -18,7 +18,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CanvasEditor } from '@platform/canvas';
 import {
-  buildPreviewDocument, Empty, ErrorState, formatDate, Loading, Notice,
+  buildPreviewDocument, Empty, ErrorState, formatDate, Loading, Notice, normalizeSnapshotGenerationErrors,
   ReplayDocument, ReplayPreview, WorkMediaGallery, useData,
 } from '@platform/shared';
 
@@ -73,7 +73,7 @@ function CanvasWorkPreview({ api, workId, detail, images, imageError }) {
       <button type="button" className={'text-button' + (view === 'canvas' ? ' is-on' : '')} onClick={() => setView('canvas')}>创作画布</button>
     </div>
     {view === 'canvas'
-      ? <div className="work-detail__canvas"><CanvasEditor key={workId} initialSnapshot={data.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={resolveSrc} /></div>
+      ? <div className="work-detail__canvas"><CanvasEditor key={workId} initialSnapshot={normalizeSnapshotGenerationErrors(data.canvasSnapshot)} readOnly showStarter={false} resolveAssetUrl={resolveSrc} /></div>
       : <WorkMediaGallery media={data.media} assets={data.assets} resolveSrc={(item) => resolveSrc(item?.url) || ''} />}
     <details className="top-gap"><summary>画布快照（原始 JSON，排查用）</summary>
       <pre style={{ maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{JSON.stringify(data.canvasSnapshot, null, 2)}</pre>

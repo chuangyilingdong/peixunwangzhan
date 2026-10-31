@@ -1,7 +1,7 @@
 // 课堂里的「作品预览」弹窗（2026-09-17 从 pages/Classrooms.jsx 原样搬进来，逻辑未改）。
 import { useEffect, useState } from 'react';
 import { CanvasEditor } from '@platform/canvas';
-import { buildPreviewDocument, Empty, ErrorState, formatDate, Loading, Notice, ReplayDocument, ReplayFiles, ReplayPreview, WorkMediaGallery, resolveWorkMediaUrl, useData, WorkSharePanel, shareablePiecesOf } from '@platform/shared';
+import { buildPreviewDocument, Empty, ErrorState, formatDate, Loading, Notice, normalizeSnapshotGenerationErrors, ReplayDocument, ReplayFiles, ReplayPreview, WorkMediaGallery, resolveWorkMediaUrl, useData, WorkSharePanel, shareablePiecesOf } from '@platform/shared';
 import { Modal, RenameWorkDialog } from './ui.jsx';
 
 export function previewHref(value) {
@@ -43,6 +43,8 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
   const [images, setImages] = useState({});
   const [imageError, setImageError] = useState('');
   const data = detail.data;
+  // 旧快照里可能还存着内容审核失败的长文案；只改显示用的副本（见 shared/generationErrors.js）。
+  const displayCanvasSnapshot = normalizeSnapshotGenerationErrors(data?.canvasSnapshot);
   // ⭐ 2026-10-01 用户口径：「老师预览不能走 OSS 吗？」—— 能。服务端随作品详情多给一份
   //    `ossUrls`（**直连 OSS 的签名地址**：不需要 cookie、支持 Range 流式、字节不经过我们那台机）。
   //    有直链的**根本不 fetch**（省掉 base64 与几十兆字符串），只有本地盘老数据才走 data: 兜底。
@@ -145,14 +147,14 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
             <button type="button" role="tab" aria-selected={workView === 'canvas'} className={workView === 'canvas' ? 'primary-button' : 'secondary-button'} onClick={() => setWorkView('canvas')}>创作画布</button>
           </div>
           {workView === 'canvas'
-            ? (data.canvasSnapshot ? <CanvasEditor key={data.id} initialSnapshot={data.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={snapshotImage} /> : <Empty title="暂无画布快照" />)
+            ? (displayCanvasSnapshot ? <CanvasEditor key={data.id} initialSnapshot={displayCanvasSnapshot} readOnly showStarter={false} resolveAssetUrl={snapshotImage} /> : <Empty title="暂无画布快照" />)
             : <WorkMediaGallery media={data.media} assets={data.assets} resolveSrc={(item) => snapshotImage(item?.url) || ''} />}
         </>
-        : (data.canvasSnapshot
+        : (displayCanvasSnapshot
           // ⚠️ 2026-10-18：画布必须包一层有**确定高度**的容器（`.cv-dialog__preview` 给 420px；
           //    不包的话 `.learning-canvas` 只有 `.cv-viewport` 下才有 height:100%，这里会塌成 0 高、
           //    「创作画布」那一档看起来是空白）。
-          ? <div className="cv-dialog__preview"><CanvasEditor key={data.id} initialSnapshot={data.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={snapshotImage} /></div>
+          ? <div className="cv-dialog__preview"><CanvasEditor key={data.id} initialSnapshot={displayCanvasSnapshot} readOnly showStarter={false} resolveAssetUrl={snapshotImage} /></div>
           : <Empty title="暂无画布快照" />))
         : <div data-console="vibecoding" className="classroom-work-preview c-work-preview-dialog__fill">
           {views.length > 1 ? <label>作品文件<select value={entry || ''} onChange={(event) => setActiveName(event.target.value)}>

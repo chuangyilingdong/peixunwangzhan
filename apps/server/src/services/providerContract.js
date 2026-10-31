@@ -28,6 +28,32 @@ export const PROVIDER_ERROR_CODES = Object.freeze({
   QUOTA_EXHAUSTED: 'COMPUTE_QUOTA_EXHAUSTED',
 });
 
+/**
+ * 内容审核失败统一文案（2026-10-31 用户口径）。
+ *
+ * 上游会以三种面貌回同一件事：
+ *   · `The generated result did not pass the content review.`
+ *   · `相同输入在24小时内已有2次内容审核失败，该输入已进入12小时冷却期…`
+ *   · `内容未通过 AI 服务安全策略`
+ * 平台原来把原文拼成「AI 服务暂时不可用（…）」/「AI 服务请求频率受限（…）」，学生看不懂。
+ * 统一成一句话：**内容审核没通过**，并给出唯一可执行的动作（改提示词/参考素材）。
+ *
+ * ⚠️ 前端 `packages/shared/src/generationErrors.js` 有同一份正则与文案 —— 两边要同步；
+ *    p30 钉服务端，画布旧快照由前端归一。
+ */
+export const CONTENT_REVIEW_MESSAGE = '内容审核没通过。请调整提示词或参考素材后再试。';
+const CONTENT_REVIEW_PATTERN = /content\s*(review|safety|policy)|safety\s*system|moderation|内容审核|内容安全|内容未通过|审核(?:失败|未通过|没通过)|冷却期|filtered\s*by[^.]*safety|rejected[^.]*(?:safety|content)/i;
+
+export function isContentReviewFailure(value) {
+  return CONTENT_REVIEW_PATTERN.test(String(value || ''));
+}
+
+/** 给旧 job 的历史 error_message 兜底；不是审核失败的原样返回。 */
+export function normalizeGenerationErrorMessage(value) {
+  const message = String(value || '');
+  return isContentReviewFailure(message) ? CONTENT_REVIEW_MESSAGE : message;
+}
+
 export function isMockProvider(name) {
   return MOCK_PROVIDERS.has(String(name || '').trim().toLowerCase());
 }
@@ -101,7 +127,12 @@ export function normalizeProviderError(error, { status } = {}) {
     return { code: PROVIDER_ERROR_CODES.QUOTA_EXHAUSTED, retryable: false, message: 'AI 服务暂时不可用（上游账户额度或余额不足，平台会处理）。请稍后再试，或先做不需要 AI 的部分。' };
   }
   if (code === PROVIDER_ERROR_CODES.AUTH_FAILED || httpStatus === 401 || httpStatus === 403) return { code: PROVIDER_ERROR_CODES.AUTH_FAILED, retryable: false, message: withDetail(`AI渠道认证失败（HTTP ${httpStatus || 401}）。请在管理后台重新填写并保存该渠道 API Key。`) };
-  if (code.includes('SAFETY') || code.includes('CONTENT') || httpStatus === 400 && /safety|moderation|policy/i.test(String(error?.message || ''))) return { code: PROVIDER_ERROR_CODES.SAFETY_REJECTED, retryable: false, message: '内容未通过 AI 服务安全策略' };
+  // 内容审核/冷却：上游中英文、冷却期都归到同一条人话（见 CONTENT_REVIEW_MESSAGE 的注释）。
+  // 必须排在 429 / UPSTREAM 之前 —— 冷却期上游就是 429，否则会被包装成「请求频率受限」。
+  if (isContentReviewFailure(detail) || isContentReviewFailure(error?.message)) {
+    return { code: PROVIDER_ERROR_CODES.SAFETY_REJECTED, retryable: false, message: CONTENT_REVIEW_MESSAGE };
+  }
+  if (code.includes('SAFETY') || code.includes('CONTENT') || httpStatus === 400 && /safety|moderation|policy/i.test(String(error?.message || ''))) return { code: PROVIDER_ERROR_CODES.SAFETY_REJECTED, retryable: false, message: CONTENT_REVIEW_MESSAGE };
   if (code === 'ABORT_ERR' || code === 'ETIMEDOUT' || code === 'GENERATION_TIMEOUT' || code === PROVIDER_ERROR_CODES.TIMEOUT || error?.name === 'AbortError' || /timeout|超时/i.test(String(error?.message || ''))) return { code: PROVIDER_ERROR_CODES.TIMEOUT, retryable: true, message: 'AI 服务响应超时' };
   // 网络层失败（连接被拒/重置、TLS 握手失败、DNS 抖动…）。
   // ⚠️ 用户口径 2026-09-18 晚：「失败的文案调整下：服务器繁忙，请重试一下。因为我多按几次按钮，就可以生了。」

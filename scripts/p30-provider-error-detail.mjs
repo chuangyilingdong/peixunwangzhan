@@ -2,6 +2,9 @@
  * P30 上游错误原因要透出来：只说「AI 供应商调用失败」，用户根本不知道该怎么改。
  * 例：真机碰到过上游返回 400 `prompt length must be between 5 and 5000 characters`
  * （学生只写了 4 个字），却被我们的通用文案盖掉了。
+ *
+ * 例外（2026-10-31 用户口径）：**内容审核失败**不暴露上游原文 —— 英文 content review、
+ * 中文「内容审核失败」、12 小时冷却期都是同一件事，统一成「内容审核没通过…」。
  */
 import assert from 'node:assert/strict';
 
@@ -26,10 +29,16 @@ try {
   const plain503 = normalizeProviderError(failure('AI 服务暂时不可用', { code: 'GENERATION_PROVIDER_HTTP_ERROR', status: 502 }));
   assert.equal(plain503.message, 'AI 服务暂时不可用', `通用文案不应重复，实际：${plain503.message}`);
 
-  // 4) 安全策略拦截仍然只给统一文案（不把上游的敏感判定原文抛给学生）
+  // 4) 内容审核：中英文、冷却期都只给统一文案（不把上游判定原文抛给学生）
   const safety = normalizeProviderError(failure('内容未通过 AI 服务安全策略', { code: 'GENERATION_SAFETY_REJECTED', status: 400 }));
   assert.ok(String(safety.code).includes('SAFETY'), `安全策略应单独归类，实际 ${safety.code}`);
-  assert.equal(safety.message, '内容未通过 AI 服务安全策略', `安全策略应给统一文案，实际 ${safety.message}`);
+  assert.equal(safety.message, '内容审核没通过。请调整提示词或参考素材后再试。', `安全策略应给统一文案，实际 ${safety.message}`);
+  const englishReview = normalizeProviderError(failure('AI 服务暂时不可用（The generated result did not pass the content review. Adjust the prompt or reference materials and try again.）', { code: 'GENERATION_PROVIDER_UPSTREAM_ERROR' }));
+  assert.equal(englishReview.message, '内容审核没通过。请调整提示词或参考素材后再试。', `英文审核失败也应统一，实际 ${englishReview.message}`);
+  assert.equal(englishReview.code, 'GENERATION_PROVIDER_SAFETY_REJECTED', `英文审核失败应归到 SAFETY，实际 ${englishReview.code}`);
+  const cooldown = normalizeProviderError(failure('AI 服务请求频率受限（AI 供应商调用失败（上游：相同输入在24小时内已有2次内容审核失败，该输入已进入12小时冷却期，请修改提示词或参考素材后再试））', { code: 'GENERATION_PROVIDER_RATE_LIMITED', status: 429 }));
+  assert.equal(cooldown.message, '内容审核没通过。请调整提示词或参考素材后再试。', `冷却期也应统一，实际 ${cooldown.message}`);
+  assert.equal(cooldown.code, 'GENERATION_PROVIDER_SAFETY_REJECTED', `冷却期应归到 SAFETY（不能被 429 抢走），实际 ${cooldown.code}`);
 
   // 5) 走一遍真实适配器的 HTTP 错误分支：上游 message 要出现在抛出的错误里
   const provider = openAiCompatibleProvider({

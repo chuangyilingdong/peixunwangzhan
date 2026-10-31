@@ -9,7 +9,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { artifactGroup, buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayPanel, ReplayPreview, ReplayShell, WorkMediaGallery, resolveWorkMediaUrl } from '@platform/shared';
+import { artifactGroup, buildPreviewDocument, ConsoleEmpty, ConsoleIcon, normalizeSnapshotGenerationErrors, ReplayDocument, ReplayFilePreview, ReplayPanel, ReplayPreview, ReplayShell, WorkMediaGallery, resolveWorkMediaUrl } from '@platform/shared';
 
 function formatDate(value) {
   if (!value) return '';
@@ -399,7 +399,7 @@ export function WorkDetailPage({ api }) {
         <button type="button" role="tab" aria-selected={view === 'canvas'} className={'work-detail__tab' + (view === 'canvas' ? ' is-active' : '')} onClick={() => setView('canvas')}>创作画布</button>
       </div>
       {view === 'canvas'
-        ? <div className="work-detail__canvas"><CanvasEditor key={work.id} initialSnapshot={work.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={canvasImage} /></div>
+        ? <div className="work-detail__canvas"><CanvasEditor key={work.id} initialSnapshot={normalizeSnapshotGenerationErrors(work.canvasSnapshot)} readOnly showStarter={false} resolveAssetUrl={canvasImage} /></div>
         : <WorkMediaGallery media={work.media} assets={work.assets} resolveSrc={(item) => resolveWorkMediaUrl(item?.url, mediaImageUrls) || ''} />}
       <div className="work-detail__foot"><Link className="button soft" to="/works">看看更多作品</Link></div>
     </> : null}
