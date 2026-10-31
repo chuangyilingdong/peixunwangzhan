@@ -35,7 +35,31 @@ function loadPptxPreview() {
 }
 
 let pdfjsPromise = null;
+/**
+ * ⚠️ 2026-10-31 用户报：老师端备课 PPT 正常，教案 DOCX 报
+ * 「文档解析失败：undefined is not a function (near '...(function () { })...')」。
+ *
+ * 根因：pdfjs-dist 6.3 的 **legacy 构建仍然依赖 `Promise.withResolvers`**（ES2023，Safari 17.4 才有；
+ * legacy 里的 core-js 没补这一项）。缺了会在 `new PDFDocumentLoadingTask()` 里直接抛 TypeError；
+ * Safari/JavaScriptCore 把它显示成上面那句 `undefined is not a function (near ...)`。
+ * PPT 走的是 pptx-preview 原生渲染，不经过 pdf.js，所以只有 DOCX/PDF 这条路会炸。
+ *
+ * 实测：Chromium 里删掉 `Promise.withResolvers` 能复现；补上这个 polyfill 后 getDocument + render 正常。
+ * ⚠️ 必须在 import('pdfjs-dist/...') 之前执行；worker 当前不需要（实测 worker 启动/渲染不依赖它），
+ *    以后若 worker 也报，需要在 worker entry 里再补一份。
+ */
+function ensurePromiseWithResolvers() {
+  if (typeof Promise.withResolvers === 'function') return;
+  Promise.withResolvers = function withResolvers() {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  };
+}
+
 function loadPdfjs() {
+  ensurePromiseWithResolvers();
   if (!pdfjsPromise) {
     pdfjsPromise = Promise.all([
       // ⚠️⚠️ 必须走 **legacy 构建**（2026-09-30 用户报：同事的电脑上预览报「文档解析失败：Iterator is not defined」）。

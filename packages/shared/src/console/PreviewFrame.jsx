@@ -52,8 +52,25 @@ export const PREVIEW_RESPONSIVE_MIN_H = 600;
  * @param responsive 可选：**不缩放、按容器宽度自适应**（见 PREVIEW_RESPONSIVE_MIN_H 的注释）
  */
 let pdfjsPromise = null;
+/**
+ * Safari 17.4 以下没有 `Promise.withResolvers`，而 pdfjs-dist 6.3 的 legacy worker/主线程仍会用它
+ * （legacy 的 core-js 没补这一项）。缺了就抛 TypeError，Safari 显示成
+ * 「undefined is not a function (near '...')」——老师端教案 DOCX 预览报的就是这个。
+ * 必须在动态 import pdf.js 之前补上；TeachingAssetViewer 里有同一份（两处都走 pdf.js）。
+ */
+function ensurePromiseWithResolvers() {
+  if (typeof Promise.withResolvers === 'function') return;
+  Promise.withResolvers = function withResolvers() {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  };
+}
+
 /** 懒惰加载 pdf.js（**legacy 构建** —— 老浏览器缺 `Iterator` 的那个坑见 TeachingAssetViewer 的注释）。 */
 function loadPdfjs() {
+  ensurePromiseWithResolvers();
   if (!pdfjsPromise) {
     pdfjsPromise = Promise.all([
       import('pdfjs-dist/legacy/build/pdf.mjs'),
