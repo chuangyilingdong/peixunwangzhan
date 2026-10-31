@@ -9,6 +9,9 @@
  * 这样"首帧崩 / 白屏"这一类（React #300、提前 return 里的空引用、hook 数量变化…）
  * **无论如何都跑不掉** —— 和 p111（机构端）、p115（官网）、p175（多语言）同一套手法。
  *
+ * 2026-10-31 追加：生成前确认、提交作品确认必须是**画布内部弹窗**（不是 window.confirm）；
+ * 取消确认时不得发出 `/ai/generations/async`，也不得触发浏览器原生 dialog。
+ *
  * 跑法：node scripts/p176-canvas-classroom-browser.mjs   （要 Chrome；约 40–70 秒）
  */
 import assert from 'node:assert/strict';
@@ -156,6 +159,64 @@ try {
 
   // ── ③ 两条路都**零 uncaught** ────────────────────────────────────────────────
   check('③ 全程零 uncaught 异常（§55.4 的口径）', pageErrors.length === 0, pageErrors.slice(0, 3).join(' ; ').slice(0, 300));
+
+  // ── ④ 提交作品：画布内部确认弹窗（2026-10-31，替换 window.confirm）────────────
+  const output = await api('student/projects', {
+    method: 'POST', token,
+    body: { courseLessonId: lesson.id, title: '确认弹窗测试 · 我的创作', canvasSnapshot: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } } },
+  });
+  assert.equal(output.status, 200, `创建带产出的项目失败：${JSON.stringify(output.data).slice(0, 240)}`);
+  await api(`student/projects/${encodeURIComponent(output.data.id)}`, {
+    method: 'PUT', token,
+    body: { canvasSnapshot: { nodes: [{ id: 'image-test', type: 'image', position: { x: 160, y: 160 }, data: { title: '测试图', slotType: 'image', caption: '一只猫', assetUrl: 'https://example.com/p176-cat.png' } }], edges: [], viewport: { x: 0, y: 0, zoom: 1 } } },
+  });
+  let nativeDialog = false;
+  page.on('dialog', () => { nativeDialog = true; });
+  await page.goto(`${base}/learn/canvas/${encodeURIComponent(output.data.id)}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.cv-viewport', { timeout: 20000 }).catch(() => {});
+  await page.waitForTimeout(1500);
+  const submit = page.getByRole('button', { name: '提交作品' });
+  const submitDisabled = await submit.isDisabled().catch(() => true);
+  check('④ 有产出的项目「提交作品」按钮可用', !submitDisabled, `disabled=${submitDisabled}`);
+  if (!submitDisabled) {
+    await submit.click();
+    await page.waitForSelector('.cv-dialog__body', { timeout: 5000 }).catch(() => {});
+    const body = await page.locator('.cv-dialog__body').innerText().catch(() => '');
+    check('④ 提交作品弹出的是画布内部确认弹窗', body.includes('提交给老师前请确认'), body);
+    check('④ 没有触发浏览器原生 confirm', !nativeDialog);
+    await page.getByRole('button', { name: '取消' }).click().catch(() => {});
+  }
+
+  // ── ⑤ 生成按钮：画布内部确认弹窗，取消时不得发出生成请求 ────────────────────
+  const generateProject = await api('student/projects', {
+    method: 'POST', token,
+    body: { courseLessonId: lesson.id, title: '生成确认测试 · 我的创作', canvasSnapshot: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } } },
+  });
+  assert.equal(generateProject.status, 200, `创建生成确认项目失败：${JSON.stringify(generateProject.data).slice(0, 240)}`);
+  await api(`student/projects/${encodeURIComponent(generateProject.data.id)}`, {
+    method: 'PUT', token,
+    body: { canvasSnapshot: { nodes: [{ id: 'image-test-2', type: 'image', position: { x: 160, y: 160 }, data: { title: '生成确认图', slotType: 'image', caption: '一只猫' } }], edges: [], viewport: { x: 0, y: 0, zoom: 1 } } },
+  });
+  let generateRequest = false;
+  page.on('request', (request) => { if (request.url().includes('/ai/generations/async')) generateRequest = true; });
+  await page.goto(`${base}/learn/canvas/${encodeURIComponent(generateProject.data.id)}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.cv-viewport', { timeout: 20000 }).catch(() => {});
+  await page.waitForTimeout(1500);
+  await page.locator('.react-flow__node').filter({ hasText: '生成确认图' }).first().click().catch(() => {});
+  await page.waitForTimeout(600);
+  const generateButton = page.getByRole('button', { name: '生成画面' });
+  const generateCount = await generateButton.count();
+  check('⑤ 生成确认图节点出现「生成画面」按钮', generateCount > 0, `count=${generateCount}`);
+  if (generateCount) {
+    await generateButton.first().click();
+    await page.waitForSelector('.cv-dialog__body', { timeout: 5000 }).catch(() => {});
+    const body = await page.locator('.cv-dialog__body').innerText().catch(() => '');
+    check('⑤ 生成前弹出画布内部确认弹窗', body.includes('确认内容无误，点击生成。'), body);
+    check('⑤ 未点确认前不会发出生成请求', !generateRequest);
+    await page.getByRole('button', { name: '取消' }).click().catch(() => {});
+    await page.waitForTimeout(300);
+    check('⑤ 取消后仍不会发出生成请求', !generateRequest);
+  }
 
   await page.screenshot({ path: path.join(temp, 'p176-canvas-workspace.png'), fullPage: false }).catch(() => {});
   if (process.env.SUITE_KEEP_LOGS) console.log(`  · 截图与日志目录：${temp}`);

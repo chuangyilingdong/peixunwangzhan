@@ -1294,7 +1294,7 @@ function CanvasDockPanel({ node, containerRef, viewportBusy = false, onRequestRo
 
 const nodeTypes = { prompt: PromptNode, image: ImageNode, character: CharacterNode, scene: SceneNode, video: VideoNode, note: NoteNode, audio: AudioNode, animation: AnimationNode };
 
-function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, onUploadFiles, onRequestMaterials, resolveAssetUrl = null, showStarter, capabilities = ['text'], allowNodeCreation = true, focusRequest = null, boxModalities = [], entranceRequest = null, placementRef = null }) {
+function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, beforeGenerate = null, onUploadFiles, onRequestMaterials, resolveAssetUrl = null, showStarter, capabilities = ['text'], allowNodeCreation = true, focusRequest = null, boxModalities = [], entranceRequest = null, placementRef = null }) {
   // 受控课堂画布（allowNodeCreation=false）默认不使用固定起始底稿，避免空画布每次刷新被自动填充。
   const shouldShowStarter = showStarter === undefined ? (!readOnly && allowNodeCreation) : showStarter;
   const initial = useMemo(() => {
@@ -1428,6 +1428,13 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
 
   const generateNode = useCallback(async (nodeId, modality, input) => {
     if (readOnly || !onGenerateNode) return;
+    // 2026-10-31：生成前确认（画布内部弹窗）。确认在把节点改成「生成中」之前，
+    // 学生点取消时画布什么都不变（不会闪一下 PENDING、也不会留下失败状态）。
+    if (beforeGenerate) {
+      let confirmed = false;
+      try { confirmed = await beforeGenerate({ nodeId, modality, input }); } catch { confirmed = false; }
+      if (!confirmed) return;
+    }
     // 记下开始时间：框体里的百分比用它算（估算进度，见 GeneratingState 的注释）
     updateNode(nodeId, { generationStatus: 'PENDING', generationError: '', generationStartedAt: Date.now() });
     try {
@@ -1443,7 +1450,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     } catch (error) {
       updateNode(nodeId, { generationStatus: 'FAILED', generationError: error instanceof Error ? error.message : 'AI生成失败' });
     }
-  }, [nodes, onGenerateNode, readOnly, updateNode]);
+  }, [beforeGenerate, nodes, onGenerateNode, readOnly, updateNode]);
 
   // 取连到该节点的图片素材地址，供图生视频当首帧。
   // 按连线顺序取连到该节点的图片素材地址：第一条当首帧，第二条当尾帧（首尾帧模型用）。

@@ -197,6 +197,37 @@ export function CanvasWorkspace({ api, prep = null, ...props }) {
   const [generating, setGenerating] = useState(false);
   const [toolPanel, setToolPanel] = useState(null);
   const [promptTarget, setPromptTarget] = useState(null);
+  // 画布内部确认弹窗（2026-10-31）：生成前确认、提交作品确认共用。
+  // 不用 window.confirm —— 学生端要的是和画布同一套视觉；也方便把「确认内容无误」做成
+  // 必须在点生成之前看到的一步。Promise 由按钮 resolve，取消/确认都走同一处。
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const confirmResolveRef = useRef(null);
+  const askConfirm = useCallback((options) => new Promise((resolve) => {
+    confirmResolveRef.current?.(false);
+    confirmResolveRef.current = resolve;
+    setConfirmDialog(options);
+  }), []);
+  const settleConfirm = useCallback((value) => {
+    const resolve = confirmResolveRef.current;
+    confirmResolveRef.current = null;
+    setConfirmDialog(null);
+    resolve?.(value);
+  }, []);
+  useEffect(() => () => {
+    confirmResolveRef.current?.(false);
+    confirmResolveRef.current = null;
+  }, []);
+  useEffect(() => {
+    if (!confirmDialog) return undefined;
+    const onKey = (event) => { if (event.key === 'Escape') settleConfirm(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [confirmDialog, settleConfirm]);
+  const confirmGenerate = useCallback(() => askConfirm({
+    title: '生成前确认',
+    body: '确认内容无误，点击生成。',
+    confirmLabel: '确认生成',
+  }), [askConfirm]);
   // 顶栏要显示「这是谁的画布」：登录时把用户写进了会话（登录响应里的 user），读一次就够。
   // 读不到就退回占位文案，不能让顶栏空着。
   // ⚠️ 必须放在这一堆 hook 里（下面有「hook 全部调用完毕才可以提前返回」那条线）——
@@ -479,6 +510,7 @@ export function CanvasWorkspace({ api, prep = null, ...props }) {
   async function generateMaterial(event) {
     event.preventDefault();
     if (!editable) return;
+    if (!(await confirmGenerate())) return;
     setGenerating(true);
     try {
       const queued = await api.post('ai/generations/async', { projectId: project.data.id, ...generationForm });
@@ -500,7 +532,11 @@ export function CanvasWorkspace({ api, prep = null, ...props }) {
     // 「已发布」排在最前：这时"有没有新产出"已经不是重点了，得先说清"为什么这次提交不了"。
     if (workPublished) { setMessage(WORK_PUBLISHED_LOCK_MESSAGE); return; }
     if (!hasSubmittableOutput) { setMessage('画布上还没有新的作品产出：先完成一张图/一段文字，或上传成品，再提交给老师。'); return; }
-    if (!window.confirm('提交给老师前请确认：这是你自己的作品，并同意平台在作品广场展示。')) return;
+    if (!(await askConfirm({
+      title: '提交作品',
+      body: '提交给老师前请确认：这是你自己的作品，并同意平台在作品广场展示。',
+      confirmLabel: '确认提交',
+    }))) return;
     setBusy(true);
     // ① 冻结自动保存、② 让在途的旧保存响应全部失效（见 createSaveGate）；提交结束再放行。
     saveGateRef.current.beginSubmit();
@@ -864,11 +900,21 @@ export function CanvasWorkspace({ api, prep = null, ...props }) {
             用户 2026-09-17 口径：那两处文案删掉、「已保存」挪到顶部即可，给画布留更多空间。
             所以这条横条整条没了 —— 保存状态在上面的顶栏里（顶栏中间本来就有课时名，
             作品名也随这条横条一起去掉，需要的话说一声再加回来）。 */}
-        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} boxModalities={boxModalities} showStarter={false} onGenerateNode={prepMode ? undefined : generateCanvasNode} onUploadFiles={prepMode ? undefined : uploadFiles} resolveAssetUrl={resolveAssetUrl} onRequestMaterials={openMaterialsPanel} onChange={setDraft} focusRequest={focusRequest} entranceRequest={entranceRequest} placementRef={placementRef} /></div>
+        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} boxModalities={boxModalities} showStarter={false} beforeGenerate={prepMode ? undefined : confirmGenerate} onGenerateNode={prepMode ? undefined : generateCanvasNode} onUploadFiles={prepMode ? undefined : uploadFiles} resolveAssetUrl={resolveAssetUrl} onRequestMaterials={openMaterialsPanel} onChange={setDraft} focusRequest={focusRequest} entranceRequest={entranceRequest} placementRef={placementRef} /></div>
       </div>
     </section>
     {message && <div className={`cv-toast ${isErrorText(message) ? 'is-error' : ''}`}>{stripNoticeMark(message)}</div>}
     {promptTarget && <div className="cv-dialog" role="dialog" aria-modal="true"><div className="cv-dialog__panel"><strong>把「{promptTarget.material.title}」插入到哪个框体？</strong><div className="cv-dialog__list">{promptTarget.targets.map((node) => <button key={node.id} type="button" onClick={() => insertPromptToSlot(node.id)}>{node.data?.title || node.type}<small>{PROMPT_SLOT_ACTION[String(node.data?.slotType || '')] || ''}{node.data?.aspectRatio ? ' · ' + node.data.aspectRatio : ''}</small></button>)}</div><button type="button" className="cv-text-btn" onClick={() => setPromptTarget(null)}>取消</button></div></div>}
+    {confirmDialog && <div className="cv-dialog" role="dialog" aria-modal="true" aria-labelledby="cv-confirm-title" onClick={() => settleConfirm(false)}>
+      <div className="cv-dialog__panel" onClick={(event) => event.stopPropagation()}>
+        <strong id="cv-confirm-title">{confirmDialog.title}</strong>
+        <p className="cv-dialog__body">{confirmDialog.body}</p>
+        <div className="cv-dialog__actions">
+          <button type="button" className="cv-btn" autoFocus onClick={() => settleConfirm(false)}>取消</button>
+          <button type="button" className="cv-btn cv-btn--primary" onClick={() => settleConfirm(true)}>{confirmDialog.confirmLabel || '确认'}</button>
+        </div>
+      </div>
+    </div>}
   </main>;
 
 }

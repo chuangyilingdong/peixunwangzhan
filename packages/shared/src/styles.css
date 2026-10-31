@@ -1286,6 +1286,8 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .cv-dialog { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / 72%); backdrop-filter: blur(4px); }
 .cv-dialog__panel { width: min(520px, 100%); max-height: 86vh; overflow: auto; padding: 18px; border: 1px solid var(--cv-border-strong); border-radius: 16px; background: var(--cv-surface); box-shadow: 0 24px 70px rgb(0 0 0 / 50%); }
 .cv-dialog__panel > strong { display: block; font-size: 13px; }
+.cv-dialog__body { margin: 10px 0 0; color: var(--cv-text-dim); font-size: 12px; line-height: 1.7; }
+.cv-dialog__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .cv-dialog__list { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
 .cv-dialog__list button { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 13px; border: 1px solid var(--cv-border-strong); border-radius: 11px; color: var(--cv-text); background: var(--cv-surface-2); text-align: left; font-size: 12px; cursor: pointer; transition: border-color var(--cv-motion) ease-out, background var(--cv-motion) ease-out; }
 .cv-dialog__list button:hover { border-color: var(--cv-primary); background: rgb(163 254 68 / 8%); }
