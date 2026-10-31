@@ -53,32 +53,48 @@ export const PREVIEW_RESPONSIVE_MIN_H = 600;
  */
 let pdfjsPromise = null;
 /**
- * Safari 17.4 以下没有 `Promise.withResolvers`，而 pdfjs-dist 6.3 的 legacy worker/主线程仍会用它
- * （legacy 的 core-js 没补这一项）。缺了就抛 TypeError，Safari 显示成
+ * Safari 17.4 以下没有 `Promise.withResolvers`，而 pdfjs-dist 6.3 的 legacy 构建（主线程和 worker）
+ * 仍在用它（legacy 的 core-js 没补这一项）。缺了就抛 TypeError，Safari 显示成
  * 「undefined is not a function (near '...')」——老师端教案 DOCX 预览报的就是这个。
- * 必须在动态 import pdf.js 之前补上；TeachingAssetViewer 里有同一份（两处都走 pdf.js）。
+ *
+ * 只补主线程不够：pdf.js 的 **worker 是独立作用域**，即使主线程补了，worker 里的
+ * `WorkerTask` / `ChunkedStreamManager` 仍会炸。所以原生不支持时把 worker 模块 import 到主线程，
+ * pdf.js 会改用 fake worker，与主线程共用同一份 polyfill（见 TeachingAssetViewer 的同名注释，两处同源）。
  */
+const PROMISE_POLYFILL_MARK = '__platformPreviewPolyfill';
+
+function hasNativePromiseWithResolvers() {
+  return typeof Promise.withResolvers === 'function' && !Promise.withResolvers[PROMISE_POLYFILL_MARK];
+}
+
 function ensurePromiseWithResolvers() {
   if (typeof Promise.withResolvers === 'function') return;
-  Promise.withResolvers = function withResolvers() {
+  const withResolvers = function withResolvers() {
     let resolve;
     let reject;
     const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
     return { promise, resolve, reject };
   };
+  withResolvers[PROMISE_POLYFILL_MARK] = true;
+  Promise.withResolvers = withResolvers;
 }
 
 /** 懒惰加载 pdf.js（**legacy 构建** —— 老浏览器缺 `Iterator` 的那个坑见 TeachingAssetViewer 的注释）。 */
 function loadPdfjs() {
+  const nativeWithResolvers = hasNativePromiseWithResolvers();
   ensurePromiseWithResolvers();
   if (!pdfjsPromise) {
-    pdfjsPromise = Promise.all([
-      import('pdfjs-dist/legacy/build/pdf.mjs'),
-      import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'),
-    ]).then(([lib, worker]) => {
-      lib.GlobalWorkerOptions.workerSrc = worker.default;
+    pdfjsPromise = (async () => {
+      if (!nativeWithResolvers) {
+        await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs');
+      }
+      const lib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+      if (nativeWithResolvers) {
+        const worker = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url');
+        lib.GlobalWorkerOptions.workerSrc = worker.default;
+      }
       return lib;
-    });
+    })();
   }
   return pdfjsPromise;
 }

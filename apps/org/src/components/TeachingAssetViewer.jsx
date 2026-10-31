@@ -44,24 +44,47 @@ let pdfjsPromise = null;
  * Safari/JavaScriptCore 把它显示成上面那句 `undefined is not a function (near ...)`。
  * PPT 走的是 pptx-preview 原生渲染，不经过 pdf.js，所以只有 DOCX/PDF 这条路会炸。
  *
- * 实测：Chromium 里删掉 `Promise.withResolvers` 能复现；补上这个 polyfill 后 getDocument + render 正常。
- * ⚠️ 必须在 import('pdfjs-dist/...') 之前执行；worker 当前不需要（实测 worker 启动/渲染不依赖它），
- *    以后若 worker 也报，需要在 worker entry 里再补一份。
+ * ⚠️⚠️ 2026-10-31 第二次报障（老师仍是 Safari）：主线程补了 polyfill 还不够 ——
+ * **pdf.js 的 worker 是独立作用域**，主线程的补丁进不去；worker 里 `WorkerTask` /
+ * `ChunkedStreamManager`（预览地址走 Range 请求时必建）都会调 `Promise.withResolvers`，
+ * 于是在 worker 里抛错、经 MessageHandler 包装成 `UnknownErrorException` 回到界面。
+ * 实测（Chromium 里把主线程和 worker 的 withResolvers 都删掉）：主线程补丁 + 真 worker
+ * 在 URL+Range 下必炸；worker 模块 import 到主线程（pdf.js 自动改用 fake worker）后正常。
+ *
+ * 因此：浏览器**原生**没有 withResolvers 时，把 worker 模块 import 到主线程，
+ * 让 pdf.js 走 fake worker（与主线程共用同一份 polyfill）；新浏览器仍用真 worker。
+ * 用 `__platformPreviewPolyfill` 标记区分“原生支持”和“被我们补过”，否则第二处
+ * 加载器（PreviewFrame）先补过之后，这里会误判成原生支持。
  */
+const PROMISE_POLYFILL_MARK = '__platformPreviewPolyfill';
+
+function hasNativePromiseWithResolvers() {
+  return typeof Promise.withResolvers === 'function' && !Promise.withResolvers[PROMISE_POLYFILL_MARK];
+}
+
 function ensurePromiseWithResolvers() {
   if (typeof Promise.withResolvers === 'function') return;
-  Promise.withResolvers = function withResolvers() {
+  const withResolvers = function withResolvers() {
     let resolve;
     let reject;
     const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
     return { promise, resolve, reject };
   };
+  withResolvers[PROMISE_POLYFILL_MARK] = true;
+  Promise.withResolvers = withResolvers;
 }
 
 function loadPdfjs() {
+  // 必须在补 polyfill **之前**判断，否则看到的永远是我们自己补的那个
+  const nativeWithResolvers = hasNativePromiseWithResolvers();
   ensurePromiseWithResolvers();
   if (!pdfjsPromise) {
-    pdfjsPromise = Promise.all([
+    pdfjsPromise = (async () => {
+      if (!nativeWithResolvers) {
+        // 老 Safari：worker 作用域缺 withResolvers。先把它 import 到主线程 —— 模块顶部的
+        // `globalThis.pdfjsWorker` 会让 pdf.js 直接走 fake worker，不再 new Worker。
+        await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs');
+      }
       // ⚠️⚠️ 必须走 **legacy 构建**（2026-09-30 用户报：同事的电脑上预览报「文档解析失败：Iterator is not defined」）。
       //    两份构建里都有同一行 `if (typeof Iterator.prototype.join !== "function") { Iterator.prototype.join = … }`，
       //    而 `Iterator` 是 **Chrome 122 / Safari 17.4 / Firefox 129 才有的新全局** —— 区别在于：
@@ -69,14 +92,33 @@ function loadPdfjs() {
       //    所以轮到那一行时它已经存在；主构建不带这些补丁（体积考虑），在老浏览器上一 import 就抛
       //    `ReferenceError: Iterator is not defined` —— 表现就是"我这台（新 Chrome）正常、别人的电脑报错"。
       //    实测复现与验证都在守卫 p169 里（源码口径 + 无 Iterator 下 import + 真浏览器真渲染一页 PDF）。
-      import('pdfjs-dist/legacy/build/pdf.mjs'),
-      import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'),
-    ]).then(([lib, worker]) => {
-      lib.GlobalWorkerOptions.workerSrc = worker.default;
+      const lib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+      if (nativeWithResolvers) {
+        const worker = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url');
+        lib.GlobalWorkerOptions.workerSrc = worker.default;
+      }
       return lib;
-    });
+    })();
   }
   return pdfjsPromise;
+}
+
+/**
+ * 报错时把浏览器/系统缩成一句话带出去（老师截图就能看出是哪台设备）。
+ * 2026-10-31 第二次报障时拿不到老师的 Safari 版本，只能靠猜 —— 以后不用再猜。
+ */
+function browserLabel() {
+  if (typeof navigator === 'undefined') return '';
+  const ua = String(navigator.userAgent || '');
+  const safari = ua.match(/Version\/([\d.]+)[^)]*Safari/i);
+  if (safari) return `Safari ${safari[1]}`;
+  const edge = ua.match(/Edg\/([\d.]+)/);
+  if (edge) return `Edge ${edge[1]}`;
+  const chrome = ua.match(/(?:Chrome|CriOS)\/([\d.]+)/);
+  if (chrome) return `Chrome ${chrome[1]}`;
+  const firefox = ua.match(/(?:Firefox|FxiOS)\/([\d.]+)/);
+  if (firefox) return `Firefox ${firefox[1]}`;
+  return ua.slice(0, 80);
 }
 
 const PDF_KINDS = new Set(['PDF', 'OFFICE']);
@@ -265,7 +307,18 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
         if (cancelled) return;
         setPages(sizes);
       } catch (error) {
-        if (!cancelled) setState((old) => ({ ...old, error: `文档解析失败：${error?.message || '未知错误'}` }));
+        // 2026-10-31：把环境一起带出去。老师那边不方便开控制台，截图里的「Safari 16.x」
+        // 就是判断"是不是老浏览器 + fake worker 有没有生效"的唯一线索。
+        if (!cancelled) {
+          const env = browserLabel();
+          setState((old) => ({ ...old, error: `文档解析失败：${error?.message || '未知错误'}${env ? `（${env}）` : ''}` }));
+        }
+        console.error('[教学素材] 文档解析失败', {
+          kind,
+          mode,
+          nativeWithResolvers: hasNativePromiseWithResolvers(),
+          userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent,
+        }, error);
       }
     })();
     return () => {
