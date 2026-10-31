@@ -166,3 +166,68 @@ function ensurePromiseWithResolvers() {
 
 > 第二次修复（fake worker）的 release `20261031T042609Z` 已由本次取代；历史保留，
 > 不要回退到它来解决老 Safari 的教案预览。
+
+---
+
+## 第四次修正（2026-10-31 晚）：Safari 17.0 还缺 `ArrayBuffer.transferToFixedLength`
+
+### 现象
+
+第三次发布（真 worker + withResolvers 补丁）后，老师**仍然白屏**，控制台出现：
+
+```text
+Warning: getOperatorList - ignoring errors during "GetOperatorList: page 0" task:
+"TypeError: i.transferToFixedLength is not a function.
+(In 'i.transferToFixedLength(c)', 'i.transferToFixedLength' is undefined)".
+(pdfWorkerWithPolyfill-….js, line 3)
+```
+
+### 根因
+
+- `pdf.worker` 的 `compileFontInfo` / `compileSystemFontInfo` 用
+  `ArrayBuffer.prototype.transferToFixedLength(c)` 把字体字节截到实际长度；
+- 该 API 是 ES2024，**Safari 17.0 没有**（17.4 才有）；
+- pdf.js 在 `getOperatorList` 里把这类异常当 **warning 吞掉**，所以界面**不报错**，
+  只是 operator list 为空 → 页面白屏；
+- 第三次的 worker polyfill 只补了 `Promise.withResolvers`，漏了这个。
+
+### 修复
+
+`pdfWorkerPromiseWithResolvers.js`（org / shared 各一份）增加：
+
+```js
+if (typeof ArrayBuffer.prototype.transferToFixedLength !== 'function') {
+  Object.defineProperty(ArrayBuffer.prototype, 'transferToFixedLength', {
+    configurable: true, writable: true,
+    value: function (newByteLength) {
+      const length = newByteLength === undefined ? this.byteLength : Number(newByteLength);
+      if (!Number.isInteger(length) || length < 0) throw new RangeError('Invalid ArrayBuffer length');
+      const source = new Uint8Array(this);
+      const target = new ArrayBuffer(length);
+      new Uint8Array(target).set(source.subarray(0, Math.min(source.length, length)));
+      return target;
+    },
+  });
+}
+```
+
+> 原生实现会把原 buffer detach；pdf.js 拿到新 buffer 后不会再用旧的，所以这里只做
+> 「截断/补零 + 复制」，不强制 detach（避免在 Safari 17.0 上再依赖 `structuredClone` 的 transfer）。
+
+守卫 `p177` 增加：
+
+- 补丁单测（删掉原生 API → import → 截断 `[1,2,3,4]→[1,2]`、补零 `[7,8]→[7,8,0,0]`）；
+- worker 内确认日志 `transferToFixedLength=function`；
+- 用生产构建出的 worker、前置 `delete Promise.withResolvers` + `delete transferToFixedLength`，
+  解析**真实 11 页教案 PDF**，Chromium 与 WebKit 都必须有像素
+  （实测 darkPixels 69776 / 65250）。
+
+### 发布
+
+- 代码提交：`58d01c72`
+- release：`20261031T045806Z`（从 `58d01c72` 构建），active / health 200 / 四端入口 200
+- 回滚点：`20261031T044923Z`
+- 发布前 MySQL `generation_jobs` 无 `QUEUED/RUNNING`（FAILED 98 / SUCCEEDED 355）
+
+> `20261031T044923Z` 的 worker 只补了 withResolvers，Safari 17.0 仍会因本节的 API
+> 白屏；不要回退到它。当前正确版本是 `20261031T045806Z`。
