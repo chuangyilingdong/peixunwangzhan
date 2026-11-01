@@ -798,10 +798,6 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_generation_jobs_project_created ON generation_jobs(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_generation_jobs_org_created ON generation_jobs(org_id, created_at DESC);
--- 队列/巡检的热点索引（2026-11-01）：认领与启动重入都要
---   WHERE status=? AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at
--- 没有它，任务一多就是全表扫；1000 路并行时这一条是每轮都要跑的。
-CREATE INDEX IF NOT EXISTS idx_generation_jobs_queue ON generation_jobs(status, next_attempt_at, created_at);
 
 CREATE TABLE IF NOT EXISTS media_assets (
   id TEXT PRIMARY KEY,
