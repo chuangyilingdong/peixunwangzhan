@@ -106,6 +106,19 @@ if (!hasPrerendered && !requireDist) {
     const html = fs.readFileSync(path.join(dist, 'index.html'), 'utf8');
     assert.ok(!html.includes('正在进入课堂'), '首页还是那个加载壳');
   });
+
+  // ⚠️ 2026-11-01 首版真的把 canonical 写成了 http://127.0.0.1:6187/handbook 并发了出去 ——
+  //    预渲染是从本地起的服务打开的页面，而页面按 window.location.origin 生成 canonical。
+  //    这比"没有预渲染"危害大得多（等于声明真页面在 localhost），所以钉死。
+  await check('④ 没有页面把 canonical/og:url 写成 localhost', async () => {
+    for (const route of routes) {
+      const file = route === '/' ? path.join(dist, 'index.html') : path.join(dist, route.slice(1), 'index.html');
+      const html = fs.readFileSync(path.join(root, file.slice(root.length + 1)), 'utf8');
+      assert.ok(!/https?:\/\/(?:127\.0\.0\.1|localhost)[:/]/.test(html), `${route} 里还有本地地址`);
+      const canonical = (html.match(/<link rel="canonical" href="([^"]*)"/) || [])[1] || '';
+      assert.ok(canonical.startsWith('https://'), `${route} 的 canonical 不是 https：${canonical}`);
+    }
+  });
 }
 
 assert.equal(failures, 0, `P199 有 ${failures} 条断言没过`);

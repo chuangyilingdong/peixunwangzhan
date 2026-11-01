@@ -36,6 +36,11 @@ const ROOT = process.cwd();
 const DIST = path.join(ROOT, 'apps/website/dist');
 const PORT = Number(process.env.PRERENDER_PORT || 6187);
 const API_BASE = String(process.env.PRERENDER_API_BASE || 'https://aicyld.com').replace(/\/+$/, '');
+// 预渲染时页面是从 `http://127.0.0.1:<PORT>` 打开的，而页面自己按 `window.location.origin`
+// 生成 canonical / og:url —— 不换回来的话，抓下来的 HTML 会写着
+// `<link rel=canonical href="http://127.0.0.1:6187/handbook">`，
+// 等于告诉百度"真页面在 localhost"（2026-11-01 首版真的这么发上去了，靠结构检查才发现）。
+const SITE_ORIGIN = String(process.env.PRERENDER_SITE_ORIGIN || 'https://aicyld.com').replace(/\/+$/, '');
 const CHROME = String(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || '/srv/ai-kids-platform/runtime/ms-playwright/chromium-1248/chrome-linux64/chrome');
 const PAGE_TIMEOUT_MS = Number(process.env.PRERENDER_TIMEOUT_MS || 45000);
 
@@ -119,14 +124,22 @@ function startServer() {
 
 /** 把渲染结果落盘。`/` 写回 dist/index.html（它就是入口文件），其余写 `dist/<路由>/index.html`。 */
 function writeRoute(route, html) {
+  // 把预渲染用的本地源换回正式域名：canonical / og:url 都是页面自己按 origin 生成的，
+  // 不换就会写成 127.0.0.1（对 SEO 是致命的 —— 等于声明真页面在 localhost）。
+  const normalized = html.split(`http://127.0.0.1:${PORT}`).join(SITE_ORIGIN);
+  // 兜底：换完之后还不许出现本地地址（localhost / 别的端口），否则宁可这次构建失败 ——
+  // 一篇 canonical 指向 localhost 的页面，比"没有预渲染"危害大得多。
+  if (/https?:\/\/(?:127\.0\.0\.1|localhost)[:/]/.test(normalized)) {
+    throw new Error('预渲染结果里仍残留本地地址（canonical/og:url 会指向 localhost）');
+  }
   if (route === '/') {
-    fs.writeFileSync(path.join(DIST, 'index.html'), html);
+    fs.writeFileSync(path.join(DIST, 'index.html'), normalized);
     return path.join(DIST, 'index.html');
   }
   const dir = path.join(DIST, route.replace(/^\//, ''));
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'index.html');
-  fs.writeFileSync(file, html);
+  fs.writeFileSync(file, normalized);
   return file;
 }
 
