@@ -200,16 +200,6 @@ try {
   check('⑥ 这次反过来：win 的条目一个字节都不许动',
     afterMac.files['win-x64'].name === name && afterMac.files['win-x64'].sha256 === digest,
     JSON.stringify(afterMac.files['win-x64']).slice(0, 200));
-  {
-    const { readClientUpdateManifest } = await import('../apps/server/src/services/clientUpdateManifest.js');
-    const view = readClientUpdateManifest(baseEnv);
-    // ⚠️ 客户端团队 2026-09-28 的硬约束：双端必须同版本。后台页面就靠 `stale` 判"两边对齐了没有"。
-    check('⑥ ⭐ 三端同版本发完之后 stale 为空（没对齐的话对应平台会反复提示更新）',
-      Array.isArray(view.stale) && view.stale.length === 0, JSON.stringify(view.stale));
-    check('⑥ 后台读得到三个平台（同一份清单里 Win/Mac ARM/Mac Intel 的名字与 SHA256 都要有）',
-      view.files?.['win-x64']?.sha256 === digest && view.files?.['mac-arm64']?.sha256 === macDigest && view.files?.['mac-x64']?.sha256 === x64Digest,
-      JSON.stringify(view.files || {}).slice(0, 200));
-  }
 
 
   /* ⑦ 2026-11-02：macOS Intel 包也走同一条上传路。 */
@@ -227,6 +217,17 @@ try {
     && afterX64.files['mac-x64'].sha256 === x64Digest && afterX64.files['mac-x64'].version === '9.9.9'
     && afterX64.files['win-x64'].name === name && afterX64.files['mac-arm64'].name === macName,
     JSON.stringify({ x64: afterX64.files['mac-x64'], win: afterX64.files['win-x64'], arm: afterX64.files['mac-arm64'] }).slice(0, 300));
+
+  {
+    const { readClientUpdateManifest } = await import('../apps/server/src/services/clientUpdateManifest.js');
+    const view = readClientUpdateManifest(baseEnv);
+    // ⚠️ 客户端团队 2026-09-28 的硬约束：双端必须同版本。后台页面就靠 `stale` 判"两边对齐了没有"。
+    check('⑥ ⭐ 三端同版本发完之后 stale 为空（没对齐的话对应平台会反复提示更新）',
+      Array.isArray(view.stale) && view.stale.length === 0, JSON.stringify(view.stale));
+    check('⑥ 后台读得到三个平台（同一份清单里 Win/Mac ARM/Mac Intel 的名字与 SHA256 都要有）',
+      view.files?.['win-x64']?.sha256 === digest && view.files?.['mac-arm64']?.sha256 === macDigest && view.files?.['mac-x64']?.sha256 === x64Digest,
+      JSON.stringify(view.files || {}).slice(0, 200));
+  }
 
   const badName = await post('lingdong-client-win-x64.exe', Buffer.from('x'));
   check('② 不合规的文件名 → 400（不是 500，也不是默默收下）', badName.status === 400, `HTTP ${badName.status}`);
