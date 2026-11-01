@@ -515,6 +515,18 @@ function waitedOut(startedAt, maxWaitMs) {
  *    一条上游永远不结束的任务会把全班后面的生成顶在后面。真到那一刻任务号已经落库，
  *    对账（`reconcileStrandedGenerations`）会继续按号找回、只补素材不计费。
  */
+/**
+ * 轮询抖动（2026-11-01，C2）：100 路并发任务若都按固定间隔轮询，会在同一秒一起打上游，
+ * 变成一个方波（默认 5 秒一次 → 峰值 20 RPS）。±15% 的随机偏移把它摊平，
+ * 代价只是平均多等几十毫秒。
+ *
+ * ⚠️ 只抖**实际睡眠时长**，不改 `waitMs` 本身 —— 否则退避翻倍会被每次抖动叠加成随机行走。
+ */
+function withPollJitter(ms) {
+  const base = Math.max(1, Number(ms) || 1);
+  return Math.round(base * (0.85 + Math.random() * 0.3));
+}
+
 async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, maxWaitMs, pollIntervalMs, title, providerName, model, pollPath = '', clientRequestId, onEvidence }) {
   let payload = initialPayload;
   const startedAt = Date.now();
@@ -524,7 +536,7 @@ async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, maxW
   while (pendingPayload(payload) && !mediaCandidate(payload, modality)) {
     const pollUrl = pollUrlFromPayload(payload, requestUrl, pollPath);
     if (!pollUrl) break;
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    await new Promise((resolve) => setTimeout(resolve, withPollJitter(waitMs)));
     let next = null;
     try {
       const response = await fetchWithTimeout(pollUrl, { method: 'GET', apiKey, timeout: POLL_QUERY_TIMEOUT_MS, modality, clientRequestId, onEvidence });

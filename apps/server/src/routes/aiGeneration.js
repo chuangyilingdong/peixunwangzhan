@@ -15,6 +15,8 @@ import { priceFenFor, salePriceFenSuccessSql } from '../services/computePool.js'
 import { archiveGeneratedAssets } from '../services/generatedAssetArchive.js';
 // B2（2026-11-01）：结算时只建**占位行**，字节交给后台归档队列 —— 归档不再堵在"任务完成"上
 import { recoverStaleClaims, stageGeneratedAssets, startGeneratedAssetArchiveWorker } from '../services/generatedAssetArchiveQueue.js';
+// C2（2026-11-01）：提交侧令牌桶。100 路并发不等于可以对上游同时发 100 个"新建任务"。
+import { acquireUpstreamSubmitToken } from '../services/upstreamSubmitGate.js';
 // 队列调度规则（纯函数，p195 守卫钉着）：轻模态优先、视频单独限流、视频之间先进先出
 import { isHeavyAsyncModality, pickNextStartableIndex, resolveReservedLight } from '../services/asyncGenerationScheduler.js';
 // 2026-09-18（用户口径）：`services/courseCuLedger.js` 已**整体删除** —— 那套课包 CU 额度
@@ -57,7 +59,10 @@ const asyncGenerationQueue = [];
  * 再人为串行；仍保留单进程内的队列 + DB 原子认领（见 processAsyncGeneration 的 claimed.changes），
  * 重复入队的任务只会有一个 worker 真正跑。
  */
-const ASYNC_GENERATION_CONCURRENCY = Math.max(1, Math.min(16, Number(process.env.AI_GENERATION_CONCURRENCY) || 8));
+// ⚠️ 2026-11-01（C3）：上限从 16 提到 500。16 是"归档还堵在任务完成路径上"时的安全值；
+// B2 解耦之后，生成侧只是 I/O 等待（真正稀缺的归档带宽由 generatedAssetArchiveQueue 单独限流），
+// 所以这里可以按"上游配额"而不是"内存"来定。生产目标 100 路（AI_GENERATION_CONCURRENCY=100）。
+const ASYNC_GENERATION_CONCURRENCY = Math.max(1, Math.min(500, Number(process.env.AI_GENERATION_CONCURRENCY) || 8));
 /**
  * 给轻模态（TEXT / IMAGE / MUSIC）预留几路 —— 规则本身在 `services/asyncGenerationScheduler.js`，
  * 这里只负责把环境变量解析出来并夹到合法区间。默认 2：8 路时视频最多占 6 路。
@@ -411,6 +416,8 @@ async function writeLyricsForMusic({ prompt, policy, requestContext = null, auth
     : baseSelection;
   const provider = getGenerationProvider(selection);
   try {
+    // 作词这一步同样是一次"新建上游任务"，也过提交令牌桶
+    await acquireUpstreamSubmitToken();
     const generated = await provider.generate({
       modality: 'TEXT',
       prompt: description,
@@ -1096,6 +1103,8 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const jobId = await createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
   try {
     const upstreamPrompt = upstreamPromptWithReferences(prompt, { originalReferences: referenceAssets, sentReferences: options.referenceAssets || [] });
+    // C2：提交前拿令牌 —— 100 路并发不等于可以对上游同秒发 100 个"新建任务"
+    await acquireUpstreamSubmitToken();
     const generated = await provider.generate({ modality, prompt: upstreamPrompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
@@ -1194,6 +1203,8 @@ async function processAsyncGeneration(item) {
     // 发上游前把提示词里的中文引用芯片翻成上游认的写法（@Image N / @Video N）——
     // 只改发给上游的这份，库里与界面上仍是学生写的中文芯片。
     const upstreamPrompt = upstreamPromptWithReferences(prompt, { originalReferences: referenceAssets, sentReferences: options.referenceAssets || [] });
+    // C2：提交前拿令牌 —— 100 路并发不等于可以对上游同秒发 100 个"新建任务"
+    await acquireUpstreamSubmitToken();
     const generated = await provider.generate({ modality, prompt: upstreamPrompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
