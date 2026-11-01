@@ -71,6 +71,33 @@ let concurrencyCode = null;
 try { await reserveUpload({ userId: 'user_p165b', orgId: 'org_p165b', bytes: 1024 }); } catch (error) { concurrencyCode = error?.code; }
 check('② 同时在传超过上限仍会被拦（UPLOAD_CONCURRENCY_LIMIT）', concurrencyCode === 'UPLOAD_CONCURRENCY_LIMIT', String(concurrencyCode));
 for (const release of held) release();
+
+/* ── ②b 个人闸与机构闸已拆开（2026-11-01）────────────────────────────────
+ * 原来两道共用 FILE_UPLOAD_MAX_CONCURRENT=3 —— 等于**一个机构同时只能 3 个上传**，
+ * 千人大班同时交作品时 997 个人直接 429。这里钉住"拆开之后机构不再被个人的 3 误伤"，
+ * 以及"机构自己那道闸仍然存在"（别把闸删了，只是放宽了）。
+ */
+console.log('②b 个人 / 机构两道闸已拆开');
+const sharedOrg = 'org_p165_shared';
+const manyUsers = [];
+for (let i = 0; i < 10; i += 1) {
+  manyUsers.push(await reserveUpload({ userId: `user_p165_shared_${i}`, orgId: sharedOrg, bytes: 1024 }));
+}
+check('②b 同一机构 10 个不同用户可同时上传（原来第 4 个就被拦）', manyUsers.length === 10, `只能同时 ${manyUsers.length} 个`);
+for (const release of manyUsers) release();
+
+const orgCfg = uploadLimitConfig();
+const fillOrg = [];
+for (let i = 0; i < orgCfg.orgConcurrent; i += 1) {
+  fillOrg.push(await reserveUpload({ userId: `user_p165_fill_${i}`, orgId: 'org_p165_orgfull', bytes: 1024 }));
+}
+let orgCode = null;
+try { await reserveUpload({ userId: 'user_p165_org_overflow', orgId: 'org_p165_orgfull', bytes: 1024 }); } catch (error) { orgCode = error?.code; }
+check('②b 机构闸占满后，新用户被拦（UPLOAD_ORG_CONCURRENCY_LIMIT）', orgCode === 'UPLOAD_ORG_CONCURRENCY_LIMIT', String(orgCode));
+check('②b 机构闸默认比个人闸宽（否则这次拆分没有意义）', orgCfg.orgConcurrent > orgCfg.userConcurrent,
+  JSON.stringify({ user: orgCfg.userConcurrent, org: orgCfg.orgConcurrent }));
+for (const release of fillOrg) release();
+
 // ⚠️ 2026-10-01：这里原来写死"传 1GB 必被拦" —— 配额上调到 2GB 之后这条**自己**红了。
 //    改成**从配置里读**当前上限再加 1 字节（同 §六十七 那条 p13 的教训：别把断言建在某个写死的默认值上）。
 const cfg = uploadLimitConfig();

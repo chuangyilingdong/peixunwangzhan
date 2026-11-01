@@ -1,7 +1,8 @@
 // P4-C04 统一文件元数据与访问授权模型
 // 提供：file_assets / file_access_grants 表的 CRUD + 授权校验 + 受保护文件流下载
 import { createReadStream } from 'node:fs';
-import { stat, rm } from 'node:fs/promises';
+import { copyFile, mkdir, open, stat, rm } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
   audit,
@@ -20,10 +21,10 @@ import {
   orgSeriesAccessSql,
   previewInfoFor, arows, arow, aq, jsonText, isMysql, parseOptionalIsoDate } from '../lib.js';
 import { assertTransition } from '../services/domainState.js';
-import { maxUploadBytes, parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
+import { maxUploadBytes, parseMultipartFormData, persistSecureUpload, uploadRoot, validateMimeAndExtension, cleanFileName } from '../services/fileUploadSecurity.js';
 import { ensurePreviewPdf, needsConversion, previewKindFor, verifyPreviewTicket, previewPdfInOss, publishPreviewPdf, canRenderNatively } from '../services/materialPreview.js';
 import { reserveUpload } from '../services/uploadLimits.js';
-import { rowStorageBackend, ossRedirectUrl, materializeObject, imageProcessFor } from '../services/fileStorage.js';
+import { rowStorageBackend, ossRedirectUrl, materializeObject, imageProcessFor, persistUploadFile } from '../services/fileStorage.js';
 import { ossConfigured, signedUrl } from '../services/objectStorage.js';
 
 /** 预览 302 到 OSS 的签名有效期（1 小时，与预览票据同量级）。 */
@@ -247,6 +248,24 @@ export async function prepareFileDownload(ctx, file) {
       publicPath: file.public_path,
       statement: 'EXTERNAL_URL 模式：客户端可直接使用已授权的 storageUrl。',
     };
+  }
+  // ── 占位行：生成成功但**字节还没搬回来**（2026-11-01，见 services/generatedAssetArchiveQueue.js）──
+  // 为什么要有这一支：一条 H3 是 20-22MB，把"归档完成"塞进任务的完成条件里，
+  // 1000 路并行时这 20GB 会把整节课堵在 10Mbps 入口上。现在任务完成时先建一行占位
+  // （INTERNAL_PROXY + 空 storage_key + metadata.archive.state=PENDING），
+  // 学生点开时**先直连上游**，同时把这条提到归档队首。
+  // ⚠️ 只 302 到我们自己写进去的 http(s) 地址（不信任任何客户端输入），且状态必须是 PENDING ——
+  //    归档失败后 state 会变 FAILED，那时仍然可以回上游（尽力而为），但没有"提优先级"的意义了。
+  const archiveMeta = parseJson(file.metadata, {})?.archive || {};
+  if (!String(file.storage_key || '').trim() && /^https?:\/\//i.test(String(archiveMeta.sourceUrl || ''))
+    && (archiveMeta.state === 'PENDING' || archiveMeta.state === 'FAILED')) {
+    if (archiveMeta.state === 'PENDING') {
+      // 学生真要看了 → 提到队首（不改 state：谁抢到谁归档，这里只调优先级）
+      const bumped = json({ ...(parseJson(file.metadata, {}) || {}), archive: { ...archiveMeta, priority: true } });
+      await aq('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [bumped, nowIso(), file.id]).catch(() => {});
+    }
+    await audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, archiveState: archiveMeta.state, upstream: true });
+    return { __fileResponse: true, status: 302, redirectUrl: String(archiveMeta.sourceUrl) };
   }
   // OSS 行：**不经过我们转发字节**，而是 302 到带签名的临时地址（见 services/fileStorage.js）。
   // 为什么必须这样：这台机的公网出口只有 5 Mbps，媒体全从它出去会拖慢所有人。
@@ -478,6 +497,132 @@ export async function storeGeneratedAsset({ buffer, mimeType, fileName, ownerUse
   );
   const created = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
   return { id: fileId, url: `/api/public/file-assets/${fileId}/download`, fileName: stored.fileName, mimeType: stored.mimeType, bytes: stored.fileSize, row: created };
+}
+
+/** 读文件头几个字节（嗅探用；不要为了一次校验把整个产物读进内存）。 */
+async function readFileHead(filePath, bytes) {
+  const handle = await open(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(bytes);
+    const { bytesRead } = await handle.read(buffer, 0, bytes, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally { await handle.close(); }
+}
+
+/**
+ * 生成产物的**流式**落库（2026-11-01）：字节已经在临时文件里，不再整段进内存。
+ *
+ * 与上面 `storeGeneratedAsset` 的差别只有"字节从哪来"：那个收 Buffer（调用方已经把整段读进内存），
+ * 这个收文件路径。**落库字段、返回形状、默认可见性与它逐字一致** —— 因为读面（下载 / 预览 /
+ * 作品发布改写）只认 `file_assets` 行，不关心字节当初怎么进来的。
+ *
+ * ⚠️ 为什么不直接复用 `persistSecureUpload`：它的签名要 Buffer，还要对整段做 sha256 与 clamscan。
+ *    生成产物是**上游给的**、不是用户上传，那两道口径本来就不适用；checksum 由调用方边下边算
+ *    （见 services/generatedAssetArchive.js）。这里仍走 `validateMimeAndExtension` —— 魔术字节那道
+ *    校验不能省，否则一个伪装成 mp4 的什么东西也能落盘。
+ *
+ * ⚠️ 临时文件由**调用方**删（归档那边 finally 里 unlink）；这里只读，不搬不删。
+ */
+export async function storeGeneratedAssetFromFile({ tempPath, bytes, mimeType, checksum, fileName, ownerUserId = null, ownerOrgId = null, category = 'MEDIA_ASSET', visibility = 'PUBLIC_PLATFORM', metadata = {} }) {
+  const { persisted, validated, safeName, digest, size } = await persistGeneratedFileBytes({ tempPath, bytes, mimeType, fileName, checksum });
+  const fileId = id('file');
+  const stamp = nowIso();
+  await aq(
+    `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [fileId, ownerUserId ? 'USER' : 'PLATFORM', ownerOrgId, ownerUserId, 'INTERNAL_PROXY', null, persisted.storageKey,
+      `/api/public/file-assets/${fileId}/download`, null, safeName, validated.mimeType, size,
+      digest, category, visibility, 'ACTIVE', 'NOT_REQUIRED', null,
+      json({ ...metadata, generated: true, security: { signature: validated.detectedMime || 'textual', scanner: 'SKIPPED', status: 'SKIPPED' }, storageBackend: persisted.storageBackend || 'local' }), ownerUserId, stamp, stamp],
+  );
+  const created = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
+  return { id: fileId, url: `/api/public/file-assets/${fileId}/download`, fileName: safeName, mimeType: validated.mimeType, bytes: size, row: created };
+}
+
+/**
+ * 校验 + 落盘（不建行、不改行）—— `storeGeneratedAssetFromFile` 与
+ * `replaceGeneratedAssetFromFile` 共用这一段，免得两条路的校验口径分叉。
+ */
+async function persistGeneratedFileBytes({ tempPath, bytes, mimeType, fileName, checksum }) {
+  const size = Number(bytes || 0);
+  if (!Number.isFinite(size) || size < 1) throw errors.badRequest('文件内容无效', 'INVALID_FILE_CONTENT');
+  if (size > maxUploadBytes()) throw errors.badRequest(`文件大小不能超过 ${Math.floor(maxUploadBytes() / 1024 / 1024)} MB`, 'FILE_TOO_LARGE');
+  const head = await readFileHead(tempPath, 8192);
+  const validated = validateMimeAndExtension(fileName, mimeType, head);
+  const safeName = cleanFileName(fileName).normalized;
+  const root = uploadRoot();
+  const now = new Date();
+  const relative = path.join(String(now.getUTCFullYear()), String(now.getUTCMonth() + 1).padStart(2, '0'), `${randomUUID()}${validated.extension}`);
+  const absolute = path.resolve(root, relative);
+  if (!absolute.startsWith(root + path.sep)) throw errors.badRequest('存储路径无效', 'INVALID_STORAGE_PATH');
+  let persisted;
+  try {
+    persisted = await persistUploadFile({
+      relativeKey: relative.replaceAll(path.sep, '/'),
+      filePath: tempPath,
+      size,
+      mimeType: validated.mimeType,
+      // 用 copy 不用 rename：临时目录与 uploads 根目录**不保证同一个挂载点**，rename 跨盘会 EXDEV。
+      moveLocal: async () => {
+        await mkdir(path.dirname(absolute), { recursive: true, mode: 0o750 });
+        await copyFile(tempPath, absolute);
+        return absolute;
+      },
+    });
+  } catch (error) {
+    // 后端（OSS）的原始错误不能吞 —— 否则线上只有一句「文件存储失败」，无从下手
+    console.warn('[storage] 流式归档写入失败：', error?.message || error);
+    throw errors.badRequest('文件存储失败', 'FILE_STORAGE_FAILED');
+  }
+  // checksum 正常由调用方边下边算；没给就补算一次（别让库里出现空 checksum，回填脚本靠它比对）
+  const digest = String(checksum || '') || await new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    const stream = createReadStream(tempPath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('error', reject);
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+  return { persisted, validated, safeName, digest, size };
+}
+
+/**
+ * 建一条**占位行**：生成成功、字节还没搬回来（2026-11-01，B2 解耦）。
+ *
+ * 对外地址在**这一刻**就固定成 `/api/student/file-assets/<id>/download`，
+ * 之后归档完成只是把字节填进同一行 —— 学生的画布快照、已分享的作品都不用改写。
+ *
+ * ⚠️ `storage_kind` 仍是 `INTERNAL_PROXY`（**不是** `PENDING`）：读面有十几处按
+ *    `storage_kind !== 'INTERNAL_PROXY'` 早退，换成 PENDING 会让预览/取源那些分支提前报"没有文件"。
+ *    判据改成"INTERNAL_PROXY 且 storage_key 为空"，语义一样但所有既有分支照常工作。
+ */
+export async function createPendingGeneratedAsset({ sourceUrl, modality, jobId, ownerUserId = null, ownerOrgId = null, fileName, declaredMime = '', metadata = {} }) {
+  const fileId = id('file');
+  const stamp = nowIso();
+  const proxyRoute = `/api/student/file-assets/${fileId}/download`;
+  await aq(
+    `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [fileId, ownerUserId ? 'USER' : 'PLATFORM', ownerOrgId, ownerUserId, 'INTERNAL_PROXY', null, null, proxyRoute, null,
+      fileName, declaredMime || null, null, null, 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null,
+      json({ ...metadata, generated: true, archive: { state: 'PENDING', sourceUrl, modality, jobId, attempts: 0, priority: false, queuedAt: stamp } }),
+      ownerUserId, stamp, stamp],
+  );
+  return { id: fileId, url: proxyRoute };
+}
+
+/** 归档落地：把字节填进**已存在**的占位行（不新建行，对外地址不变）。 */
+export async function replaceGeneratedAssetFromFile({ fileId, tempPath, bytes, mimeType, checksum, fileName }) {
+  const existing = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
+  if (!existing) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
+  const { persisted, validated, safeName, digest, size } = await persistGeneratedFileBytes({ tempPath, bytes, mimeType, fileName, checksum });
+  const meta = parseJson(existing.metadata, {}) || {};
+  const stamp = nowIso();
+  await aq(
+    'UPDATE file_assets SET storage_key=?, file_name=?, mime_type=?, file_size=?, checksum=?, metadata=?, updated_at=? WHERE id=?',
+    [persisted.storageKey, safeName, validated.mimeType, size, digest,
+      json({ ...meta, storageBackend: persisted.storageBackend || 'local', security: { signature: validated.detectedMime || 'textual', scanner: 'SKIPPED', status: 'SKIPPED' },
+        archive: { ...(meta.archive || {}), state: 'ARCHIVED', archivedAt: stamp, bytes: size } }),
+      stamp, fileId],
+  );
+  return { id: fileId, storageKey: persisted.storageKey, mimeType: validated.mimeType, bytes: size };
 }
 
 /**

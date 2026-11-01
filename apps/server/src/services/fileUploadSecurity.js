@@ -80,7 +80,7 @@ export function uploadRoot() {
   return path.resolve(process.env.FILE_UPLOAD_ROOT || path.join(process.cwd(), 'var', 'uploads'));
 }
 
-function cleanFileName(value) {
+export function cleanFileName(value) {
   const original = String(value || '').trim();
   const normalized = original.normalize('NFKC');
   // 拒绝而不是删除 NUL/控制字符，避免攻击者借助清理后的名称绕过审计。
@@ -115,7 +115,7 @@ export function sniffMime(buffer) {
   return null;
 }
 
-function validateMimeAndExtension(fileName, declaredMime, buffer) {
+export function validateMimeAndExtension(fileName, declaredMime, buffer) {
   const { extension } = cleanFileName(fileName);
   const mimeType = String(declaredMime || '').toLowerCase().split(';', 1)[0].trim();
   if (!MIME_EXTENSIONS.has(mimeType)) throw errors.badRequest('MIME 类型不被允许', 'MIME_TYPE_BLOCKED');

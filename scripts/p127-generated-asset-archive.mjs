@@ -17,6 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
+import { stripComments } from './lib/sourceText.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p127-archive-'));
@@ -45,7 +46,7 @@ const run = (args) => new Promise((resolve, reject) => {
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
-const { archiveOneGeneratedAsset, archiveGeneratedAssets, archivableMimeFor, studentAssetUrl, ARCHIVABLE_MIME_EXTENSION } = await import('../apps/server/src/services/generatedAssetArchive.js');
+const { archiveOneGeneratedAsset, archiveGeneratedAssets, archivableMimeFor, studentAssetUrl, ARCHIVABLE_MIME_EXTENSION, archiveTempUsage } = await import('../apps/server/src/services/generatedAssetArchive.js');
 const { row, arow } = await import('../apps/server/src/lib.js');
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
 const { aq, arows } = await import('../packages/database/src/store.js');
@@ -69,7 +70,10 @@ let ORG = '';
 const PNG_1PX = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 const UPSTREAM_IMAGE = 'https://getapib.org/f/image/example-dead-or-alive.png';
 function bytesFetch({ status = 200, contentType = 'image/png', bytes = PNG_1PX } = {}) {
-  return async () => ({ ok: status >= 200 && status < 300, status, headers: { get: (name) => (String(name).toLowerCase() === 'content-type' ? contentType : String(name).toLowerCase() === 'content-length' ? String(bytes.length) : null) }, arrayBuffer: async () => bytes });
+  // 2026-11-01：归档改成**流式**（不再整段 arrayBuffer），所以替身必须返回一个**真的 Response** ——
+  // 它带 `body`（web ReadableStream），downloadToTempFile 才读得到。
+  // 这里刻意不返回只有一个 `arrayBuffer()` 的假对象：那样测的就是一条生产已经不走的路径。
+  return async () => new Response(bytes, { status, headers: { 'content-type': contentType, 'content-length': String(bytes.length) } });
 }
 
 /* ── ① 归档真的好使：下载 → 落盘 → 返回我们自己的私有地址 ─────────────────── */
@@ -120,12 +124,21 @@ check('⑧ 私有地址形状与读面约定一致（canvasMediaFrom 只认这�
   studentAssetUrl('file_abc') === '/api/student/file-assets/file_abc/download'
   && !('video/quicktime' in ARCHIVABLE_MIME_EXTENSION) && archivableMimeFor('video/mp4') === 'video/mp4');
 
-/* ── ③ 接线：生成链路两处都要在结算前归档 ─────────────────────────────────── */
+/* ── ③ 接线：生成链路两处都要在结算前**建占位行**（2026-11-01 B2 解耦）────────
+ * 旧口径是"结算前把 20MB 下载完再交给结算"；现在改成"结算前建占位行、字节交后台队列"：
+ *   · 对外地址在结算那一刻就固定（学生的快照/分享都不用改写）；
+ *   · 归档不再是任务完成的条件 —— 1000 路并行时这是唯一能把 20GB 从关键路径上摘掉的办法。
+ * 这条断言跟着换判据，但**意图没变**：仍然是"结算前必须已经安排好读面"，只是安排的方式变了。
+ */
 const generation = read('apps/server/src/routes/aiGeneration.js');
-const archiveCalls = generation.match(/assetPayloads: archivedAssets/g) || [];
-check('⑨ 两条生成链路（同步 + worker）都在结算前归档，并把**归档后**的清单交给结算（不是原来那份）',
-  archiveCalls.length === 2 && (generation.match(/const archivedAssets = await archiveGeneratedAssets\(/g) || []).length === 2,
-  `结算处收到归档结果的次数=${archiveCalls.length}`);
+const stagedCalls = generation.match(/assetPayloads: stagedAssets/g) || [];
+check('⑨ 两条生成链路（同步 + worker）都在结算前建占位行，并把**带稳定地址**的清单交给结算',
+  stagedCalls.length === 2
+  && (generation.match(/const stagedAssets = await stageGeneratedAssets\(/g) || []).length === 2
+  && !/assetPayloads: archivedAssets/.test(generation),
+  `结算处收到占位清单的次数=${stagedCalls.length}`);
+check('⑨b 后台归档队列在启动时接上（否则占位行永远拿不到字节）',
+  /startGeneratedAssetArchiveWorker\(\)/.test(generation) && /recoverStaleClaims\(\)/.test(generation));
 
 /* ── ④ 广场读面：私有地址换成作品专属公开代理 ─────────────────────────────── */
 const publicRoutes = read('apps/server/src/routes/communication/public.js');
@@ -187,6 +200,37 @@ check('⑱ 替换表**从库里推**（不是用本次跑出来的内存清单�
   /SELECT asset_url, metadata FROM media_assets WHERE metadata LIKE/.test(backfill));
 
 await assert.doesNotReject(async () => {});
+
+/* ── ⑲ 归档改成流式（2026-11-01）：内存不再随产物大小增长 ────────────────── */
+console.log('⑲ 归档是流式的（不再整段读进内存）');
+{
+  const source = stripComments(read('apps/server/src/services/generatedAssetArchive.js'));
+  // 老写法 `Buffer.from(await response.arrayBuffer())` 是 OOM 的根源：一条 H3 20-22MB。
+  check('⑲ 源码里不再出现 arrayBuffer()（整段进内存的老写法）', !/arrayBuffer\s*\(/.test(source));
+  check('⑲ 走「边下边写临时文件 → 流式上传」这条路',
+    /downloadToTempFile/.test(source) && /storeGeneratedAssetFromFile/.test(source));
+  check('⑲ 临时文件用 .part 后缀，并且有陈旧文件清理（进程被杀也不留垃圾）',
+    /\.part/.test(source) && /STALE_TEMP_MS/.test(source));
+
+  // 前面所有归档用例都跑完了：临时目录必须是空的，漏一个就是每跑一次留 20MB
+  const usage = await archiveTempUsage();
+  check('⑲ 归档结束后临时目录没有残留文件', usage.files === 0, JSON.stringify(usage));
+
+  // 声明长度超限的产物应当在**读字节之前**就拒掉（不占磁盘、不占内存）
+  const oversized = await archiveOneGeneratedAsset({
+    assetUrl: UPSTREAM_IMAGE, modality: 'IMAGE', jobId: 'job_p127_oversize',
+    fetchImpl: async () => ({
+      ok: true, status: 200,
+      headers: { get: (name) => (String(name).toLowerCase() === 'content-type' ? 'image/png' : String(name).toLowerCase() === 'content-length' ? String(65 * 1024 * 1024) : null) },
+      body: new Blob([PNG_1PX]).stream(),
+    }),
+  });
+  check('⑲ 声明超过 64MB 的产物直接拒（reason 说清是超上限，不是笼统失败）',
+    oversized.ok === false && /超过归档上限/.test(oversized.reason || ''), JSON.stringify(oversized));
+  const after = await archiveTempUsage();
+  check('⑲ 被拒的那次也没留下临时文件', after.files === 0, JSON.stringify(after));
+}
+
 
 console.log('');
 if (failures) {

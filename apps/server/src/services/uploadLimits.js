@@ -14,6 +14,12 @@ function positive(name, fallback, max = Number.MAX_SAFE_INTEGER) { const n = Num
  * ⚠️ 下面**两类仍然保留**，它们不是频次闸、用户也没让取消：
  *    · `maxConcurrent` —— **同时在传**的数量（不是总量）。界面是一次传一个，正常使用撞不到；
  *      它的作用是别让一个客户端同时占一堆上传连接。
+ *      ⚠️ **2026-11-01 拆成两道**（原来个人和机构共用同一个 3，是个误伤）：
+ *        一个机构里 **同时只能有 3 个上传** —— 代码注释自己写这闸的目的是"别让一个客户端
+ *        占一堆连接"，那是**个人**维度的事。1000 人的班里同时交作品，997 个人直接 429。
+ *        现在：个人仍是 3（FILE_UPLOAD_MAX_CONCURRENT），机构单独一个（FILE_UPLOAD_ORG_MAX_CONCURRENT）。
+ *        机构那道**故意开得比内存闸宽**（默认 60 vs `uploadBodyGate` 的 32）：让它不成为瓶颈，
+ *        真正管住内存的仍然是 `services/uploadBodyGate.js` 那道**按字节**算的闸。
  *    · `userBytes` / `orgBytes` —— **容量**配额（都是累计占用）。
  *      ⚠️ 2026-10-01 上调过一档：个人 **500MB → 2GB**、机构 **5GB → 20GB**。
  *      依据是生产实测（不是猜）：当时**最重的那个用户已经用到 410MB / 500MB** —— 再传两节课件
@@ -22,13 +28,16 @@ function positive(name, fallback, max = Number.MAX_SAFE_INTEGER) { const n = Num
  *      ⚠️ 这是**累计占用**不是频次：真要再放宽就调 `FILE_UPLOAD_USER_QUOTA_BYTES` / `..._ORG_...`，
  *      别再把它当成"限流"来理解（频次那两道已在 §六十四 整体删掉）。
  */
-function limits() { return { maxConcurrent: positive('FILE_UPLOAD_MAX_CONCURRENT', 3, 100), userBytes: positive('FILE_UPLOAD_USER_QUOTA_BYTES', 2 * 1024 * 1024 * 1024, 100 * 1024 * 1024 * 1024), orgBytes: positive('FILE_UPLOAD_ORG_QUOTA_BYTES', 20 * 1024 * 1024 * 1024, 1024 * 1024 * 1024 * 1024) }; }
+function limits() { return { userConcurrent: positive('FILE_UPLOAD_MAX_CONCURRENT', 3, 100), orgConcurrent: positive('FILE_UPLOAD_ORG_MAX_CONCURRENT', 60, 500), userBytes: positive('FILE_UPLOAD_USER_QUOTA_BYTES', 2 * 1024 * 1024 * 1024, 100 * 1024 * 1024 * 1024), orgBytes: positive('FILE_UPLOAD_ORG_QUOTA_BYTES', 20 * 1024 * 1024 * 1024, 1024 * 1024 * 1024 * 1024) }; }
 function key(scope, value) { return `${scope}:${value || 'anonymous'}`; }
 async function currentBytes(scope, value) { const clause = scope === 'org' ? 'owner_org_id=?' : 'owner_user_id=?'; return Number((await arows(`SELECT COALESCE(SUM(file_size),0) AS bytes FROM file_assets WHERE ${clause} AND storage_kind='INTERNAL_PROXY' AND status != 'REMOVED'`, [value])).at(0)?.bytes || 0); }
 export async function reserveUpload({ userId, orgId, bytes }) {
   const cfg = limits();
   const userKey = key('user', userId); const orgKey = key('org', orgId);
-  if ((active.get(userKey) || 0) >= cfg.maxConcurrent || (active.get(orgKey) || 0) >= cfg.maxConcurrent) throw errors.tooMany('上传并发数已达到上限，请稍后再试', 'UPLOAD_CONCURRENCY_LIMIT', { retryAfterSeconds: 10 });
+  // 两道分开判、给不同的错误码与文案：撞机构闸说明"不是你一个人的问题"，
+  // 学生端提示要能区分（原来两句共用一个码，运维看不出是哪个维度顶到了）。
+  if ((active.get(userKey) || 0) >= cfg.userConcurrent) throw errors.tooMany('上传并发数已达到上限，请稍后再试', 'UPLOAD_CONCURRENCY_LIMIT', { retryAfterSeconds: 10 });
+  if ((active.get(orgKey) || 0) >= cfg.orgConcurrent) throw errors.tooMany('本机构同时在传的文件太多，请稍后再试', 'UPLOAD_ORG_CONCURRENCY_LIMIT', { retryAfterSeconds: 10 });
   const size = Number(bytes || 0);
   const userBytes = await currentBytes('user', userId);
   const orgBytes = await currentBytes('org', orgId);

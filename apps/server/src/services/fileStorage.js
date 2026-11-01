@@ -12,7 +12,7 @@
  */
 import { stat } from 'node:fs/promises';
 import { parseJson } from '@platform/database';
-import { ossConfigured, storageBackend, putObject, signedUrl, getObjectToFile, headObject, withPrefix, deleteObject, ossInfo } from './objectStorage.js';
+import { ossConfigured, storageBackend, putObject, putObjectFromFile, signedUrl, getObjectToFile, headObject, withPrefix, deleteObject, ossInfo } from './objectStorage.js';
 
 /** 这一行的对象在哪个后端：'oss' 或 'local'（缺省即 local，老数据安全） */
 export function rowStorageBackend(file) {
@@ -36,6 +36,26 @@ export async function persistUploadBytes({ relativeKey, buffer, mimeType, writeL
     return { storageKey: result.key, storageBackend: 'oss', storagePath: null };
   }
   const storagePath = await writeLocal();
+  return { storageKey: String(relativeKey).replaceAll('\\', '/'), storageBackend: 'local', storagePath };
+}
+
+/**
+ * 落一次上传的字节，但**字节已经在磁盘上**（流式归档用，2026-11-01）。
+ *
+ * 为什么需要它：生成产物一条 20-22MB，归档原来是 `Buffer.from(await response.arrayBuffer())`
+ * 整段读进内存 —— 1000 路并行就是 20GB。改成"边下边写临时文件"之后，最后一步只需要把
+ * **文件**交给存储层，`putObjectFromFile` 本身就是 `createReadStream` 流式上传
+ * （见 objectStorage.js 里那段注释，2026-09-25 在真桶上验过）。
+ *
+ * 与 `persistUploadBytes` 的关系：那个收 Buffer，这个收路径；**返回值形状逐字一致**，
+ * 调用方（读面）分不出区别。本地后端由调用方提供 `moveLocal`（它知道 uploads 根目录）。
+ */
+export async function persistUploadFile({ relativeKey, filePath, size, mimeType, moveLocal }) {
+  if (uploadBackend() === 'oss') {
+    const result = await putObjectFromFile(relativeKey, filePath, mimeType, { size });
+    return { storageKey: result.key, storageBackend: 'oss', storagePath: null };
+  }
+  const storagePath = await moveLocal();
   return { storageKey: String(relativeKey).replaceAll('\\', '/'), storageBackend: 'local', storagePath };
 }
 

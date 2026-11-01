@@ -13,6 +13,10 @@ import { assertTransition } from '../services/domainState.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
 import { priceFenFor, salePriceFenSuccessSql } from '../services/computePool.js';
 import { archiveGeneratedAssets } from '../services/generatedAssetArchive.js';
+// B2（2026-11-01）：结算时只建**占位行**，字节交给后台归档队列 —— 归档不再堵在"任务完成"上
+import { recoverStaleClaims, stageGeneratedAssets, startGeneratedAssetArchiveWorker } from '../services/generatedAssetArchiveQueue.js';
+// 队列调度规则（纯函数，p195 守卫钉着）：轻模态优先、视频单独限流、视频之间先进先出
+import { isHeavyAsyncModality, pickNextStartableIndex, resolveReservedLight } from '../services/asyncGenerationScheduler.js';
 // 2026-09-18（用户口径）：`services/courseCuLedger.js` 已**整体删除** —— 那套课包 CU 额度
 // （`reserveCourseCu/settleCourseCu/releaseCourseCu`）的 `cu_limit` 全仓无人写，恒 `UNLIMITED`、
 // 两张 `student_course_cu_*` 表永远是空的。学生算力额度现在**只有一套、且只观测不拦人**：
@@ -54,7 +58,14 @@ const asyncGenerationQueue = [];
  * 重复入队的任务只会有一个 worker 真正跑。
  */
 const ASYNC_GENERATION_CONCURRENCY = Math.max(1, Math.min(16, Number(process.env.AI_GENERATION_CONCURRENCY) || 8));
+/**
+ * 给轻模态（TEXT / IMAGE / MUSIC）预留几路 —— 规则本身在 `services/asyncGenerationScheduler.js`，
+ * 这里只负责把环境变量解析出来并夹到合法区间。默认 2：8 路时视频最多占 6 路。
+ */
+const ASYNC_GENERATION_RESERVED_LIGHT = resolveReservedLight(process.env.AI_GENERATION_RESERVED_LIGHT, ASYNC_GENERATION_CONCURRENCY);
 let asyncGenerationActive = 0;
+// 视频在跑的条数。单独计数是因为"总槽位"和"视频槽位"是两个上限。
+let asyncGenerationActiveHeavy = 0;
 // Seedance video tasks can remain queued for several minutes before the
 // provider exposes the final URL. Keep the job alive long enough for normal
 // queue latency instead of reporting a false generation failure at 120s.
@@ -549,13 +560,17 @@ export async function interruptOwnJobsOnShutdown() {
 
 export async function initializeAsyncGenerationQueue() {
   const now = nowIso();
-  console.log(`[生成队列] 并发 ${ASYNC_GENERATION_CONCURRENCY} 路（AI_GENERATION_CONCURRENCY 可覆盖，默认 8）`);
+  console.log(`[生成队列] 并发 ${ASYNC_GENERATION_CONCURRENCY} 路，其中视频最多 ${ASYNC_GENERATION_CONCURRENCY - ASYNC_GENERATION_RESERVED_LIGHT} 路（为图片/文本/音乐预留 ${ASYNC_GENERATION_RESERVED_LIGHT} 路；AI_GENERATION_CONCURRENCY / AI_GENERATION_RESERVED_LIGHT 可覆盖）`);
   // 本进程刚起来：此刻任何 RUNNING 都属于**已经没了**的那个 worker → 全部收掉（含只跑了 94 秒的那种）。
   const interrupted = await interruptOrphanedJobs();
   if (interrupted) console.warn(`[生成队列] 回收了 ${interrupted} 条被中断的生成任务（服务重启，上游结果未知）`);
   // 租约兜底保留：崩溃重启（没走关服钩子）时它照样会把老任务收掉。
   await aq("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code='UPSTREAM_OUTCOME_UNKNOWN',error_message='执行中断，上游结果未知；请核查后人工处理',completed_at=? WHERE status='RUNNING' AND (started_at IS NULL OR started_at < ?)", [now, new Date(Date.now() - ASYNC_RUNNING_LEASE_MS).toISOString()]);
   for (const { id: jobId } of (await arows("SELECT id FROM generation_jobs WHERE status='QUEUED' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at", [now]))) { await enqueuePersistedJob(jobId); };
+  // ⭐ 2026-11-01（B2）：后台归档队列。先把上次被中断（进程被杀时停在 ARCHIVING）的认领收回，
+  //    再启动循环 —— 不收回的话那些行永远停在 ARCHIVING，而认领只认 PENDING，学生就一直拿上游地址。
+  await recoverStaleClaims();
+  startGeneratedAssetArchiveWorker();
 }
 
 async function markJobFailed({ jobId, orgId, userId, project, modality, provider, info, session, error, requestContext = null }) {
@@ -1086,12 +1101,14 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     // 上游产物先留一份在我们自己这儿：它给的是**临时地址**，过一阵就 403，
     // 而作品读面只存了那个引用（2026-09-22 实测：getapib.org 那批 21 条里 7 条已经 403）。
-    // 归档是 best-effort —— 拿不到就保留原地址并在 metadata 里记原因，**绝不因此判这次生成失败**。
-    const archivedAssets = await archiveGeneratedAssets(assetPayloads, {
+    // ⭐ 2026-11-01（B2）：这里**不再当场下载**，只建一条占位行（对外地址立刻固定），
+    //    字节由后台归档队列慢慢搬（services/generatedAssetArchiveQueue.js）。
+    //    原先把"20MB 已存好"当成任务完成的条件，1000 路并行时 20GB 会把整节课堵在入口带宽上。
+    //    建行失败会**退回同步归档**，所以不会留下没人管的上游地址。
+    const stagedAssets = await stageGeneratedAssets(assetPayloads, {
       modality, jobId, ownerUserId: auth.user.id, ownerOrgId: (auth.session?.org_id || auth.user.orgId),
-      log: (message) => console.log(`[GENERATED ASSET ARCHIVE] job=${jobId} ${message}`),
     });
-    await settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads: archivedAssets, requestContext, usage: generated?.usage || null });
+    await settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads: stagedAssets, requestContext, usage: generated?.usage || null });
     await audit(auditContext(auth, requestContext), action, 'GENERATION_JOB', jobId, retryOfJobId ? { jobId: retryOfJobId } : null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
     const job = await jobDetail(jobId);
     return { job, assets: job.assets };
@@ -1180,12 +1197,11 @@ async function processAsyncGeneration(item) {
     const generated = await provider.generate({ modality, prompt: upstreamPrompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
-    // 同上（同步那条路）：上游产物先归档到本机，失败不判死本次生成。
-    const archivedAssets = await archiveGeneratedAssets(assetPayloads, {
+    // 同上（同步那条路）：⭐ 2026-11-01 起也只建占位行，字节交给后台归档队列。
+    const stagedAssets = await stageGeneratedAssets(assetPayloads, {
       modality, jobId, ownerUserId: auth.user.id, ownerOrgId: (auth.session?.org_id || auth.user.orgId),
-      log: (message) => console.log(`[GENERATED ASSET ARCHIVE] job=${jobId} ${message}`),
     });
-    await settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads: archivedAssets, requestContext, usage: generated?.usage || null });
+    await settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads: stagedAssets, requestContext, usage: generated?.usage || null });
     await audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
   } catch (error) {
     await markJobFailed({ jobId, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, project, modality, provider, info, session: context?.activeSession, error, requestContext });
@@ -1193,13 +1209,24 @@ async function processAsyncGeneration(item) {
 }
 
 function drainAsyncGenerationQueue() {
-  while (asyncGenerationActive < ASYNC_GENERATION_CONCURRENCY && asyncGenerationQueue.length) {
-    const item = asyncGenerationQueue.shift();
+  for (;;) {
+    // 挑选规则见 services/asyncGenerationScheduler.js：轻模态优先、视频单独限流、视频之间先进先出
+    const index = pickNextStartableIndex(asyncGenerationQueue, {
+      active: asyncGenerationActive,
+      activeHeavy: asyncGenerationActiveHeavy,
+      concurrency: ASYNC_GENERATION_CONCURRENCY,
+      reservedLight: ASYNC_GENERATION_RESERVED_LIGHT,
+    });
+    if (index < 0) return;
+    const item = asyncGenerationQueue.splice(index, 1)[0];
+    const heavy = isHeavyAsyncModality(item?.modality);
     asyncGenerationActive += 1;
+    if (heavy) asyncGenerationActiveHeavy += 1;
     processAsyncGeneration(item)
       .catch((error) => console.error('[GENERATION WORKER ERROR]', error))
       .finally(() => {
         asyncGenerationActive -= 1;
+        if (heavy) asyncGenerationActiveHeavy -= 1;
         drainAsyncGenerationQueue();
       });
   }

@@ -24,10 +24,22 @@
  *      拿到真 Chromium 里实测才发现：那些文件**能播**（currentTime 真的在走、有画幅、无报错）——
  *      容器品牌不等于播不动，别拿它当判据。「浏览器播不了」那件事只对**真的 `.mov`**成立
  *      （它声明 `video/quicktime`，本来就被白名单挡在外面）。
+ *
+ * 2026-11-01：**下载改成流式**，不再 `response.arrayBuffer()`。
+ *   原因：一条 H3 是 20-22MB，整段进内存；8 路并发就是 160MB，1000 路就是 20GB（机器 7.4GB，直接 OOM）。
+ *   现在边下边写临时文件（边算 sha256、只留前 8KB 用于嗅探），最后交给 `putObjectFromFile`
+ *   流式上传（那个函数在 objectStorage.js 里，2026-09-25 已在真桶上验过）。
+ *   **内存峰值从「产物大小」降到「一个 chunk」**，与单个产物多大无关。
+ *   ⚠️ 临时文件一定不能漏：下载失败、上传失败、进程被杀都要有人收。
+ *      本文件在 finally 里删；进程被杀留下的由 `cleanupStaleTempFiles()` 在下次启动时清。
  */
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { createReadStream, readFileSync } from 'node:fs';
+import { mkdir, open, readdir, stat, unlink } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { sniffMime } from './fileUploadSecurity.js';
-import { storeGeneratedAsset } from '../routes/fileAssets.js';
+import { replaceGeneratedAssetFromFile, storeGeneratedAssetFromFile } from '../routes/fileAssets.js';
 
 /** 归档时能存的产物类型 → 落盘用的扩展名（与 fileUploadSecurity 的 MIME_EXTENSIONS 对齐）。 */
 export const ARCHIVABLE_MIME_EXTENSION = Object.freeze({
@@ -37,9 +49,20 @@ export const ARCHIVABLE_MIME_EXTENSION = Object.freeze({
 });
 
 // 上游对产物的上限是图片 30MB / 音视频 50MB（它自己的素材上限），留一点余量即可；
-// 这里再卡一道是为了"别为了一件归档把内存吃爆"（这台机器 1.6GB）。
+// 这里再卡一道是为了"别为了一件归档把磁盘吃爆"（一次上传最多占 64MB 临时空间）。
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 120000;
+// 嗅探只需要前几个字节（sniffMime 最多看前 512 字节，ftyp 那类看前 12 字节）。
+const SNIFF_BYTES = 8 * 1024;
+// 进程被杀留下的临时文件，超过这个年龄就当作垃圾清掉。
+const STALE_TEMP_MS = 60 * 60 * 1000;
+
+/** 临时目录：跟 PLATFORM_DATA_DIR 同一个盘（生产是 /srv，13G 空闲），不要用 /tmp（可能是 tmpfs）。 */
+export function archiveTempDir() {
+  if (process.env.FILE_ARCHIVE_TMP_DIR) return path.resolve(process.env.FILE_ARCHIVE_TMP_DIR);
+  const base = process.env.PLATFORM_DATA_DIR || os.tmpdir();
+  return path.join(base, 'tmp-generated-archive');
+}
 
 /** 学生私有素材的取用地址（与「学生自己传的图」逐字同一个形状，读面才认得出 fileId）。 */
 export function studentAssetUrl(fileId) {
@@ -48,6 +71,107 @@ export function studentAssetUrl(fileId) {
 
 function normalizeMime(value) {
   return String(value || '').toLowerCase().split(';', 1)[0].trim();
+}
+
+let tempDirReady = false;
+
+/**
+ * 建临时目录，并在**本进程第一次用时**清一次陈旧文件。
+ *
+ * 为什么要有这一步：进程被杀（OOM / 发布重启）时，正在下的那几个临时文件没人删。
+ * 不清的话，每崩一次留几十 MB，几个月后把 13G 的盘吃掉 —— 那种故障极难归因。
+ */
+async function ensureTempDir() {
+  const dir = archiveTempDir();
+  if (tempDirReady) return dir;
+  await mkdir(dir, { recursive: true, mode: 0o750 });
+  tempDirReady = true;
+  try {
+    const now = Date.now();
+    for (const name of await readdir(dir)) {
+      if (!name.endsWith('.part')) continue;
+      const full = path.join(dir, name);
+      const info = await stat(full).catch(() => null);
+      if (info && now - info.mtimeMs > STALE_TEMP_MS) await unlink(full).catch(() => {});
+    }
+  } catch { /* 清理是锦上添花，清不掉不影响归档 */ }
+  return dir;
+}
+
+/** 边下边写临时文件；成功时把文件所有权交给调用方（调用方负责删）。 */
+async function downloadToTempFile(source, { timeoutMs, doFetch }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref?.();
+  let tempPath = null;
+  let keep = false;
+  try {
+    const response = await doFetch(source, { signal: controller.signal });
+    if (!response?.ok) return { ok: false, reason: `下载产物失败（HTTP ${response?.status || 0}）` };
+    const declaredMime = normalizeMime(response.headers?.get?.('content-type'));
+    const declaredLength = Number(response.headers?.get?.('content-length') || 0);
+    if (declaredLength > MAX_ARCHIVE_BYTES) {
+      return { ok: false, reason: `产物 ${(declaredLength / 1048576).toFixed(1)}MB，超过归档上限` };
+    }
+    if (!response.body?.getReader) return { ok: false, reason: '上游没有返回可读流（这个运行时不支持流式下载）' };
+
+    const dir = await ensureTempDir();
+    tempPath = path.join(dir, `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}.part`);
+    const handle = await open(tempPath, 'w', 0o640);
+    const hash = createHash('sha256');
+    let bytes = 0;
+    let head = null;
+    try {
+      const reader = response.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value?.byteLength) continue;
+        bytes += value.byteLength;
+        if (bytes > MAX_ARCHIVE_BYTES) {
+          await reader.cancel().catch(() => {});
+          return { ok: false, reason: `产物 ${(bytes / 1048576).toFixed(1)}MB，超过归档上限` };
+        }
+        // 只留前 8KB 做 MIME 嗅探（不把整段留内存）
+        if (!head) head = Buffer.from(value.subarray(0, Math.min(value.byteLength, SNIFF_BYTES)));
+        hash.update(value);
+        await handle.write(value);
+      }
+    } finally {
+      await handle.close();
+    }
+    if (!bytes) return { ok: false, reason: '产物是空的' };
+    keep = true; // 交给调用方删
+    return { ok: true, tempPath, bytes, sha256: hash.digest('hex'), declaredMime, head: head || Buffer.alloc(0) };
+  } catch (error) {
+    return { ok: false, reason: `下载产物失败（${String(error?.message || error).slice(0, 100)}）` };
+  } finally {
+    clearTimeout(timer);
+    if (!keep && tempPath) await unlink(tempPath).catch(() => {});
+  }
+}
+
+/**
+ * 判定这份产物该按什么类型落盘。**声明的 MIME 说了算**；嗅探**只救"上游没正经声明"的情况**
+ * （空 / octet-stream）。
+ *
+ * 为什么不一律按字节嗅：`.mov` 与 `.mp4` 的字节长得一样（都是 `ftyp` + 品牌），
+ * 按字节会把上游明说是 `video/quicktime` 的真 `.mov` 也收进来 —— 而那种浏览器播不了
+ * （2026-09-21 那次事故，要 `ffmpeg -c copy` 转）。上游**声明**什么，是它给的唯一线索，先信它。
+ */
+function resolveArchiveMime({ declaredMime, head }) {
+  const generic = !declaredMime || declaredMime === 'application/octet-stream';
+  if (ARCHIVABLE_MIME_EXTENSION[declaredMime]) return declaredMime;
+  if (generic) {
+    const sniffed = normalizeMime(sniffMime(head));
+    if (ARCHIVABLE_MIME_EXTENSION[sniffed]) return sniffed;
+  }
+  return '';
+}
+
+/** 产物落盘用的文件名（扩展名必须与 MIME 对得上，否则 validateMimeAndExtension 会拒）。 */
+function archiveFileName(mimeType, modality, jobId) {
+  return `${String(modality || 'asset').toLowerCase()}-${jobId || 'job'}.${ARCHIVABLE_MIME_EXTENSION[mimeType]}`;
 }
 
 /**
@@ -60,50 +184,64 @@ export async function archiveOneGeneratedAsset({ assetUrl, modality, jobId, owne
   const doFetch = fetchImpl || globalThis.fetch;
   if (typeof doFetch !== 'function') return { ok: false, reason: '当前环境没有 fetch' };
 
-  let buffer;
-  let declaredMime = '';
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  timer.unref?.();
-  try {
-    const response = await doFetch(source, { signal: controller.signal });
-    if (!response?.ok) return { ok: false, reason: `下载产物失败（HTTP ${response?.status || 0}）` };
-    declaredMime = normalizeMime(response.headers?.get?.('content-type'));
-    const declaredLength = Number(response.headers?.get?.('content-length') || 0);
-    if (declaredLength > MAX_ARCHIVE_BYTES) return { ok: false, reason: `产物 ${(declaredLength / 1048576).toFixed(1)}MB，超过归档上限` };
-    buffer = Buffer.from(await response.arrayBuffer());
-  } catch (error) {
-    return { ok: false, reason: `下载产物失败（${String(error?.message || error).slice(0, 100)}）` };
-  } finally { clearTimeout(timer); }
-
-  if (!buffer?.length) return { ok: false, reason: '产物是空的' };
-  if (buffer.length > MAX_ARCHIVE_BYTES) return { ok: false, reason: `产物 ${(buffer.length / 1048576).toFixed(1)}MB，超过归档上限` };
-
-  // ⚠️ **声明的 MIME 说了算**；嗅探**只救"上游没正经声明"的情况**（空 / octet-stream）。
-  //    为什么不一律按字节嗅：`.mov` 与 `.mp4` 的字节长得一样（都是 `ftyp` + 品牌），
-  //    按字节会把上游明说是 `video/quicktime` 的真 `.mov` 也收进来 —— 而那种浏览器播不了
-  //    （2026-09-21 那次事故，要 `ffmpeg -c copy` 转）。上游**声明**什么，是它给的唯一线索，先信它。
-  const generic = !declaredMime || declaredMime === 'application/octet-stream';
-  let mimeType = ARCHIVABLE_MIME_EXTENSION[declaredMime] ? declaredMime : '';
-  if (!mimeType && generic) {
-    const sniffed = normalizeMime(sniffMime(buffer));
-    if (ARCHIVABLE_MIME_EXTENSION[sniffed]) mimeType = sniffed;
-  }
-  if (!mimeType) return { ok: false, reason: `产物类型不在落盘白名单里（上游声明的是 ${declaredMime || '空'}）` };
+  // fetchImpl 是测试注入点；**必须显式传下去**，不能改 globalThis.fetch ——
+  // `archiveGeneratedAssets` 是 Promise.all 并发的，换全局会互相踩。
+  const fetched = await downloadToTempFile(source, { timeoutMs, doFetch });
+  if (!fetched.ok) return { ok: false, reason: fetched.reason };
 
   try {
-    const stored = await storeGeneratedAsset({
-      buffer,
+    const mimeType = resolveArchiveMime(fetched);
+    if (!mimeType) return { ok: false, reason: `产物类型不在落盘白名单里（上游声明的是 ${fetched.declaredMime || '空'}）` };
+
+    const stored = await storeGeneratedAssetFromFile({
+      tempPath: fetched.tempPath,
+      bytes: fetched.bytes,
+      checksum: fetched.sha256,
       mimeType,
-      fileName: `${String(modality || 'asset').toLowerCase()}-${jobId || 'job'}.${ARCHIVABLE_MIME_EXTENSION[mimeType]}`,
+      fileName: archiveFileName(mimeType, modality, jobId),
       ownerUserId,
       ownerOrgId,
       visibility: 'PRIVATE',
-      metadata: { source: 'generated-asset-archive', modality: String(modality || '').toUpperCase(), jobId: jobId || null, upstreamUrl: source, upstreamMimeType: declaredMime || null },
+      metadata: { source: 'generated-asset-archive', modality: String(modality || '').toUpperCase(), jobId: jobId || null, upstreamUrl: source, upstreamMimeType: fetched.declaredMime || null },
     });
     return { ok: true, url: studentAssetUrl(stored.id), mimeType, bytes: stored.bytes };
   } catch (error) {
     return { ok: false, reason: `落盘失败（${String(error?.message || error).slice(0, 120)}）` };
+  } finally {
+    await unlink(fetched.tempPath).catch(() => {});
+  }
+}
+
+/**
+ * 归档**进一条已存在的占位行**（2026-11-01，B2 解耦）：
+ * 下载同一套流式逻辑，落盘时填的是那一行而不是新建 —— 所以对外的
+ * `/api/student/file-assets/<id>/download` **从头到尾不变**。
+ */
+export async function archiveIntoExistingAsset({ fileId, assetUrl, modality, jobId, fetchImpl = null, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const source = String(assetUrl || '').trim();
+  if (!fileId) return { ok: false, reason: '缺少要填充的素材 id' };
+  if (!/^https?:\/\//i.test(source)) return { ok: false, reason: '不是 http(s) 地址' };
+  const doFetch = fetchImpl || globalThis.fetch;
+  if (typeof doFetch !== 'function') return { ok: false, reason: '当前环境没有 fetch' };
+
+  const fetched = await downloadToTempFile(source, { timeoutMs, doFetch });
+  if (!fetched.ok) return { ok: false, reason: fetched.reason };
+  try {
+    const mimeType = resolveArchiveMime(fetched);
+    if (!mimeType) return { ok: false, reason: `产物类型不在落盘白名单里（上游声明的是 ${fetched.declaredMime || '空'}）` };
+    const stored = await replaceGeneratedAssetFromFile({
+      fileId,
+      tempPath: fetched.tempPath,
+      bytes: fetched.bytes,
+      checksum: fetched.sha256,
+      mimeType,
+      fileName: archiveFileName(mimeType, modality, jobId),
+    });
+    return { ok: true, mimeType, bytes: stored.bytes };
+  } catch (error) {
+    return { ok: false, reason: `落盘失败（${String(error?.message || error).slice(0, 120)}）` };
+  } finally {
+    await unlink(fetched.tempPath).catch(() => {});
   }
 }
 
@@ -152,4 +290,30 @@ export function archivableMimeFor(declaredMime, buffer = null) {
 /** 守卫用：读一份本地文件当作"上游产物"，验归档链路（不联网）。 */
 export function readBytesForTest(absolutePath) {
   return readFileSync(absolutePath);
+}
+
+/** 诊断用：临时目录里还有多少字节没清（守卫与巡检看它有没有漏）。 */
+export async function archiveTempUsage() {
+  const dir = archiveTempDir();
+  let files = 0;
+  let bytes = 0;
+  try {
+    for (const name of await readdir(dir)) {
+      if (!name.endsWith('.part')) continue;
+      const info = await stat(path.join(dir, name)).catch(() => null);
+      if (info) { files += 1; bytes += info.size; }
+    }
+  } catch { /* 目录还不存在 = 0 */ }
+  return { dir, files, bytes };
+}
+
+/** 守卫用：按流算一遍文件的 sha256（与归档时同一算法）。 */
+export function sha256OfFile(absolutePath) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    const stream = createReadStream(absolutePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('error', reject);
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
 }
