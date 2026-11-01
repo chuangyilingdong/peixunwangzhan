@@ -136,9 +136,10 @@ const frame = read('packages/shared/src/console/PreviewFrame.jsx');
 // ⚠️ 2026-11-01：外层补了 `allow-forms`（学生作品把发送按钮放在 <form> 里，点按钮被沙箱拦）。
 //    外层是**嵌套沙箱的权限上限**：内层 /vibe-preview.html 早写了 allow-forms，但外层不开就无效。
 //    这条断言改成"有脚本 + 有表单，但**绝不能**有 allow-same-origin" —— 隔离底线没变。
-check('预览是 allow-scripts + allow-forms 的沙箱 iframe（且不引入同源执行）',
+check('预览是 allow-scripts + allow-forms + allow-modals 的沙箱 iframe（且不引入同源执行）',
   /sandbox="[^"]*\ballow-scripts\b[^"]*"/.test(frame)
   && /sandbox="[^"]*\ballow-forms\b[^"]*"/.test(frame)
+  && /sandbox="[^"]*\ballow-modals\b[^"]*"/.test(frame)
   && !/sandbox="[^"]*allow-same-origin/.test(frame));
 check('预览仍走 /vibe-preview.html 那个放宽 CSP 的外壳', /PREVIEW_SHELL_URL = '\/vibe-preview\.html'/.test(frame));
 check('预览文档仍由 buildPreviewDocument 统一拼（作品广场与机构端看的是同一份）',

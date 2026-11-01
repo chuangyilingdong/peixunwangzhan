@@ -326,7 +326,10 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
       //    浏览器在 submit 事件到达页面前就报 "Blocked form submission … 'allow-forms' permission
       //    is not set"，于是点击发送没反应、回车（走 keydown）却正常 —— 四端同一个现象。
       //    ⚠️ 仍然**不给** allow-same-origin：那是隔离的底线（作品是 opaque origin，读不到主站 cookie）。
-      sandbox="allow-scripts allow-forms"
+      //    ⚠️ 2026-11-01 再补 `allow-modals`：内层外壳（/vibe-preview.html）声明了它，外层不开同样无效，
+      //       学生作品里的 alert()/confirm()/prompt() 会被静默拦掉。它与表单是同一类"外层漏配"。
+      //       **allow-popups 仍然不给**：开新窗口是把学生代码带出这层沙箱的口子，作品真正需要时再加。
+      sandbox="allow-scripts allow-forms allow-modals"
       src={PREVIEW_SHELL_URL}
       style={frameStyle}
     />
