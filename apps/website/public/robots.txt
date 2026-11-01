@@ -1,0 +1,25 @@
+User-agent: Baiduspider
+Allow: /
+Disallow: /admin/
+Disallow: /org/
+Disallow: /student/
+Disallow: /api/
+Disallow: /login
+Disallow: /my-home
+Disallow: /account
+Disallow: /learn/canvas
+Disallow: /learn/prep
+
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /org/
+Disallow: /student/
+Disallow: /api/
+Disallow: /login
+Disallow: /my-home
+Disallow: /account
+Disallow: /learn/canvas
+Disallow: /learn/prep
+
+Sitemap: https://aicyld.com/sitemap.xml
