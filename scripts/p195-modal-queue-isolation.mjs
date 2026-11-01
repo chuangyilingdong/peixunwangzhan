@@ -94,6 +94,21 @@ try {
     check('空队列返回 -1', pickNextStartableIndex([], { ...base, active: 0, activeHeavy: 0 }) === -1);
   }
 
+  /* ───────── ④b 生产目标：100 路（2026-11-01 起 AI_GENERATION_CONCURRENCY=100）───────── */
+  {
+    console.log('④b 100 路并发下的调度');
+    const wide = { concurrency: 100, reservedLight: 2 };
+    check('100 路时视频上限是 98', heavySlotLimit(100, 2) === 98);
+    check('98 条视频在跑时，第 99 条视频不许开', pickNextStartableIndex([VIDEO], { ...wide, active: 98, activeHeavy: 98 }) === -1);
+    check('98 条视频在跑时，图片照样能开（预留的 2 路没被占）',
+      pickNextStartableIndex([VIDEO, IMAGE], { ...wide, active: 98, activeHeavy: 98 }) === 1);
+    // 队尾一张图：前面排 500 条视频也必须能立刻开（这是"图片被饿死"的极端形态）
+    const heavyQueue = [...Array(500).fill(VIDEO), IMAGE];
+    check('前面排 500 条视频，队尾的图片仍立刻能开',
+      pickNextStartableIndex(heavyQueue, { ...wide, active: 0, activeHeavy: 0 }) === 500);
+    check('100 路跑满时一条都不开', pickNextStartableIndex([IMAGE], { ...wide, active: 100, activeHeavy: 98 }) === -1);
+  }
+
   /* ───────── ⑤ 环境变量解析（空串是坑） ───────── */
   {
     console.log('⑤ 预留值解析');
