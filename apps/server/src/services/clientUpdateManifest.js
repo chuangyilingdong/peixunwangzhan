@@ -80,24 +80,24 @@ function booleanValue(value, fallback) {
 }
 
 /**
- * 平台键：与客户端 `LingdongUpdater.updateTarget()` 认的两个目标一致。
- * ⚠️ 2026-09-28 客户端团队口径：**双端必须同版本发布**（客户端读的是清单顶层的 `version`，
- *    只抬 Mac 的版本会让老 Windows 客户端以为有新版本、下下来还是旧的，来回更新不上去）。
+ * 平台键：与客户端更新器识别的三个目标一致。
+ * ⚠️ 2026-11-02 客户端团队口径：**三端必须同版本发布**（客户端读的是清单顶层的 `version`，
+ *    只抬某一个架构的版本会让其他平台客户端以为有新版本、下下来还是旧的，来回更新不上去）。
  *    将来若改成每平台独立版本，客户端读的是 `files[target].version ?? manifest.version`。
  */
-export const CLIENT_PLATFORMS = ['win-x64', 'mac-arm64']
+export const CLIENT_PLATFORMS = ['win-x64', 'mac-arm64', 'mac-x64']
 
 /**
  * 文件名里那个版本（清单顶层 `version` 是"这次发布的版本"；两者不一致 = 这个平台的文件是旧的）。
  *
  * ⚠️ 这里**故意比上传口宽松**（上传口 `parseClientInstallerName` 是严格契约，只认
- *    `lingdong-client-<版本>-win-x64.exe` / `-mac-arm64.dmg`）。为什么读视图要松：
+ *    `lingdong-client-<版本>-win-x64.exe` / `-mac-arm64.dmg` / `-mac-x64.dmg`）。为什么读视图要松：
  *    生产上现网那只 Windows 包叫 `lingdong-client-0.1.7-alpha.2.3-win-x64-unsigned.exe`
  *    （客户端仓的脚本发的，带 `-unsigned` 后缀）—— 严格规则认不出来，
  *    于是"版本对不对得上"这件事就**静默失效**（stale 永远为空 = 危险状态看不出来）。
  *    取不到就返回空串（不抛错）：读视图不能因为一个怪名字就 500。
  */
-const LOOSE_INSTALLER = /^lingdong-client-(.+?)-(win-x64|mac-arm64)(?:-[0-9A-Za-z.]+)*\.(exe|dmg)$/
+const LOOSE_INSTALLER = /^lingdong-client-(.+?)-(win-x64|mac-arm64|mac-x64)(?:-[0-9A-Za-z.]+)*\.(exe|dmg)$/
 function installerVersion(name) {
   const match = LOOSE_INSTALLER.exec(String(name || ''))
   if (!match) return ''
@@ -135,12 +135,12 @@ export function readClientUpdateManifest(env = process.env) {
     publishedAt: typeof value.publishedAt === 'string' ? value.publishedAt : '',
     // ⚠️ 保留 `file`（= Windows 那一条）：后台与既有调用方读的是它，Windows 自动更新的身份也在里面。
     file: platforms['win-x64'],
-    // 两个平台都给（后台「客户端更新」页要同时展示 Win / Mac 的文件名、大小、SHA256）。
+    // 三个平台都给（后台「客户端更新」页要同时展示 Win / macOS arm64 / macOS x64 的文件名、大小、SHA256）。
     files: platforms,
     /**
      * 「声明了新版、但这个平台的文件还是旧的」的平台列表（拿文件名里的版本与顶层 version 比）。
-     * ⚠️ 非空就是危险状态：Windows 客户端会看到新版本 → 下到的还是旧包 → 装完还是旧的 → 反复提示更新。
-     * 所以发布时**两个平台要一起发**（客户端仓 `deploy/desktop/publish-client.sh <win> <mac>` 一次写两条）。
+     * ⚠️ 非空就是危险状态：某个平台的客户端会看到新版本 → 下到的还是旧包 → 装完还是旧的 → 反复提示更新。
+     * 所以正式发布时**三个平台要一起发**（客户端仓 `deploy/publish-client.sh <win> <mac-arm64> <mac-x64>` 一次原子写三条）。
      */
     stale: CLIENT_PLATFORMS.filter((key) => {
       const view = platforms[key]
@@ -186,21 +186,49 @@ export function updateClientUpdateManifest(input, env = process.env) {
 /**
  * 安装包文件名 → `{ version, platform }`。
  *
- * ⚠️ 文件名是**客户端硬校验的**（`LingdongUpdater.ts` 要求恰好
- * `lingdong-client-${version}-win-x64.exe`，还对 sha256 长度与字节数做比对），
+ * ⚠️ 文件名是**客户端硬校验的**（更新器要求恰好
+ * `lingdong-client-${version}-<target>.<ext>`，还对 sha256 长度与字节数做比对），
  * 所以这里不是"随便取个后缀"，而是把客户端的契约在**上传入口**先拦一道：
  * 名字不合规的包就算传上来，客户端也永远更新不过去。
- * Mac 包客户端目前**不参与自动更新**（updater 只认 win32+x64），但官网下载页要能列出它。
+ * Windows、macOS Apple 芯片和 macOS Intel 芯片分别使用独立文件。
  */
-const INSTALLER_NAME = /^lingdong-client-(.+)-(win-x64\.exe|mac-arm64\.dmg)$/
+const INSTALLER_NAME = /^lingdong-client-(.+)-(win-x64\.exe|mac-arm64\.dmg|mac-x64\.dmg)$/
 
 export function parseClientInstallerName(fileName) {
   const name = String(fileName || '').trim()
   const match = INSTALLER_NAME.exec(name)
-  if (!match) throw new Error('安装包文件名必须是 lingdong-client-<版本>-win-x64.exe 或 lingdong-client-<版本>-mac-arm64.dmg')
+  if (!match) throw new Error('安装包文件名必须是 lingdong-client-<版本>-win-x64.exe、-mac-arm64.dmg 或 -mac-x64.dmg')
   const version = match[1]
   if (!VERSION_PATTERN.test(version)) throw new Error(`版本号格式不正确：${version}`)
-  return { version, platform: match[2] === 'win-x64.exe' ? 'win-x64' : 'mac-arm64' }
+  return { version, platform: match[2].replace(/\.(?:exe|dmg)$/, '') }
+}
+
+/**
+ * electron-builder 的差分更新索引：`<安装包文件名>.blockmap`（2026-11-02 补）。
+ *
+ * 为什么要有：客户端更新器做**差分下载**时要先取这个文件；没有它就只能退回全量下载
+ * （每个学生每次更新多下 144-178MB）。生产日志实测它在 404：
+ * `GET /downloads/lingdong-client-0.2.11-win-x64.exe.blockmap → 404`，UA 是 `electron-builder`。
+ *
+ * ⚠️ 它**不是安装包**：不写清单、不参与版本判定 —— 内容由打客户端那边（electron-builder）生成，
+ *    平台只负责收下来 + 发出去。
+ * ⚠️ **绝不在服务端"自己造"一个 blockmap**：分块格式必须与客户端生成端一致，
+ *    猜一个会让差分更新算出错误的补丁（比 404 更糟）。
+ */
+const BLOCKMAP_NAME = /^lingdong-client-(.+)-(win-x64|mac-arm64|mac-x64)\.(?:exe|dmg)\.blockmap$/
+
+/** 认出 blockmap 文件名；不是（或版本号不合规）返回 null。 */
+export function parseBlockmapName(fileName) {
+  const name = String(fileName || '').trim()
+  const match = BLOCKMAP_NAME.exec(name)
+  if (!match) return null
+  if (!VERSION_PATTERN.test(match[1])) return null
+  return { version: match[1], platform: match[2] }
+}
+
+/** 安装包对应的 blockmap 文件名（补传脚本与守卫共用，避免两边各写一份拼法）。 */
+export function blockmapNameFor(installerName) {
+  return `${String(installerName || '').trim()}.blockmap`
 }
 
 /**
@@ -228,9 +256,9 @@ export function publishClientInstaller({ fileName, size, sha256, env = process.e
     files: {
       ...files,
       // ⚠️ 条目里**带上这个平台自己的版本**（客户端读 `files[target].version ?? manifest.version`，
-      //    客户端团队 2026-09-28 给的形状）。今天两端同版本，它是冗余的；但一旦哪天只发了一个平台，
-      //    另一个平台的老客户端比的是**自己那条**版本 → 不会被顶层 version 误判成"有新版本"。
-      //    ⚠️ 别的平台的条目照旧一个字节都不动（没写过 version 的老条目就让它缺着，客户端会回落顶层）。
+      //    客户端团队 2026-11-02 口径）。三个平台同版本，它是冗余的；但一旦哪天只发了一个平台，
+      //    另外两个平台的老客户端比的是**自己那条**版本 → 不会被顶层 version 误判成"有新版本"。
+      //    ⚠️ 其他平台的条目照旧一个字节都不动（没写过 version 的老条目就让它缺着，客户端会回落顶层）。
       [platform]: { name: String(fileName), size: Number(size), sha256: digest, version },
     },
   }

@@ -79,7 +79,17 @@ let skipped = 0;
 let failed = 0;
 let bytesTotal = 0;
 
-for (const name of [...new Set(targets)]) {
+// 每个安装包旁边可能还有一个 `.blockmap`（electron 差分更新索引）。
+// 它在不在会不会影响"能不能更新"：缺了会退回全量下载（每个学生多下 144-178MB），所以一起补。
+const { blockmapNameFor } = await import('../../apps/server/src/services/clientUpdateManifest.js');
+const expanded = [];
+for (const name of new Set(targets)) {
+  expanded.push(name);
+  const blockmap = blockmapNameFor(name);
+  if (fs.existsSync(path.join(DOWNLOAD_DIR, blockmap))) expanded.push(blockmap);
+}
+
+for (const name of expanded) {
   if (name.includes('/') || name.includes('..')) { console.error(`跳过可疑文件名：${name}`); failed += 1; continue; }
   const localPath = path.join(DOWNLOAD_DIR, name);
   let size = 0;

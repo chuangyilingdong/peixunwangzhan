@@ -10,6 +10,8 @@
  *
  * ── 请求形状（刻意不用 multipart）──────────────────────────────────────────
  *   POST /api/admin/client-update/upload?name=lingdong-client-<版本>-win-x64.exe
+ *   POST /api/admin/client-update/upload?name=lingdong-client-<版本>-mac-arm64.dmg
+ *   POST /api/admin/client-update/upload?name=lingdong-client-<版本>-mac-x64.dmg
  *   Content-Type: application/octet-stream
  *   <body = 安装包原始字节>
  * 元数据只在查询串里（文件名），不解析 multipart —— 少一层解析就少一处能把 377MB 读进内存的地方。
@@ -32,7 +34,7 @@ import { mkdir, rename, rm, stat } from 'node:fs/promises';
 //    别为了少打四个字符把守卫弄红 —— 那条网是拦线上 500 的。
 import path from 'node:path';
 import { audit, envelope, errors, requirePlatformPermission, sendJson } from '../../lib.js';
-import { parseClientInstallerName, publishClientInstaller, clientUpdateDir } from '../../services/clientUpdateManifest.js';
+import { parseBlockmapName, parseClientInstallerName, publishClientInstaller, clientUpdateDir } from '../../services/clientUpdateManifest.js';
 import { ossConfigured, putObjectFromFile } from '../../services/objectStorage.js';
 import { forgetProbe } from '../publicAssets.js';
 
@@ -102,6 +104,48 @@ export async function handleClientInstallerUpload(ctx, req, res) {
 
   const rawName = String(ctx.search.get('name') || '').trim();
   if (!rawName) throw errors.badRequest('缺少安装包文件名（?name=）', 'INSTALLER_NAME_REQUIRED');
+
+  // ── blockmap（2026-11-02）：electron 差分更新索引，走同一条流式通道，但**不动清单** ──
+  // 为什么单独一支：它不是安装包，不参与版本判定；但和安装包一样要落到 /downloads/ 并推 OSS，
+  // 否则更新器只能退回全量下载（每个学生多下 144-178MB）。
+  const blockmapInfo = parseBlockmapName(rawName);
+  if (blockmapInfo) {
+    const dir = clientUpdateDir();
+    const target = path.join(dir, rawName);
+    if (rawName.includes('/') || rawName.includes('\\') || rawName.includes('..')) {
+      throw errors.badRequest('blockmap 文件名不合法', 'INVALID_INSTALLER_NAME');
+    }
+    // blockmap 只有几百 KB ~ 几 MB，给 64MB 已经非常宽松（它不是安装包，别用 600MB 的额度）
+    const { temp, bytes, sha256 } = await streamToFile(req, target, Math.min(maxInstallerBytes(), 64 * 1024 * 1024));
+    if (bytes <= 0) {
+      await rm(temp, { force: true }).catch(() => {});
+      throw errors.badRequest('blockmap 是空的', 'INSTALLER_EMPTY');
+    }
+    await rename(temp, target);
+    let synced = false;
+    let reason = '';
+    if (ossConfigured()) {
+      try {
+        await putObjectFromFile(`downloads/${rawName}`, target, 'application/octet-stream', { cacheControl: 'public, max-age=86400', size: bytes });
+        synced = true;
+        forgetProbe(`downloads/${rawName}`);
+      } catch (error) {
+        reason = String(error?.message || error).slice(0, 200);
+        console.error(`[客户端更新] blockmap 已落本地，但推 OSS 失败：${reason}`);
+      }
+    } else {
+      reason = 'OSS 未配置（blockmap 只在本机）';
+    }
+    await audit(ctx, 'CLIENT_INSTALLER_BLOCKMAP', 'PLATFORM_SETTING', rawName, null, {
+      version: blockmapInfo.version, platform: blockmapInfo.platform, bytes, sha256, ossSynced: synced,
+    });
+    sendJson(res, 200, envelope({
+      fileName: rawName, blockmap: true, version: blockmapInfo.version, platform: blockmapInfo.platform,
+      bytes, sha256, ossSynced: synced, ossReason: reason,
+    }), req);
+    return true;
+  }
+
   let parsed;
   try { parsed = parseClientInstallerName(rawName); } catch (error) { throw errors.badRequest(error.message, 'INVALID_INSTALLER_NAME'); }
 

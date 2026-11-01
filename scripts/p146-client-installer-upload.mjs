@@ -90,7 +90,7 @@ check('① 权限用的是 ADMIN_AUDIT（能改更新策略的人才能发包）
 /* ② 文件名契约（纯函数，先离线钉） */
 console.log('② 文件名契约');
 const { parseClientInstallerName } = await import('../apps/server/src/services/clientUpdateManifest.js');
-const good = [['lingdong-client-0.1.7-alpha.2.3-win-x64.exe', '0.1.7-alpha.2.3', 'win-x64'], ['lingdong-client-1.0.0-mac-arm64.dmg', '1.0.0', 'mac-arm64']];
+const good = [['lingdong-client-0.1.7-alpha.2.3-win-x64.exe', '0.1.7-alpha.2.3', 'win-x64'], ['lingdong-client-1.0.0-mac-arm64.dmg', '1.0.0', 'mac-arm64'], ['lingdong-client-1.0.0-mac-x64.dmg', '1.0.0', 'mac-x64']];
 for (const [name, version, platform] of good) {
   let parsed = null;
   try { parsed = parseClientInstallerName(name); } catch { /* 下面断言 */ }
@@ -163,6 +163,26 @@ try {
   check('④ 清单里别的平台条目原样留着（这次发 win，原来的 mac 条目一个字节都不许动）',
     JSON.stringify(written.files['mac-arm64']) === JSON.stringify(macEntry), JSON.stringify(written.files['mac-arm64']));
 
+  /* ── ③b blockmap（2026-11-02）：electron 差分更新索引，走同一条流式通道但不改清单 ──
+   * 现场：`GET /downloads/lingdong-client-0.2.11-win-x64.exe.blockmap → 404`（UA electron-builder），
+   * 缺了它更新器只能退回全量下载，每个学生每次更新多下 144-178MB。 */
+  {
+    const blockmapPayload = Buffer.from('{"version":2,"files":[]}');
+    const blockmapName = `${name}.blockmap`;
+    const beforeManifest = fs.readFileSync(manifest, 'utf8');
+    const res = await post(blockmapName, blockmapPayload);
+    const body = await res.json().catch(() => ({}));
+    check('③b blockmap 上传 → 200 且标记 blockmap:true',
+      res.status === 200 && body?.data?.blockmap === true, `HTTP ${res.status} ${JSON.stringify(body).slice(0, 160)}`);
+    const onDiskBlockmap = path.join(downloads, blockmapName);
+    check('③b blockmap 字节完整落盘',
+      fs.existsSync(onDiskBlockmap) && fs.readFileSync(onDiskBlockmap).equals(blockmapPayload));
+    check('③b ⭐ blockmap **不改清单**（它不是安装包，不能动版本号/条目）',
+      fs.readFileSync(manifest, 'utf8') === beforeManifest);
+    const badName = await post('lingdong-client-9.9.9-win-x64.zip.blockmap', blockmapPayload);
+    check('③b 名字不合规的 blockmap 被拒（400）', badName.status === 400, `HTTP ${badName.status}`);
+  }
+
   /* ⑥ 2026-09-28：Mac 包（.dmg）走同一条路 —— 这次发布就是它。 */
   const macPayload = Buffer.alloc(1024 * 1024);
   for (let i = 0; i < macPayload.length; i += 1) macPayload[i] = (i * 17) % 249;
@@ -184,12 +204,29 @@ try {
     const { readClientUpdateManifest } = await import('../apps/server/src/services/clientUpdateManifest.js');
     const view = readClientUpdateManifest(baseEnv);
     // ⚠️ 客户端团队 2026-09-28 的硬约束：双端必须同版本。后台页面就靠 `stale` 判"两边对齐了没有"。
-    check('⑥ ⭐ 双端同版本发完之后 stale 为空（没对齐的话 Windows 会反复提示更新）',
+    check('⑥ ⭐ 三端同版本发完之后 stale 为空（没对齐的话对应平台会反复提示更新）',
       Array.isArray(view.stale) && view.stale.length === 0, JSON.stringify(view.stale));
-    check('⑥ 后台读得到两个平台（同一份清单里 Win/Mac 的名字与 SHA256 都要有）',
-      view.files?.['win-x64']?.sha256 === digest && view.files?.['mac-arm64']?.sha256 === macDigest,
+    check('⑥ 后台读得到三个平台（同一份清单里 Win/Mac ARM/Mac Intel 的名字与 SHA256 都要有）',
+      view.files?.['win-x64']?.sha256 === digest && view.files?.['mac-arm64']?.sha256 === macDigest && view.files?.['mac-x64']?.sha256 === x64Digest,
       JSON.stringify(view.files || {}).slice(0, 200));
   }
+
+
+  /* ⑦ 2026-11-02：macOS Intel 包也走同一条上传路。 */
+  const x64Payload = Buffer.alloc(768 * 1024);
+  for (let i = 0; i < x64Payload.length; i += 1) x64Payload[i] = (i * 29) % 251;
+  const x64Digest = createHash('sha256').update(x64Payload).digest('hex');
+  const x64Name = 'lingdong-client-9.9.9-mac-x64.dmg';
+  const x64Upload = await post(x64Name, x64Payload);
+  const x64Body = await x64Upload.json().catch(() => ({}));
+  check('⑦ 上传 macOS Intel 的 .dmg → 200（严格文件名认 mac-x64）',
+    x64Upload.status === 200, `HTTP ${x64Upload.status} ${JSON.stringify(x64Body).slice(0, 160)}`);
+  const afterX64 = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+  check('⑦ mac-x64 条目四项齐全，且 win / mac-arm64 条目不变',
+    afterX64.files['mac-x64'].name === x64Name && afterX64.files['mac-x64'].size === x64Payload.length
+    && afterX64.files['mac-x64'].sha256 === x64Digest && afterX64.files['mac-x64'].version === '9.9.9'
+    && afterX64.files['win-x64'].name === name && afterX64.files['mac-arm64'].name === macName,
+    JSON.stringify({ x64: afterX64.files['mac-x64'], win: afterX64.files['win-x64'], arm: afterX64.files['mac-arm64'] }).slice(0, 300));
 
   const badName = await post('lingdong-client-win-x64.exe', Buffer.from('x'));
   check('② 不合规的文件名 → 400（不是 500，也不是默默收下）', badName.status === 400, `HTTP ${badName.status}`);
