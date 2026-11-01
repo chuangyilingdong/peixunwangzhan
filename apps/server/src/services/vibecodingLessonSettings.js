@@ -48,6 +48,7 @@
 //     老库补列默认 0 = 还没数到任何发送（不是"已用满"）。
 //   · **留空 = 不记上限，但仍然记账**：上课时照数，老师端/平台端将来能看到"这个学生按了几次"。
 import { q, row, arow, aq } from '../lib.js';
+import { countSendIds, normalizeSendId, recordSendId } from './vibecodingSendLedger.js';
 
 /** 读这节课配的发送次数上限。返回 `null` = 不设上限（不填 / 0 / 非法值都按不设上限处理）。 */
 export async function vibecodingSendLimit(lessonId) {
@@ -210,9 +211,16 @@ export function previewUserMessages(messages, { limit = 6, tail = 3 } = {}) {
   });
 }
 
-/** 这个学生在**这场课堂**里已记下的发送次数（单调最大值）。 */
+/** 这个学生在**这场课堂**里已记下的发送次数。
+ *
+ * ⚠️ 2026-11-01 起**以幂等台账为准**（`session_vibecoding_sends` 的行数）：客户端每次真实发送
+ *    都会带 `x-zcode-send-id`，去重后就是准确值，不再依赖对话历史启发式。
+ *    台账为空（老客户端 / 这场课堂还没人用新版）时才退回兼容列 —— 那个列是启发式路径写的。
+ */
 export async function vibecodingSendUsage({ sessionId, studentId }) {
   if (!sessionId || !studentId) return 0;
+  const fromLedger = await countSendIds({ sessionId, studentId });
+  if (fromLedger > 0) return fromLedger;
   const value = (await arow(
     "SELECT vibecoding_sends FROM session_students WHERE session_id=? AND student_id=? AND status <> 'REMOVED' ORDER BY added_at DESC LIMIT 1",
     [sessionId, studentId],
@@ -225,14 +233,74 @@ export async function vibecodingSendUsage({ sessionId, studentId }) {
  * 判定这一次请求放不放行，并把"学生的发送次数"往前推（只增不减）。
  *
  * ⚠️ 调用点必须在**打上游之前**（`routes/runtimeGateway.js`）——超限的这一次既不花钱、也不进用量账。
- * ⚠️ **判据必须用"观察到的单调最大值"（seen），不能只用本次请求历史里的条数**：学生压缩一次历史，
- *    历史里的 user 消息就变少了 —— 只看当前条数等于"压缩一下就刷新额度"（我第一版就是这么错的）。
- * ⚠️ 但**对外报的 `used` 封顶到上限**（`min(seen, limit)`）：这样老师端/客户端看到的是"用了几次／共几次"，
- *    不会因为学生超限后反复点而出现"这学生按了 37 次"这种脏数字，`used ≤ limit` 这个不变量也成立。
- * 返回 `{ limit, used, allowed, remaining, exceeded }`：`limit === null` 表示这节课没设上限。
+ *
+ * 两条判据按**请求头**分流（2026-11-01）：
+ *   · 带 `x-zcode-send-id`  → 台账去重计数（准确、幂等，见 services/vibecodingSendLedger.js）；
+ *   · 不带（老客户端）      → 原启发式（下面 enforceByHistory 那一整套注释仍然有效）。
+ * 两者**不混写**：只要这场课堂已有台账行，旧路径就直接按台账值判定、不再自己加数。
  */
-export async function enforceVibecodingSendLimit({ sessionId, studentId, lessonId, messages }) {
+export async function enforceVibecodingSendLimit({ sessionId, studentId, lessonId, messages, sendId = '' }) {
   const limit = await vibecodingSendLimit(lessonId);
+  const normalized = normalizeSendId(sendId);
+  if (normalized) return enforceBySendId({ sessionId, studentId, limit, sendId: normalized });
+  return enforceByHistory({ sessionId, studentId, limit, messages });
+}
+
+/**
+ * 新路径：sendId 幂等计数。
+ *
+ * ⚠️ 顺序是「先原子插入，再看行数」，不是「先查有没有，再插」：
+ *    同一次发送的工具轮会并发到网关（一步一次请求），先查后写在并发下必然多记。
+ *    插入成功与否由数据库主键裁决（`INSERT OR IGNORE` + 复合主键）。
+ * ⚠️ 超限的那一次**仍然记账**：否则学生反复点发送不会留下痕迹；对外 `used` 封顶到 limit。
+ */
+async function enforceBySendId({ sessionId, studentId, limit, sendId }) {
+  const { inserted } = await recordSendId({ sessionId, studentId, sendId });
+  const count = await countSendIds({ sessionId, studentId });
+  // 兼容列跟着台账走（只增不减）：老师端与旧报表还在读 session_students.vibecoding_sends。
+  if (sessionId && studentId && count > 0) {
+    await aq(
+      "UPDATE session_students SET vibecoding_sends=?, updated_at=? WHERE session_id=? AND student_id=? AND status <> 'REMOVED' AND vibecoding_sends < ?",
+      [count, new Date().toISOString(), sessionId, studentId, count],
+    );
+  }
+  const exceeded = limit !== null && count > limit;
+  const used = limit === null ? count : Math.min(count, limit);
+  if (inserted || exceeded) {
+    console.log(`[发送计数] sendId=${sendId.slice(0, 12)}… ${inserted ? '新发送' : '重复请求'}`
+      + ` · 累计 ${count}${limit === null ? '（本课不设上限）' : `/${limit}`}`
+      + ` · session=${sessionId || '-'} student=${studentId || '-'}`);
+  }
+  return {
+    limit,
+    used,
+    allowed: !exceeded,
+    remaining: limit === null ? null : Math.max(0, limit - used),
+    exceeded,
+    source: 'send-id',
+  };
+}
+
+/**
+ * 旧路径：从对话历史推断（没有 sendId 的老客户端）。
+ * 下面这一整段判据是 2026-09-19 ~ 09-26 在真客户端上一点点磨出来的，别因为新路径上线就删 ——
+ * 老客户端还在用，而且新路径的边界（重复 sendId、并发）也要靠它兜底排查。
+ */
+async function enforceByHistory({ sessionId, studentId, limit, messages }) {
+  // 这场课堂已经有台账行 → 旧启发式完全退出计数（同一次发送不能被两条路各记一遍）
+  const ledgerCount = await countSendIds({ sessionId, studentId });
+  if (ledgerCount > 0) {
+    const exceeded = limit !== null && ledgerCount > limit;
+    const used = limit === null ? ledgerCount : Math.min(ledgerCount, limit);
+    return {
+      limit,
+      used,
+      allowed: !exceeded,
+      remaining: limit === null ? null : Math.max(0, limit - used),
+      exceeded,
+      source: 'send-id',
+    };
+  }
   const observed = countUserMessages(messages);
   const seenBefore = await vibecodingSendUsage({ sessionId, studentId });
   // ① 不是"新的一次发送"（工具轮 / dsh 自己的请求）→ 一点都不推
@@ -263,5 +331,6 @@ export async function enforceVibecodingSendLimit({ sessionId, studentId, lessonI
     allowed: !exceeded,
     remaining: limit === null ? null : Math.max(0, limit - used),
     exceeded,
+    source: 'history',
   };
 }

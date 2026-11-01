@@ -398,6 +398,128 @@ try {
     assert.equal(bogus.reason, 'CLASSROOM_NOT_AVAILABLE');
   });
 
+  // ⑦ 新判据：`x-zcode-send-id` 幂等计数（2026-11-01 客户端契约）
+  //    客户端给**每次真实发送派生出的所有模型请求**带同一个 turnId；平台按
+  //    (session, student, send_id) 去重 —— 去重后的行数就是真实发送次数。
+  //    这一节钉的就是契约里的验收清单：同 sendId 100 次只 +1、并发不重复、
+  //    第 N 次成功、第 N+1 次 429、旧客户端不因工具轮加数。
+  const ledgerCount = async () => Number((await readRow(
+    'SELECT COUNT(*) AS n FROM session_vibecoding_sends WHERE session_id=? AND student_id=?', [sessionId, student.id],
+  ))?.n || 0);
+  /** 每条用例都从"零台账"开始，免得前一条的 sendId 影响后一条。 */
+  const resetSendState = async () => {
+    await write('DELETE FROM session_vibecoding_sends WHERE session_id=? AND student_id=?', [sessionId, student.id]);
+    await write('UPDATE session_students SET vibecoding_sends=0 WHERE session_id=? AND student_id=?', [sessionId, student.id]);
+  };
+  const callWithSendId = (runtimeKey, messages, sendId) => api('/api/gateway/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${runtimeKey}`,
+      ...(sendId ? { 'x-zcode-send-id': sendId } : {}),
+    },
+    body: JSON.stringify({ model: 'deepseek-flash', stream: false, messages }),
+  });
+
+  await check('⑦ 同一个 sendId 连打 100 次，台账只记 1 次', async () => {
+    await resetSendState();
+    await setLimit(3);
+    const runtimeKey = await key();
+    const history = [{ role: 'user', content: '做一个关于小猫的网页' }];
+    for (let i = 0; i < 100; i += 1) {
+      const response = await callWithSendId(runtimeKey, history, 'turn_same_100');
+      assert.equal(response.status, 200, `第 ${i + 1} 次被拦了：${response.status}`);
+    }
+    assert.equal(await ledgerCount(), 1, '同一个 sendId 被重复计数了');
+  });
+
+  await check('⑦ 并发的同一个 sendId 也不重复加次（靠唯一约束收敛，不是先查后写）', async () => {
+    await resetSendState();
+    const runtimeKey = await key();
+    const history = [{ role: 'user', content: '并发的工具轮' }];
+    const responses = await Promise.all(Array.from({ length: 8 }, () => callWithSendId(runtimeKey, history, 'turn_race')));
+    assert.ok(responses.every((item) => item.status === 200), responses.map((item) => item.status).join(','));
+    assert.equal(await ledgerCount(), 1, '并发下同一条发送被记了多次');
+  });
+
+  await check('⑦ 新 sendId 才 +1；同一次发送的工具轮不重复加；client-context 到上限报 used=limit/remaining=0', async () => {
+    await resetSendState();
+    const runtimeKey = await key();
+    for (const turn of ['t1', 't2', 't3']) {
+      assert.equal((await callWithSendId(runtimeKey, [{ role: 'user', content: `第 ${turn} 次` }], turn)).status, 200);
+      // 同一次发送的工具轮：同一个 sendId、历史末尾是工具结果 —— 契约要求复用同一个值、不重复加次
+      const toolRound = [
+        { role: 'user', content: `第 ${turn} 次` },
+        { role: 'assistant', content: '' },
+        { role: 'tool', content: 'ok' },
+      ];
+      assert.equal((await callWithSendId(runtimeKey, toolRound, turn)).status, 200);
+    }
+    assert.equal(await ledgerCount(), 3);
+    const current = await context();
+    assert.equal(current.sends.limit, 3);
+    assert.equal(current.sends.used, 3);
+    assert.equal(current.sends.remaining, 0);
+    // 兼容列跟着台账走（老师端/报表还在读它）
+    assert.equal(await sends(sessionId, student.id), 3);
+  });
+
+  await check('⑦ 达到上限后第 N+1 个新 sendId 返回 429 SEND_QUOTA_EXCEEDED，且不新增 usage_records', async () => {
+    const runtimeKey = await key();
+    const before = await usageCount();
+    const response = await callWithSendId(runtimeKey, [{ role: 'user', content: '再发一次' }], 't4');
+    assert.equal(response.status, 429);
+    const body = await response.json();
+    assert.equal(body.error.code, 'SEND_QUOTA_EXCEEDED');
+    assert.equal(await usageCount(), before, '被拦下的这次还是记账/打上游了');
+  });
+
+  await check('⑦ 老客户端（不带 sendId）在已有台账的课堂里：不加数，只按台账判定', async () => {
+    const runtimeKey = await key();
+    const before = await ledgerCount();
+    assert.equal(before, 4, `第 4 次（超限那次）也应当留痕，实际 ${before}`);
+    // 台账 4 条 > 上限 3 → 老客户端同样被拦；关键在于它**没有把自己的发送再加进去**
+    const blocked = await callWithSendId(runtimeKey, [{ role: 'user', content: '老客户端' }], '');
+    assert.equal(blocked.status, 429);
+    assert.equal(await ledgerCount(), before);
+  });
+
+  // ⑧ 平台全局提示词（2026-11-01 客户端契约第二节）：存得进、下发得出、清得掉、超限拒收。
+  const { saveGlobalPrompt } = await import('../apps/server/src/services/vibecodingGlobalPrompt.js');
+  await check('⑧ 保存后 client-context 原样下发 globalSystemPrompt + revision', async () => {
+    const text = '回答必须使用简体中文。涉及网址时先说明用途。';
+    await saveGlobalPrompt({ prompt: text, revision: 'p118-r1' });
+    const current = await context();
+    assert.equal(current.globalSystemPrompt, text);
+    assert.equal(current.globalSystemPromptRevision, 'p118-r1');
+  });
+
+  await check('⑧ 改正文 + revision 后下发的是新内容（不是缓存）', async () => {
+    await saveGlobalPrompt({ prompt: '第二版：先给结论，再给步骤。', revision: 'p118-r2' });
+    const current = await context();
+    assert.equal(current.globalSystemPrompt, '第二版：先给结论，再给步骤。');
+    assert.equal(current.globalSystemPromptRevision, 'p118-r2');
+  });
+
+  await check('⑧ 清空后这两个字段整块消失（客户端按"没有"处理，不会把旧提示词留着）', async () => {
+    await saveGlobalPrompt({ prompt: '' });
+    const current = await context();
+    assert.equal(current.globalSystemPrompt, undefined);
+    assert.equal(current.globalSystemPromptRevision, undefined);
+  });
+
+  await check('⑧ 超过 32 KiB 直接拒收，且库里不会留下半截正文', async () => {
+    await saveGlobalPrompt({ prompt: '保留的这一版', revision: 'p118-keep' });
+    const tooLarge = 'a'.repeat(32 * 1024 + 1);
+    let code = '';
+    try { await saveGlobalPrompt({ prompt: tooLarge, revision: 'p118-too-large' }); }
+    catch (error) { code = error?.code || ''; }
+    assert.equal(code, 'GLOBAL_PROMPT_TOO_LARGE');
+    const current = await context();
+    assert.equal(current.globalSystemPrompt, '保留的这一版', '超限的那次把正文写进去了（或者截断成半截）');
+    await saveGlobalPrompt({ prompt: '' });
+  });
+
   // ⑥ 课堂没开始（老师还没点「立即上课」）：不发密钥，但要把「接下来是哪节课」告诉客户端。
   //    ⚠️ 这条钉的是**闸门**：没有 ACTIVE 课堂时必须没有 `gateway` —— 学生拿不到密钥就调不动网关，
   //    「点了立即上课才能进」是服务端兜底的，不靠客户端自觉（见 studentRuntime.js 该处注释）。

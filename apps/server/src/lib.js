@@ -64,6 +64,9 @@ export function platformPermissionForPathname(pathname) {
     ['/api/admin/work-data', 'ADMIN_WORKS'],
     ['/api/admin/billing', 'ADMIN_BILLING'],
     ['/api/admin/billing-config', 'ADMIN_BILLING'],
+    // VibeCoding 全局提示词（2026-11-01）：与 AI 渠道/模型同一块配置能力，
+    // 后台放在「AI 能力与价格」页里改，所以挂 ADMIN_BILLING。
+    ['/api/admin/vibecoding-prompt', 'ADMIN_BILLING'],
     ['/api/admin/compute-attempts', 'ADMIN_BILLING'],
     ['/api/admin/compute-gateway', 'ADMIN_BILLING'],
     ['/api/admin/compute-pricing', 'ADMIN_BILLING'],

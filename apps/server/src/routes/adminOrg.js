@@ -11,6 +11,7 @@ import { handleWorks } from './admin/works.js';
 // 2026-09-18：供应商账单两条线整体下线（用户口径），这两个 admin 路由文件已删除。
 import { handleFinancialReporting } from './admin/financialReporting.js'
 import { handleClientUpdate } from './admin/clientUpdate.js';
+import { handlePlatformSettings } from './admin/platformSettings.js';
 
 export async function handleAdmin(ctx) {
   const { pathname, method } = ctx;
@@ -28,6 +29,7 @@ export async function handleAdmin(ctx) {
   { const result = await handleWorks(ctx, part, method); if (result !== null) return result; }
   { const result = await handleFinancialReporting(ctx, part, method); if (result !== null) return result; }
   { const result = await handleClientUpdate(ctx, part, method); if (result !== null) return result; }
+  { const result = await handlePlatformSettings(ctx, part, method); if (result !== null) return result; }
   return null;
 }
 

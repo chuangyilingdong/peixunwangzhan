@@ -59,6 +59,8 @@ export function App() {
         2026-09-23 再加一条 /compute/names（模型显示名，用户口径：单独一页配映射名字）。 */}
     <Route path="/compute/config" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
     <Route path="/compute/names" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
+    {/* 2026-11-01：全局提示词（客户端契约：平台级 system 提示词 ≤32KiB，随 client-context 下发） */}
+    <Route path="/compute/prompt" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
     <Route path="/compute/usage" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
     <Route path="/materials" element={page('ADMIN_CONTENT', <AdminMaterials api={api} />)} />
     <Route path="/website-content" element={page('ADMIN_CONTENT', <WebsiteContent api={api} />)} />

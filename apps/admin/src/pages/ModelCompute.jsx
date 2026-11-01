@@ -2,6 +2,7 @@ import { NavLink, useLocation, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '@platform/shared';
 import { AiCapabilityPanel, OrgStudentUsagePanel } from '../components/BillingPanels.jsx';
 import { ModelNamePanel } from '../components/ModelNamePanel.jsx';
+import { VibecodingPromptPanel } from '../components/VibecodingPromptPanel.jsx';
 import { ComputeBudgetPanel } from '../components/ComputePanels.jsx';
 import { FinancialReconciliation } from '../components/FinancialReconciliation.jsx';
 
@@ -22,13 +23,17 @@ export function ModelCompute({ api }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const usage = location.pathname.endsWith('/usage');
   const names = location.pathname.endsWith('/names');
+  // 2026-11-01：第四个页签「全局提示词」（客户端契约：平台级 system 提示词，≤32KiB）
+  const prompt = location.pathname.endsWith('/prompt');
   const requested = searchParams.get('view');
   const view = USAGE_VIEWS.has(requested) ? requested : 'calls';
   const setView = (next) => setSearchParams({ view: next }, { replace: true });
   return <>
-    <nav aria-label="面包屑" className="breadcrumb row-actions"><NavLink to="/compute/config">AI 能力与价格</NavLink>{usage ? <><span className="muted" aria-hidden="true">/</span><span>用量与成本</span></> : null}{names ? <><span className="muted" aria-hidden="true">/</span><span>模型显示名</span></> : null}</nav>
-    <PageHeader eyebrow={usage ? '平台运营' : '平台配置'} title={names ? '模型显示名' : 'AI 能力与价格'}
-      description={usage
+    <nav aria-label="面包屑" className="breadcrumb row-actions"><NavLink to="/compute/config">AI 能力与价格</NavLink>{usage ? <><span className="muted" aria-hidden="true">/</span><span>用量与成本</span></> : null}{names ? <><span className="muted" aria-hidden="true">/</span><span>模型显示名</span></> : null}{prompt ? <><span className="muted" aria-hidden="true">/</span><span>全局提示词</span></> : null}</nav>
+    <PageHeader eyebrow={usage ? '平台运营' : '平台配置'} title={prompt ? '全局提示词' : names ? '模型显示名' : 'AI 能力与价格'}
+      description={prompt
+        ? '平台级 VibeCoding 系统提示词：作为独立 system 段下发给客户端，主 Agent 与子 Agent 都生效。上限 32 KiB，留空 = 不启用，只影响新任务。'
+        : usage
         ? '看每一笔调用的对外售价与上游成本（两本账），并按机构 / 学生对照；两账与毛利看收入侧。'
         : names
           ? '给模型取一个学生看得懂的名字 —— 画布与 VibeCoding 课堂显示的就是它。只改显示：调用上游仍然用模型 ID，也不动课包快照。'
@@ -36,9 +41,10 @@ export function ModelCompute({ api }) {
     <nav className="admin-tabs" aria-label="AI 能力与价格视图">
       <NavLink to="/compute/config">渠道与价格</NavLink>
       <NavLink to="/compute/names">模型显示名</NavLink>
+      <NavLink to="/compute/prompt">全局提示词</NavLink>
       <NavLink to="/compute/usage">用量与成本</NavLink>
     </nav>
-    {names ? <ModelNamePanel api={api} /> : usage ? <>
+    {prompt ? <VibecodingPromptPanel api={api} /> : names ? <ModelNamePanel api={api} /> : usage ? <>
       <nav className="admin-tabs" aria-label="用量与成本视图">
         <button type="button" className={view === 'calls' ? 'active' : ''} aria-pressed={view === 'calls'} onClick={() => setView('calls')}>调用账</button>
         <button type="button" className={view === 'orgs' ? 'active' : ''} aria-pressed={view === 'orgs'} onClick={() => setView('orgs')}>机构与学生</button>

@@ -13,6 +13,8 @@ import { accessibleLesson } from './adminOrg.js';
 import { collectStudentDeliverable, launchStudentRuntime, listStudentDeliverables, runtimeGatewayUrl, stopStudentRuntime, studentRuntimeAvailability } from '../services/studentRuntime.js';
 import { issueRuntimeKey } from './runtimeGateway.js';
 import { vibecodingPresetPrompts, vibecodingSendLimit, vibecodingSendUsage } from '../services/vibecodingLessonSettings.js';
+// 平台级全局提示词（2026-11-01 客户端契约）：正文 ≤32KiB，空 = 不下发这两个字段
+import { globalPromptForClient } from '../services/vibecodingGlobalPrompt.js';
 import { isSubmittableArtifactKind, kindForName } from '../services/vibecodingArtifacts.js';
 import { documentMime } from '../services/ooxml/documents.js';
 import { ensureRuntimeConversation, recordRuntimeSubmission, rewriteLocalReferences, runtimeSubmissionWorkItem, textDefaultModel, textModelOptions } from './vibecoding.js';
@@ -337,6 +339,9 @@ export async function handleStudentRuntime(ctx) {
           capabilities: prepLesson.capabilities || [],
         } : null,
         presets: prepLesson ? await vibecodingPresetPrompts(prepLesson.id) : [],
+        // 2026-11-01 客户端契约：备课上下文**可以**带全局提示词（客户端也会按同一规则保存）。
+        // 空 = 这两个字段根本不出现（客户端按"没有"处理，不会把 undefined 写成空文件）。
+        ...await globalPromptForClient(),
         models: await textModelOptions(),
         defaultModel: await textDefaultModel(),
         // ⭐ 2026-10-18（客户端 WebSearch 接入）：备课模式**没有** gateway key（下面那支才发），
@@ -407,6 +412,9 @@ export async function handleStudentRuntime(ctx) {
       features: { webSearch: true },
       presets: await vibecodingPresetPrompts(lessonId),
       sends: { limit, used, remaining: limit === null ? null : Math.max(0, limit - used) },
+      // 2026-11-01 客户端契约第二节：平台全局系统提示词。空 = 整块不下发。
+      // ⚠️ revision 只用于诊断日志，客户端不许拼进模型上下文。
+      ...await globalPromptForClient(),
       // ⭐ 模型清单下发给客户端（2026-09-24 客户端口径）：客户端不再把模型名写死在补丁层里，
       //    而是**用 displayName 显示、用 id 发上游** —— 否则运营在后台改的别名到不了学生眼前。
       //    ⚠️ 只放 TEXT 渠道**实际启用**的模型（+ 渠道默认），**不是** modelMappings：

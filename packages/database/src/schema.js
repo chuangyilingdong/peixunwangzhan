@@ -2788,6 +2788,34 @@ CREATE INDEX IF NOT EXISTS idx_session_students_session ON session_students(sess
 try { db.exec('ALTER TABLE session_students ADD COLUMN vibecoding_sends INTEGER NOT NULL DEFAULT 0'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
+// ── 发送次数幂等台账（2026-11-01）──────────────────────────────────────────────
+// 客户端从 0.1.8 起给每次真实发送派生出的**所有**模型请求带 `x-zcode-send-id`（同一个用户发送
+// 产生的工具轮、压缩、起标题、子代理、SSE 重试都复用同一个值）。于是平台不必再从对话历史里
+// 猜"这是不是学生按的" —— 直接按 send_id 去重就是准确值。
+//
+// 判据换成行数：**这张表里 (session, student) 的行数 = 真实发送次数**。
+// `session_students.vibecoding_sends` 退化成缓存/兼容字段（旧的启发式路径还在用它）。
+//
+// ⚠️ 主键就是幂等键：同一条请求重试 100 次、并发 8 路，INSERT 只成功一次 ——
+//    **不要**写成"先 SELECT 再 INSERT"，那是 check-then-act，并发下必然多记。
+// ⚠️ 老客户端不带这个头：走原来的启发式路径（见 vibecodingLessonSettings.js），
+//    两套**按"这个学生这场课堂有没有台账行"隔离**，不会混写。
+db.exec(`CREATE TABLE IF NOT EXISTS session_vibecoding_sends (
+  session_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  send_id TEXT NOT NULL,
+  first_seen_at TEXT NOT NULL,
+  PRIMARY KEY (session_id, student_id, send_id)
+);`);
+
+// 平台级 VibeCoding 全局提示词（2026-11-01，客户端契约见《给平台-课堂发送计数与全局提示词》）。
+// 正文走 client-context.globalSystemPrompt 下发；revision 只进诊断日志、绝不进模型上下文。
+// 32 KiB 的上限在接口层校验（这里不做 CHECK —— 存量/SQLite 的 TEXT 没有长度概念）。
+try { db.exec('ALTER TABLE platform_settings ADD COLUMN vibecoding_global_prompt TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE platform_settings ADD COLUMN vibecoding_global_prompt_revision TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
 // 历史课堂的学生回填 —— 只认**证据**：确实在这节课消耗过算力的人判为「已完课」。
 // 不按「今天的班级名单」回填：班级成员是可变的，用今天的名单去还原当时谁在这节课上，等于编数据。
 // 幂等：`NOT EXISTS (同课堂已有学生行)` 保证只回填「新模型之前的老课堂」，跑第二遍什么都不做。

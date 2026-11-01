@@ -513,7 +513,12 @@ export async function handleRuntimeGateway(ctx) {
   // VibeCoding 发送次数上限（2026-09-19 用户口径，机制见 services/vibecodingLessonSettings.js）。
   // ⚠️ 位置有意放在**打上游之前**：超限的这一次既不花算力、也不进用量账，学生当场拿到原因。
   // ⚠️ 这节课没配上限时 `allowed` 恒为 true（不填 = 不拦），所以没人配置时现状一字不改。
-  const sendGate = await enforceVibecodingSendLimit({ sessionId: session.id, studentId: payload.u, lessonId: session.lesson_id || '', messages });
+  // ⭐ 2026-11-01（客户端契约《给平台-课堂发送计数与全局提示词》）：客户端给**每次真实发送派生出的
+  //    所有模型请求**带同一个 `x-zcode-send-id`（工具轮/压缩/起标题/子代理/SSE 重试都复用）。
+  //    带上它就按这个值做幂等计数（去重后就是真实发送次数），不再靠猜对话历史 ——
+  //    2026-11-01 那次「学生按了 2 次、平台记成 9 次」就是启发式的边界。
+  const sendId = String(ctx.req.headers['x-zcode-send-id'] || '').trim();
+  const sendGate = await enforceVibecodingSendLimit({ sessionId: session.id, studentId: payload.u, lessonId: session.lesson_id || '', messages, sendId });
   if (!sendGate.allowed) {
     // 对外仍要说 OpenAI 方言（dsh 只认这个），客户端把 message 原样显示给学生
     // ⚠️ 2026-09-28：错误码按客户端契约（《平台接口契约-zcode.md》「发送次数」一节）改成
