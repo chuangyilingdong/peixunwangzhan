@@ -49,6 +49,12 @@ node_modules/.bin/vite build apps/website --config apps/website/vite.config.mjs
 # 必须**在 vite build 之后**跑 —— 它读的是 dist 里的产物算 sha256，改的也是 dist 里的 HTML（不动源码）。
 # 不跑的话页面引用的是字面量 `?v=__STAMP__`，所有版本共用一个 URL → 撞 nginx `/assets/` 的 7 天强缓存。
 node apps/website/scripts/stamp-junshi.mjs
+# ⭐ 官网预渲染（2026-11-01，SEO 方案 B）：把 11 个公开页渲染成静态 HTML。
+# 为什么必须做：官网是 SPA，不跑 JS 只有 3060 字节的「正在进入课堂」——
+# 百度抓到的就是这个，sitemap 里的页面**都能被发现、但没有任何可排名的正文**。
+# 必须在 stamp-junshi **之后**（预渲染抓的是最终 dist 里的页面，编号要已经打进去）。
+# 应急可跳过：PRERENDER_SKIP=1（会退回"只有空壳"的老状态，别长期开）。
+PRERENDER_API_BASE="${PRERENDER_API_BASE:-https://aicyld.com}" node apps/website/scripts/prerender.mjs
 
 for app in admin org website; do
   test -f "apps/${app}/dist/index.html"
