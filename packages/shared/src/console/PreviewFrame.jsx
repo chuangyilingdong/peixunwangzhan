@@ -319,7 +319,14 @@ export function PreviewFrame({ html, className = '', stageClassName = '', title 
       ref={frameRef}
       className={className}
       title={title}
-      sandbox="allow-scripts"
+      // ⚠️ 2026-11-01：必须带 `allow-forms`。
+      //    沙箱权限在嵌套浏览上下文里是**逐层收紧**的：外层的 flag 集会被内层继承，
+      //    内层（/vibe-preview.html 里那个 iframe）虽然写了 allow-forms，外层没开就照样被拦。
+      //    现场：学生作品把发送按钮放在 <form> 里（type="submit"），点按钮走原生表单提交，
+      //    浏览器在 submit 事件到达页面前就报 "Blocked form submission … 'allow-forms' permission
+      //    is not set"，于是点击发送没反应、回车（走 keydown）却正常 —— 四端同一个现象。
+      //    ⚠️ 仍然**不给** allow-same-origin：那是隔离的底线（作品是 opaque origin，读不到主站 cookie）。
+      sandbox="allow-scripts allow-forms"
       src={PREVIEW_SHELL_URL}
       style={frameStyle}
     />
