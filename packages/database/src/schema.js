@@ -1068,6 +1068,60 @@ CREATE TABLE IF NOT EXISTS help_feedback (
 CREATE INDEX IF NOT EXISTS idx_help_feedback_org_status ON help_feedback(org_id, status, submitted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_help_feedback_user ON help_feedback(user_id, submitted_at DESC);
 
+-- 桌面客户端反馈：只供平台后台接收，与机构 help_feedback 完全隔离。
+-- id 由 (user_id, idempotency_key) 稳定哈希生成，主键本身承担幂等约束。
+CREATE TABLE IF NOT EXISTS client_feedback (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  org_id TEXT,
+  idempotency_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('bug','usage','feature','performance')),
+  severity TEXT,
+  module TEXT,
+  contact TEXT,
+  environment TEXT NOT NULL,
+  device_mid TEXT,
+  status TEXT NOT NULL DEFAULT 'SUBMITTED' CHECK (status IN ('SUBMITTED','IN_PROGRESS','RESOLVED','CLOSED')),
+  resolution TEXT,
+  handled_by TEXT,
+  handled_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE SET NULL,
+  FOREIGN KEY (handled_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_client_feedback_status_time ON client_feedback(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_client_feedback_user_time ON client_feedback(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS client_feedback_attachments (
+  id TEXT PRIMARY KEY,
+  feedback_id TEXT NOT NULL,
+  file_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('log','image','other')),
+  filename TEXT NOT NULL,
+  mime_type TEXT,
+  file_size INTEGER,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (feedback_id) REFERENCES client_feedback(id) ON DELETE CASCADE,
+  FOREIGN KEY (file_id) REFERENCES file_assets(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_client_feedback_attachments_feedback ON client_feedback_attachments(feedback_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS client_feedback_messages (
+  id TEXT PRIMARY KEY,
+  feedback_id TEXT NOT NULL,
+  sender_type TEXT NOT NULL CHECK (sender_type IN ('USER','PLATFORM')),
+  sender_user_id TEXT,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (feedback_id) REFERENCES client_feedback(id) ON DELETE CASCADE,
+  FOREIGN KEY (sender_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_client_feedback_messages_feedback ON client_feedback_messages(feedback_id, created_at ASC);
+
 -- 统一文件元数据与访问授权（P4-C04）
 CREATE TABLE IF NOT EXISTS file_assets (
   id TEXT PRIMARY KEY,
@@ -3438,4 +3492,3 @@ if (seriesDdl.includes("'ASSIGNED_ORGS'")) {
 //    所以它每次启动都抛 `no such column: snapshot` 并被 catch 吞掉，**一次都没生效过**。
 //    读取侧已经做了归一化（normalizeSeriesVisibility：ALL_ORGS/ASSIGNED_ORGS → PUBLIC），
 //    数据面不受影响，所以直接删掉这条死语句。
-

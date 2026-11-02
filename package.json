@@ -17,7 +17,8 @@
     "dist:junshi-desktop": "pnpm --filter @junshi/desktop dist:win",
     "test:junshi-voice": "node scripts/p194-junshi-voice-result.mjs",
     "test:client-three-platform": "node scripts/p178-client-three-platform-contract.mjs",
-    "test:client-multiplatform-download": "node scripts/p179-client-multiplatform-download.mjs"
+    "test:client-multiplatform-download": "node scripts/p179-client-multiplatform-download.mjs",
+    "test:client-feedback": "node scripts/p-client-feedback.mjs"
   },
   "dependencies": {
     "@platform/database": "workspace:*",

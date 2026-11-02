@@ -20,6 +20,7 @@ import { handleClientInstallerUpload } from './routes/admin/clientInstallerUploa
 import { handleAdminBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 import { handleVibeCoding } from './routes/vibecoding.js';
 import { handleJunshi } from './routes/junshi.js';
+import { handleClientFeedback } from './routes/clientFeedback.js';
 import { domainStateContract } from './services/domainState.js';
 import { maxUploadBytes } from './services/fileUploadSecurity.js';
 import { acquireBodySlot as acquireUploadBodySlot } from './services/uploadBodyGate.js';
@@ -190,6 +191,7 @@ const server = http.createServer(async (req, res) => {
       ?? await handlePublicCommunication(ctx)
       ?? await handlePublicFileAssets(ctx)
       ?? await handleAuth(ctx)
+      ?? await handleClientFeedback(ctx)
       ?? await handleAdmin(ctx)
       ?? await handleAdminCommunication(ctx)
       ?? await handleAdminFileAssets(ctx)

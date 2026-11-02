@@ -12,6 +12,7 @@ import { handleWorks } from './admin/works.js';
 import { handleFinancialReporting } from './admin/financialReporting.js'
 import { handleClientUpdate } from './admin/clientUpdate.js';
 import { handlePlatformSettings } from './admin/platformSettings.js';
+import { handleAdminClientFeedback } from './admin/clientFeedback.js';
 
 export async function handleAdmin(ctx) {
   const { pathname, method } = ctx;
@@ -29,6 +30,7 @@ export async function handleAdmin(ctx) {
   { const result = await handleWorks(ctx, part, method); if (result !== null) return result; }
   { const result = await handleFinancialReporting(ctx, part, method); if (result !== null) return result; }
   { const result = await handleClientUpdate(ctx, part, method); if (result !== null) return result; }
+  { const result = await handleAdminClientFeedback(ctx, part, method); if (result !== null) return result; }
   { const result = await handlePlatformSettings(ctx, part, method); if (result !== null) return result; }
   return null;
 }

@@ -540,7 +540,7 @@ async function syncFileGrants(fileId, file, audience, grantedBy) {
   }
 }
 
-async function createUploadedFileAsset(ctx, { auth, ownerType, ownerOrgId = null, scope, defaultVisibility }) {
+export async function createUploadedFileAsset(ctx, { auth, ownerType, ownerOrgId = null, scope, defaultVisibility }) {
   const contentType = String(ctx.req.headers['content-type'] || '');
   let multipart = { fields: {}, file: null };
   try { multipart = parseMultipartFormData(ctx.rawBody || Buffer.alloc(0), contentType); }

@@ -43,6 +43,7 @@ export const navigation = [
   { to: '/website-content', icon: '✎', label: '官网内容', permission: 'ADMIN_CONTENT' },
   { to: '/notifications', icon: '✉', label: '通知事件', permission: 'ADMIN_CONTENT' },
   { to: '/inbox', icon: '✉', label: '站内信', permission: 'ADMIN_CONTENT' },
+  { to: '/client-feedback', icon: '⚑', label: '客户端问题反馈', permission: 'ADMIN_CONTENT' },
   { heading: '系统管理' },
   { to: '/admins', icon: '⚙', label: '平台管理员', permission: 'ADMIN_AUDIT' },
   { to: '/audit', icon: '☉', label: '操作审计', permission: 'ADMIN_AUDIT' },
