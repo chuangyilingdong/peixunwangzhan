@@ -3176,6 +3176,7 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_run_conversation ON vibecoding_runs
 db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_submissions (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL,
+  client_task_id TEXT NOT NULL DEFAULT '',
   student_id TEXT NOT NULL,
   org_id TEXT NOT NULL,
   class_id TEXT,
@@ -3205,10 +3206,24 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_submission_student ON vibecoding_submissions(student_id, submitted_at DESC)');
 try { db.exec("ALTER TABLE vibecoding_submissions ADD COLUMN entry_file TEXT NOT NULL DEFAULT 'index.html'"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
-// 「一个对话 × 一份产物」唯一（新库在这里建；老库由下面那次重建表保证）。
-// 有了它，同一份产物重复提交走覆盖（round+1），不同产物各自成条。
+// 2026-11-02：判重键再加一维「客户端任务」。
+// 背景：一个工作区可以同时有 N 个任务（ZCode session），不同任务各自产出一件作品；
+// 当前键只有 (conversation, entry_file)，两个任务都产出 index.html 时会互相覆盖。
+// 口径：同一个任务里重复提交 = 覆盖（round+1），不同任务 = 各自成条。
+// 老客户端不传 taskId → 空串 → 与改动前完全一致（键退化成 (conversation, entry_file)）。
+try { db.exec("ALTER TABLE vibecoding_submissions ADD COLUMN client_task_id TEXT NOT NULL DEFAULT ''"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 「一个对话 × 一个任务 × 一份产物」唯一（新库在这里建；老库由下面那次重建表保证）。
+// 有了它，同一任务同一产物重复提交走覆盖（round+1），不同产物/不同任务各自成条。
 try {
-  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_submission_conversation_entry ON vibecoding_submissions(conversation_id, entry_file)');
+  // 老索引是两列的，必须先让位：否则同名入口跨任务仍会被它挡住（或建新索引时被它误伤）。
+  db.exec('DROP INDEX IF EXISTS idx_vibe_submission_conversation_entry');
+} catch (error) {
+  // 索引不存在/被别处带走都不影响：下面这一条才是唯一性的真实依据。
+  if (!String(error?.message || '').includes('no such index')) throw error;
+}
+try {
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_submission_conversation_task_entry ON vibecoding_submissions(conversation_id, client_task_id, entry_file)');
 } catch (error) {
   // 老库此时还带着列级 UNIQUE(conversation_id)：建索引本身没问题，真出问题留给重建那段处理
   if (!String(error?.message || '').includes('already exists')) throw error;
@@ -3273,6 +3288,7 @@ try {
       db.exec(`CREATE TABLE vibecoding_submissions_migrated (
         id TEXT PRIMARY KEY,
         conversation_id TEXT NOT NULL,
+        client_task_id TEXT NOT NULL DEFAULT '',
         student_id TEXT NOT NULL,
         org_id TEXT NOT NULL,
         class_id TEXT,
@@ -3310,7 +3326,8 @@ try {
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_submission_share_token ON vibecoding_submissions(share_token) WHERE share_token IS NOT NULL');
       // ⚠️ 这个复合唯一索引必须在**重建之后**再建一次：DROP TABLE 会把它一起带走。
       // （第一版就是漏了这一步，「同一份产物重复提交」的唯一性实际没生效 —— 迁移验证脚本当场照出来了。）
-      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_submission_conversation_entry ON vibecoding_submissions(conversation_id, entry_file)');
+      // 2026-11-02：判重键升级为 (对话, 客户端任务, 产物)；重建后同样要按新键建。
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_submission_conversation_task_entry ON vibecoding_submissions(conversation_id, client_task_id, entry_file)');
       db.exec('COMMIT');
     } catch (error) {
       try { db.exec('ROLLBACK'); } catch (_) { /* 已回滚 */ }

@@ -206,6 +206,12 @@ let colCount = 0;
 // 直接建不出来（ERROR 1118 Row size too large）。所以**按表算总宽度**，超了就把非索引列降级。
 const MAX_ROW_BYTES = 64000;
 const MEDIUMTEXT_COST = 20; // TEXT 系在行里只占一个指针 + 长度
+// 索引列默认按**真实数据长度**定宽（下限 64）。空库/新列没有数据时会被缩成 64，
+// 而应用侧对某些列有明确上限 —— 不覆盖就会生成一个比应用窄的列，写入直接 ER_DATA_TOO_LONG。
+// 2026-11-02：client_task_id 由客户端传（ZCode sessionId），应用限制 200 字符。
+const COLUMN_WIDTH_OVERRIDES = new Map([
+  ['vibecoding_submissions.client_task_id', 200],
+]);
 
 for (const m of meta) {
   // ── 第一趟：定初选类型、算固定宽度 ──
@@ -226,10 +232,12 @@ for (const m of meta) {
       // ⚠️ 不能一律 VARCHAR(255)：MySQL 的单条索引键上限是 3072 字节，utf8mb4 下
       //    4 列 × 255 字符 = 4080 字节 → `ERROR 1071 Specified key was too long`。
       //    id 这类列真实只有 25 字符左右，给 64 完全够，键长一下就下来了。
-      const size = Math.min(255, Math.max(64, Math.ceil((len * 1.2) / 16) * 16));
+      // 少数列在应用侧有明确上限（COLUMN_WIDTH_OVERRIDES），空库时也不能缩到 64。
+      const override = COLUMN_WIDTH_OVERRIDES.get(`${m.table}.${c.name}`);
+      const size = override || Math.min(255, Math.max(64, Math.ceil((len * 1.2) / 16) * 16));
       mysqlType = `VARCHAR(${size})`;
       fixedWidth = size * 4;
-      if (len > 255) notes.push(`⚠️ ${m.table}.${c.name} 是索引列但真实数据最长 ${len} 字符 > 255 —— **必须人工决定**（前缀索引？换做法？）`);
+      if (!override && len > 255) notes.push(`⚠️ ${m.table}.${c.name} 是索引列但真实数据最长 ${len} 字符 > 255 —— **必须人工决定**（前缀索引？换做法？）`);
     } else {
       // ⚠️ 2026-09-25：非索引的 TEXT 列**一律 MEDIUMTEXT**，不再按"当前最长 × 1.2"定 VARCHAR。
       //    原来那套的理由是"能保留 DEFAULT"，但 MySQL 8.0.13+ 的**表达式默认值** `DEFAULT ('{}')`

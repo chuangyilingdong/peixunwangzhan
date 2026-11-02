@@ -595,6 +595,34 @@ function collectUploadedArtifacts(body) {
 }
 
 /**
+ * 客户端任务标识的长度上限 —— 与 MySQL 列宽 `VARCHAR(200)` 一致。
+ * 超了必须报错，不能静默截断：截断会让两个不同任务撞成同一个键（表现为「后交的覆盖前一个」）。
+ */
+const MAX_CLIENT_TASK_ID_CHARS = 200;
+
+/**
+ * 解析客户端任务标识（2026-11-02）。
+ *
+ * 背景：桌面客户端一个工作区可以并行 N 个任务，每个任务各自产出一件作品。
+ * 平台原来只按 `(对话, 产物)` 判重，两个任务都产出 `index.html` 时会互相覆盖。
+ * 现在客户端把当前任务 id 带上，判重键变成 `(对话, 任务, 产物)`：
+ *   · 同一任务重复提交 → 覆盖（round+1）；
+ *   · 不同任务即使入口同名 → 各自成条。
+ * 老客户端不传这个字段 → 空串 → 判重键退化成 `(对话, 产物)`，行为与改动前完全一致。
+ */
+function clientTaskIdFromBody(body) {
+  const raw = String(body?.taskId ?? '').trim();
+  if (!raw) return '';
+  if (raw.length > MAX_CLIENT_TASK_ID_CHARS) {
+    throw errors.badRequest(
+      `任务标识太长了（最多 ${MAX_CLIENT_TASK_ID_CHARS} 个字符）`,
+      'VIBECODING_TASK_ID_TOO_LONG',
+    );
+  }
+  return raw;
+}
+
+/**
  * 把一份产物清单落成一次作品提交（`/submit` 与 `/submit-upload` 共用）。
  *
  * 步骤：① 二进制存成学生的私有资产（主产物走 fileId、被引用的图走 URL 改写）；
@@ -722,10 +750,14 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
   const title = body.title === undefined || String(body.title).trim() === ''
     ? String(conversation.title || '我的作品').slice(0, 60)
     : String(body.title).trim().slice(0, 60);
+  // 2026-11-02：桌面客户端一个工作区可以并行 N 个任务，每个任务的作品要独立成条。
+  // 老客户端不传 / 传空 → 空串 → 判重键退化成 (对话, 产物)，与改动前完全一致。
+  const taskId = clientTaskIdFromBody(body);
   const dbStartedAt = Date.now();
   const submission = await recordRuntimeSubmission({
     ctx, auth, conversation, entryFile, files, artifacts, title,
     description: String(body.description || '').slice(0, 1000),
+    taskId,
   });
   const dbMs = Date.now() - dbStartedAt;
   // 拍平改名 / 丢了素材这些事要让学生看见 —— 提交成功了但作品缺了东西，比提交失败更糟。
@@ -750,6 +782,6 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
     scanStatus: batchScan.status,
     scanCached: batchScan.cached || 0,
   };
-  console.log(`[submit-upload] files=${timings.fileCount} bytes=${timings.contentBytes} scan=${timings.scanStatus}(cached=${timings.scanCached}) scanMs=${timings.scanMs} storageMs=${timings.storageMs} dbMs=${timings.dbMs} totalMs=${timings.totalMs}`);
+  console.log(`[submit-upload] task=${taskId || '-'} files=${timings.fileCount} bytes=${timings.contentBytes} scan=${timings.scanStatus}(cached=${timings.scanCached}) scanMs=${timings.scanMs} storageMs=${timings.storageMs} dbMs=${timings.dbMs} totalMs=${timings.totalMs}`);
   return { ...submission, warnings, missing: collected.missing || [], works: submittedWork ? [submittedWork] : [], timings };
 }

@@ -47,13 +47,16 @@ let failures = 0;
 const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`); else { failures += 1; console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`); } };
 
  
-// ⚠️ 这两条原来直接查 `sqlite_master`（只有 SQLite 有）——MySQL 侧改查 information_schema：
-//    「索引在不在」看 STATISTICS；「旧的单列 UNIQUE 去没去掉」看有没有**只覆盖 conversation_id** 的唯一索引
-//    （比读 DDL 文本稳；SQLite 侧仍沿用原来的 DDL 文本判据，保持原意）。
-const index = isMysql
+// ⚠️ 2026-11-02：判重键从 (对话, 产物) 升级为 (对话, 客户端任务, 产物)。
+//    这里跟着改成「三列索引在、旧的两列索引已让位」，否则同名入口跨任务仍会被挡住。
+const indexColumns = isMysql
+  ? (await arows("SELECT COLUMN_NAME name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vibecoding_submissions' AND INDEX_NAME='idx_vibe_submission_conversation_task_entry' ORDER BY SEQ_IN_INDEX")).map((item) => item.name)
+  : (await arows("SELECT name FROM pragma_index_info('idx_vibe_submission_conversation_task_entry')")).map((item) => item.name);
+check('① 复合唯一索引 (conversation_id, client_task_id, entry_file) 已建', indexColumns.join(',') === 'conversation_id,client_task_id,entry_file', JSON.stringify(indexColumns));
+const oldTwoColumnIndex = isMysql
   ? await arow("SELECT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vibecoding_submissions' AND INDEX_NAME='idx_vibe_submission_conversation_entry' LIMIT 1")
   : await arow("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_vibe_submission_conversation_entry'");
-check('① 复合唯一索引 (conversation_id, entry_file) 已建', Boolean(index));
+check('①b 旧的两列唯一索引已让位（否则不同任务的同名入口仍会互相覆盖）', !oldTwoColumnIndex);
 const legacySingleUnique = isMysql
   ? Number((await arow("SELECT COUNT(*) n FROM (SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vibecoding_submissions' AND NON_UNIQUE=0 GROUP BY INDEX_NAME HAVING COUNT(*)=1 AND MAX(COLUMN_NAME)='conversation_id') x"))?.n || 0) > 0
   : String((await arow("SELECT sql FROM sqlite_master WHERE name='vibecoding_submissions'"))?.sql || '').includes('conversation_id TEXT NOT NULL UNIQUE');
@@ -66,7 +69,7 @@ const orgId = student?.org_id || (await arow("SELECT id FROM organizations LIMIT
 if (student && orgId) {
   const convId = 'conv_p94';
   await aq('INSERT INTO vibecoding_conversations(id,student_id,org_id,title,status,entry_file,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', [convId, student.id, orgId, 'P94 测试作品', 'DRAFT', 'index.html', now, now]);
-  const insert = async (id, entryFile) => await aq(`INSERT INTO vibecoding_submissions(id,conversation_id,student_id,org_id,title,entry_file,submitted_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, [id, convId, student.id, orgId, 'P94', entryFile, now, now, now]);
+  const insert = async (id, entryFile, taskId = '') => await aq(`INSERT INTO vibecoding_submissions(id,conversation_id,client_task_id,student_id,org_id,title,entry_file,submitted_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`, [id, convId, taskId, student.id, orgId, 'P94', entryFile, now, now, now]);
 
   let two = true; let detail = '';
   try { await insert('sub_p94_a', 'index.html'); await insert('sub_p94_b', '演示文稿.pptx'); } catch (error) { two = false; detail = error.message; }
@@ -76,8 +79,13 @@ if (student && orgId) {
   try { await insert('sub_p94_c', 'index.html'); } catch { blocked = true; }
   check('③ 同一份产物重复插入被唯一性挡住（重复提交走覆盖，不是新增）', blocked);
 
+  // 2026-11-02：判重键多了一维「客户端任务」——同名入口在不同任务下必须能共存。
+  let otherTask = true; let otherTaskDetail = '';
+  try { await insert('sub_p94_d', 'index.html', 'task-other'); } catch (error) { otherTask = false; otherTaskDetail = error.message; }
+  check('③b 不同任务 + 同名入口可以共存（任务维度已生效）', otherTask, otherTaskDetail);
+
   const rows = await arows('SELECT entry_file FROM vibecoding_submissions WHERE conversation_id=? ORDER BY entry_file', [convId]);
-  check('④ 该对话最终是 2 条提交（各对应一份产物）', rows.length === 2, JSON.stringify(rows));
+  check('④ 该对话最终是 3 条提交（两份产物 + 另一个任务的同名产物）', rows.length === 3, JSON.stringify(rows));
   await aq('DELETE FROM vibecoding_submissions WHERE conversation_id=?', [convId]);
   await aq('DELETE FROM vibecoding_conversations WHERE id=?', [convId]);
 } else {
@@ -87,7 +95,9 @@ if (student && orgId) {
 
 // 接口层：提交必须按 entryFile 作用域，并且多提交时下发列表（源码断言，端到端在服务器上真机验证）
 const route = fs.readFileSync(path.join(root, 'apps/server/src/routes/vibecoding.js'), 'utf8');
-check('⑤ 提交接口按 (conversation_id, entry_file) 查已有提交', /WHERE conversation_id = \? AND entry_file = \?/.test(route));
+check('⑤ 提交接口按 (conversation_id, client_task_id, entry_file) 查已有提交（网页端锁空任务）',
+  /WHERE conversation_id = \? AND client_task_id = \? AND entry_file = \?/.test(route)
+  && /WHERE conversation_id = \? AND client_task_id = '' AND entry_file = \?/.test(route));
 check('⑥ 提交接口会拒绝不在作品里的产物名', route.includes('VIBECODING_ARTIFACT_NOT_FOUND'));
 check('⑦ 会话详情下发已提交产物列表（界面才能准确标「已提交」）', route.includes('submittedEntries: submissions.map'));
 

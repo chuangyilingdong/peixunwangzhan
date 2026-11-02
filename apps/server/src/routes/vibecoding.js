@@ -1117,6 +1117,9 @@ export function normalizeSubmission(value, { includeContent = false } = {}) {
     lessonId: value.lesson_id || null, lessonTitle: value.lesson_title || null,
     title: value.title, description: value.description || '', round: Number(value.round || 1),
     entryFile: value.entry_file || 'index.html',
+    // 客户端任务标识（2026-11-02）：同一个工作区的不同任务各自成条；老记录/网页端为空串。
+    // 作品投影与提交回显都带它，客户端才能判断「这个任务这件作品交过没有」。
+    taskId: value.client_task_id || '',
     status: value.status, submittedAt: value.submitted_at,
     copyrightConfirmedAt: value.copyright_confirmed_at || null,
     isPublic: Number(value.is_public || 0) === 1,
@@ -1431,7 +1434,8 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       throw errors.badRequest('只有网页、PPT、Word 和 Excel 可以作为作品提交', 'VIBECODING_ARTIFACT_NOT_SUBMITTABLE');
     }
     const includedNames = submissionArtifactNames(allFiles, entryFile);
-    const existing = await arow('SELECT * FROM vibecoding_submissions WHERE conversation_id = ? AND entry_file = ?', [conversation.id, entryFile]);
+    // 网页端提交没有「客户端任务」这一维：显式锁空串，避免误匹配到某个任务交上来的同名产物。
+    const existing = await arow("SELECT * FROM vibecoding_submissions WHERE conversation_id = ? AND client_task_id = '' AND entry_file = ?", [conversation.id, entryFile]);
     // 没有老师点评这一环了：提交只是「交给平台」，可以反复提交（round+1），不再挡第二次
     // 与画布作品一致：提交即确认版权与展示授权，平台后续才可发布到作品广场
     if (ctx.body?.copyrightConfirmed !== true) {
@@ -1456,10 +1460,10 @@ async function handleStudentVibeCoding(ctx, auth, part) {
           [title, description, json(files), json(artifacts), json(transcript), entryFile, now, now, now, ownerAuth.user.id, submissionId]);
       } else {
         await aq(`INSERT INTO vibecoding_submissions(
-             id,conversation_id,student_id,org_id,class_id,lesson_id,title,description,files,artifacts,transcript,entry_file,round,status,submitted_at,created_at,updated_at,
+             id,conversation_id,client_task_id,student_id,org_id,class_id,lesson_id,title,description,files,artifacts,transcript,entry_file,round,status,submitted_at,created_at,updated_at,
              copyright_confirmed_at,copyright_confirmed_by
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-          [submissionId, conversation.id, ownerAuth.user.id, ownerAuth.user.orgId, conversation.class_id, conversation.lesson_id,
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [submissionId, conversation.id, '', ownerAuth.user.id, ownerAuth.user.orgId, conversation.class_id, conversation.lesson_id,
             title, description, json(files), json(artifacts), json(transcript), entryFile, 1, 'PENDING', now, now, now, now, ownerAuth.user.id]);
       }
       await aq("UPDATE vibecoding_conversations SET status='SUBMITTED',updated_at=? WHERE id=?", [now, conversation.id]);
@@ -1535,11 +1539,15 @@ export function rewriteLocalReferences(content, name, replacements) {
  * 规则保持一致：入口只允许网页/PPT/Word/Excel、必须确认版权、重复提交是覆盖（round+1）。
  *
  * @param {{ctx: object, auth: object, conversation: object, entryFile: string,
- *          files: Record<string,string>, artifacts: Array<object>, title: string, description?: string}} input
+ *          files: Record<string,string>, artifacts: Array<object>, title: string, description?: string,
+ *          taskId?: string}} input
  */
-export async function recordRuntimeSubmission({ ctx, auth, conversation, entryFile, files, artifacts, title, description = '' }) {
+export async function recordRuntimeSubmission({ ctx, auth, conversation, entryFile, files, artifacts, title, description = '', taskId = '' }) {
   const now = nowIso();
-  const existing = await arow('SELECT * FROM vibecoding_submissions WHERE conversation_id = ? AND entry_file = ?', [conversation.id, entryFile]);
+  // 2026-11-02：判重键从 (对话, 产物) 升级为 (对话, 客户端任务, 产物)。
+  // 同一个任务重复提交仍然覆盖（round+1）；不同任务即使入口同名也各自成条。
+  // 老客户端不传 taskId → 空串 → 与改动前完全一致。
+  const existing = await arow('SELECT * FROM vibecoding_submissions WHERE conversation_id = ? AND client_task_id = ? AND entry_file = ?', [conversation.id, taskId, entryFile]);
   const submissionId = existing?.id || id('vibesub');
   const transcript = json([]);
   await atransaction(async () => {
@@ -1551,16 +1559,16 @@ export async function recordRuntimeSubmission({ ctx, auth, conversation, entryFi
         [title, description, json(files), json(artifacts), transcript, entryFile, now, now, now, auth.user.id, submissionId]);
     } else {
       await aq(`INSERT INTO vibecoding_submissions(
-           id,conversation_id,student_id,org_id,class_id,lesson_id,title,description,files,artifacts,transcript,entry_file,round,status,submitted_at,created_at,updated_at,
+           id,conversation_id,client_task_id,student_id,org_id,class_id,lesson_id,title,description,files,artifacts,transcript,entry_file,round,status,submitted_at,created_at,updated_at,
            copyright_confirmed_at,copyright_confirmed_by
-         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [submissionId, conversation.id, auth.user.id, auth.user.orgId, conversation.class_id || null, conversation.lesson_id || null,
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [submissionId, conversation.id, taskId, auth.user.id, auth.user.orgId, conversation.class_id || null, conversation.lesson_id || null,
           title, description, json(files), json(artifacts), transcript, entryFile, 1, 'PENDING', now, now, now, now, auth.user.id]);
     }
     await aq("UPDATE vibecoding_conversations SET status='SUBMITTED',updated_at=? WHERE id=?", [now, conversation.id]);
     await audit(ctx, 'VIBECODING_SUBMIT', 'VIBECODING_CONVERSATION', conversation.id,
       existing ? { round: existing.round } : null,
-      { title, entryFile, round: Number(existing?.round || 0) + 1, source: 'STUDENT_RUNTIME' });
+      { title, entryFile, taskId: taskId || null, round: Number(existing?.round || 0) + 1, source: 'STUDENT_RUNTIME' });
   });
   return normalizeSubmission(await arow(submissionSelect() + ' WHERE submission.id = ?', [submissionId]), { includeContent: true });
 }
@@ -1600,6 +1608,9 @@ export function vibecodingWorkItem(submission, { lessonTitle = null, seriesTitle
     source: 'VIBECODING',
     seriesTitle: seriesTitle || null,
     entryFile: submission.entry_file || 'index.html',
+    // 客户端任务标识（2026-11-02）：客户端靠它判断「这个任务这件作品交过没有」。
+    // 老记录/网页端为空串 —— 客户端按空串处理即可，行为与改动前一致。
+    taskId: submission.client_task_id || '',
     classSessionId: classSessionId || null,
     submissionRound: Number(submission.round || 1),
     submissions: [],
