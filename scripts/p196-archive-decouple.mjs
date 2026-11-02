@@ -34,6 +34,8 @@ process.env.FILE_STORAGE = 'local';
 process.env.DEPLOYMENT_MODE = 'local-mock';
 process.env.AI_ARCHIVE_CONCURRENCY = '3';
 process.env.AI_ARCHIVE_MAX_ATTEMPTS = '3';
+// 下载侧等待归档的上限：生产默认 30 秒，这里压到 8 秒让用例跑得快
+process.env.ARCHIVE_DOWNLOAD_WAIT_MS = '8000';
 
 let failures = 0;
 const check = async (label, fn) => {
@@ -106,12 +108,16 @@ try {
     assert.equal(meta.archive?.sourceUrl, upstream);
   });
 
-  await check('③ 归档没落地时，下载路由 302 到上游并把该行提到队首', async () => {
+  await check('③ 归档没落地时，下载请求**等服务端搬完**再给（不把浏览器甩到上游 CDN）', async () => {
+    // 2026-11-02 修正：第一版是"直接 302 到上游"，但上游 CDN 从国内网络时通时不通
+    // （实测同一地址连打三次：超时 20s、超时 20s、1.5s 才成功），画布刚生成完的图就成了破图，
+    // 刷新一下（这时已归档、走 OSS）才好。现在改成有界等待。
     const result = await prepareFileDownload(ctx, await rowOf(fileId));
-    assert.equal(result.__fileResponse, true);
-    assert.equal(result.status, 302);
-    assert.equal(result.redirectUrl, upstream);
-    assert.equal((await metaOf(fileId)).archive?.priority, true, '没有提优先级（学生等了，队列还不知道）');
+    assert.notEqual(String(result.redirectUrl || ''), upstream, '还是 302 到上游了（破图的根源）');
+    assert.ok(result.stream || result.redirectUrl, '既没有本地流也没有跳转地址');
+    const meta = await metaOf(fileId);
+    assert.equal(meta.archive?.state, 'ARCHIVED', '等待期间没有真的去归档');
+    assert.equal(meta.archive?.priority, true, '没有把该行提到队首');
   });
 
   await check('④ 后台队列把字节填进同一行（storage_key 有值、ARCHIVED、大小对）', async () => {
@@ -158,6 +164,10 @@ try {
       if (round < 3) assert.equal(meta.archive?.state, 'PENDING', `第 ${round} 轮不该放弃`);
       else assert.equal(meta.archive?.state, 'FAILED', '到上限了还停在 PENDING（会无限重试）');
     }
+    // 最后的保底：连一次都搬不回来时，下载仍然给上游地址（总比 404 好），但这是**异常路径**
+    const fallback = await prepareFileDownload(ctx, await rowOf(badId));
+    assert.equal(fallback.status, 302, '归档彻底失败后连保底跳转都没了');
+    assert.equal(fallback.redirectUrl, deadUpstream);
   });
 
   await check('⑧ 非 http(s) 产物原样返回（data:/mock: 本来就在我们库里）', async () => {

@@ -30,6 +30,19 @@ import { ossConfigured, signedUrl } from '../services/objectStorage.js';
 /** 预览 302 到 OSS 的签名有效期（1 小时，与预览票据同量级）。 */
 const PREVIEW_LINK_TTL_SECONDS = 3600;
 
+/**
+ * 取一件"生成成功但还没归档完"的产物时，**最多等多久**（毫秒，2026-11-02）。
+ *
+ * 为什么不是直接 302 到上游：那台上游 CDN 从国内网络时通时不通（实测连打三次：超时 20s、
+ * 超时 20s、1.5s 成功）。学生点开的那几秒正好是"还没归档完"的窗口，于是破图；
+ * 再刷新时已经归档，走 OSS 就好了。所以这里等**我们自己的**归档完成再发。
+ *
+ * 预算：图片 2-3MB、视频 20MB，归档入口现在 150Mbps（约 20MB/s）、并发 3 ——
+ * 单件通常 1-3 秒；给 30 秒是为了扛"一次来了几十个请求"的排队。
+ * 真等到超时（队列被大文件占满 / 上游彻底不可达）才退回 302 上游作为保底。
+ */
+const ARCHIVE_WAIT_MS = Math.max(0, Number(process.env.ARCHIVE_DOWNLOAD_WAIT_MS ?? 30000) || 0);
+
 const STORAGE_KINDS = new Set(['EXTERNAL_URL', 'INTERNAL_PROXY', 'PENDING']);
 const VISIBILITY_MODES = new Set(['PRIVATE', 'ORG', 'ASSIGNED_ORGS', 'PUBLIC_PLATFORM', 'PUBLIC_RELEASE']);
 const CATEGORIES = new Set(['PROMO_MATERIAL', 'PROMO_COVER', 'CLIENT_INSTALLER', 'MEDIA_ASSET', 'TEACHING_ASSET', 'GENERAL']);
@@ -251,18 +264,39 @@ export async function prepareFileDownload(ctx, file) {
   }
   // ── 占位行：生成成功但**字节还没搬回来**（2026-11-01，见 services/generatedAssetArchiveQueue.js）──
   // 为什么要有这一支：一条 H3 是 20-22MB，把"归档完成"塞进任务的完成条件里，
-  // 1000 路并行时这 20GB 会把整节课堵在 10Mbps 入口上。现在任务完成时先建一行占位
-  // （INTERNAL_PROXY + 空 storage_key + metadata.archive.state=PENDING），
-  // 学生点开时**先直连上游**，同时把这条提到归档队首。
-  // ⚠️ 只 302 到我们自己写进去的 http(s) 地址（不信任任何客户端输入），且状态必须是 PENDING ——
-  //    归档失败后 state 会变 FAILED，那时仍然可以回上游（尽力而为），但没有"提优先级"的意义了。
+  // 1000 路并行时这 20GB 会把整节课堵在入口带宽上。现在任务完成时先建一行占位
+  // （INTERNAL_PROXY + 空 storage_key + metadata.archive.state=PENDING）。
+  //
+  // ⚠️⚠️ 2026-11-02 修正：**不要**把浏览器 302 到上游 CDN。
+  //   第一版就是那么做的，结果画布刚生成完时图片是破的、刷新一下才好 —— 因为上游 CDN
+  //   （media.seedance.nz / 腾讯 COS）从国内网络**时通时不通**，实测同一个地址连打三次：
+  //   超时 20s、超时 20s、1.5s 才成功。学生点开的那几秒正好撞上"还没归档完"，于是破图；
+  //   等几秒后归档完成、再刷新就走 OSS 了，于是"刷新一下就好了"。
+  //   现在改成：**等服务端把字节搬回来再给**（下面这段有界等待），浏览器完全不碰第三方地址。
+  //   真等到超时（归档队列被大文件占满 / 上游彻底不可达）才退回 302，作为最后的保底。
   const archiveMeta = parseJson(file.metadata, {})?.archive || {};
   if (!String(file.storage_key || '').trim() && /^https?:\/\//i.test(String(archiveMeta.sourceUrl || ''))
     && (archiveMeta.state === 'PENDING' || archiveMeta.state === 'FAILED')) {
     if (archiveMeta.state === 'PENDING') {
-      // 学生真要看了 → 提到队首（不改 state：谁抢到谁归档，这里只调优先级）
+      // 学生真要看了 → 提到队首，并**立刻踢一下归档队列**（默认 2 秒一轮，别干等着）
       const bumped = json({ ...(parseJson(file.metadata, {}) || {}), archive: { ...archiveMeta, priority: true } });
       await aq('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [bumped, nowIso(), file.id]).catch(() => {});
+      // 动态 import 避免静态环（队列那边静态依赖本文件）
+      import('../services/generatedAssetArchiveQueue.js')
+        .then((mod) => mod.drainArchiveQueue?.())
+        .catch(() => {});
+
+      const deadline = Date.now() + ARCHIVE_WAIT_MS;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        const fresh = await arow('SELECT * FROM file_assets WHERE id=?', [file.id]).catch(() => null);
+        if (!fresh) continue;
+        if (String(fresh.storage_key || '').trim()) {
+          // 搬完了 —— 用新行重走一遍（此时会走 OSS 302 那条正常路径）
+          return prepareFileDownload(ctx, fresh);
+        }
+        if ((parseJson(fresh.metadata, {})?.archive?.state) === 'FAILED') break;
+      }
     }
     await audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, archiveState: archiveMeta.state, upstream: true });
     return { __fileResponse: true, status: 302, redirectUrl: String(archiveMeta.sourceUrl) };

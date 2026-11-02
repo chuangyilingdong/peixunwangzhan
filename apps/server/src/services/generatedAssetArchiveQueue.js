@@ -37,7 +37,10 @@ function positiveInt(raw, fallback, max) {
 export const ARCHIVE_CONCURRENCY = positiveInt(process.env.AI_ARCHIVE_CONCURRENCY, 3, 16);
 const MAX_ATTEMPTS = positiveInt(process.env.AI_ARCHIVE_MAX_ATTEMPTS, 3, 10);
 const DEADLINE_MS = positiveInt(process.env.AI_ARCHIVE_DEADLINE_MS, 24 * 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
-const TICK_MS = positiveInt(process.env.AI_ARCHIVE_TICK_MS, 10000, 60000);
+// ⚠️ 2026-11-02：默认从 10 秒缩到 2 秒。学生点开产物的那一刻会**等我们归档完**再发
+// （见 routes/fileAssets.js 的 ARCHIVE_WAIT_MS），10 秒的空转窗口会让"刚生成完的图"
+// 多等一整个 tick。2 秒一轮是一次索引查询，代价可以忽略。
+const TICK_MS = positiveInt(process.env.AI_ARCHIVE_TICK_MS, 2000, 60000);
 /** 单次取多少条来挑（按 priority/最老排序在这一批里做，不依赖 JSON 的 SQL 排序）。 */
 const BATCH = 40;
 
