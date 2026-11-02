@@ -1519,3 +1519,14 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
   .hp-brands-title,.hp-brands-facts{opacity:1;transform:none;filter:none;transition:none}
   .hp-brands-marquee{opacity:.9;transition:none}
 }
+
+/* ── 画布作品查看层（学生主页弹窗，2026-11-02）──────────────────────────────
+   与广场作品详情页、老师端同一套口径：默认看「作品内容」（图/视频/音频），
+   画布作为第二个标签页。用户 2026-09-21：「应该显示的是图片/视频/音频等等，而不是画布」。
+   ⚠️ 弹窗的 `.pl-viewer-body` 是 has-frame（固定高度 + overflow:hidden），
+   所以这里必须自己撑满并把滚动交给内容区，否则标签页会把画布挤出去。 */
+.canvas-work{display:flex;flex-direction:column;height:100%;min-height:0;background:#faf9ff}
+.canvas-work__tabs{flex:0 0 auto;justify-content:center;padding:10px 14px 0;border-bottom:1px solid var(--line)}
+.canvas-work__body{flex:1;min-height:0;overflow:auto;padding:14px}
+/* 画布需要**确定高度**的容器（CanvasEditor 在无高度容器里会塌成 0），去掉详情页那条 margin */
+.canvas-work__canvas{flex:1;min-height:0;margin:0;position:relative;overflow:hidden}

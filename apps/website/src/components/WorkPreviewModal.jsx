@@ -11,7 +11,7 @@
 //    `@platform/shared`，与机构/老师端**同一套 UI**。发码走学生会话（主人才能分享）。
 import { useEffect, useState } from 'react';
 import { CanvasEditor } from '@platform/canvas';
-import { buildPreviewDocument, ReplayPreview, shareablePiecesOf, WorkSharePanel } from '@platform/shared';
+import { buildPreviewDocument, ReplayPreview, shareablePiecesOf, WorkMediaGallery, WorkSharePanel } from '@platform/shared';
 import { workType } from './workCard.jsx';
 
 /** 画布快照里的「学生域素材地址」→ 这份作品专属的公开代理（与详情页同一条规则）。 */
@@ -22,6 +22,30 @@ function canvasResolve(detail) {
     if (!match) return raw;
     return (detail?.media || []).find((item) => item.fileId === match[1])?.url || null;
   };
+}
+
+/**
+ * 画布作品的查看层：**默认看「作品内容」**（图片 / 视频 / 音频），画布只是过程，想看点一下切过去。
+ *
+ * 用户 2026-09-21 原话：「作品发布后，网站显示的是画布内容，应该显示的是图片/视频/音频等等，
+ * 而不是画布」。当时**广场的作品详情页**（pages/WorkDetail.jsx）按这条口径改了、老师端
+ * （org 的 ClassroomWork）也改了，**唯独学生主页这个弹窗漏了** —— 点开只剩画布，
+ * 看起来像还在编辑。2026-11-02 对齐同一套口径。
+ *
+ * ⚠️ 不用再给 `WorkMediaGallery` 传 `resolveSrc`：公开接口返回的 `media[].url` 已经是
+ * 这份作品专属的**公开代理**地址（访客拿得到），服务端换好了。
+ */
+function CanvasWorkView({ detail }) {
+  const [view, setView] = useState('media');
+  return <div className="canvas-work">
+    <div className="canvas-work__tabs work-detail__views" role="tablist">
+      <button type="button" role="tab" aria-selected={view === 'media'} className={'work-detail__tab' + (view === 'media' ? ' is-active' : '')} onClick={() => setView('media')}>作品内容</button>
+      <button type="button" role="tab" aria-selected={view === 'canvas'} className={'work-detail__tab' + (view === 'canvas' ? ' is-active' : '')} onClick={() => setView('canvas')}>创作画布</button>
+    </div>
+    {view === 'canvas'
+      ? <div className="canvas-work__canvas work-detail__canvas"><CanvasEditor key={detail.id} initialSnapshot={detail.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={canvasResolve(detail)} /></div>
+      : <div className="canvas-work__body"><WorkMediaGallery media={detail.media} /></div>}
+  </div>;
 }
 
 /**
@@ -88,7 +112,7 @@ export function WorkPreviewModal({ api, studentApi = null, isOwner = false, crea
           //    现在与老师端（§九十）同款：**`fill` = 铺满这一屏、原生比例、无缩放**，
           //    外层弹窗固定一屏不滚动，作品自身按容器宽度自适应（学生页的媒体查询因此真正生效）。
           ? <div className="creator-modal__web"><ReplayPreview html={buildPreviewDocument(detail.files, entry)} title={detail.title || '作品预览'} chrome={false} fill /></div>
-          : <div className="work-detail__canvas"><CanvasEditor key={detail.id} initialSnapshot={detail.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={canvasResolve(detail)} /></div>) : null}
+          : <CanvasWorkView detail={detail} />) : null}
       </div>
       <div className="pl-viewer-foot">
         <span>{detail?.studentName || ''}</span>
