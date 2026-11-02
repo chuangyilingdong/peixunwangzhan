@@ -114,12 +114,26 @@ export function shareablePiecesOf(detail, source) {
     //    然后是一些引用文件……这里肯定就是一个整体啊」）。服务端在产物清单上标了这一位。
     return (detail?.artifacts || [])
       .filter((item) => item?.pieceKey && item.shareable !== false)
-      .map((item) => ({ pieceKey: item.pieceKey, label: item.name || '这一件' }));
+      .map((item) => ({ pieceKey: item.pieceKey, label: String(item.name || '这一件').slice(0, 24) }));
   }
   const labels = { IMAGE: '图片', VIDEO: '视频', AUDIO: '音频', TEXT: '文字' };
   // 没有 fileId/url 的产出（例如画布里的 AI 文字）没有可发码的键；空键 `media:` 要挡掉，
   // 否则分享面板会出现一件"看得见但发不了"的条目（服务端 assertSharePiece 会拒）。
+  //
+  // ⚠️ 2026-11-02：标签**不能直接用 caption**。画布产出的 caption 是**生成提示词**
+  //    （实测一条几百字：「…只能看见背面，严禁露出侧脸。2个视图必须是同一人物…」），
+  //    塞进 <select> 会把下拉框撑成一条横幅，把二维码挤出屏幕（用户截图）。
+  //    规则：学生自己起的短名字（≤12 字）才用，否则一律「图片 1 / 视频 2」这种短标签，
+  //    同类按出现顺序编号区分。
+  const counters = {};
   return (detail?.media || [])
     .filter((item) => item?.pieceKey && !String(item.pieceKey).endsWith(':'))
-    .map((item) => ({ pieceKey: item.pieceKey, label: item.caption || labels[item.modality] || '这一件' }));
+    .map((item) => {
+      const kind = labels[item.modality] || '产出';
+      counters[kind] = (counters[kind] || 0) + 1;
+      const ordinal = counters[kind];
+      // 先压掉换行/多余空白，再判"够不够短" —— 提示词里全是换行，只看原串长度会误判
+      const caption = String(item.caption || '').replace(/\s+/g, ' ').trim();
+      return { pieceKey: item.pieceKey, label: caption && caption.length <= 12 ? caption : `${kind} ${ordinal}` };
+    });
 }

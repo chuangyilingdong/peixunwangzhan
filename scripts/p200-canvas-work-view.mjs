@@ -58,5 +58,15 @@ check('④ 三处用的是同一个标签文案（别再各写各的）', () => 
   }
 });
 
+check('⑤ 分享面板的选项标签是**短的**（长 caption 会把下拉框撑成一条横幅）', () => {
+  const share = read('packages/shared/src/workShare.jsx');
+  // 不能再把 caption 直接当 label —— 画布的 caption 是生成提示词，几百字
+  assert.ok(!/label: item\.caption \|\|/.test(share), '又直接用 caption 当标签了');
+  assert.ok(/caption\.length <= 12/.test(share), '没有按长度判断"短名字"');
+  assert.ok(/`\$\{kind\} \$\{ordinal\}`/.test(share), '没有「图片 N」这种短标签兜底');
+  // 网页作品那支用文件名，也压一下长度
+  assert.ok(/String\(item\.name \|\| '这一件'\)\.slice\(0, \d+\)/.test(share), '文件名没有截断');
+});
+
 assert.equal(failures, 0, `P200 有 ${failures} 条断言没过`);
 console.log('PASS: 画布作品三处都默认看「作品内容」，画布作为第二个标签页');
