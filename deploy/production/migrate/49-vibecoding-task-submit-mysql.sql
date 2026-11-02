@@ -21,8 +21,11 @@
 --   mysql --defaults-file=/root/.my.cnf -D aild_admin < deploy/production/migrate/49-vibecoding-task-submit-mysql.sql
 --
 -- 回滚（按需，顺序不能反）：
---   ALTER TABLE vibecoding_submissions DROP INDEX idx_vibe_submission_conversation_task_entry;
+--   ⚠️ 如果已经产生了按任务提交的作品（同一对话同名入口多行），旧的两列唯一索引**建不回来**：
+--      先合并/清理这些行再回滚，否则 CREATE UNIQUE INDEX 会撞重复键。
+--   ⚠️ 先建旧索引、再删新索引：反过来删新索引会撞外键 1553（旧索引此时还不存在）。
 --   CREATE UNIQUE INDEX idx_vibe_submission_conversation_entry ON vibecoding_submissions (conversation_id, entry_file);
+--   ALTER TABLE vibecoding_submissions DROP INDEX idx_vibe_submission_conversation_task_entry;
 --   ALTER TABLE vibecoding_submissions DROP COLUMN client_task_id;
 --
 -- 复查：
@@ -35,7 +38,7 @@
 --    WHERE table_schema = DATABASE() AND table_name = 'vibecoding_submissions' AND NON_UNIQUE = 0
 --    GROUP BY INDEX_NAME;
 --
--- 说明：三段都写成幂等的（先查 information_schema 再决定执行哪条），重复跑不会报错。
+-- 说明：四段都写成幂等的（先查 information_schema 再决定执行哪条），重复跑不会报错。
 
 -- ① 加列
 SET @has_column := (
@@ -49,7 +52,23 @@ SET @ddl := IF(@has_column = 0,
   'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
--- ② 旧的两列唯一索引让位（它会把「不同任务、同名入口」挡住）
+-- ② 先建新的三列唯一索引。
+--    ⚠️ 顺序不能反：旧的两列索引在 MySQL 里**同时承担 conversation_id 外键的索引**
+--    （外键要求被引用列上有索引），直接 DROP 会报
+--    `ERROR 1553: Cannot drop index ... needed in a foreign key constraint`。
+--    新索引最左列同样是 conversation_id，建好之后旧索引才能安全让位。
+SET @has_new_index := (
+  SELECT COUNT(*) FROM information_schema.statistics
+   WHERE table_schema = DATABASE()
+     AND table_name = 'vibecoding_submissions'
+     AND index_name = 'idx_vibe_submission_conversation_task_entry'
+);
+SET @ddl := IF(@has_new_index = 0,
+  'CREATE UNIQUE INDEX `idx_vibe_submission_conversation_task_entry` ON `vibecoding_submissions` (`conversation_id`, `client_task_id`, `entry_file`)',
+  'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ③ 旧的两列唯一索引让位（它会把「不同任务、同名入口」挡住；外键此时已由新索引接住）
 SET @has_old_index := (
   SELECT COUNT(*) FROM information_schema.statistics
    WHERE table_schema = DATABASE()
@@ -61,8 +80,9 @@ SET @ddl := IF(@has_old_index > 0,
   'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
--- ②b 更老的单列 UNIQUE(conversation_id) 也要让位（SQLite 侧当年是重建表去掉的；
+-- ③b 更老的单列 UNIQUE(conversation_id) 也要让位（SQLite 侧当年是重建表去掉的；
 --     MySQL 侧如果还留着，会让「一个对话只能有一条提交」，第二件作品直接撞唯一键）。
+--     放在新索引建好之后：外键已经由新索引接住，删它不会再撞 1553。
 SET @legacy_single_name := (
   SELECT INDEX_NAME FROM information_schema.statistics
    WHERE table_schema = DATABASE()
@@ -75,16 +95,4 @@ SET @legacy_single_name := (
 SET @ddl := IF(@legacy_single_name IS NULL,
   'SELECT 1',
   CONCAT('DROP INDEX `', @legacy_single_name, '` ON `vibecoding_submissions`'));
-PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
-
--- ③ 新的三列唯一索引
-SET @has_new_index := (
-  SELECT COUNT(*) FROM information_schema.statistics
-   WHERE table_schema = DATABASE()
-     AND table_name = 'vibecoding_submissions'
-     AND index_name = 'idx_vibe_submission_conversation_task_entry'
-);
-SET @ddl := IF(@has_new_index = 0,
-  'CREATE UNIQUE INDEX `idx_vibe_submission_conversation_task_entry` ON `vibecoding_submissions` (`conversation_id`, `client_task_id`, `entry_file`)',
-  'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
