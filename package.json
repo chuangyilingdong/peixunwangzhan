@@ -15,7 +15,9 @@
     "dev:website": "vite apps/website --config apps/website/vite.config.mjs",
     "dev:junshi-desktop": "pnpm --filter @junshi/desktop dev",
     "dist:junshi-desktop": "pnpm --filter @junshi/desktop dist:win",
-    "test:junshi-voice": "node scripts/p194-junshi-voice-result.mjs"
+    "test:junshi-voice": "node scripts/p194-junshi-voice-result.mjs",
+    "test:client-three-platform": "node scripts/p178-client-three-platform-contract.mjs",
+    "test:client-multiplatform-download": "node scripts/p179-client-multiplatform-download.mjs"
   },
   "dependencies": {
     "@platform/database": "workspace:*",

@@ -223,12 +223,16 @@
   "works.docDocx": "文件",
   "works.docPlay": "可線上玩",
   "download.win": "Windows 版",
-  "download.mac": "Mac 版（Apple 晶片）",
+  "download.mac": "macOS 版",
+  "download.macArch": "選擇 Mac 晶片類型",
+  "download.macApple": "Apple 晶片",
+  "download.macIntel": "Intel 晶片",
   "download.version": "版本",
   "download.download": "下載安裝包",
   "download.winHint": "下載後雙擊安裝；首次開啟若提示「未知發行者」，選擇「仍要執行」即可（我們正在辦理程式碼簽章憑證）。",
   "download.macPreparing": "正在準備中",
-  "download.macHint": "需要 macOS 12 以上、Apple 晶片（M 系列）。完成後會在本頁放出。",
+  "download.macHint": "需要 macOS 12 以上、Apple 晶片（M 系列）。",
+  "download.macHintIntel": "需要 macOS 12 以上、Intel 晶片。",
   "download.loading": "正在讀取安裝包資訊…",
   "download.retry": "稍後再試，或聯絡我們取得安裝包。",
   "download.errorPrefix": "安裝包暫時取不到（{error}）",
@@ -427,7 +431,7 @@
       },
       {
         "question": "機房和教室的電腦都能用嗎？",
-        "answer": "可以，公開客戶端支援 macOS Apple 晶片版與 Windows 64 位元。"
+        "answer": "可以，公開客戶端支援 macOS Apple 晶片版、macOS Intel 晶片版與 Windows 64 位元。"
       },
       {
         "question": "能否做 Arduino 和 micro:bit 硬體課？",

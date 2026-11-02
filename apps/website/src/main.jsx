@@ -1639,66 +1639,106 @@ function Faq() {
     </div>
   </main>;
 }
-// 下载创作客户端（/download，2026-09-19）。
+function isMacBrowserClient() {
+  if (typeof navigator === "undefined") return false;
+  return /Mac/i.test(`${navigator.platform || ""} ${navigator.userAgent || ""}`);
+}
+
+function detectMacClientArchitecture() {
+  const navigatorLike = typeof navigator === "undefined" ? null : navigator;
+  if (!isMacBrowserClient()) return "arm64";
+  const platform = String(navigatorLike?.platform || "");
+  const userAgent = String(navigatorLike?.userAgent || "");
+  const explicitArchitecture = String(navigatorLike?.userAgentData?.architecture || "").toLowerCase();
+  if (explicitArchitecture === "arm") return "arm64";
+  if (explicitArchitecture === "x86") return "x64";
+  if (/arm64|aarch64/i.test(`${platform} ${userAgent}`)) return "arm64";
+  // Safari on Apple Silicon reports MacIntel too, so only an explicit x86 signal may select Intel.
+  return "arm64";
+}
+
+// 下载创作客户端（/download，2026-09-19；2026-11-02 增加 Intel Mac）。
 // 安装包放在**发布目录之外**（服务器 /srv/ai-kids-platform/downloads/，nginx 的 /downloads/），
 // 所以每次发布换代都不会把它冲掉；这里读同目录的 manifest.json 拿到当前版本/体积/校验值，
 // 而不是把文件名写死在这份代码里（否则每次出包都得改官网并重发）。
 function Download() {
   const t = useT();
   const [manifest, setManifest] = useState(null);
-  const [downloadState, setDownloadState] = useState('loading');
-  const [error, setError] = useState('');
+  const [downloadState, setDownloadState] = useState("loading");
+  const [error, setError] = useState("");
+  const [macArchitecture, setMacArchitecture] = useState(detectMacClientArchitecture);
+  const macArchitectureTouched = useRef(false);
   useEffect(() => {
     let live = true;
-    fetch('/downloads/manifest.json', { cache: 'no-store' })
+    fetch("/downloads/manifest.json", { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
       .then((data) => {
         if (!live) return;
-        const file = data?.files?.['win-x64'];
-        if (!file || typeof file.name !== 'string' || !file.name.trim() || !Number.isFinite(Number(file.size)) || Number(file.size) <= 0) {
-          setError(t('download.manifestInvalid'));
-          setDownloadState('error');
+        const file = data?.files?.["win-x64"];
+        if (!file || typeof file.name !== "string" || !file.name.trim() || !Number.isFinite(Number(file.size)) || Number(file.size) <= 0) {
+          setError(t("download.manifestInvalid"));
+          setDownloadState("error");
           return;
         }
         setManifest(data);
-        setDownloadState('ready');
+        setDownloadState("ready");
       })
       .catch((reason) => {
         if (!live) return;
-        setError(reason.message || t('faq.readError'));
-        setDownloadState('error');
+        setError(reason.message || t("faq.readError"));
+        setDownloadState("error");
       });
     return () => { live = false; };
   }, [t]);
-  const windows = manifest?.files?.['win-x64'] || null;
-  const mac = manifest?.files?.['mac-arm64'] || null;
-  const mb = (bytes) => (bytes ? (bytes / 1048576).toFixed(0) + ' MB' : '');
-  // 这一页按用户口径删到只剩「两块安装卡片」：
-  //   2026-09-25：「第一屏，全部删除，就留个 windows 版和 mac 版安装就行。如果需要图标直接用 svg」
-  //     → 删掉底部那整块「装上以后怎么用」（四条步骤 + 两条尾注 + 打开客户端的深链），图标换 shared 的线性 SVG；
-  //   2026-09-26：「客户端下载图1这部分也删掉」→ 连**页头那块**（创作客户端眉题 +「把课堂装进学生的电脑」
-  //     + 那句说明）一起去掉。所以现在 <main className="inner"> 里直接就是两张卡片。
-  //   ⚠️ 这一页**没有 Title 了**：给页面留一个 h1 是 SEO 的习惯，但用户明确要删 —— 别自作主张加回来。
+  useEffect(() => {
+    let live = true;
+    const userAgentData = typeof navigator === "undefined" ? null : navigator.userAgentData;
+    if (!isMacBrowserClient()) return undefined;
+    if (typeof userAgentData?.getHighEntropyValues !== "function") return undefined;
+    userAgentData.getHighEntropyValues(["architecture"]).then((values) => {
+      if (!live || macArchitectureTouched.current) return;
+      const architecture = String(values?.architecture || "").toLowerCase();
+      if (architecture === "arm") setMacArchitecture("arm64");
+      else if (architecture === "x86") setMacArchitecture("x64");
+    }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+  const windows = manifest?.files?.["win-x64"] || null;
+  const macTarget = macArchitecture === "arm64" ? "mac-arm64" : "mac-x64";
+  const mac = manifest?.files?.[macTarget] || null;
+  const mb = (bytes) => (bytes ? (bytes / 1048576).toFixed(0) + " MB" : "");
+  const chooseMacArchitecture = (architecture) => {
+    macArchitectureTouched.current = true;
+    setMacArchitecture(architecture);
+  };
+  // 下载页只保留 Windows 与 macOS 两块安装卡片。macOS 卡内保留架构切换，避免 Safari
+  // 这类无法可靠暴露 CPU 架构的浏览器在 Apple Silicon / Intel 之间选错。
   return <main className="inner">
     <section className="dl">
       <article className="dl-card">
         <Icon name="windows" size={30} />
-        <h3>{t('download.win')}</h3>
-        {downloadState === 'ready' && windows
-          ? <><p>{t('download.version')} {windows.version || manifest.version} · {mb(windows.size)}</p><a className="button" href={'/downloads/' + windows.name}>{t('download.download')}</a>
-            <small>{t('download.winHint')}</small></>
-          : <><p>{downloadState === 'error' ? t('download.errorPrefix', { error }) : t('download.loading')}</p><small>{t('download.retry')}</small></>}
+        <h3>{t("download.win")}</h3>
+        {downloadState === "ready" && windows
+          ? <><p>{t("download.version")} {windows.version || manifest.version} · {mb(windows.size)}</p><a className="button" href={"/downloads/" + windows.name}>{t("download.download")}</a>
+            <small>{t("download.winHint")}</small></>
+          : <><p>{downloadState === "error" ? t("download.errorPrefix", { error }) : t("download.loading")}</p><small>{t("download.retry")}</small></>}
       </article>
       <article className="dl-card">
         <Icon name="apple" size={30} />
-        <h3>{t('download.mac')}</h3>
-        {/* 版本号优先用**这个平台自己**的（清单里每条都带 version）；没有才回落到顶层 version。
-            ⚠️ 这样即使哪天只发了一个平台，这一页也不会把另一个平台的版本号写错。 */}
-        {mac ? <><p>{t('download.version')} {mac.version || manifest.version} · {mb(mac.size)}</p><a className="button" href={'/downloads/' + mac.name}>{t('download.download')}</a></> : <><p>{t('download.macPreparing')}</p><small>{t('download.macHint')}</small></>}
+        <h3>{t("download.mac")}</h3>
+        <div className="dl-arch" role="group" aria-label={t("download.macArch")}>
+          <button type="button" className={macArchitecture === "arm64" ? "active" : ""} aria-pressed={macArchitecture === "arm64"} onClick={() => chooseMacArchitecture("arm64")}>{t("download.macApple")}</button>
+          <button type="button" className={macArchitecture === "x64" ? "active" : ""} aria-pressed={macArchitecture === "x64"} onClick={() => chooseMacArchitecture("x64")}>{t("download.macIntel")}</button>
+        </div>
+        {downloadState === "loading" ? <><p>{t("download.loading")}</p><small>{t("download.retry")}</small></>
+          : downloadState === "error" ? <><p>{t("download.errorPrefix", { error })}</p><small>{t("download.retry")}</small></>
+          : mac ? <><p>{t("download.version")} {mac.version || manifest.version} · {mb(mac.size)}</p><a className="button" href={"/downloads/" + mac.name}>{t("download.download")}</a><small>{t(macArchitecture === "arm64" ? "download.macHint" : "download.macHintIntel")}</small></>
+          : <><p>{t("download.macPreparing")}</p><small>{t(macArchitecture === "arm64" ? "download.macHint" : "download.macHintIntel")}</small></>}
       </article>
     </section>
   </main>;
 }
+
 function Compare(){
   const t=useT();
   const { messages }=useI18n();
@@ -1725,7 +1765,7 @@ const CMS_FALLBACK = {
   // 原来这里只有 3 条、且少了「授权次数用完会怎样」，与线上那份对不上，正是那条口径要防的隐患。
   FAQ: {
     audienceOrder: ['student', 'teacher', 'org'],
-    student: [{ question: '需要学生自备 API Key 或对话平台账号吗？', answer: '不需要。机构账号登录即可使用平台统一模型能力。' }, { question: '机房和教室的电脑都能用吗？', answer: '可以，公开客户端支持 macOS Apple 芯片版与 Windows 64 位。' }, { question: '能否做 Arduino 和 micro:bit 硬件课？', answer: '支持 Arduino Uno 与 micro:bit 的课堂实践。' }, { question: '机构的授权次数用完了会怎样？', answer: '机构端会提示老师补足授权次数，补足后学生即可继续上课；平台不会因为算力用量去拦学生。' }],
+    student: [{ question: '需要学生自备 API Key 或对话平台账号吗？', answer: '不需要。机构账号登录即可使用平台统一模型能力。' }, { question: '机房和教室的电脑都能用吗？', answer: '可以，公开客户端支持 macOS Apple 芯片版、macOS Intel 芯片版与 Windows 64 位。' }, { question: '能否做 Arduino 和 micro:bit 硬件课？', answer: '支持 Arduino Uno 与 micro:bit 的课堂实践。' }, { question: '机构的授权次数用完了会怎样？', answer: '机构端会提示老师补足授权次数，补足后学生即可继续上课；平台不会因为算力用量去拦学生。' }],
     teacher: [{ question: '上课前需要做什么准备？', answer: '学生用机构账号登录，浏览器打开课堂即可开始；机房电脑不需要额外安装环境。' }, { question: '学生的作品和用量在哪里看？', answer: '机构后台可以查看学生的用量记录与作品，并把优秀作品发布到作品展厅。' }],
     org: [{ question: '学生需要自己买账号或自备 API Key 吗？', answer: '不需要。机构账号分级，学生无需自备 Key，由机构统一开通与管理。' }, { question: '平台提供哪些课程？', answer: '课程中心提供标准课包（含 PPT 与 HTML 互动课件），机构可按课包直接排课。' }],
   },

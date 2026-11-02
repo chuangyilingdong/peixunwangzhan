@@ -10,7 +10,7 @@ function megabytes(bytes) {
  * 安装包文件名契约（与客户端 `LingdongUpdater.ts` 一致）：客户端**按这个名字**校验更新包，
  * 名字不对的话包传上来了也永远不会被装上。所以前端先拦一道，省得白传几百 MB。
  */
-const INSTALLER_NAME = /^lingdong-client-(.+)-(win-x64\.exe|mac-arm64\.dmg)$/;
+const INSTALLER_NAME = /^lingdong-client-(.+)-(win-x64\.exe|mac-arm64\.dmg|mac-x64\.dmg)$/;
 
 /**
  * 上传安装包。
@@ -105,7 +105,7 @@ export function ClientUpdate({ api }) {
   async function publish() {
     if (!picked) { setError('先选一个安装包文件。'); return; }
     if (!INSTALLER_NAME.test(picked.name)) {
-      setError('文件名必须是 lingdong-client-<版本>-win-x64.exe（Mac 用 -mac-arm64.dmg）—— 客户端按这个名字校验，改个名再传。');
+      setError('文件名必须是 lingdong-client-<版本>-win-x64.exe、-mac-arm64.dmg 或 -mac-x64.dmg —— 客户端按这个名字校验，改个名再传。');
       return;
     }
     setUploading(true); setError(''); setNotice(''); setPercent(0);
@@ -125,9 +125,9 @@ export function ClientUpdate({ api }) {
   const file = data?.file;
   const platforms = data?.files || {};
   const stale = Array.isArray(data?.stale) ? data.stale : [];
-  const PLATFORM_ORDER = ['win-x64', 'mac-arm64'];
-  const PLATFORM_LABEL = { 'win-x64': 'Windows（x64）', 'mac-arm64': 'macOS（Apple 芯片）' };
-  const PLATFORM_EXAMPLE = { 'win-x64': 'lingdong-client-<版本>-win-x64.exe', 'mac-arm64': 'lingdong-client-<版本>-mac-arm64.dmg' };
+  const PLATFORM_ORDER = ['win-x64', 'mac-arm64', 'mac-x64'];
+  const PLATFORM_LABEL = { 'win-x64': 'Windows（x64）', 'mac-arm64': 'macOS（Apple 芯片）', 'mac-x64': 'macOS（Intel 芯片）' };
+  const PLATFORM_EXAMPLE = { 'win-x64': 'lingdong-client-<版本>-win-x64.exe', 'mac-arm64': 'lingdong-client-<版本>-mac-arm64.dmg', 'mac-x64': 'lingdong-client-<版本>-mac-x64.dmg' };
   return <>
     <PageHeader eyebrow="系统管理" title="客户端更新"  />
     {error ? <Notice tone="danger">{error}</Notice> : null}
@@ -135,11 +135,12 @@ export function ClientUpdate({ api }) {
     {loading ? <Loading /> : !data ? <ErrorState error={error || '没有返回配置'} onRetry={load} /> : <>
       <Panel title="上传新安装包" actions={uploading ? <span className="muted">上传中 {percent}%</span> : null}>
         <p className="muted">直接选安装包上传即可发布（几百 MB 的包会上传较久，进度在标题栏）。文件名必须是
-          <code>lingdong-client-&lt;版本&gt;-win-x64.exe</code>，Mac 版是
-          <code>lingdong-client-&lt;版本&gt;-mac-arm64.dmg</code> —— 客户端按这个名字与清单里的 SHA256 校验。</p>
-        <p className="muted">⚠️ Windows 与 macOS 必须<strong>同一次发布、同一个版本号</strong>：客户端判断「要不要更新」读的是清单顶层的
-          <code>version</code>，只抬高一个平台的版本号，另一个平台的客户端就会反复提示更新却装不上。两个平台一起发时，
-          用客户端仓的 <code>deploy/desktop/publish-client.sh &lt;win&gt; &lt;mac&gt;</code>（两条目一次原子写入）最稳。</p>
+          <code>lingdong-client-&lt;版本&gt;-win-x64.exe</code>、
+          <code>lingdong-client-&lt;版本&gt;-mac-arm64.dmg</code> 或
+          <code>lingdong-client-&lt;版本&gt;-mac-x64.dmg</code> —— 客户端按这个名字与清单里的 SHA256 校验。</p>
+        <p className="muted">⚠️ Windows 与两个 macOS 架构必须<strong>同一次发布、同一个版本号</strong>：客户端判断「要不要更新」读的是清单顶层的
+          <code>version</code>，只抬高一个平台的版本号，另外两个平台的客户端就会反复提示更新却装不上。三平台一起发时，
+          用客户端仓的 <code>deploy/publish-client.sh &lt;win&gt; &lt;mac-arm64&gt; &lt;mac-x64&gt;</code>（三条目一次原子写入）最稳。</p>
         <div className="row-actions top-gap">
           <input ref={fileInputRef} type="file" accept=".exe,.dmg" disabled={uploading}
             onChange={(event) => { setPicked(event.target.files?.[0] || null); setError(''); setNotice(''); }} />
@@ -151,17 +152,17 @@ export function ClientUpdate({ api }) {
         {uploading ? <progress className="top-gap" value={percent} max={100} style={{ width: '100%' }} /> : null}
       </Panel>
       <Panel title="当前发布包" actions={<button type="button" className="secondary-button" onClick={load}>刷新</button>}>
-        {!data.exists || !file ? <Notice tone="warning">当前服务器还没有客户端更新清单。用上面的「上传新安装包」发布第一版即可（也可以在客户端仓跑 <code>deploy/desktop/publish-client.sh</code>）。</Notice> : <>
+        {!data.exists || !file ? <Notice tone="warning">当前服务器还没有客户端更新清单。用上面的「上传新安装包」发布第一版即可（也可以在客户端仓跑 <code>deploy/publish-client.sh</code>）。</Notice> : <>
           <div className="form-grid">
             <label>版本<input value={data.version || '未记录'} readOnly /></label>
             <label>更新通道<input value={data.channel || 'stable'} readOnly /></label>
             <label>发布时间<input value={timestamp(data.publishedAt || data.updatedAt)} readOnly /></label>
           </div>
-          {/* ⚠️ 客户端（Windows）判「要不要更新」看的是顶层 version，实际装的是 files['win-x64']。
-              两者版本不一致 = 反复提示更新却装不上 —— 这就是「必须双端同版本发布」那条约束的形状。 */}
+          {/* ⚠️ 客户端判「要不要更新」看的是顶层 version，实际装的是 files[当前平台]。
+              任一平台版本不一致 = 该平台反复提示更新却装不上 —— 这就是「三端同版本发布」那条约束的形状。 */}
           {stale.length ? <Notice tone="warning">
             版本对不上：清单声明的是 {data.version || '未记录'}，但 {stale.map((key) => PLATFORM_LABEL[key] || key).join('、')} 的文件名里还是旧版本。
-            装那个平台的客户端会反复提示更新却装不上。请把两个平台<strong>同一次</strong>发布（客户端仓 <code>deploy/desktop/publish-client.sh &lt;win&gt; &lt;mac&gt;</code>）。
+            装那个平台的客户端会反复提示更新却装不上。请把三个平台<strong>同一次</strong>发布（客户端仓 <code>deploy/publish-client.sh &lt;win&gt; &lt;mac-arm64&gt; &lt;mac-x64&gt;</code>）。
           </Notice> : null}
           {PLATFORM_ORDER.map((key) => <div key={key} className="top-gap">
             <strong>{PLATFORM_LABEL[key]}</strong>

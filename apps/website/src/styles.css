@@ -760,6 +760,10 @@ nav a{position:relative;white-space:nowrap;color:#7b7490;font-size:12.5px;paddin
    容器从 <i> 变成真的 <svg>，所以这条选择器跟着改。 */
 .dl-card svg{display:block;color:var(--deep)}
 .dl-card h3{margin:14px 0 8px;font-size:20px}
+.dl-arch{display:inline-flex;gap:4px;padding:3px;margin:0 0 14px;border:1px solid var(--line);border-radius:999px;background:#fff}
+.dl-arch button{padding:7px 12px;border:0;border-radius:999px;background:transparent;color:var(--muted);font:inherit;font-size:12px;cursor:pointer}
+.dl-arch button.active{background:var(--deep);color:#fff}
+.dl-arch button:focus-visible{outline:2px solid var(--deep);outline-offset:2px}
 .dl-card p{margin:0 0 18px;color:var(--muted);font-size:13px}
 .dl-card small{display:block;margin-top:14px;color:#9a94a7;font-size:11.5px;line-height:1.75}
 /* 「装上以后怎么用」那一整块 2026-09-25 按用户口径删掉（只留两块的安装卡片），

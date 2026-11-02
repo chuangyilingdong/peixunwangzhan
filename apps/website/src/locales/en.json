@@ -223,12 +223,16 @@
   "works.docDocx": "Document",
   "works.docPlay": "Playable online",
   "download.win": "Windows",
-  "download.mac": "Mac (Apple silicon)",
+  "download.mac": "macOS",
+  "download.macArch": "Choose Mac processor",
+  "download.macApple": "Apple silicon",
+  "download.macIntel": "Intel",
   "download.version": "Version",
   "download.download": "Download",
   "download.winHint": "Double-click the file to install. If Windows warns about an unknown publisher on first launch, choose \"Run anyway\" — we are applying for a code-signing certificate.",
   "download.macPreparing": "In preparation",
-  "download.macHint": "Requires macOS 12 or later on Apple silicon (M series). It will appear on this page once ready.",
+  "download.macHint": "Requires macOS 12 or later on Apple silicon (M series).",
+  "download.macHintIntel": "Requires macOS 12 or later on Intel.",
   "download.loading": "Reading installer information…",
   "download.retry": "Please try again later, or contact us for the installer.",
   "download.errorPrefix": "The installer is unavailable for now ({error})",
@@ -427,7 +431,7 @@
       },
       {
         "question": "Do the computer lab and classroom PCs work?",
-        "answer": "Yes — the public client supports macOS (Apple silicon) and 64-bit Windows."
+        "answer": "Yes — the public client supports macOS (Apple silicon and Intel) and 64-bit Windows."
       },
       {
         "question": "Can we run Arduino and micro:bit lessons?",
