@@ -11,7 +11,7 @@ import { scheduleReminder } from './communication.js';
 import { assertTransition } from '../services/domainState.js';
 import {
   addSessionStudents, assertSessionManager, canManageSession, sessionRuntimeDetail, removeSessionStudent,
-  sessionCandidates, sessionScope, sessionStudentCounts, settleSessionStudents,
+  sessionCandidates, sessionScope, sessionStudentCounts, sessionSubmissionSummary, settleSessionStudents,
 } from '../services/classroomSessions.js';
 // 体验课包（2026-09-24 用户口径）：课包类型 + 次数账（剩余次数、按有效产出核销）
 import { experienceBalanceByStudent, grantUnitsOf, isExperienceSeries, seriesTypeOf, EXPERIENCE_SERIES_TYPE } from '../services/courseGrants.js';
@@ -1154,6 +1154,13 @@ export async function handleOrg(ctx) {
     const checks = await sessionPrecheck(target, action);
     return { sessionId: target.id, action, allPassed: checks.every((item) => item.passed), checks };
   }
+  // 结束课堂前的作品提交汇总（2026-11-02）：老师端点「结束课堂」先拉这份，
+  // 有学生 0 件/明显少于多数时弹窗提醒；写路径（end）也用同一份 helper 兜底。
+  let sessionSubmissionSummaryMatch = part.match(/^\/sessions\/([^/]+)\/submission-summary$/);
+  if (sessionSubmissionSummaryMatch && method === 'GET') {
+    const target = await sessionInOrg(sessionSubmissionSummaryMatch[1], { manage: false });
+    return await sessionSubmissionSummary(target);
+  }
   let sessionActionMatch = part.match(/^\/sessions\/([^/]+)\/(start|end|dissolve)$/);
   if (sessionActionMatch && method === 'POST') {
     const target = await sessionInOrg(sessionActionMatch[1]);
@@ -1200,6 +1207,21 @@ export async function handleOrg(ctx) {
       warmSessionRuntimes(target.id, target.lesson_id, target.org_id);
     } else if (action === 'end') {
       if (target.status !== 'ACTIVE') throw errors.conflict('只有正在上课的课堂可以结束', 'SESSION_NOT_ACTIVE');
+      // 2026-11-02：结束前先看作品提交情况。**只有老师端显式带了 `submissionCheck: true` 才检查**——
+      // 这样老调用方（守卫、脚本、其它客户端）的结束行为完全不变；老师端一定会带。
+      // 有 0 件/少于多数时，老师必须显式确认（`confirmIncomplete: true`）才能结束；
+      // **不是硬拦**，老师仍可结束，但一定会看到提醒（409 的 details.summary 就是弹窗明细）。
+      const submissionSummary = ctx.body?.submissionCheck === true ? await sessionSubmissionSummary(target) : null;
+      if (submissionSummary?.warningCount > 0 && ctx.body?.confirmIncomplete !== true) {
+        const parts = [];
+        if (submissionSummary.missingCount) parts.push(`${submissionSummary.missingCount} 名学生未提交作品`);
+        if (submissionSummary.belowPeerCount) parts.push(`${submissionSummary.belowPeerCount} 名学生少于多数同学`);
+        throw errors.conflict(
+          `${parts.join('、')}；确认后再结束课堂`,
+          'SESSION_HAS_MISSING_SUBMISSIONS',
+          { summary: submissionSummary },
+        );
+      }
       const settlement = await atransaction(async () => {
         await assertTransition(ctx, 'classSession', target.status, 'ENDED', { targetType: 'CLASS_SESSION', targetId: target.id, before: normalizeSession(target), code: 'INVALID_CLASS_SESSION_TRANSITION', message: '当前状态不能结束课堂' });
         // 先结算学生（按「这节课有没有消耗过算力」），再落课堂状态：两件事在同一事务里
@@ -1207,7 +1229,14 @@ export async function handleOrg(ctx) {
         await aq("UPDATE class_sessions SET status='ENDED', ended_by=?, ended_at=?, ended_reason=?, updated_at=? WHERE id=?", [auth.user.id, now, reason || 'MANUAL', now, target.id]);
         return summary;
       });
-      await audit(ctx, 'SESSION_END', 'CLASS_SESSION', target.id, normalizeSession(target), { status: 'ENDED', ...settlement });
+      await audit(ctx, 'SESSION_END', 'CLASS_SESSION', target.id, normalizeSession(target), {
+        status: 'ENDED',
+        submissionChecked: Boolean(submissionSummary),
+        submissionWarningCount: submissionSummary?.warningCount ?? null,
+        submissionMissingCount: submissionSummary?.missingCount ?? null,
+        submissionBelowPeerCount: submissionSummary?.belowPeerCount ?? null,
+        ...settlement,
+      });
       releaseSessionRuntimes(target.id, 'SESSION_END');
     } else {
       if (target.status !== 'PENDING') throw errors.conflict('只有待上课的课堂可以解散', 'SESSION_NOT_PENDING');

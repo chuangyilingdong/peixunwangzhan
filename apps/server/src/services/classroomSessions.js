@@ -397,6 +397,96 @@ export async function sessionRuntimeDetail(session, auth, students) {
       presence: 'unknown', presenceSource: 'NO_HEARTBEAT', costCap: sessionAi.costCap, ai: sessionAi }, students: enrichedStudents, works, events };
 }
 
+/**
+ * 结束课堂前的「作品提交汇总」（2026-11-02，用户口径）：
+ * 老师点结束课堂时，先看清「这堂课 5 个学生、各交了几件」——
+ * 有学生 0 件（未提交）或明显少于多数同学时，弹窗提醒，老师可取消回去让学生补交。
+ *
+ * 口径（与老师端课堂详情同一份数据来源）：
+ *   · 作品 = `works`（画布，一个项目一条；重复提交只更新 round，不虚增）
+ *          + `vibecoding_submissions`（客户端，按「对话 × 任务 × 入口」一条；同任务重交是覆盖）
+ *   · 只看**本场课堂**（works.class_session_id / conversation.class_session_id），不看别的课；
+ *   · 只看**名单里未被移除**的学生（REMOVED 不算）。
+ *
+ * 判定：
+ *   · 0 件 = MISSING（未提交，硬提醒）
+ *   · >0 但少于本节课「多数同学的件数」= BELOW_PEERS（少于多数，软提醒）
+ *   · 其余 NONE
+ * 多数 = 所有 >0 件数的众数；并列时取**较小**的那个（避免把"偶尔多做一件"当成标准）。
+ * 不拿最高件数当标准 —— "别人交 3 件、你交 1 件"不该一律算缺交。
+ */
+export async function sessionSubmissionSummary(session) {
+  const students = await arows(
+    `SELECT part.student_id, student.display_name student_name, student.login student_login
+       FROM session_students part
+       JOIN users student ON student.id=part.student_id
+      WHERE part.session_id=? AND part.status <> 'REMOVED'
+      ORDER BY student.display_name`,
+    [session.id],
+  );
+  const counts = new Map(students.map((item) => [item.student_id, 0]));
+  const applyCounts = (rows) => {
+    for (const row of rows) {
+      if (counts.has(row.student_id)) counts.set(row.student_id, (counts.get(row.student_id) || 0) + Number(row.n || 0));
+    }
+  };
+  applyCounts(await arows(
+    `SELECT student_id, COUNT(*) n FROM works
+      WHERE org_id=? AND class_session_id=? GROUP BY student_id`,
+    [session.org_id, session.id],
+  ));
+  applyCounts(await arows(
+    `SELECT submission.student_id, COUNT(*) n
+       FROM vibecoding_submissions submission
+       JOIN vibecoding_conversations conversation
+         ON conversation.id=submission.conversation_id
+        AND conversation.org_id=submission.org_id
+        AND conversation.student_id=submission.student_id
+      WHERE submission.org_id=? AND conversation.class_session_id=?
+      GROUP BY submission.student_id`,
+    [session.org_id, session.id],
+  ));
+  const items = students.map((item) => ({
+    studentId: item.student_id,
+    studentName: item.student_name || null,
+    studentLogin: item.student_login || null,
+    workCount: counts.get(item.student_id) || 0,
+  }));
+  const frequencies = new Map();
+  for (const item of items) {
+    if (item.workCount > 0) frequencies.set(item.workCount, (frequencies.get(item.workCount) || 0) + 1);
+  }
+  let majorityCount = 0;
+  let majorityFrequency = 0;
+  for (const [count, frequency] of frequencies) {
+    if (frequency > majorityFrequency || (frequency === majorityFrequency && count < majorityCount)) {
+      majorityCount = count;
+      majorityFrequency = frequency;
+    }
+  }
+  for (const item of items) {
+    item.warning = item.workCount === 0
+      ? 'MISSING'
+      : (majorityCount > 0 && item.workCount < majorityCount ? 'BELOW_PEERS' : 'NONE');
+  }
+  const rank = { MISSING: 0, BELOW_PEERS: 1, NONE: 2 };
+  items.sort((left, right) => (rank[left.warning] - rank[right.warning])
+    || String(left.studentName || left.studentLogin || '').localeCompare(String(right.studentName || right.studentLogin || ''), 'zh-Hans-CN'));
+  const missingCount = items.filter((item) => item.warning === 'MISSING').length;
+  const belowPeerCount = items.filter((item) => item.warning === 'BELOW_PEERS').length;
+  return {
+    sessionId: session.id,
+    sessionTitle: session.title || null,
+    studentCount: items.length,
+    totalWorks: items.reduce((sum, item) => sum + item.workCount, 0),
+    majorityCount,
+    missingCount,
+    belowPeerCount,
+    warningCount: missingCount + belowPeerCount,
+    items,
+  };
+}
+
 export function normalizeSessionStudent(part) {
   const LABELS = { PENDING: '待上课', ACTIVE: '上课中', COMPLETED: '已完课', INCOMPLETE: '未完课', REMOVED: '被移除' };
   return {

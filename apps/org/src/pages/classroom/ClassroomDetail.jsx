@@ -15,6 +15,13 @@ import { Checklist, DefinitionGrid, InfoStrip, Modal, RenameWorkDialog } from '.
 import { ClassroomWork } from './ClassroomWork.jsx';
 import { DELIVERY_LABEL, removedReasonLabel, SESSION_STATE, StateBadge, STUDENT_STATE } from './states.jsx';
 
+// 结束课堂前的作品提交提示（与服务端 sessionSubmissionSummary 的 warning 一一对应）。
+const SUBMISSION_STATE = {
+  MISSING: { label: '未提交', tone: 'danger' },
+  BELOW_PEERS: { label: '少于多数', tone: 'warning' },
+  NONE: { label: '正常', tone: 'muted' },
+};
+
 function Duration({ runtime, status }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -89,6 +96,24 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
   function showModal(value) { setError(''); setModal(value); }
   function closeModal() { if (!busyRef.current) { setModal(null); setError(''); } }
 
+  // 结束课堂前先拉「作品提交汇总」：有学生 0 件 / 少于多数时弹窗提醒（2026-11-02）。
+  // 不直接用页面上可能已经过期的 current.students —— 老师可能在这页停留很久，
+  // 期间学生还在提交，必须拿结束这一刻的最新统计。
+  async function openEndModal() {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true); setError('');
+    try {
+      const summary = await api.get(`org/sessions/${encodeURIComponent(openId)}/submission-summary`);
+      showModal({ kind: 'end', summary });
+    } catch (err) {
+      setError(err.message || '读取提交汇总失败，请重试。');
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }
+
   async function saveTitle() {
     if (titleValidation) { setError(titleValidation); return; }
     await run(async () => {
@@ -105,7 +130,12 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
         if (current?.status !== 'PENDING' || !modal.student?.studentId) throw new Error('当前不能移除该学生，请刷新名单。');
         await api.delete(`org/sessions/${encodeURIComponent(openId)}/students/${encodeURIComponent(modal.student.studentId)}`);
       } else {
-        await api.post(`org/sessions/${encodeURIComponent(openId)}/${kind}`);
+        // 老师端结束课堂一律带 submissionCheck；有未提交/少于多数时，弹窗里已看过明细，
+        // 再带 confirmIncomplete 让服务端放行（不是硬拦，老师有最终决定权）。
+        const body = kind === 'end'
+          ? { submissionCheck: true, ...(modal.summary?.warningCount > 0 ? { confirmIncomplete: true } : {}) }
+          : undefined;
+        await api.post(`org/sessions/${encodeURIComponent(openId)}/${kind}`, body);
       }
       setModal(null);
     }, { remove: '学生已移除，可以被其他课堂添加。', start: '课堂已开始。', end: '课堂已结束，完课结果已结算。', dissolve: '课堂已解散，学生已解除占用。' }[kind], permission);
@@ -168,7 +198,7 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
                   ? <button className="primary-button" disabled={busy || !summary.pending} onClick={() => showModal({ kind: 'start' })}>开始上课</button>
                   : null}
                 {allowed('canEnd') && current.status === 'ACTIVE'
-                  ? <button className="primary-button" disabled={busy} onClick={() => showModal({ kind: 'end' })}>结束课堂</button>
+                  ? <button className="primary-button" disabled={busy} onClick={openEndModal}>结束课堂</button>
                   : null}
                 {allowed('canDissolve') && current.status === 'PENDING'
                   ? <button className="secondary-button danger-outline" disabled={busy} onClick={() => showModal({ kind: 'dissolve' })}>解散课堂</button>
@@ -290,11 +320,43 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
       <Checklist title="开始前资格校验" checks={checks} />
     </Modal> : null}
 
-    {/* 课堂结束确认（线框图未覆盖；沿用原有口径，不做校验清单） */}
-    {modal?.kind === 'end' ? <Modal title="确认结束课堂？" busy={busy} error={error} onClose={closeModal}
-      footer={<><button className="secondary-button" onClick={closeModal}>取消</button>
-        <button className="primary-button" disabled={!allowed('canEnd') || busy} onClick={actAndClose}>{busy ? '处理中…' : '确认结束'}</button></>}>
-    </Modal> : null}
+    {/* 课堂结束确认 + 作品提交提醒（2026-11-02）。
+        0 件 = 未提交（红）；>0 但少于多数同学 = 少于多数（黄）；其余正常。
+        老师可以取消回去让学生补交，也可以「仍然结束课堂」（带 confirmIncomplete 重试）。 */}
+    {modal?.kind === 'end' ? (() => {
+      const summary = modal.summary;
+      const warnings = summary?.warningCount > 0;
+      return <Modal title={warnings ? '还有学生未提交作品' : '确认结束课堂？'} busy={busy} error={error} onClose={closeModal}
+        footer={<><button className="secondary-button" onClick={closeModal}>{warnings ? '返回课堂' : '取消'}</button>
+          <button className="primary-button" disabled={!allowed('canEnd') || busy} onClick={actAndClose}>
+            {busy ? '处理中…' : warnings ? '仍然结束课堂' : '确认结束'}
+          </button></>}>
+        {summary ? <>
+          <InfoStrip items={[
+            { label: '课堂', value: current?.title || '—' },
+            { label: '学生', value: `${summary.studentCount} 人` },
+            { label: '作品', value: `${summary.totalWorks} 件` },
+            { label: '多数同学', value: summary.majorityCount ? `${summary.majorityCount} 件` : '暂无' },
+          ]} />
+          {warnings
+            ? <Notice tone="danger">
+              还有 {summary.missingCount} 名学生未提交作品
+              {summary.belowPeerCount ? `，${summary.belowPeerCount} 名学生少于多数同学` : ''}。
+              结束后这节课就不能再补交作品了，请确认。
+            </Notice>
+            : <Notice tone="success">本节课所有学生都已提交作品。</Notice>}
+          <div className="table-wrap"><table>
+            <thead><tr><th>学生</th><th>作品数</th><th>状态</th></tr></thead>
+            <tbody>{summary.items.map((item) => <tr key={item.studentId}>
+              <td><strong>{item.studentName || item.studentLogin || '—'}</strong>
+                {item.studentLogin ? <span className="muted"> · {item.studentLogin}</span> : null}</td>
+              <td>{item.workCount} 件</td>
+              <td><StateBadge value={item.warning} map={SUBMISSION_STATE} /></td>
+            </tr>)}</tbody>
+          </table></div>
+        </> : <p className="muted">正在读取提交汇总…</p>}
+      </Modal>;
+    })() : null}
 
     {/* 005-03E 解散课堂确认 */}
     {modal?.kind === 'dissolve' ? <Modal title="解散课堂确认" busy={busy} error={error} onClose={closeModal}
