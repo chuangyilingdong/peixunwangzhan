@@ -207,10 +207,13 @@ try {
       if (round < 3) assert.equal(meta.archive?.state, 'PENDING', `第 ${round} 轮不该放弃`);
       else assert.equal(meta.archive?.state, 'FAILED', '到上限了还停在 PENDING（会无限重试）');
     }
-    // 最后的保底：连一次都搬不回来时，下载仍然给上游地址（总比 404 好），但这是**异常路径**
-    const fallback = await prepareFileDownload(ctx, await rowOf(badId));
-    assert.equal(fallback.status, 302, '归档彻底失败后连保底跳转都没了');
-    assert.equal(fallback.redirectUrl, deadUpstream);
+    // 最后的兜底：连一次都搬不回来时，**服务器转发也取不到** —— 这时候给一句明确的错误，
+    // 而不是把浏览器跳到一个连不上的上游地址（2026-11-02 起浏览器不再接触上游）
+    let proxyError = null;
+    try { await prepareFileDownload(ctx, await rowOf(badId)); }
+    catch (error) { proxyError = error; }
+    assert.ok(proxyError, '上游彻底不可达时居然没报错');
+    assert.equal(proxyError.code, 'UPSTREAM_TEMPORARILY_UNAVAILABLE', `错误码不对：${proxyError.code}`);
   });
 
   await check('③d ⭐ 归档失败时**由服务器转发字节**（不再 302 到上游，浏览器不会破图）', async () => {
