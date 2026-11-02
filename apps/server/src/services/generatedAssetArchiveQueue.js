@@ -41,6 +41,9 @@ const DEADLINE_MS = positiveInt(process.env.AI_ARCHIVE_DEADLINE_MS, 24 * 60 * 60
 // （见 routes/fileAssets.js 的 ARCHIVE_WAIT_MS），10 秒的空转窗口会让"刚生成完的图"
 // 多等一整个 tick。2 秒一轮是一次索引查询，代价可以忽略。
 const TICK_MS = positiveInt(process.env.AI_ARCHIVE_TICK_MS, 2000, 60000);
+/** 失败多久之后放回队列重试；以及最多重试多少轮（每轮 3 次）。 */
+const RETRY_AFTER_MS = positiveInt(process.env.AI_ARCHIVE_RETRY_AFTER_MS, 60 * 60 * 1000, 24 * 60 * 60 * 1000);
+const MAX_RETRY_ROUNDS = positiveInt(process.env.AI_ARCHIVE_MAX_RETRY_ROUNDS, 24, 200);
 /** 单次取多少条来挑（按 priority/最老排序在这一批里做，不依赖 JSON 的 SQL 排序）。 */
 const BATCH = 40;
 
@@ -183,6 +186,8 @@ export async function drainArchiveQueue() {
 }
 
 let timer = null;
+let lastSweepAt = 0;
+const SWEEP_EVERY_MS = 10 * 60 * 1000;
 
 /**
  * 启动后台归档循环。**幂等**：重复调用只会有一个定时器。
@@ -197,6 +202,11 @@ export function startGeneratedAssetArchiveWorker() {
       state.lastError = String(error?.message || error).slice(0, 200);
       console.warn('[归档] 本轮出错：', state.lastError);
     });
+    // 每 10 分钟扫一次"失败过一小时"的行，放回队列（不阻塞收件）
+    if (Date.now() - lastSweepAt > SWEEP_EVERY_MS) {
+      lastSweepAt = Date.now();
+      requeueStaleFailures().catch(() => {});
+    }
   };
   tick();
   timer = setInterval(tick, TICK_MS);
@@ -231,6 +241,37 @@ export async function recoverStaleClaims() {
   }
   if (recovered) console.warn(`[归档] 收回了 ${recovered} 条上次被中断的归档任务`);
   return recovered;
+}
+
+/**
+ * 把**失败过一段时间**的行放回队列重试（2026-11-02）。
+ *
+ * 为什么需要：`releaseOrFail` 在 3 次失败后标 FAILED 就不再碰它 —— 一条上游抖一下，
+ * 这条产物就永远停在上游地址上（而那个地址活不过 81 小时）。这里每小时扫一次，
+ * 把 FAILED 且 `updated_at` 超过 `AI_ARCHIVE_RETRY_AFTER_MS`（默认 1 小时）的重新排队，
+ * 并把 `attempts` 归零（给新的 3 次机会），用 `retryRounds` 记住总轮数封顶，避免无限折腾。
+ */
+export async function requeueStaleFailures() {
+  const cutoff = new Date(Date.now() - RETRY_AFTER_MS).toISOString();
+  const rows = await arows(
+    "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND (storage_key IS NULL OR storage_key='') AND status='ACTIVE' AND metadata LIKE '%\"state\":\"FAILED\"%' AND updated_at < ? LIMIT 50",
+    [cutoff],
+  ).catch(() => []);
+  let requeued = 0;
+  for (const row of rows) {
+    const meta = parseJson(row.metadata, {}) || {};
+    const archive = meta.archive || {};
+    if (archive.state !== 'FAILED') continue;
+    const rounds = Number(archive.retryRounds || 0);
+    if (rounds >= MAX_RETRY_ROUNDS) continue;
+    await aq('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [
+      json({ ...meta, archive: { ...archive, state: 'PENDING', attempts: 0, retryRounds: rounds + 1, priority: false, requeuedAt: new Date().toISOString() } }),
+      new Date().toISOString(), row.id,
+    ]).catch(() => {});
+    requeued += 1;
+  }
+  if (requeued) console.warn(`[归档] 把 ${requeued} 条之前失败的重新排队（第 N 轮，最多 ${MAX_RETRY_ROUNDS} 轮）`);
+  return requeued;
 }
 
 /** 诊断用：还有多少条没归档。 */

@@ -213,6 +213,38 @@ try {
     assert.equal(fallback.redirectUrl, deadUpstream);
   });
 
+  await check('③d ⭐ 归档失败时**由服务器转发字节**（不再 302 到上游，浏览器不会破图）', async () => {
+    // 目标：浏览器永远只跟我们打交道。
+    const staged4 = await stageGeneratedAssets(
+      [{ assetUrl: upstream, mimeType: 'image/png' }],
+      { modality: 'IMAGE', jobId: 'job_p196_proxy', ownerUserId: student.id, ownerOrgId: student.org_id },
+    );
+    const proxyId = fileIdOf(staged4[0].assetUrl);
+    const before = await metaOf(proxyId);
+    await aq('UPDATE file_assets SET metadata=? WHERE id=?', [
+      JSON.stringify({ ...before, archive: { ...before.archive, state: 'FAILED' } }), proxyId,
+    ]);
+    const result = await prepareFileDownload(ctx, await rowOf(proxyId));
+    assert.ok(result.stream, '没有返回字节流（又 302 到上游了？）');
+    assert.notEqual(String(result.redirectUrl || ''), upstream, '还是跳转到上游了');
+    const chunks = [];
+    for await (const chunk of result.stream) chunks.push(chunk);
+    assert.equal(Buffer.concat(chunks).length, PNG.length, '转发出来的字节不对');
+  });
+
+  await check('⑨ 失败的行过一段时间会**重新排队**（不会永久停在上游地址）', async () => {
+    const { requeueStaleFailures } = await import('../apps/server/src/services/generatedAssetArchiveQueue.js');
+    const failedRow = await arow("SELECT id FROM file_assets WHERE metadata LIKE '%\"state\":\"FAILED\"%' AND (storage_key IS NULL OR storage_key='') LIMIT 1");
+    assert.ok(failedRow?.id, '没有 FAILED 的行可测（⑦ 应该造过一条）');
+    // 把 updated_at 拨回两小时前（真实场景：失败一小时后才重试）
+    await aq('UPDATE file_assets SET updated_at=? WHERE id=?', [new Date(Date.now() - 2 * 3600 * 1000).toISOString(), failedRow.id]);
+    const requeued = await requeueStaleFailures();
+    assert.ok(requeued >= 1, '一条都没放回队列');
+    const meta = await metaOf(failedRow.id);
+    assert.equal(meta.archive?.state, 'PENDING', '没回到 PENDING');
+    assert.equal(Number(meta.archive?.attempts || 0), 0, 'attempts 没归零（会立刻又被判失败）');
+  });
+
   await check('⑧ 非 http(s) 产物原样返回（data:/mock: 本来就在我们库里）', async () => {
     const kept = await stageGeneratedAssets([{ assetUrl: 'mock://generation/x', mimeType: 'text/plain' }], { modality: 'TEXT', jobId: 'job_p196_text' });
     assert.equal(kept[0].assetUrl, 'mock://generation/x');

@@ -3,6 +3,7 @@
 import { createReadStream } from 'node:fs';
 import { copyFile, mkdir, open, stat, rm } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import path from 'node:path';
 import {
   audit,
@@ -42,6 +43,50 @@ const PREVIEW_LINK_TTL_SECONDS = 3600;
  * 真等到超时（队列被大文件占满 / 上游彻底不可达）才退回 302 上游作为保底。
  */
 const ARCHIVE_WAIT_MS = Math.max(0, Number(process.env.ARCHIVE_DOWNLOAD_WAIT_MS ?? 30000) || 0);
+
+/**
+ * 兜底：**由我们服务器去上游取字节，边取边转发**（2026-11-02）。
+ *
+ * 为什么不用 302：上游 CDN 从国内网络时通时不通（实测同一地址连打三次：20s 超时、20s 超时、
+ * 1.5s 成功）。把浏览器指过去 = 一半概率是破图。而**我们服务器访问那个 CDN 一直很稳**
+ * （7 天归档 0 失败）—— 所以兜底走服务器转发，浏览器永远只跟我们打交道。
+ *
+ * ⚠️ 这条只在"等到超时 / 归档失败"时才走，正常路径根本不经过（字节走 OSS 302）。
+ * ⚠️ 必须原样转发 `Range`：视频要拖进度条，206 与 content-range 都得带出去。
+ * ⚠️ 用流式（Readable.fromWeb），不把 20MB 读进内存。
+ */
+async function proxyUpstreamBytes(ctx, sourceUrl, { fallbackMime = '', timeoutMs = 120000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref?.();
+  // 浏览器断线就别继续拉了（学生切走页面时别白占出口）
+  try { ctx.req?.once?.('close', () => controller.abort()); } catch { /* 没有 req 就算了 */ }
+  const range = String(ctx.req?.headers?.range || '').trim();
+  let response;
+  try {
+    response = await fetch(sourceUrl, { signal: controller.signal, headers: range ? { range } : {} });
+  } catch (error) {
+    clearTimeout(timer);
+    throw errors.badRequest('素材还在转存，请稍后再试', 'UPSTREAM_TEMPORARILY_UNAVAILABLE');
+  }
+  if (!response.ok || !response.body) {
+    clearTimeout(timer);
+    throw errors.badRequest('素材还在转存，请稍后再试', 'UPSTREAM_TEMPORARILY_UNAVAILABLE');
+  }
+  const headers = {
+    'content-type': response.headers.get('content-type') || fallbackMime || 'application/octet-stream',
+    'cache-control': 'private, no-store',
+    'x-content-type-options': 'nosniff',
+  };
+  for (const name of ['content-length', 'accept-ranges', 'content-range']) {
+    const value = response.headers.get(name);
+    if (value) headers[name] = value;
+  }
+  const stream = Readable.fromWeb(response.body);
+  stream.on('close', () => clearTimeout(timer));
+  stream.on('error', () => clearTimeout(timer));
+  return { __fileResponse: true, status: response.status === 206 ? 206 : 200, headers, stream };
+}
 
 /** 这一行是不是"生成成功但字节还没搬回来"的占位行。 */
 function isPendingArchive(file) {
@@ -324,8 +369,9 @@ export async function prepareFileDownload(ctx, file) {
   if (isPendingArchive(file)) {
     const fresh = await kickAndWaitArchive(file);
     if (fresh && String(fresh.storage_key || '').trim()) return prepareFileDownload(ctx, fresh);
-    await audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, archiveState: archiveMeta.state, upstream: true });
-    return { __fileResponse: true, status: 302, redirectUrl: String(archiveMeta.sourceUrl) };
+    // 等到超时 / 归档失败 → **由我们服务器转发字节**（2026-11-02）
+    await audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, archiveState: archiveMeta.state, proxied: true });
+    return proxyUpstreamBytes(ctx, String(archiveMeta.sourceUrl), { fallbackMime: file.mime_type || '' });
   }
   // OSS 行：**不经过我们转发字节**，而是 302 到带签名的临时地址（见 services/fileStorage.js）。
   // 为什么必须这样：这台机的公网出口只有 5 Mbps，媒体全从它出去会拖慢所有人。
@@ -396,6 +442,9 @@ export async function prepareWorkImage(ctx, file) {
   if (isPendingArchive(file)) {
     const fresh = await kickAndWaitArchive(file);
     if (fresh && String(fresh.storage_key || '').trim()) return prepareWorkImage(ctx, fresh);
+    // 等不到 → **服务端转发**，保证作品图不出现破图
+    const archive = parseJson(file.metadata, {})?.archive || {};
+    return proxyUpstreamBytes(ctx, String(archive.sourceUrl), { fallbackMime: file.mime_type || '' });
   }
   // Keep previews aligned with the upload policy. The stream below enforces this
   // again for OSS rows whose metadata or response headers are missing/stale.
@@ -913,6 +962,8 @@ export async function prepareFilePreview(ctx, file, { ossOffload = false } = {})
   if (isPendingArchive(file)) {
     const fresh = await kickAndWaitArchive(file);
     if (fresh && String(fresh.storage_key || '').trim()) return prepareFilePreview(ctx, fresh, { ossOffload });
+    const archive = parseJson(file.metadata, {})?.archive || {};
+    return proxyUpstreamBytes(ctx, String(archive.sourceUrl), { fallbackMime: file.mime_type || '' });
   }
   const root = uploadRoot();
   const storageKey = String(file.storage_key || '').replaceAll('\\', '/');
