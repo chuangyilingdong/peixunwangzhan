@@ -211,7 +211,8 @@ console.log('⑨ 课包锁「音频怎么用」（用户 2026-09-21 口径：只
 check('后台下拉只有两档，且只对「能连音频」的框体显示（视频 + 全能参考/未锁）', () => {
   const admin = read('apps/admin/src/components/CourseManagement.jsx');
   assert.match(admin, /label="音频怎么用"/, '要有这一项');
-  assert.match(admin, /modality === 'VIDEO' && \(box\.inputMode === 'OMNI_REFERENCE' \|\| !box\.inputMode\)/, '只对能连音频的框体显示');
+  // 2026-11-02：多了「文生视频 / 全能参考（自动）」这一档锁 —— 它同样能连音频当参考，所以也要显示
+  assert.match(admin, /modality === 'VIDEO' && \(box\.inputMode === 'OMNI_REFERENCE' \|\| box\.inputMode === AUTO_TEXT_OMNI_MODE \|\| !box\.inputMode\)/, '只对能连音频的框体显示');
   assert.match(admin, /value="LIP_SYNC">对口型/, '第一档叫对口型');
   assert.match(admin, /value="VOICE_REFERENCE">声音参考/, '第二档叫声音参考');
   assert.doesNotMatch(admin, /remix_source|reference_only/, '另外两档（重新配乐/只作参考）按口径不做');
