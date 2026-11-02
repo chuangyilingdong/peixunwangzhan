@@ -45,7 +45,7 @@ SET @has_column := (
      AND column_name = 'client_task_id'
 );
 SET @ddl := IF(@has_column = 0,
-  'ALTER TABLE `vibecoding_submissions` ADD COLUMN `client_task_id` VARCHAR(200) NOT NULL DEFAULT '''''' AFTER `conversation_id`',
+  'ALTER TABLE `vibecoding_submissions` ADD COLUMN `client_task_id` VARCHAR(200) NOT NULL DEFAULT '''' AFTER `conversation_id`',
   'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
