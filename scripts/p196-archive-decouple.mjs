@@ -65,10 +65,19 @@ try {
       res.end(PNG);
       return;
     }
+    // 慢一点的上游：用来把"归档正在搬（ARCHIVING）"这个窗口撑开，复现生产那 3 秒
+    if (req.url.startsWith('/slow.png')) {
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'image/png', 'content-length': String(PNG.length) });
+        res.end(PNG);
+      }, 600);
+      return;
+    }
     res.writeHead(404).end();
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const upstream = `http://127.0.0.1:${server.address().port}/ok.png`;
+  const slowUpstream = `http://127.0.0.1:${server.address().port}/slow.png`;
   // 一个确定连不上的地址（本机一个没监听的端口）
   const deadUpstream = 'http://127.0.0.1:9/never.png';
 
@@ -134,6 +143,24 @@ try {
     const preview = await prepareFilePreview(ctx, await rowOf(previewId));
     assert.ok(preview && (preview.stream || preview.redirectUrl), '预览没拿到字节');
     assert.equal((await metaOf(previewId)).archive?.state, 'ARCHIVED');
+  });
+
+  await check('③c ⭐ 归档**正在搬**（ARCHIVING）时也不 404 —— 生产就是死在这 3 秒里', async () => {
+    // 2026-11-02 生产实证：产物建好 0.56 秒后队列就认领了（PENDING→ARCHIVING），
+    // 3.7 秒后归档完成。学生点开正好落在 ARCHIVING 这个窗口 —— 而第一版的判断只认 PENDING，
+    // 于是掉到本地分支报 FILE_STORAGE_NOT_FOUND（404），表现就是"刚生成完是破图、刷新才好"。
+    const staged3 = await stageGeneratedAssets(
+      [{ assetUrl: slowUpstream, mimeType: 'image/png' }],
+      { modality: 'IMAGE', jobId: 'job_p196_archiving', ownerUserId: student.id, ownerOrgId: student.org_id },
+    );
+    const archivingId = fileIdOf(staged3[0].assetUrl);
+    drainArchiveQueue();                       // 认领（不 await 它跑完）
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal((await metaOf(archivingId)).archive?.state, 'ARCHIVING', '没进入 ARCHIVING 窗口，这条用例失去意义');
+    const result = await prepareFileDownload(ctx, await rowOf(archivingId));
+    assert.notEqual(String(result.redirectUrl || ''), slowUpstream, '又退回上游了（ARCHIVING 没被当成待归档）');
+    assert.ok(result.stream || result.redirectUrl, '既没有本地流也没有跳转地址');
+    assert.equal((await metaOf(archivingId)).archive?.state, 'ARCHIVED');
   });
 
   await check('④ 后台队列把字节填进同一行（storage_key 有值、ARCHIVED、大小对）', async () => {

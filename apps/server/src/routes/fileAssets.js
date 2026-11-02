@@ -46,8 +46,11 @@ const ARCHIVE_WAIT_MS = Math.max(0, Number(process.env.ARCHIVE_DOWNLOAD_WAIT_MS 
 /** 这一行是不是"生成成功但字节还没搬回来"的占位行。 */
 function isPendingArchive(file) {
   const archive = parseJson(file?.metadata, {})?.archive || {};
+  // ⚠️ **必须包含 ARCHIVING**（2026-11-02 血的教训）：队列认领这一行时就把它从 PENDING 改成 ARCHIVING，
+  //    而"正在搬"的这几秒正是学生点开的时间窗 —— 只认 PENDING 的话，这 3-4 秒里读面全部 404。
+  //    现象与"占位行没等"一模一样：刚生成完是破图，刷新一下（已 ARCHIVED）就好。
   return !String(file?.storage_key || '').trim()
-    && (archive.state === 'PENDING' || archive.state === 'FAILED')
+    && (archive.state === 'PENDING' || archive.state === 'ARCHIVING' || archive.state === 'FAILED')
     && /^https?:\/\//i.test(String(archive.sourceUrl || ''));
 }
 
@@ -65,13 +68,16 @@ async function kickAndWaitArchive(file) {
   if (!file?.id) return null;
   const meta = parseJson(file.metadata, {}) || {};
   const archive = meta.archive || {};
-  if (archive.state !== 'PENDING') return null;
-  // 提到队首 + 立刻踢一下队列（默认 2 秒一轮，学生就在等，别空转）
-  const bumped = json({ ...meta, archive: { ...archive, priority: true } });
-  await aq('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [bumped, nowIso(), file.id]).catch(() => {});
-  import('../services/generatedAssetArchiveQueue.js')
-    .then((mod) => mod.drainArchiveQueue?.())
-    .catch(() => {});
+  // PENDING = 还没人搬（要踢）；ARCHIVING = 已经有 worker 在搬（只需要等）
+  if (archive.state !== 'PENDING' && archive.state !== 'ARCHIVING') return null;
+  if (archive.state === 'PENDING') {
+    // 提到队首 + 立刻踢一下队列（默认 2 秒一轮，学生就在等，别空转）
+    const bumped = json({ ...meta, archive: { ...archive, priority: true } });
+    await aq('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [bumped, nowIso(), file.id]).catch(() => {});
+    import('../services/generatedAssetArchiveQueue.js')
+      .then((mod) => mod.drainArchiveQueue?.())
+      .catch(() => {});
+  }
   const deadline = Date.now() + ARCHIVE_WAIT_MS;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 150));
