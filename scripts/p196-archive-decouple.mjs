@@ -74,7 +74,7 @@ try {
 
   const { arow, aq } = await import('../packages/database/src/store.js');
   const { stageGeneratedAssets, drainArchiveQueue, awaitArchiveIdle, recoverStaleClaims } = await import('../apps/server/src/services/generatedAssetArchiveQueue.js');
-  const { prepareFileDownload } = await import('../apps/server/src/routes/fileAssets.js');
+  const { prepareFileDownload, prepareWorkImage, prepareFilePreview } = await import('../apps/server/src/routes/fileAssets.js');
 
   const student = await arow("SELECT id, org_id FROM users WHERE login='student-1'");
   assert.ok(student, '种子库里没有 student-1');
@@ -118,6 +118,22 @@ try {
     const meta = await metaOf(fileId);
     assert.equal(meta.archive?.state, 'ARCHIVED', '等待期间没有真的去归档');
     assert.equal(meta.archive?.priority, true, '没有把该行提到队首');
+  });
+
+  await check('③b 作品图与预览在待归档窗口也**不 404**（同一个窗口、同一套等待）', async () => {
+    // 作品广场/学生主页的作品图走 prepareWorkImage、素材预览走 prepareFilePreview，
+    // 两者原来在 storage_key 为空时直接 FILE_STORAGE_NOT_FOUND —— 学生生成完立刻发布就是一片坏图。
+    const staged2 = await stageGeneratedAssets(
+      [{ assetUrl: upstream, mimeType: 'image/png' }],
+      { modality: 'IMAGE', jobId: 'job_p196_preview', ownerUserId: student.id, ownerOrgId: student.org_id },
+    );
+    const previewId = fileIdOf(staged2[0].assetUrl);
+    assert.equal((await metaOf(previewId)).archive?.state, 'PENDING');
+    const image = await prepareWorkImage(ctx, await rowOf(previewId));
+    assert.ok(image && (image.stream || image.redirectUrl), '作品图没拿到字节');
+    const preview = await prepareFilePreview(ctx, await rowOf(previewId));
+    assert.ok(preview && (preview.stream || preview.redirectUrl), '预览没拿到字节');
+    assert.equal((await metaOf(previewId)).archive?.state, 'ARCHIVED');
   });
 
   await check('④ 后台队列把字节填进同一行（storage_key 有值、ARCHIVED、大小对）', async () => {

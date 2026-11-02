@@ -43,6 +43,46 @@ const PREVIEW_LINK_TTL_SECONDS = 3600;
  */
 const ARCHIVE_WAIT_MS = Math.max(0, Number(process.env.ARCHIVE_DOWNLOAD_WAIT_MS ?? 30000) || 0);
 
+/** 这一行是不是"生成成功但字节还没搬回来"的占位行。 */
+function isPendingArchive(file) {
+  const archive = parseJson(file?.metadata, {})?.archive || {};
+  return !String(file?.storage_key || '').trim()
+    && (archive.state === 'PENDING' || archive.state === 'FAILED')
+    && /^https?:\/\//i.test(String(archive.sourceUrl || ''));
+}
+
+/**
+ * 占位行的**统一等待**（下载 / 作品图 / 预览三处共用，2026-11-02）。
+ *
+ * 为什么三处都要：`storage_key` 为空时，三个读面原来**各自**走不同的兜底 ——
+ * 下载口 302 到上游（破图根源，已改成等待），作品图与预览直接 `FILE_STORAGE_NOT_FOUND`
+ * （404）。同一个窗口、同一种"看起来像文件丢了"的故障，不该有三套行为。
+ *
+ * 返回最新的行（可能已经归档完成），或 null（超时/状态没变）。
+ * ⚠️ 只有 PENDING 才等；FAILED 立刻返回，让调用方走各自的老兜底。
+ */
+async function kickAndWaitArchive(file) {
+  if (!file?.id) return null;
+  const meta = parseJson(file.metadata, {}) || {};
+  const archive = meta.archive || {};
+  if (archive.state !== 'PENDING') return null;
+  // 提到队首 + 立刻踢一下队列（默认 2 秒一轮，学生就在等，别空转）
+  const bumped = json({ ...meta, archive: { ...archive, priority: true } });
+  await aq('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [bumped, nowIso(), file.id]).catch(() => {});
+  import('../services/generatedAssetArchiveQueue.js')
+    .then((mod) => mod.drainArchiveQueue?.())
+    .catch(() => {});
+  const deadline = Date.now() + ARCHIVE_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const fresh = await arow('SELECT * FROM file_assets WHERE id=?', [file.id]).catch(() => null);
+    if (!fresh) continue;
+    if (String(fresh.storage_key || '').trim()) return fresh;
+    if ((parseJson(fresh.metadata, {})?.archive?.state) === 'FAILED') return fresh;
+  }
+  return null;
+}
+
 const STORAGE_KINDS = new Set(['EXTERNAL_URL', 'INTERNAL_PROXY', 'PENDING']);
 const VISIBILITY_MODES = new Set(['PRIVATE', 'ORG', 'ASSIGNED_ORGS', 'PUBLIC_PLATFORM', 'PUBLIC_RELEASE']);
 const CATEGORIES = new Set(['PROMO_MATERIAL', 'PROMO_COVER', 'CLIENT_INSTALLER', 'MEDIA_ASSET', 'TEACHING_ASSET', 'GENERAL']);
@@ -275,29 +315,9 @@ export async function prepareFileDownload(ctx, file) {
   //   现在改成：**等服务端把字节搬回来再给**（下面这段有界等待），浏览器完全不碰第三方地址。
   //   真等到超时（归档队列被大文件占满 / 上游彻底不可达）才退回 302，作为最后的保底。
   const archiveMeta = parseJson(file.metadata, {})?.archive || {};
-  if (!String(file.storage_key || '').trim() && /^https?:\/\//i.test(String(archiveMeta.sourceUrl || ''))
-    && (archiveMeta.state === 'PENDING' || archiveMeta.state === 'FAILED')) {
-    if (archiveMeta.state === 'PENDING') {
-      // 学生真要看了 → 提到队首，并**立刻踢一下归档队列**（默认 2 秒一轮，别干等着）
-      const bumped = json({ ...(parseJson(file.metadata, {}) || {}), archive: { ...archiveMeta, priority: true } });
-      await aq('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [bumped, nowIso(), file.id]).catch(() => {});
-      // 动态 import 避免静态环（队列那边静态依赖本文件）
-      import('../services/generatedAssetArchiveQueue.js')
-        .then((mod) => mod.drainArchiveQueue?.())
-        .catch(() => {});
-
-      const deadline = Date.now() + ARCHIVE_WAIT_MS;
-      while (Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 150));
-        const fresh = await arow('SELECT * FROM file_assets WHERE id=?', [file.id]).catch(() => null);
-        if (!fresh) continue;
-        if (String(fresh.storage_key || '').trim()) {
-          // 搬完了 —— 用新行重走一遍（此时会走 OSS 302 那条正常路径）
-          return prepareFileDownload(ctx, fresh);
-        }
-        if ((parseJson(fresh.metadata, {})?.archive?.state) === 'FAILED') break;
-      }
-    }
+  if (isPendingArchive(file)) {
+    const fresh = await kickAndWaitArchive(file);
+    if (fresh && String(fresh.storage_key || '').trim()) return prepareFileDownload(ctx, fresh);
     await audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, archiveState: archiveMeta.state, upstream: true });
     return { __fileResponse: true, status: 302, redirectUrl: String(archiveMeta.sourceUrl) };
   }
@@ -364,6 +384,12 @@ export async function prepareWorkImage(ctx, file) {
   // ⭐ 2026-10-01：svg 也走这条（它同样是"作品里的图"）—— 它的 XSS 补偿在下面的 svgLike/attachment。
   if (file?.storage_kind !== 'INTERNAL_PROXY' || !/^image\/(png|jpeg|gif|webp|avif|svg\+xml)$/.test(mimeType)) {
     throw errors.notFound('作品图片不可用', 'WORK_IMAGE_UNAVAILABLE');
+  }
+  // 2026-11-02：占位行（刚生成、还没归档完）→ 等服务端搬完再来一次，别直接 404。
+  // 作品广场/学生主页的作品图也走这条路 —— 学生生成完立刻发布时，原来会看到一片坏图。
+  if (isPendingArchive(file)) {
+    const fresh = await kickAndWaitArchive(file);
+    if (fresh && String(fresh.storage_key || '').trim()) return prepareWorkImage(ctx, fresh);
   }
   // Keep previews aligned with the upload policy. The stream below enforces this
   // again for OSS rows whose metadata or response headers are missing/stale.
@@ -877,6 +903,11 @@ export async function prepareFilePreview(ctx, file, { ossOffload = false } = {})
   let servePath = null;
   let mimeType = file.mime_type || 'application/octet-stream';
   if (file.storage_kind !== 'INTERNAL_PROXY') throw errors.badRequest('这份素材没有可预览的文件', 'PREVIEW_UNAVAILABLE');
+  // 2026-11-02：占位行 → 等归档完成后重来（否则预览在"刚生成"的几秒里是 404）
+  if (isPendingArchive(file)) {
+    const fresh = await kickAndWaitArchive(file);
+    if (fresh && String(fresh.storage_key || '').trim()) return prepareFilePreview(ctx, fresh, { ossOffload });
+  }
   const root = uploadRoot();
   const storageKey = String(file.storage_key || '').replaceAll('\\', '/');
   if (!storageKey || storageKey.startsWith('/') || /^[A-Za-z]:/.test(storageKey) || storageKey.split('/').includes('..')) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
