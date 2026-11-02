@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS client_feedback (
   KEY idx_client_feedback_status_time (status, created_at),
   KEY idx_client_feedback_user_time (user_id, created_at),
   KEY idx_client_feedback_org_time (org_id, created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS client_feedback_attachments (
   id VARCHAR(64) NOT NULL PRIMARY KEY,
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS client_feedback_attachments (
   created_at VARCHAR(64) NOT NULL,
   KEY idx_client_feedback_attachments_feedback (feedback_id, created_at),
   KEY idx_client_feedback_attachments_file (file_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS client_feedback_messages (
   id VARCHAR(64) NOT NULL PRIMARY KEY,
@@ -55,4 +55,4 @@ CREATE TABLE IF NOT EXISTS client_feedback_messages (
   body MEDIUMTEXT NOT NULL,
   created_at VARCHAR(64) NOT NULL,
   KEY idx_client_feedback_messages_feedback (feedback_id, created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
