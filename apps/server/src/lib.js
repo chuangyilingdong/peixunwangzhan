@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { db, q, rows, row, count, json, parseJson, jsonText, transaction, aq, arows, arow, aone, acount, atransaction, amap, dialect, isMysql, SQL_MAX, SQL_MIN } from '../../../packages/database/src/store.js';
 import { AUTH_PEPPER, CORS_ALLOWED_ORIGINS } from './config.js';
-import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, inputModeShortLabel, normalizeInputModeValue, normalizeAudioRole, audioRoleShortLabel, requiresFirstFrameFor, MUSIC_MODES } from './services/modelCapabilities.js';
+import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, inputModeShortLabel, normalizeInputModeValue, normalizeAudioRole, audioRoleShortLabel, requiresFirstFrameFor, MUSIC_MODES, AUTO_TEXT_OMNI_MODE } from './services/modelCapabilities.js';
 import { previewKindFor, previewModeFor, canRenderNatively, signPreviewTicket } from './services/materialPreview.js';
 
 const TOKEN_TTL_DAYS = 7;
@@ -926,7 +926,10 @@ export async function normalizeGenerationBox(raw, { strict = false, policy = nul
     // 连几张图**不等于**就是首尾帧（连 2 张也可能要"全能参考"），所以必须由课包显式定，
     // 不能靠客户端"连了几条线"去推。只能从模型声明支持的方式里挑，挑不中就当没锁。
     const wantedMode = normalizeInputModeValue(raw.inputMode);
-    box.inputMode = wantedMode && box.inputModes.includes(wantedMode) ? wantedMode : '';
+    // 「文生视频 / 全能参考（自动）」是**课包层的组合锁**，模型不会声明它 —— 所以单独放行，
+    // 不能拿 `inputModes.includes()` 去判（那样它会被当成"挑不中"而静默退回"学生自选"）。
+    const isAutoTextOmni = wantedMode === AUTO_TEXT_OMNI_MODE;
+    box.inputMode = (isAutoTextOmni || (wantedMode && box.inputModes.includes(wantedMode))) ? wantedMode : '';
     box.inputModeLabel = inputModeShortLabel(box.inputMode, modality);
     // 「连过来的音频怎么用」——**也由课包锁**（用户 2026-09-21 口径：只要两档，驱动那档叫「对口型」）：
     //   LIP_SYNC（默认）= 第一条音频当驱动（画面跟着它动，上游缺省还会把这段音频留在产物里）；
@@ -935,7 +938,14 @@ export async function normalizeGenerationBox(raw, { strict = false, policy = nul
     box.audioRole = normalizeAudioRole(raw.audioRole);
     box.audioRoleLabel = audioRoleShortLabel(box.audioRole);
     // 锁定后"要不要画面"跟着锁定那种走：文生视频不给画面、图生/首尾帧必须给画面、全能参考给素材
-    box.requiresFirstFrame = requiresFirstFrameFor(box.inputMode ? [box.inputMode] : box.inputModes);
+    if (isAutoTextOmni) {
+      // 「文生 / 参考（自动）」：画布上**只保留"文生"与"参考"两档**，永远不出现首帧/尾帧槽 ——
+      // 学生怎么连都只会变成参考，不会掉进首尾帧（用户 2026-11-02 的要求）。
+      box.inputModes = box.inputModes.filter((mode) => mode === 'TEXT' || mode === 'OMNI_REFERENCE');
+      box.requiresFirstFrame = false;
+    } else {
+      box.requiresFirstFrame = requiresFirstFrameFor(box.inputMode ? [box.inputMode] : box.inputModes);
+    }
     box.paramOptions = { ...(box.paramOptions || {}), durations: [...capabilities.durations], audio: capabilities.audio === true };
   }
   return box;

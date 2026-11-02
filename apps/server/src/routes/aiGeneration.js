@@ -5,7 +5,7 @@ import { isCanvasEditableProjectStatus } from '../../../../packages/shared/src/c
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { assertExternalAiAllowed, assertProviderCapability, normalizeGenerationErrorMessage, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
-import { effectiveCapabilities, acceptsFirstFrame, acceptsLastFrame, inputModeShortLabel, normalizeInputModeValue, normalizeAudioRole, requestTemplateFor } from '../services/modelCapabilities.js';
+import { effectiveCapabilities, acceptsFirstFrame, acceptsLastFrame, inputModeShortLabel, normalizeInputModeValue, normalizeAudioRole, requestTemplateFor, AUTO_TEXT_OMNI_MODE } from '../services/modelCapabilities.js';
 import { PUBLIC_SITE_URL } from '../config.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { recordAiUsage } from '../services/creditUsage.js';
@@ -922,18 +922,26 @@ export async function generationOptionsFor({ context, modality, policy, selectio
     //    连 2 张图不等于就是首尾帧：锁成全能参考时，**1 张图也走参考**（不是首帧）。
     //    所以这里把 options.inputModes 收成**一种**，下游（分支、预检、模板选择）全部跟着它走 ——
     //    判断只有一处，不会再出现"客户端按一种、服务端按另一种"。
-    const lockedMode = normalizeInputModeValue(target?.inputMode);
-    options.inputModes = lockedMode && (Array.isArray(capabilities.inputModes) ? capabilities.inputModes : []).includes(lockedMode)
-      ? [lockedMode]
-      : (Array.isArray(capabilities.inputModes) ? capabilities.inputModes : ['TEXT']);
-    options.lockedInputMode = lockedMode || '';
     const references = (Array.isArray(referenceAssets) ? referenceAssets : []).filter((item) => item && item.url);
     const presetAsset = String(target?.assetUrl || '').trim();
+    // 「文生视频 / 全能参考（自动）」（2026-11-02，用户口径：「只需要文生视频或者全能参考，
+    // 其他模式都不需要」）：**有没有连线**决定走哪一种，首帧/尾帧完全不参与 ——
+    // 学生从"首帧槽"连过来的东西也会被当成参考，不会变成首尾帧。
+    const rawLocked = normalizeInputModeValue(target?.inputMode);
+    const hasAnyInput = Boolean(references.length || presetAsset
+      || String(firstFrameUrl || '').trim() || String(lastFrameUrl || '').trim());
+    const effectiveMode = rawLocked === AUTO_TEXT_OMNI_MODE
+      ? (hasAnyInput ? 'OMNI_REFERENCE' : 'TEXT')
+      : rawLocked;
+    const supportedModes = Array.isArray(capabilities.inputModes) ? capabilities.inputModes : [];
+    const lockedMode = effectiveMode && supportedModes.includes(effectiveMode) ? effectiveMode : '';
+    options.inputModes = lockedMode ? [lockedMode] : (supportedModes.length ? supportedModes : ['TEXT']);
+    options.lockedInputMode = lockedMode;
     // 锁成「全能参考」时，**锁定的方式赢过客户端的推断**：连过来的东西一律当参考发，
     // 哪怕只有一张图、哪怕客户端把它当首帧传上来的 —— 这正是用户要的"连 2 张图也可能是参考、不是首尾帧"。
-    // ⚠️ 只对**框体锁了 omni** 的情形生效：模型自己只声明 omni（而框体没锁）时维持原行为
-    //    （"能当帧就当帧"，p11 场景 5.7 正面钉着）。
-    const forceOmni = String(target?.inputMode || '').trim().toUpperCase() === 'OMNI_REFERENCE';
+    // ⚠️ 只对**框体锁了 omni**（含"文生/参考（自动）"算出 omni 的情形）生效：
+    //    模型自己只声明 omni（而框体没锁）时维持原行为（"能当帧就当帧"，p11 场景 5.7 正面钉着）。
+    const forceOmni = effectiveMode === 'OMNI_REFERENCE';
     if ((options.inputModes.includes('OMNI_REFERENCE') && (references.length || presetAsset)) || forceOmni) {
       // 全能参考：这些素材当参考发，不当首/尾帧（上游不允许混用）；框体预置素材也算一张图片参考。
       const presetResolved = await resolvableAssetUrl(presetAsset);

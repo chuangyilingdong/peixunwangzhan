@@ -49,12 +49,22 @@ const VIDEO_MODE_LABELS = {
   TEXT: '文生视频（纯文本）',
   OMNI_REFERENCE: '全能参考（多图 / 多视频 / 多音频）',
 };
+// 组合锁（2026-11-02 用户口径：「只需要文生视频或者全能参考，其他模式都不需要」）：
+// 没连线 → 文生视频；连了东西 → 全能参考（**永远不当首帧/尾帧**）。
+// ⚠️ 它不是模型能力值，只存在课包的 `inputMode` 上，所以单独列、不放进 VIDEO_MODE_LABELS。
+const AUTO_TEXT_OMNI_MODE = 'TEXT_OR_OMNI';
+const AUTO_TEXT_OMNI_LABEL = '文生视频 / 全能参考（自动：没连线就文生，连了就当参考）';
 const IMAGE_MODE_LABELS = { TEXT: '文生图（不给参考）', IMAGE_REFERENCE: '图生图（参考素材）' };
 function generationModeOptions(caps, modality) {
   const labels = String(modality).toUpperCase() === 'IMAGE' ? IMAGE_MODE_LABELS : VIDEO_MODE_LABELS;
   const supported = Array.isArray(caps?.inputModes) && caps.inputModes.length ? caps.inputModes : Object.keys(labels);
   // 只列我们提供的那几种，且这个模型得真支持（例如只会文生的模型就只出「文生视频」）
-  return Object.keys(labels).filter((value) => supported.includes(value)).map((value) => [value, labels[value]]);
+  const list = Object.keys(labels).filter((value) => supported.includes(value)).map((value) => [value, labels[value]]);
+  // 视频 + 模型同时支持文生与全能参考 → 多给一个组合锁，插在「文生视频」后面
+  if (String(modality).toUpperCase() === 'VIDEO' && supported.includes('TEXT') && supported.includes('OMNI_REFERENCE')) {
+    list.splice(1, 0, [AUTO_TEXT_OMNI_MODE, AUTO_TEXT_OMNI_LABEL]);
+  }
+  return list;
 }
 const MUSIC_MODE_OPTIONS = [['LYRICS', '歌词生音乐'], ['DESCRIPTION', '描述生音乐（平台代写词）']];
 const TEACHING_TYPE_OPTIONS = [
@@ -532,7 +542,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
                     只对**能连音频**的框体显示：音频只连得到"全能参考"的视频框体上（其余方式连线闸门直接挡住）。
                     两档在上游是两种**不同的角色**（`drive_audio` / `reference_audio`），产物差别很大（口径 81）：
                     对口型的音频会驱动画面、并被原样保留在产物音轨里；声音参考只借音色、音轨由 AI 重新生成。 */}
-                {modality === 'VIDEO' && (box.inputMode === 'OMNI_REFERENCE' || !box.inputMode) ? <div className="lesson-field-row">
+                {modality === 'VIDEO' && (box.inputMode === 'OMNI_REFERENCE' || box.inputMode === AUTO_TEXT_OMNI_MODE || !box.inputMode) ? <div className="lesson-field-row">
                   <LessonField
                     label="音频怎么用"
                     hint={box.audioRole === 'VOICE_REFERENCE'

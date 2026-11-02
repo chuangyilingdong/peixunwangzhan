@@ -18,7 +18,19 @@ export const INPUT_MODE_LABELS = Object.freeze({
   FIRST_LAST_FRAME: '首尾帧参考（首帧+尾帧）',
   OMNI_REFERENCE: '全能参考（多图/多视频/多音频）',
   IMAGE_REFERENCE: '图生图（参考素材）',
+  TEXT_OR_OMNI: '文生视频 / 全能参考（自动）',
 });
+
+/**
+ * 课包层的**组合锁**（2026-11-02，用户口径：「只需要文生视频或者全能参考，其他模式都不需要」）：
+ *   · 没连线 → 文生视频；
+ *   · 连了东西 → 全能参考（**永远不当首帧/尾帧**）。
+ *
+ * ⚠️ 它**不是模型能力值** —— 模型不会声明它（`INPUT_MODES` 里也没有），只出现在课包的
+ *    `inputMode` 上。判断处一律按"先翻译成 TEXT 或 OMNI_REFERENCE，再走原逻辑"，
+ *    不要在模型能力比较里加它（否则老模型的 available modes 会被它污染）。
+ */
+export const AUTO_TEXT_OMNI_MODE = 'TEXT_OR_OMNI';
 
 // 生图框体只有两种"生成方式"：文生图（不给参考）/ 图生图（给参考）。视频那四个不适用于图片。
 export const IMAGE_INPUT_MODES = Object.freeze(['TEXT', 'IMAGE_REFERENCE']);
@@ -29,6 +41,7 @@ export const INPUT_MODE_SHORT_LABELS = Object.freeze({
   FIRST_LAST_FRAME: '首尾帧',
   OMNI_REFERENCE: '全能参考',
   IMAGE_REFERENCE: '图生图',
+  TEXT_OR_OMNI: '文生/参考',
 });
 export function inputModeShortLabel(mode, modality = 'VIDEO') {
   const value = normalizeInputModeValue(mode);
