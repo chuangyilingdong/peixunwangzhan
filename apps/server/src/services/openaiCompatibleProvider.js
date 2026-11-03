@@ -158,12 +158,17 @@ function tokenUsage(payload) {
   //    ⚠️ 取不到就**不带这几个键**（别填 0：0 与"上游没报"在账单里是两件事）。
   const cacheHit = numberIn(usage, ['prompt_cache_hit_tokens', 'cache_hit_tokens']) ?? numberIn(details, ['cached_tokens']);
   const cacheMiss = numberIn(usage, ['prompt_cache_miss_tokens', 'cache_miss_tokens']);
+  // 推理 token 在 OpenAI/兼容渠道有顶层与 details 两种常见形状；网关日志统一读 reasoningTokens。
+  const reasoning = numberIn(usage, ['reasoning_tokens'])
+    ?? numberIn(usage.completion_tokens_details, ['reasoning_tokens'])
+    ?? numberIn(usage.output_tokens_details, ['reasoning_tokens']);
   return {
     inputTokens: input || 0,
     outputTokens: output || 0,
     totalTokens: numberIn(usage, ['total_tokens']) ?? (input || 0) + (output || 0),
     ...(cacheHit === null ? {} : { cacheHitTokens: cacheHit }),
     ...(cacheMiss === null ? {} : { cacheMissTokens: cacheMiss }),
+    ...(reasoning === null ? {} : { reasoningTokens: reasoning }),
   };
 }
 
@@ -303,6 +308,15 @@ async function parseResponse(response, modality) {
   }
 }
 
+// 思考控制由运行网关按白名单校验后传入。模板仍负责请求主体，但这四个字段
+// 必须显式覆盖模板同名字段，否则客户端选择的档位会在渠道默认值处丢失。
+function applyRuntimeReasoningControls(rendered, options) {
+  if (options.reasoningEffort !== undefined) rendered.reasoning_effort = options.reasoningEffort;
+  if (options.reasoning !== undefined) rendered.reasoning = options.reasoning;
+  if (options.thinking !== undefined) rendered.thinking = options.thinking;
+  if (options.outputConfig !== undefined) rendered.output_config = options.outputConfig;
+}
+
 // 请求体由渠道模板生成：模板里的 {{aspectRatio}} / {{resolution}} / {{durationSeconds}} / {{audio}}
 // 会被课时配置的取值替换，不再由代码写死。
 function requestBody({ modality, model, prompt, title, voice = 'alloy', options = {}, referenceAssets = [], requestTemplates = {}, modelRequestTemplates = {}, messages = null, stream = false, tools = null, toolChoice = null }) {
@@ -344,6 +358,9 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy', options 
     if (Array.isArray(messages) && messages.length && !JSON.stringify(template).includes('{{messages}}')) {
       if (Array.isArray(rendered?.messages)) rendered.messages = messages;
     }
+    // 思考控制只属于文本对话；图片/视频模板不受影响。字段在模板渲染后写入，
+    // 保证客户端显式选择优先于渠道模板中的同名字段。
+    if (normalizedModality === 'TEXT') applyRuntimeReasoningControls(rendered, options);
     if (stream) {
       rendered.stream = true;
       // 客户端（ZCode）可能带 `stream_options: { include_usage: true }` —— **原样转发**（只在流式时）：
