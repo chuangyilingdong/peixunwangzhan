@@ -350,11 +350,12 @@ export async function sessionRuntimeDetail(session, auth, students) {
       salePriceFen: await salePriceFenFor({ orgId: session.org_id, sessionId: session.id, ...(studentId ? { studentId } : {}) }) };
   };
   const works = (await arows(`SELECT work.id,work.student_id,student.display_name student_name,work.title,work.status,
-      work.submitted_at,work.project_id FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
+      work.submitted_at,work.project_id,work.auto_submitted FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
       WHERE work.org_id=? AND work.class_session_id=?`, [session.org_id, session.id])).map((work) => ({
     id: work.id, source: 'CANVAS', studentId: work.student_id, studentName: work.student_name,
     title: work.title, status: work.status, createdAt: null, updatedAt: null, submittedAt: work.submitted_at,
     projectId: work.project_id, conversationId: null, entryFile: null, previewUrl: null,
+    autoSubmitted: Number(work.auto_submitted || 0) === 1,
   }));
   works.push(...(await arows(`SELECT submission.*,student.display_name student_name FROM vibecoding_submissions submission
     JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id AND conversation.org_id=submission.org_id AND conversation.student_id=submission.student_id
@@ -364,6 +365,7 @@ export async function sessionRuntimeDetail(session, auth, students) {
     title: work.title, status: work.status, createdAt: work.created_at, updatedAt: work.updated_at,
     submittedAt: work.submitted_at, projectId: null, conversationId: work.conversation_id,
     entryFile: work.entry_file, previewUrl: null,
+    autoSubmitted: Number(work.auto_submitted || 0) === 1,
   })));
   for (const work of works) work.detailUrl = `/api/org/sessions/${encodeURIComponent(session.id)}/works/${work.source}/${encodeURIComponent(work.id)}`;
   works.sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));

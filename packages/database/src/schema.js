@@ -606,6 +606,9 @@ CREATE TABLE IF NOT EXISTS works (
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   canvas_snapshot TEXT NOT NULL,
+  -- 系统在课堂结束时自动提交（学生没点「提交作品」）。只用于给老师/学生看来源，
+  -- 不改变审核与发布规则；自动提交的 copyright_confirmed_at 为空，不能直接进广场。
+  auto_submitted INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','APPROVED','REJECTED','PUBLISHED')),
   teacher_comment TEXT,
   reviewed_by TEXT,
@@ -2646,6 +2649,9 @@ try { db.exec('ALTER TABLE works ADD COLUMN unpublish_reason TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec('ALTER TABLE works ADD COLUMN unpublished_at TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 2026-11-03：课堂结束时系统自动提交的画布作品（学生没点提交）。见 sessionAutoSubmit.js。
+try { db.exec('ALTER TABLE works ADD COLUMN auto_submitted INTEGER NOT NULL DEFAULT 0'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
 // works.status 的 CHECK 里要能容纳 UNPUBLISHED（C2）。SQLite 不能直接改 CHECK，
 // 按官方推荐重建一次表（与上面 file_assets 那次同一套做法）。
@@ -2682,17 +2688,18 @@ if (worksDdl && !worksDdl.includes("'UNPUBLISHED'")) {
       share_token TEXT,
       unpublish_reason TEXT,
       unpublished_at TEXT,
+      auto_submitted INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE CASCADE
     )`);
     db.exec(`INSERT INTO works_migrated (
       id, project_id, student_id, org_id, class_id, course_lesson_id, title, description, canvas_snapshot,
       status, teacher_comment, reviewed_by, reviewed_at, copyright_confirmed_at, copyright_confirmed_by,
-      featured_at, featured_by, featured_reason, submitted_at, is_public, share_token, unpublish_reason, unpublished_at
+      featured_at, featured_by, featured_reason, submitted_at, is_public, share_token, unpublish_reason, unpublished_at, auto_submitted
     ) SELECT
       id, project_id, student_id, org_id, class_id, course_lesson_id, title, description, canvas_snapshot,
       status, teacher_comment, reviewed_by, reviewed_at, copyright_confirmed_at, copyright_confirmed_by,
       featured_at, featured_by, featured_reason, submitted_at,
-      COALESCE(is_public, 0), share_token, unpublish_reason, unpublished_at
+      COALESCE(is_public, 0), share_token, unpublish_reason, unpublished_at, COALESCE(auto_submitted, 0)
     FROM works`);
     db.exec('DROP TABLE works');
     db.exec('ALTER TABLE works_migrated RENAME TO works');
@@ -3231,6 +3238,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_submissions (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL,
   client_task_id TEXT NOT NULL DEFAULT '',
+  auto_submitted INTEGER NOT NULL DEFAULT 0,
   student_id TEXT NOT NULL,
   org_id TEXT NOT NULL,
   class_id TEXT,
@@ -3266,6 +3274,9 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 // 口径：同一个任务里重复提交 = 覆盖（round+1），不同任务 = 各自成条。
 // 老客户端不传 taskId → 空串 → 与改动前完全一致（键退化成 (conversation, entry_file)）。
 try { db.exec("ALTER TABLE vibecoding_submissions ADD COLUMN client_task_id TEXT NOT NULL DEFAULT ''"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 2026-11-03：课堂结束后客户端自动补交（autoSubmit）。只标记来源，不改判重键。
+try { db.exec('ALTER TABLE vibecoding_submissions ADD COLUMN auto_submitted INTEGER NOT NULL DEFAULT 0'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 // 「一个对话 × 一个任务 × 一份产物」唯一（新库在这里建；老库由下面那次重建表保证）。
 // 有了它，同一任务同一产物重复提交走覆盖（round+1），不同产物/不同任务各自成条。
@@ -3343,6 +3354,7 @@ try {
         id TEXT PRIMARY KEY,
         conversation_id TEXT NOT NULL,
         client_task_id TEXT NOT NULL DEFAULT '',
+        auto_submitted INTEGER NOT NULL DEFAULT 0,
         student_id TEXT NOT NULL,
         org_id TEXT NOT NULL,
         class_id TEXT,

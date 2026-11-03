@@ -17,6 +17,7 @@ import {
 import { experienceBalanceByStudent, grantUnitsOf, isExperienceSeries, seriesTypeOf, EXPERIENCE_SERIES_TYPE } from '../services/courseGrants.js';
 import { computePoolSummary, salePriceFenSuccessSql } from '../services/computePool.js';
 import { appendLicenseGrantRevenue } from '../services/licenseLedger.js';
+import { autoSubmitSessionCanvasWorks } from '../services/sessionAutoSubmit.js';
 import { COURSE_QUOTA_SOURCES, recordQuotaChange } from '../services/courseQuotaLedger.js';
 
 /**
@@ -1167,6 +1168,7 @@ export async function handleOrg(ctx) {
     const action = sessionActionMatch[2];
     const reason = String(ctx.body?.reason || '').trim().slice(0, 500) || null;
     const now = nowIso();
+    let canvasAutoSubmit = null;
     if (action === 'start') {
       if (target.status !== 'PENDING') throw errors.conflict('只有待上课的课堂可以开始上课', 'SESSION_NOT_PENDING');
       const ready = await acount("SELECT COUNT(*) n FROM session_students WHERE session_id=? AND status='PENDING'", [target.id]);
@@ -1237,6 +1239,17 @@ export async function handleOrg(ctx) {
         submissionBelowPeerCount: submissionSummary?.belowPeerCount ?? null,
         ...settlement,
       });
+      // 2026-11-03：老师端（submissionCheck）结束时，把缺交的画布作品用服务器最后一次
+      // 自动保存的快照补交；VibeCoding 由客户端在 10 分钟宽限期内自己补交。
+      // 尽力而为：单个学生失败只记日志，不影响课堂结束。
+      if (submissionSummary) {
+        try {
+          canvasAutoSubmit = await autoSubmitSessionCanvasWorks({ session: target, ctx, actorId: auth.user.id });
+        } catch (error) {
+          // 课堂已经结束，自动提交失败不能把老师这次结束操作改判成失败。
+          console.warn(`[SESSION_END] 画布自动提交失败 session=${target.id}: ${String(error?.message || error).slice(0, 200)}`);
+        }
+      }
       releaseSessionRuntimes(target.id, 'SESSION_END');
     } else {
       if (target.status !== 'PENDING') throw errors.conflict('只有待上课的课堂可以解散', 'SESSION_NOT_PENDING');
@@ -1253,7 +1266,7 @@ export async function handleOrg(ctx) {
       FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id
       LEFT JOIN course_series series ON series.id=session.series_id LEFT JOIN users teacher ON teacher.id=session.teacher_id
       WHERE session.id=?`, [target.id]);
-    return normalizeSession(updated);
+    return { ...normalizeSession(updated), ...(canvasAutoSubmit ? { canvasAutoSubmit } : {}) };
   }
   if (part.match(/^\/sessions\/([^/]+)\/candidates$/) && method === 'GET') {
     const target = await sessionInOrg(part.match(/^\/sessions\/([^/]+)\/candidates$/)[1], { manage: false });

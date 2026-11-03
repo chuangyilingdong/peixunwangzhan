@@ -118,6 +118,12 @@ await aq(`INSERT INTO vibecoding_submissions(id,conversation_id,student_id,org_i
 await aq(`INSERT INTO work_submissions(id,work_id,project_id,student_id,org_id,round,title,description,canvas_snapshot,snapshot_version,submitted_at,created_at,updated_at)
   VALUES (?,?,?,?,?, 2, ?, '', '{"nodes":[],"edges":[]}', 2, ?, ?, ?)`,
 ['p203_round2', cWork.workId, cWork.projectId, studentC.id, session.org_id, 'C 的第 1 件', now, now, now]);
+// 学生 A 有一个**没提交过**的画布项目（有产出、但没点提交）：老师确认结束时应该被自动提交。
+const aProjectId = 'p203_a_project';
+const aSnapshot = { nodes: [{ id: 'p203-a-node', data: { generatedText: 'P203 学生 A 的画布产出' } }], edges: [] };
+await aq(`INSERT INTO student_projects(id,student_id,org_id,class_id,course_lesson_id,class_session_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at)
+  VALUES (?,?,?,NULL,?,?, 'A 未提交的画布作品', 'DRAFT', ?, 1, ?, ?, ?)`,
+[aProjectId, studentA.id, session.org_id, session.lesson_id, session.id, JSON.stringify(aSnapshot), now, now, now]);
 
 const server = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
 let serverLog = '';
@@ -184,6 +190,17 @@ try {
     assert.equal(confirmed.status, 200, JSON.stringify(confirmed.raw).slice(0, 300));
     const row = await arow('SELECT status FROM class_sessions WHERE id=?', [session.id]);
     assert.equal(row?.status, 'ENDED');
+  });
+
+  await check('画布：老师确认结束时，缺交学生的画布作品自动提交（未确认版权）', async () => {
+    const work = await arow('SELECT * FROM works WHERE project_id=?', [aProjectId]);
+    assert.ok(work, 'A 的画布作品没有自动提交');
+    assert.equal(Number(work.auto_submitted), 1, '应标记为系统自动提交');
+    assert.equal(work.copyright_confirmed_at, null, '自动提交不能代替学生确认版权');
+    const project = await arow('SELECT status,last_submitted_output_signature FROM student_projects WHERE id=?', [aProjectId]);
+    assert.equal(project?.status, 'SUBMITTED');
+    assert.ok(project?.last_submitted_output_signature, '提交后应写入产出指纹');
+    assert.ok(Number(confirmed.data?.canvasAutoSubmit?.submitted || 0) >= 1, '结束响应应回自动提交数量');
   });
 
   // 第二场：名单里每个学生各 1 件 → 没有提醒，直接结束。

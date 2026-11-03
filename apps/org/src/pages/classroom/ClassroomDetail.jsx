@@ -129,13 +129,18 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
       if (kind === 'remove') {
         if (current?.status !== 'PENDING' || !modal.student?.studentId) throw new Error('当前不能移除该学生，请刷新名单。');
         await api.delete(`org/sessions/${encodeURIComponent(openId)}/students/${encodeURIComponent(modal.student.studentId)}`);
-      } else {
+      } else if (kind === 'end') {
         // 老师端结束课堂一律带 submissionCheck；有未提交/少于多数时，弹窗里已看过明细，
         // 再带 confirmIncomplete 让服务端放行（不是硬拦，老师有最终决定权）。
-        const body = kind === 'end'
-          ? { submissionCheck: true, ...(modal.summary?.warningCount > 0 ? { confirmIncomplete: true } : {}) }
-          : undefined;
-        await api.post(`org/sessions/${encodeURIComponent(openId)}/${kind}`, body);
+        const body = { submissionCheck: true, ...(modal.summary?.warningCount > 0 ? { confirmIncomplete: true } : {}) };
+        const result = await api.post(`org/sessions/${encodeURIComponent(openId)}/end`, body);
+        setModal(null);
+        const auto = result?.canvasAutoSubmit;
+        return auto?.submitted
+          ? `课堂已结束；已自动提交 ${auto.submitted} 名学生的画布作品。`
+          : '课堂已结束，完课结果已结算。';
+      } else {
+        await api.post(`org/sessions/${encodeURIComponent(openId)}/${kind}`);
       }
       setModal(null);
     }, { remove: '学生已移除，可以被其他课堂添加。', start: '课堂已开始。', end: '课堂已结束，完课结果已结算。', dissolve: '课堂已解散，学生已解除占用。' }[kind], permission);
@@ -237,7 +242,8 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
             {current.works?.length ? <div className="table-wrap"><table>
               <thead><tr><th>作品</th><th>学生</th><th>类型</th><th>状态</th><th>更新时间</th><th /></tr></thead>
               <tbody>{current.works.map((work) => <tr key={work.source + work.id}>
-                <td>{work.title || '未命名作品'}</td><td>{work.studentName || '—'}</td>
+                <td>{work.title || '未命名作品'}
+                  {work.autoSubmitted ? <span className="muted"> · 自动提交</span> : null}</td><td>{work.studentName || '—'}</td>
                 <td>{DELIVERY_LABEL[work.source] || work.source}</td><td>{work.status}</td>
                 <td>{formatDate(work.updatedAt || work.submittedAt || work.createdAt)}</td>
                 <td>{['CANVAS', 'VIBECODING'].includes(work.source)
@@ -354,6 +360,10 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
               <td><StateBadge value={item.warning} map={SUBMISSION_STATE} /></td>
             </tr>)}</tbody>
           </table></div>
+          <p className="muted">
+            结束后：缺交的画布作品会用服务器最后一次自动保存的版本自动提交；
+            VibeCoding 客户端会在 10 分钟内自动补交（客户端没开则收不到）。
+          </p>
         </> : <p className="muted">正在读取提交汇总…</p>}
       </Modal>;
     })() : null}

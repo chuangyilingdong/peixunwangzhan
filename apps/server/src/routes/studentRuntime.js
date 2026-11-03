@@ -200,6 +200,53 @@ async function requireSelectedClassroom(ctx, studentId, what, mismatch = '') {
   return entry.session;
 }
 
+/**
+ * 课堂结束后的自动补交宽限期（2026-11-03）。
+ *
+ * 背景：VibeCoding 的作品在学生电脑上，客户端每 5 秒轮询一次 `client-context`；
+ * 老师点「结束课堂」时课堂立即变 ENDED，客户端往往晚几秒才发现。没有宽限期的话，
+ * 这段时间的 `submit-upload` 会因 `RUNTIME_NO_ACTIVE_CLASSROOM` 被拒，自动补交永远晚一步。
+ *
+ * 宽限期只对**刚刚结束的那一堂课**开：
+ *   · 必须带 `sessionId`（客户端缓存结束前的那节课 id）；
+ *   · 学生必须在这堂课的名单里（REMOVED 不算；已完课/未完课都算）；
+ *   · 必须是 ENDED 且 `ended_at` 在宽限期内；
+ *   · 必须是声明了 VIBECODING 的课时。
+ * 过了窗口一律拒绝，防止学生往旧课堂里补交。
+ * 默认 10 分钟；`RUNTIME_AUTO_SUBMIT_GRACE_MS` 可覆盖（1 分钟 ~ 1 小时）。
+ */
+const AUTO_SUBMIT_GRACE_MS = (() => {
+  const configured = Number(process.env.RUNTIME_AUTO_SUBMIT_GRACE_MS || 0);
+  const wanted = Number.isFinite(configured) && configured > 0 ? configured : 10 * 60 * 1000;
+  return Math.max(60 * 1000, Math.min(60 * 60 * 1000, wanted));
+})();
+
+/** 解析「刚刚结束的课堂」用于自动补交；不满足宽限条件一律 403。 */
+async function requireAutoSubmitClassroom(studentId, sessionId) {
+  const requested = String(sessionId || '').trim();
+  if (!requested) {
+    throw errors.badRequest('自动提交需要带上刚刚结束的课堂 id', 'AUTO_SUBMIT_SESSION_REQUIRED');
+  }
+  const cutoff = new Date(Date.now() - AUTO_SUBMIT_GRACE_MS).toISOString();
+  const session = await arow(
+    `SELECT session.id, session.lesson_id, session.title, session.started_at, session.ended_at, session.org_id,
+            lesson.delivery_mode AS lesson_delivery_mode, lesson.delivery_modes AS lesson_delivery_modes
+       FROM class_sessions session
+       JOIN session_students part ON part.session_id = session.id
+       LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
+      WHERE session.id = ? AND part.student_id = ? AND part.status <> 'REMOVED'
+        AND session.status = 'ENDED' AND session.ended_at >= ?
+      LIMIT 1`,
+    [requested, studentId, cutoff],
+  );
+  if (!session) {
+    throw errors.forbidden('这节课的自动提交窗口已结束（或你不在名单里）', 'AUTO_SUBMIT_WINDOW_CLOSED');
+  }
+  if (!isRuntimeLesson(session)) {
+    throw errors.forbidden('这节不是 VibeCoding 课堂，不能自动提交 VibeCoding 作品', 'AUTO_SUBMIT_WRONG_CLASSROOM');
+  }
+  return session;
+}
 
 /** 相对路径里**每一段**允许的形状（与 packages/shared 的 FILE_NAME_PATTERN 同一套字符表）。 */
 const ARTIFACT_SEGMENT = /^[A-Za-z0-9\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af][A-Za-z0-9._\-\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]*$/;
@@ -474,11 +521,21 @@ export async function handleStudentRuntime(ctx) {
   //    "maxUploadBytes() + 1MB"——那是 **multipart** 路径（index.js:149）的闸，这条 JSON 路径
   //    当时实际还是默认 24MB，100MB 的业务上限因此**从未真正生效**（客户端实测 19.6MB 视频被 413）。
   if (part === '/submit-upload' && method === 'POST') {
-    const classroom = await requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品', '当前是画布课堂，不能提交 VibeCoding 作品');
-    if (ctx.body?.copyrightConfirmed !== true) {
+    // 2026-11-03：课堂结束后的自动补交（客户端带 sessionId + autoSubmit）。
+    // 自动补交允许 copyrightConfirmed=false（学生没点确认），只标记 auto_submitted；
+    // 手动提交仍然必须确认版权。
+    const autoSubmit = ctx.body?.autoSubmit === true;
+    const classroom = autoSubmit
+      ? await requireAutoSubmitClassroom(auth.user.id, ctx.body?.sessionId)
+      : await requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品', '当前是画布课堂，不能提交 VibeCoding 作品');
+    if (!autoSubmit && ctx.body?.copyrightConfirmed !== true) {
       throw errors.badRequest('提交前请确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
     }
-    return recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, collected: collectUploadedArtifacts(ctx.body) });
+    return recordSubmissionFromArtifacts({
+      ctx, auth, orgId, classroom,
+      collected: collectUploadedArtifacts(ctx.body),
+      autoSubmit,
+    });
   }
 
   return null;
@@ -628,7 +685,7 @@ function clientTaskIdFromBody(body) {
  * 步骤：① 二进制存成学生的私有资产（主产物走 fileId、被引用的图走 URL 改写）；
  *       ② 文本产物落库并改写本地引用；③ 产物清单在这一刻定格（广场靠它认版本与图）。
  */
-async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, collected }) {
+async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, collected, autoSubmit = false }) {
   const submitStartedAt = Date.now();
   const entryFile = safeArtifactName(collected.name);
   const entryKind = kindForName(entryFile);
@@ -758,7 +815,11 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
     ctx, auth, conversation, entryFile, files, artifacts, title,
     description: String(body.description || '').slice(0, 1000),
     taskId,
+    autoSubmitted: autoSubmit,
   });
+  if (submission?.autoSubmitSkipped) {
+    warnings.push('这件作品之前已经提交过，自动提交没有覆盖它');
+  }
   const dbMs = Date.now() - dbStartedAt;
   // 拍平改名 / 丢了素材这些事要让学生看见 —— 提交成功了但作品缺了东西，比提交失败更糟。
   // ⭐ 2026-09-29（客户端契约《平台接口契约-zcode.md》「作品提交」）：除了 `warnings` / `missing`

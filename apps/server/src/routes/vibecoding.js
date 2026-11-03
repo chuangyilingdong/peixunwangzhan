@@ -1120,6 +1120,8 @@ export function normalizeSubmission(value, { includeContent = false } = {}) {
     // 客户端任务标识（2026-11-02）：同一个工作区的不同任务各自成条；老记录/网页端为空串。
     // 作品投影与提交回显都带它，客户端才能判断「这个任务这件作品交过没有」。
     taskId: value.client_task_id || '',
+    // 2026-11-03：系统在课堂结束时自动补交（学生没点确认版权）。
+    autoSubmitted: Number(value.auto_submitted || 0) === 1,
     status: value.status, submittedAt: value.submitted_at,
     copyrightConfirmedAt: value.copyright_confirmed_at || null,
     isPublic: Number(value.is_public || 0) === 1,
@@ -1455,7 +1457,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       if (existing) {
         await aq(`UPDATE vibecoding_submissions SET title=?,description=?,files=?,artifacts=?,transcript=?,entry_file=?,round=round+1,status='PENDING',
              teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,submitted_at=?,updated_at=?,
-             copyright_confirmed_at=?,copyright_confirmed_by=?,is_public=0,share_token=NULL,published_at=NULL,published_by=NULL,
+             copyright_confirmed_at=?,copyright_confirmed_by=?,auto_submitted=0,is_public=0,share_token=NULL,published_at=NULL,published_by=NULL,
              featured_at=NULL,unpublish_reason=NULL WHERE id=?`,
           [title, description, json(files), json(artifacts), json(transcript), entryFile, now, now, now, ownerAuth.user.id, submissionId]);
       } else {
@@ -1542,33 +1544,48 @@ export function rewriteLocalReferences(content, name, replacements) {
  *          files: Record<string,string>, artifacts: Array<object>, title: string, description?: string,
  *          taskId?: string}} input
  */
-export async function recordRuntimeSubmission({ ctx, auth, conversation, entryFile, files, artifacts, title, description = '', taskId = '' }) {
+export async function recordRuntimeSubmission({ ctx, auth, conversation, entryFile, files, artifacts, title, description = '', taskId = '', autoSubmitted = false }) {
   const now = nowIso();
   // 2026-11-02：判重键从 (对话, 产物) 升级为 (对话, 客户端任务, 产物)。
   // 同一个任务重复提交仍然覆盖（round+1）；不同任务即使入口同名也各自成条。
   // 老客户端不传 taskId → 空串 → 与改动前完全一致。
   const existing = await arow('SELECT * FROM vibecoding_submissions WHERE conversation_id = ? AND client_task_id = ? AND entry_file = ?', [conversation.id, taskId, entryFile]);
+  const existingAuto = Number(existing?.auto_submitted || 0) === 1;
+  const sameFiles = existing ? String(existing.files || '') === json(files) : false;
+  // 2026-11-03（课堂结束自动补交）：
+  //   · 学生手动交过的 → **绝不被自动提交覆盖**（返回原记录 + autoSubmitSkipped）；
+  //   · 自动交过、内容没变 → 也不重复加轮次（客户端轮询/重试要幂等）；
+  //   · 自动交过、内容变了 → 正常覆盖（round+1），标记仍为自动。
+  if (autoSubmitted && existing && (!existingAuto || sameFiles)) {
+    return {
+      ...normalizeSubmission(await arow(submissionSelect() + ' WHERE submission.id = ?', [existing.id]), { includeContent: true }),
+      autoSubmitSkipped: true,
+    };
+  }
   const submissionId = existing?.id || id('vibesub');
   const transcript = json([]);
   await atransaction(async () => {
     if (existing) {
       await aq(`UPDATE vibecoding_submissions SET title=?,description=?,files=?,artifacts=?,transcript=?,entry_file=?,round=round+1,status='PENDING',
            teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,submitted_at=?,updated_at=?,
-           copyright_confirmed_at=?,copyright_confirmed_by=?,is_public=0,share_token=NULL,published_at=NULL,published_by=NULL,
+           copyright_confirmed_at=?,copyright_confirmed_by=?,auto_submitted=?,
+           is_public=0,share_token=NULL,published_at=NULL,published_by=NULL,
            featured_at=NULL,unpublish_reason=NULL WHERE id=?`,
-        [title, description, json(files), json(artifacts), transcript, entryFile, now, now, now, auth.user.id, submissionId]);
+        [title, description, json(files), json(artifacts), transcript, entryFile, now, now,
+          autoSubmitted ? null : now, autoSubmitted ? null : auth.user.id, autoSubmitted ? 1 : 0, submissionId]);
     } else {
       await aq(`INSERT INTO vibecoding_submissions(
-           id,conversation_id,client_task_id,student_id,org_id,class_id,lesson_id,title,description,files,artifacts,transcript,entry_file,round,status,submitted_at,created_at,updated_at,
+           id,conversation_id,client_task_id,student_id,org_id,class_id,lesson_id,title,description,files,artifacts,transcript,entry_file,auto_submitted,round,status,submitted_at,created_at,updated_at,
            copyright_confirmed_at,copyright_confirmed_by
-         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [submissionId, conversation.id, taskId, auth.user.id, auth.user.orgId, conversation.class_id || null, conversation.lesson_id || null,
-          title, description, json(files), json(artifacts), transcript, entryFile, 1, 'PENDING', now, now, now, now, auth.user.id]);
+          title, description, json(files), json(artifacts), transcript, entryFile, autoSubmitted ? 1 : 0, 1, 'PENDING', now, now, now,
+          autoSubmitted ? null : now, autoSubmitted ? null : auth.user.id]);
     }
     await aq("UPDATE vibecoding_conversations SET status='SUBMITTED',updated_at=? WHERE id=?", [now, conversation.id]);
     await audit(ctx, 'VIBECODING_SUBMIT', 'VIBECODING_CONVERSATION', conversation.id,
       existing ? { round: existing.round } : null,
-      { title, entryFile, taskId: taskId || null, round: Number(existing?.round || 0) + 1, source: 'STUDENT_RUNTIME' });
+      { title, entryFile, taskId: taskId || null, autoSubmitted, round: Number(existing?.round || 0) + 1, source: 'STUDENT_RUNTIME' });
   });
   return normalizeSubmission(await arow(submissionSelect() + ' WHERE submission.id = ?', [submissionId]), { includeContent: true });
 }
@@ -1611,6 +1628,8 @@ export function vibecodingWorkItem(submission, { lessonTitle = null, seriesTitle
     // 客户端任务标识（2026-11-02）：客户端靠它判断「这个任务这件作品交过没有」。
     // 老记录/网页端为空串 —— 客户端按空串处理即可，行为与改动前一致。
     taskId: submission.client_task_id || '',
+    // 2026-11-03：课堂结束自动补交的来源标记（老师端/学生端可据此显示「系统自动提交」）。
+    autoSubmitted: Number(submission.auto_submitted || 0) === 1,
     classSessionId: classSessionId || null,
     submissionRound: Number(submission.round || 1),
     submissions: [],
