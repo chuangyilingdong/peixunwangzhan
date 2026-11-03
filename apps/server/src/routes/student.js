@@ -1,4 +1,4 @@
-import { asPositiveInteger, audit, clearAuthCookies, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, workCoverFromSnapshot, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, likeKeyword, likeEscapeClause, ensureHomeToken, avatarUrlOf } from '../lib.js';
+import { asPositiveInteger, audit, clearAuthCookies, displayAuthorized, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, workCoverFromSnapshot, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, likeKeyword, likeEscapeClause, ensureHomeToken, avatarUrlOf } from '../lib.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
@@ -967,10 +967,13 @@ export async function handleStudent(ctx) {
         const latestSubmission = await arow('SELECT round FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [existingWork.id]);
         round = Number(latestSubmission?.round || 0) + 1;
         await aq(
+          // 手动重新提交 = 学生这次真的点了确认：把展示授权写上、并清掉「自动提交」标记
+          // （与 VibeCoding 手动路径同口径；否则一件自动交过的作品永远显示为"自动提交"）。
           `UPDATE works SET title=?,description=?,canvas_snapshot=?,status='PENDING',teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,
-             featured_at=NULL,featured_by=NULL,featured_reason=NULL,unpublish_reason=NULL,unpublished_at=NULL,submitted_at=?
+             featured_at=NULL,featured_by=NULL,featured_reason=NULL,unpublish_reason=NULL,unpublished_at=NULL,submitted_at=?,
+             copyright_confirmed_at=?,copyright_confirmed_by=?,auto_submitted=0
            WHERE id=? AND project_id=? AND student_id=? AND org_id=?`,
-          [fresh.title, description, json(canvasSnapshot), now, existingWork.id, fresh.id, auth.user.id, auth.user.orgId],
+          [fresh.title, description, json(canvasSnapshot), now, now, auth.user.id, existingWork.id, fresh.id, auth.user.id, auth.user.orgId],
         );
         workId = existingWork.id;
       } else {
@@ -1323,7 +1326,7 @@ export async function handleStudent(ctx) {
           canSubmitProject: project?.status === 'DRAFT' && !project?.deleted_at,
           canRequestPublish: work.status === 'APPROVED' && !pendingPublishRequest,
           canWithdrawPublishRequest: Boolean(pendingPublishRequest),
-          canTogglePublic: ['APPROVED', 'PUBLISHED'].includes(work.status) && Boolean(work.copyright_confirmed_at),
+          canTogglePublic: ['APPROVED', 'PUBLISHED'].includes(work.status) && displayAuthorized(work),
         },
         sharing: (() => {
           const isPublic = Number(work.is_public || 0) === 1;

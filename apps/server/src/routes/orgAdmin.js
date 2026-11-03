@@ -1447,6 +1447,8 @@ export async function handleOrg(ctx) {
       unpublishReason: submission.unpublish_reason || null,
       pendingReportCount: 0,
       copyrightConfirmedAt: submission.copyright_confirmed_at || null,
+      // 课堂结束自动补交视为已同意展示（2026-11-03），机构端据此显示正确的授权文案。
+      autoSubmitted: Number(submission.auto_submitted || 0) === 1,
     }));
 
     // 作品预览里"做出来的东西"现在可能是**我们自己存的**生成产物（生成成功时归档成学生私有素材），

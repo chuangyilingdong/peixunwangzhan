@@ -3,7 +3,7 @@ import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, inProgressClassroomSql,
-  canvasMediaFrom, workCoverFromSnapshot,
+  canvasMediaFrom, workCoverFromSnapshot, displayAuthorized,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -403,7 +403,8 @@ export async function handleWorks(ctx, part, method) {
     const now = nowIso();
     if (published) {
       if (!['PENDING', 'APPROVED', 'PUBLISHED', 'UNPUBLISHED'].includes(work.status)) throw errors.conflict('仅学生已提交的作品可以发布到作品广场（被驳回的作品需学生重新提交）', 'WORK_NOT_SUBMITTED');
-      if (!work.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布到作品广场', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+      // 2026-11-03 用户口径：学生作品不存在版权；课堂结束自动提交（auto_submitted=1）视为已同意展示。
+      if (!displayAuthorized(work)) throw errors.conflict('学生尚未确认展示授权（且不是课堂结束自动提交），不能发布到作品广场', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
       // ⭐ 2026-09-26 用户口径：**课堂还在进行中的作品不进平台后台，也不许在这里发布**。
       //    课堂没结束时学生还能继续提交，而一发成 PUBLISHED，状态机里 `PUBLISHED → PENDING` 不合法
       //    → 学生那边只会看到「当前作品状态不允许重新提交」，只能等平台下架（现场就是这么卡住的）。
@@ -590,7 +591,8 @@ export async function handleWorks(ctx, part, method) {
     if (!Object.hasOwn(ctx.body || {}, 'published') || typeof ctx.body.published !== 'boolean') throw errors.badRequest('请选择是否发布到作品广场', 'WORK_PLAZA_FLAG_REQUIRED');
     const now = nowIso();
     if (ctx.body.published) {
-      if (!submission.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布到作品广场', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+      // 同画布那条：自动提交（auto_submitted=1）视为已同意展示。
+      if (!displayAuthorized(submission)) throw errors.conflict('学生尚未确认展示授权（且不是课堂结束自动提交），不能发布到作品广场', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
       // 同画布那条：课堂还在进行中的作品不许发布（口径与理由见 lib.js 的 inProgressClassroomSql）。
       // VibeCoding 这条的课堂要从 conversation 绕一下。
       // 课堂要从 conversation 绕一下（与列表筛选里 vibecodingSessionIdExpr 取的是同一个东西）

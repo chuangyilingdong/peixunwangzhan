@@ -11,7 +11,8 @@
  *   · 空画布 → 跳过；
  *   · 已评分/已归档的项目、已发布到广场的作品 → 跳过（手动流程也不允许）；
  *   · 自动提交的作品 `copyright_confirmed_at` 为空、`auto_submitted=1`：
- *     老师能看到、能点评，但**不能直接发布到作品广场**（学生之后可补确认版权）。
+ *     老师能看到、能点评；按 2026-11-03 用户口径「学生作品不存在版权」，
+ *     **自动提交视为已同意展示**，平台可以直接发布到作品广场。
  *
  * ⚠️ 这是**尽力而为**：单个学生失败只记日志、不抛给老师；老师点结束课堂不能因为
  *    「某个学生的快照坏了」而失败。
@@ -19,7 +20,7 @@
 import { aq, arow, arows, atransaction, audit, id, json, nowIso } from '../lib.js';
 import { canvasOutputSignature, newCanvasOutputKeys } from '../../../../packages/shared/src/canvasOutput.js';
 
-const AUTO_DESCRIPTION = '课堂结束时由系统自动提交（学生未点确认版权）';
+const AUTO_DESCRIPTION = '课堂结束时由系统自动提交（学生未手动提交）';
 const AUTO_SNAPSHOT_LABEL = '课堂结束自动提交';
 const PROJECT_STATUSES = new Set(['DRAFT', 'SUBMITTED']);
 const RESUBMITTABLE_WORK_STATUSES = new Set(['PENDING', 'APPROVED', 'REJECTED', 'UNPUBLISHED']);

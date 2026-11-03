@@ -1429,6 +1429,19 @@ export function workCoverFromSnapshot(canvasSnapshot, urlFor) {
   return url || null;
 }
 
+/**
+ * 「展示授权」的唯一判定（2026-11-03 用户口径：学生作品不存在版权）。
+ *
+ *   · 学生手动提交时确认过 → `copyright_confirmed_at` 非空；
+ *   · 课堂结束由系统自动提交 → `auto_submitted=1`，**视为已同意展示**
+ *     （客户端自动补交固定带 `copyrightConfirmed: false`，不会伪造确认）。
+ *
+ * 平台发布到广场、公开列表/详情、学生端公开开关都只认这一条，别再各自写一遍。
+ */
+export function displayAuthorized(value) {
+  return Boolean(value?.copyright_confirmed_at) || Number(value?.auto_submitted || 0) === 1;
+}
+
 export async function normalizeWork(value, { includeSnapshot = false } = {}) {
   if (!value) return null;
   const result = {
@@ -1462,6 +1475,8 @@ export async function normalizeWork(value, { includeSnapshot = false } = {}) {
     reviewedAt: value.reviewed_at || null,
     copyrightConfirmedAt: value.copyright_confirmed_at || null,
     copyrightConfirmedBy: value.copyright_confirmed_by || null,
+    // 课堂结束由系统自动提交（2026-11-03）：视为已同意展示，管理端据此放开「发布到广场」。
+    autoSubmitted: Number(value.auto_submitted || 0) === 1,
     featured: Boolean(value.featured_at),
     featuredAt: value.featured_at || null,
     featuredBy: value.featured_by || null,

@@ -159,7 +159,7 @@ export async function handlePublicCommunication(ctx) {
       JOIN users user ON user.id=work.student_id
       LEFT JOIN organizations organization ON organization.id=work.org_id
       WHERE work.is_public=1 AND work.status='PUBLISHED' AND work.share_token IS NOT NULL
-        AND work.copyright_confirmed_at IS NOT NULL
+        AND (work.copyright_confirmed_at IS NOT NULL OR work.auto_submitted=1)
       ORDER BY work.featured_at DESC NULLS LAST, work.submitted_at DESC
       LIMIT ?
     `, [limit])), async (row) => await publicWorkRow(row));
@@ -217,7 +217,7 @@ export async function handlePublicCommunication(ctx) {
       JOIN users user ON user.id=submission.student_id
       LEFT JOIN organizations organization ON organization.id=submission.org_id
       WHERE submission.is_public=1 AND submission.share_token IS NOT NULL
-        AND submission.copyright_confirmed_at IS NOT NULL
+        AND (submission.copyright_confirmed_at IS NOT NULL OR submission.auto_submitted=1)
       ORDER BY submission.featured_at DESC NULLS LAST, submission.submitted_at DESC
       LIMIT ?
     `, [limit])), async (item) => await publicVibeCodingWorkRow(item));
@@ -234,7 +234,7 @@ export async function handlePublicCommunication(ctx) {
       JOIN users user ON user.id=submission.student_id
       LEFT JOIN organizations organization ON organization.id=submission.org_id
       WHERE submission.share_token=? AND submission.is_public=1
-        AND submission.copyright_confirmed_at IS NOT NULL
+        AND (submission.copyright_confirmed_at IS NOT NULL OR submission.auto_submitted=1)
     `, [publicVibeCodingWorkMatch[1]]);
     if (!work) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');
     return await publicVibeCodingWorkRow(work, { includeFiles: true });
@@ -982,11 +982,11 @@ async function publicVibeCodingWorkRow(row, { includeFiles = false, includePiece
 
 /**
  * 公开取一份已发布的 VibeCoding 作品（按分享码）。
- * 发布口径与列表/详情一致：is_public=1 且学生确认过展示授权。
+ * 发布口径与列表/详情一致：is_public=1，且学生确认过展示授权或作品是课堂结束自动提交。
  */
 async function publicSubmission(token) {
   const submission = await arow(
-    'SELECT * FROM vibecoding_submissions WHERE share_token=? AND is_public=1 AND copyright_confirmed_at IS NOT NULL',
+    'SELECT * FROM vibecoding_submissions WHERE share_token=? AND is_public=1 AND (copyright_confirmed_at IS NOT NULL OR auto_submitted=1)',
     [token],
   );
   if (!submission) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');

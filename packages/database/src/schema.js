@@ -606,8 +606,9 @@ CREATE TABLE IF NOT EXISTS works (
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   canvas_snapshot TEXT NOT NULL,
-  -- 系统在课堂结束时自动提交（学生没点「提交作品」）。只用于给老师/学生看来源，
-  -- 不改变审核与发布规则；自动提交的 copyright_confirmed_at 为空，不能直接进广场。
+  -- 系统在课堂结束时自动提交（学生没点「提交作品」）。只用于给老师/学生看来源；
+  -- 2026-11-03 用户口径「学生作品不存在版权」：自动提交**视为已同意展示**，
+  -- 即使 copyright_confirmed_at 为空，平台也可以发布到作品广场。
   auto_submitted INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','APPROVED','REJECTED','PUBLISHED')),
   teacher_comment TEXT,
@@ -3317,7 +3318,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS user_mfa_credentials (
 db.exec('CREATE INDEX IF NOT EXISTS idx_user_mfa_status ON user_mfa_credentials(status)');
 
 // ── VibeCoding 作品发布到作品广场 ─────────────────────────────────────────────
-// 学生提交时确认版权与展示授权；平台在「平台作品库」决定是否发布到作品广场（share_token 前缀 vbt_）。
+// 学生提交时确认展示授权；平台在「平台作品库」决定是否发布到作品广场（share_token 前缀 vbt_）。
+// 2026-11-03：课堂结束自动补交（auto_submitted=1）视为已同意展示，发布门禁同样放行。
 try { db.exec('ALTER TABLE vibecoding_submissions ADD COLUMN copyright_confirmed_at TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec('ALTER TABLE vibecoding_submissions ADD COLUMN copyright_confirmed_by TEXT'); }
