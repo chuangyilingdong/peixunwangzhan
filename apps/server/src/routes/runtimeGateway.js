@@ -479,15 +479,52 @@ function publicUsage(usage) {
  * ⚠️ `retry_count` 在这条路上恒为 0：网关不给流式请求做候选渠道回退（回退由 config 层的
  *    primary/backup 在非流式那条路做）。真加了回退，这里要跟着变成真实的计数。
  */
-function logGatewayRound({ provider, model, channelId, mode, startedAt, firstTokenAt = null, status, errorCode = '', retryCount = 0, cacheHit = null, cacheMiss = null }) {
+export function runtimeReasoningControls(body) {
+  const controls = {};
+  const effort = body?.reasoning_effort;
+  if (effort !== undefined) {
+    if (typeof effort !== 'string' || !effort.trim()) {
+      throw errors.badRequest('reasoning_effort 必须是非空字符串', 'RUNTIME_REASONING_INVALID');
+    }
+    controls.reasoningEffort = effort.trim().slice(0, 64);
+  }
+  for (const [sourceName, targetName] of [
+    ['reasoning', 'reasoning'],
+    ['thinking', 'thinking'],
+    ['output_config', 'outputConfig'],
+  ]) {
+    const value = body?.[sourceName];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== 'object' || Array.isArray(value)) {
+      throw errors.badRequest(sourceName + ' 必须是 JSON 对象', 'RUNTIME_REASONING_INVALID');
+    }
+    controls[targetName] = JSON.parse(JSON.stringify(value));
+  }
+  return controls;
+}
+
+export function runtimeReasoningLabel(controls) {
+  if (controls.reasoningEffort) return controls.reasoningEffort;
+  for (const value of [controls.reasoning, controls.outputConfig, controls.thinking]) {
+    if (typeof value?.effort === 'string' && value.effort.trim()) return value.effort.trim();
+    if (typeof value?.type === 'string' && value.type.trim()) return value.type.trim();
+  }
+  return 'provider_default';
+}
+
+function logGatewayRound({ provider, model, channelId, mode, startedAt, firstTokenAt = null, status, errorCode = '', retryCount = 0, cacheHit = null, cacheMiss = null, requestedReasoning = 'provider_default', forwardedReasoning = 'provider_default', usage = null }) {
   const total = Date.now() - startedAt;
   const ttft = firstTokenAt ? firstTokenAt - startedAt : null;
   // 缓存命中/未命中也进这一行（2026-09-29 客户端对账口径）：对账时要能从日志里直接看出来，
   // 不然账本与客户端观察对不上时无从下手。上游没返回就整段不打（老样子）。
   const cache = cacheHit === null && cacheMiss === null ? '' : ` cache_hit=${cacheHit ?? '-'} cache_miss=${cacheMiss ?? '-'}`;
+  const tokens = usage
+    ? ` input_tokens=${usage.inputTokens ?? '-'} output_tokens=${usage.outputTokens ?? '-'} reasoning_tokens=${usage.reasoningTokens ?? '-'}`
+    : '';
   console.log(`[runtimeGateway] provider=${provider} model=${model} channel=${channelId || '-'} mode=${mode || '-'}`
     + ` time_to_first_token_ms=${ttft ?? '-'} total_upstream_ms=${total} retry_count=${retryCount}`
-    + ` status=${status} error_code=${errorCode || '-'}${cache}`);
+    + ` reasoning_requested=${requestedReasoning} reasoning_forwarded=${forwardedReasoning}`
+    + ` status=${status} error_code=${errorCode || '-'}${tokens}${cache}`);
 }
 
 export async function handleRuntimeGateway(ctx) {
@@ -510,6 +547,12 @@ export async function handleRuntimeGateway(ctx) {
   }
   const stream = body.stream === true;
 
+  // 思考控制是 OpenAI-compatible 请求的一部分。这里只放行明确支持的四个字段，
+  // 不能让客户端任意 body 穿透到上游；字段类型错误必须在发送次数台账和打上游前拒绝。
+  const reasoningControls = runtimeReasoningControls(body);
+  const providerOptions = Object.keys(reasoningControls).length ? reasoningControls : undefined;
+  const requestedReasoning = runtimeReasoningLabel(reasoningControls);
+  const forwardedReasoning = requestedReasoning;
   // VibeCoding 发送次数上限（2026-09-19 用户口径，机制见 services/vibecodingLessonSettings.js）。
   // ⚠️ 位置有意放在**打上游之前**：超限的这一次既不花算力、也不进用量账，学生当场拿到原因。
   // ⚠️ 这节课没配上限时 `allowed` 恒为 true（不填 = 不拦），所以没人配置时现状一字不改。
@@ -587,7 +630,7 @@ export async function handleRuntimeGateway(ctx) {
   const roundStartedAt = Date.now();
   if (!stream) {
     try {
-      const result = await provider.generate({ modality: 'TEXT', messages, model: body.model || undefined, tools, toolChoice });
+      const result = await provider.generate({ modality: 'TEXT', messages, model: body.model || undefined, tools, toolChoice, options: providerOptions });
       // 同流式：上游把工具调用当正文吐出来时（DSML），别原样交给客户端。
       const text = stripDsml(String(result?.assets?.[0]?.metadata?.text || '').trim());
       const usage = result?.usage || result?.assets?.find((asset) => asset?.metadata?.tokens)?.metadata?.tokens || null;
@@ -598,12 +641,12 @@ export async function handleRuntimeGateway(ctx) {
         choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
         usage: publicUsage(usage),
       }));
-      logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, status: 'SUCCESS', cacheHit: usage?.cacheHitTokens ?? null, cacheMiss: usage?.cacheMissTokens ?? null });
+      logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, status: 'SUCCESS', cacheHit: usage?.cacheHitTokens ?? null, cacheMiss: usage?.cacheMissTokens ?? null, requestedReasoning, forwardedReasoning, usage });
       return { __streamed: true };
     } catch (error) {
       const normalized = normalizeProviderError(error) || {};
       await record('FAILED', { failCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });
-      logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, status: 'FAILED', errorCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });
+      logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, status: 'FAILED', errorCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN, requestedReasoning, forwardedReasoning });
       throw error;
     }
   }
@@ -633,6 +676,7 @@ export async function handleRuntimeGateway(ctx) {
     const result = await provider.generateStream({
       messages,
       model: body.model || undefined,
+      options: providerOptions,
       tools,
       toolChoice,
       streamOptions,
@@ -677,13 +721,13 @@ export async function handleRuntimeGateway(ctx) {
       usage: publicUsage(usage),
     });
     sseWrite(res, '[DONE]');
-    logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, firstTokenAt, status: 'SUCCESS', cacheHit: usage?.cacheHitTokens ?? null, cacheMiss: usage?.cacheMissTokens ?? null });
+    logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, firstTokenAt, status: 'SUCCESS', cacheHit: usage?.cacheHitTokens ?? null, cacheMiss: usage?.cacheMissTokens ?? null, requestedReasoning, forwardedReasoning, usage });
   } catch (error) {
     const normalized = normalizeProviderError(error) || {};
     await record('FAILED', { failCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });
     sseWrite(res, { error: { message: String(error?.message || '上游调用失败'), type: 'upstream_error', code: normalized.code || 'UPSTREAM_ERROR' } });
     sseWrite(res, '[DONE]');
-    logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, firstTokenAt, status: 'FAILED', errorCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });
+    logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, firstTokenAt, status: 'FAILED', errorCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN, requestedReasoning, forwardedReasoning });
   } finally {
     clearInterval(heartbeat);
     if (!res.writableEnded) res.end();

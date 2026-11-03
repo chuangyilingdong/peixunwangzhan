@@ -110,6 +110,23 @@ try {
   const ok = await call(key, { messages });
   check('④ 正常调用 → 200，OpenAI 形状回复', ok.status === 200 && typeof ok.payload?.choices?.[0]?.message?.content === 'string', `实际 ${ok.status} ${ok.text.slice(0, 200)}`);
   check('④ 回复带 model 与 usage 字段', Boolean(ok.payload?.model) && typeof ok.payload?.usage?.total_tokens === 'number', JSON.stringify(ok.payload?.usage));
+  const reasoningCall = await call(key, {
+    messages,
+    reasoning_effort: 'low',
+    reasoning: { effort: 'low' },
+    thinking: { type: 'enabled' },
+    output_config: { effort: 'low' },
+    ignored_client_field: 'must-not-pass',
+  });
+  await sleep(50);
+  check('⑪ 思考控制请求正常通过网关', reasoningCall.status === 200, `实际 ${reasoningCall.status} ${reasoningCall.text.slice(0, 160)}`);
+  check('⑪ 网关日志记录 requested/forwarded 档位',
+    /reasoning_requested=low reasoning_forwarded=low/.test(logs), logs.slice(-1200));
+  const sendsBeforeInvalid = Number((await arow("SELECT vibecoding_sends FROM session_students WHERE session_id=? AND student_id=? AND status <> 'REMOVED' ORDER BY added_at DESC LIMIT 1", [sessionId, student.id]))?.vibecoding_sends || 0);
+  const invalidReasoning = await call(key, { messages, reasoning: 'not-an-object' });
+  check('⑪ 非法思考字段在上游前被拒绝', invalidReasoning.status === 400 && /RUNTIME_REASONING_INVALID/.test(invalidReasoning.text), `实际 ${invalidReasoning.status} ${invalidReasoning.text.slice(0, 180)}`);
+  const sendsAfterInvalid = Number((await arow("SELECT vibecoding_sends FROM session_students WHERE session_id=? AND student_id=? AND status <> 'REMOVED' ORDER BY added_at DESC LIMIT 1", [sessionId, student.id]))?.vibecoding_sends || 0);
+  check('⑪ 非法思考字段不消耗发送次数', sendsAfterInvalid === sendsBeforeInvalid, `之前 ${sendsBeforeInvalid}，之后 ${sendsAfterInvalid}`);
 
   {
      
