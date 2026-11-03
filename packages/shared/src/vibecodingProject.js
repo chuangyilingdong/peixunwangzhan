@@ -398,6 +398,8 @@ export const LLM_BRIDGE = `<script>(function(){
   var TIMEOUT=120000;                              // 厂商慢起来没谱（长文/推理模型），给足；超时给一句人话
   var DEFAULT_BASE='https://api.deepseek.com/v1';  // 与平台运行时同一个默认厂商（作品侧可随时改）
   var DEFAULT_MODEL='deepseek-chat';
+  // 2026-11-03：平台为作品提供的模型（Key 只在服务端；文档里只有短期 grant）。
+  var PLATFORM_LLM_PATH='/api/works-llm/chat';
   var NET_BLOCKED='这个预览窗口关掉了作品的联网（老师端 / 平台端预览就是这样）。到分享页或作品页打开，再填 Key 就能用。';
   var realFetch=typeof window.fetch==='function'?window.fetch.bind(window):null;
 
@@ -405,6 +407,48 @@ export const LLM_BRIDGE = `<script>(function(){
     return new Response(JSON.stringify(payload),{status:200,headers:{'content-type':'application/json; charset=utf-8'}});
   }
   function fail(error,hint){return jsonResponse({ok:false,error:error,hint:hint||''});}
+
+  // 2026-11-03 作品调用模型：作品没填自己的 Key 时，走平台的代理（Key 不出服务端）。
+  // 服务端响应是平台统一的 {success,data} 信封，这里拆一层；成败仍然用 {ok} 表达（与 BYO-Key 同形状）。
+  function callPlatform(platform,body,init){
+    var payload={grant:String(platform.grant||''),messages:body.messages||[]};
+    ['temperature','max_tokens'].forEach(function(field){if(body[field]!==undefined)payload[field]=body[field];});
+    if(body.json)payload.json=true;
+    var options={method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)};
+    var controller=null;
+    if(init&&init.signal){options.signal=init.signal;}
+    else if(typeof AbortController==='function'){controller=new AbortController();options.signal=controller.signal;}
+    var timer=controller?setTimeout(function(){try{controller.abort();}catch(error){}},TIMEOUT):0;
+    var clear=function(){if(timer)clearTimeout(timer);};
+    if(!realFetch)return Promise.resolve(fail('这个浏览器不支持 fetch'));
+    var endpoint=PLATFORM_LLM_PATH;
+    try{endpoint=new URL(PLATFORM_LLM_PATH,document.baseURI||window.location.href).href;}catch(error){}
+    return realFetch(endpoint,options).then(function(response){
+      return response.text().then(function(text){
+        clear();
+        var envelope=null;
+        try{envelope=JSON.parse(text);}catch(error){}
+        var data=envelope&&envelope.data?envelope.data:envelope;
+        var errorInfo=envelope&&envelope.error?envelope.error:null;
+        if(!response.ok){
+          var message=String((errorInfo&&(errorInfo.message||errorInfo.code))||('作品模型调用失败（HTTP '+response.status+'）')).slice(0,300);
+          return jsonResponse({ok:false,status:response.status,error:message,hint:''});
+        }
+        if(!data)return fail('作品模型返回格式异常','请稍后重试；如果一直这样，请联系老师。');
+        if(data.ok===false)return fail(String(data.error||'作品模型调用失败'),String(data.hint||''));
+        if(typeof data.content!=='string'||!data.content)return fail('作品模型没有返回正文','换个说法再试一次。');
+        return jsonResponse({ok:true,content:data.content,model:data.model||'',usage:data.usage||null});
+      });
+    }).catch(function(error){
+      clear();
+      var name=String((error&&error.name)||'');
+      if(name==='AbortError'){
+        if(init&&init.signal)return fail('这次调用被取消了');
+        return fail('等了 '+(TIMEOUT/1000)+' 秒还没等到作品模型响应，先停掉了');
+      }
+      return fail('连不上作品模型（'+String((error&&error.message)||error).slice(0,160)+'）','检查网络后重试；如果一直这样，请联系老师。');
+    });
+  }
 
   // 学生文档里那段收紧的 meta CSP（机构端/平台端预览注入的）让不让出网：
   // 有 meta 且 connect-src（没有就退 default-src）里既没有 https: 也没有 * ⇒ 就是不联网。
@@ -450,6 +494,10 @@ export const LLM_BRIDGE = `<script>(function(){
     var model=String(body.model||'').trim()||DEFAULT_MODEL;
     // 禁网这条先判：老师端/平台端预览里**填了 Key 也发不出去**，先说环境再说 Key 才不误导人。
     if(metaBlocksNetwork())return Promise.resolve(fail(NET_BLOCKED,'老师端/平台端的预览是故意禁网的安全设置，分享链接与作品页不受影响。'));
+    // 2026-11-03：作品**没填自己的 Key**、但平台给了作品模型授权 → 走平台代理（Key 不出服务端）。
+    // 填了 Key 就仍然按学生自己的 Key 直连厂商 —— 老作品与 BYO-Key 行为完全不变。
+    var platform=window.__PLATFORM_WORK_LLM__;
+    if(platform&&platform.grant&&!key)return callPlatform(platform,body,init);
     if(!key){
       return Promise.resolve(fail('还没有填写 API Key',
         '在这个作品的「接口设置」里，粘贴你自己在模型服务商申请的 Key（只保存在你的浏览器里，不会上传到平台）。'));
@@ -562,8 +610,18 @@ function normalizePreviewVideoAudio(value) {
 /**
  * 把入口 HTML 里引用的本地 css/js 内联进预览文档；外链保持原样（sandbox 内没有同源权限）。
  * 工作区预览与官网公开作品页共用这一份，保证「学生看到的」和「作品广场看到的」一致。
+ *
+ * `worksLlm`（2026-11-03）：平台为作品提供的模型授权 `{ grant }`。只有 grant，没有 Key；
+ * 注进文档后，LLM 桥在作品**没填自己的 Key** 时会走 `/api/works-llm/chat`。
  */
-export function buildPreviewDocument(files, entryFile) {
+function worksLlmContextScript(worksLlm) {
+  const grant = String(worksLlm?.grant || '').trim();
+  if (!grant) return '';
+  const payload = JSON.stringify({ grant }).replace(/</g, '\\u003c');
+  return `<script>window.__PLATFORM_WORK_LLM__=${payload};</script>`;
+}
+
+export function buildPreviewDocument(files, entryFile, { worksLlm } = {}) {
   const entry = files?.[entryFile];
   if (entry === undefined) return '<!doctype html><html><body style="font-family:sans-serif;padding:16px">入口文件不存在</body></html>';
   if (!/\.html?$/i.test(entryFile)) return `<!doctype html><html><body><pre style="font-family:monospace;padding:12px">${escapeHtml(entry)}</pre></body></html>`;
@@ -586,9 +644,10 @@ export function buildPreviewDocument(files, entryFile) {
   const normalizedMedia = normalizePreviewVideoAudio(embedded);
   // 存储替身与桥都必须装在学生脚本**之前**：前者要抢在那行顶层 localStorage 之前，
   // 后者要抢在 head 里的早期 console/error 调用之前（fetch 桥也一样：学生页可能一上来就 fetch 素材）。
-  // 顺序：存储替身 → 控制台桥 → 高度上报 → 素材 fetch 桥 → 大模型桥 → PDF 桥（PDF 桥仍排最后，见它自己的注释）。
+  // 顺序：存储替身 → 控制台桥 → 高度上报 → 素材 fetch 桥 → 作品模型授权 → 大模型桥 → PDF 桥
+  // （PDF 桥仍排最后，见它自己的注释）。作品模型授权必须在 LLM 桥之前：桥要在第一次 fetch 时就读到它。
   // ⚠️ 两座 fetch 桥的先后无所谓（各自只认自己那几个地址、其余原样往下传），但都要在 PDF 桥之前。
-  const preamble = `${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}${PREVIEW_HEIGHT_BRIDGE}${ASSET_FETCH_BRIDGE}${LLM_BRIDGE}${PDF_BRIDGE}`;
+  const preamble = `${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}${PREVIEW_HEIGHT_BRIDGE}${ASSET_FETCH_BRIDGE}${worksLlmContextScript(worksLlm)}${LLM_BRIDGE}${PDF_BRIDGE}`;
   if (/<head[^>]*>/i.test(normalizedMedia)) return normalizedMedia.replace(/<head[^>]*>/i, (match) => `${match}${preamble}`);
   if (/<body[^>]*>/i.test(normalizedMedia)) return normalizedMedia.replace(/<body[^>]*>/i, (match) => `${match}${preamble}`);
   return preamble + normalizedMedia;

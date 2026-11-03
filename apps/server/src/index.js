@@ -21,6 +21,7 @@ import { handleAdminBillingConfig, handleStudentBillingConfig } from './routes/b
 import { handleVibeCoding } from './routes/vibecoding.js';
 import { handleJunshi } from './routes/junshi.js';
 import { handleClientFeedback } from './routes/clientFeedback.js';
+import { handleWorksLlm } from './routes/workLlm.js';
 import { domainStateContract } from './services/domainState.js';
 import { maxUploadBytes } from './services/fileUploadSecurity.js';
 import { acquireBodySlot as acquireUploadBodySlot } from './services/uploadBodyGate.js';
@@ -125,6 +126,16 @@ function handleSeoAsset(ctx) {
 
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
+    // 学生作品里的 LLM 桥从 opaque origin（Origin: null）发 preflight：只给作品模型这一条放行。
+    if (String(req.url || '').split('?')[0] === '/api/works-llm/chat') {
+      sendNoContent(res, req, {
+        'access-control-allow-origin': 'null',
+        'access-control-allow-headers': 'content-type',
+        'access-control-allow-methods': 'POST,OPTIONS',
+        'access-control-max-age': '600',
+      });
+      return;
+    }
     sendNoContent(res, req);
     return;
   }
@@ -142,6 +153,7 @@ const server = http.createServer(async (req, res) => {
     auth: authResult.auth,
     authError: authResult.error,
     setCookie: null,
+    extraHeaders: {},
   };
 
   try {
@@ -184,7 +196,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const data = await handlePublicAssets(ctx)
+    const data = await handleWorksLlm(ctx)
+      ?? await handlePublicAssets(ctx)
       ?? await handleJunshi(ctx)
       ?? await handleRuntimeGateway(ctx)
       ?? await handleRuntimeSearchGateway(ctx)
@@ -215,7 +228,7 @@ const server = http.createServer(async (req, res) => {
     }
     // SSE 等自行写响应的处理器：响应已结束，不能再套 JSON 信封
     if (data && data.__streamed) return;
-    const extraHeaders = ctx.setCookie ? { 'set-cookie': ctx.setCookie } : {};
+    const extraHeaders = { ...(ctx.setCookie ? { 'set-cookie': ctx.setCookie } : {}), ...(ctx.extraHeaders || {}) };
     sendJson(res, 200, envelope(data), req, extraHeaders);
   } catch (error) {
     const apiError = error instanceof ApiError
@@ -238,6 +251,8 @@ const server = http.createServer(async (req, res) => {
     }
     sendJson(res, apiError.status || 500, apiError.toResponse(), req, {
       ...(ctx.setCookie ? { 'set-cookie': ctx.setCookie } : {}),
+      // 作品模型那条要给沙箱回 ACAO: null —— 4xx 也要带上，否则作品只能看到「网络错误」。
+      ...(ctx.extraHeaders || {}),
       // ⭐ 请求体**没读完**就不能再宣称 keep-alive：客户端会把这条连接放回池子，下一个请求
       //    一旦复用到它就会一直等那些写不完的字节（实测挂 304 秒才报传输层错误）。所有"读到
       //    一半 / 压根没读就回话"的拒绝都属这一类：readJson/readBodyBuffer 超限、以及读 body

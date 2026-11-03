@@ -111,7 +111,7 @@ export function WorkPreviewModal({ api, studentApi = null, isOwner = false, crea
           //    重新栅格化整页（这页有 8 张大尺寸 SVG data URI 与动画），既卡又小、还带内层滚动条。
           //    现在与老师端（§九十）同款：**`fill` = 铺满这一屏、原生比例、无缩放**，
           //    外层弹窗固定一屏不滚动，作品自身按容器宽度自适应（学生页的媒体查询因此真正生效）。
-          ? <div className="creator-modal__web"><ReplayPreview html={buildPreviewDocument(detail.files, entry)} title={detail.title || '作品预览'} chrome={false} fill /></div>
+          ? <div className="creator-modal__web"><ReplayPreview html={buildPreviewDocument(detail.files, entry, { worksLlm: detail.worksLlm })} title={detail.title || '作品预览'} chrome={false} fill /></div>
           : <CanvasWorkView detail={detail} />) : null}
       </div>
       <div className="pl-viewer-foot">

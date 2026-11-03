@@ -5,6 +5,7 @@ import { missingLocalAssets, normalizeSubmission, parseSnapshotArtifacts, sharea
 import { assertSharePiece, ensureWorkShareLink, shareLinkUrl } from '../services/workShare.js';
 import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from './fileAssets.js';
 import { ossRedirectUrl } from '../services/fileStorage.js';
+import { previewWorksLlmGrant } from '../services/workLlm.js';
 import { hashPassword, isUniqueViolation } from '@platform/database';
 
 import { scheduleReminder } from './communication.js';
@@ -916,7 +917,9 @@ export async function handleOrg(ctx) {
     // ⭐ 2026-10-02：可分享件与发码准入同一份（`shareableArtifactNames`）—— 网页作品是个**整体**，
     //    它引用的 css/js/图是零件，不该出现在"选哪一件"里（用户口径见该函数注释）。
     const shareablePieces = new Set(shareableArtifactNames(work));
-    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: (content.artifacts || []).map((item) => ({ ...item, pieceKey: `artifact:${item.name}`, shareable: shareablePieces.has(item.name) })), preview: content.preview, imageUrls, ossUrls, fileUrls, missingAssets: missingLocalAssets(content.files, content.entryFile) };
+    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: (content.artifacts || []).map((item) => ({ ...item, pieceKey: `artifact:${item.name}`, shareable: shareablePieces.has(item.name) })), preview: content.preview, imageUrls, ossUrls, fileUrls, missingAssets: missingLocalAssets(content.files, content.entryFile),
+      // 2026-11-03 作品调用模型：老师端预览把这条透传给 buildPreviewDocument（Key 只在服务端）。
+      worksLlm: await previewWorksLlmGrant({ workId: work.id, userId: ctx.auth?.user?.id }) };
   }
 
   // ⭐ 2026-10-05 用户口径：「学生提交上来的作品，**老师/机构/平台都可以改作品名称**；改名后分享页、

@@ -109,7 +109,7 @@ export function ClassroomWork({ api, workBase, work = {}, onClose, canShare = fa
     //    「https://… img-src data: blob: …」当成**一条名字非法的指令**整条丢弃 ⇒ **真 `img-src` 不存在**、
     //    回落到 `default-src 'none'` ⇒ 老师端预览里**所有图片被拦**（连 data:/blob: 一起）。
     //    没有 OSS 素材的作品那串为空、CSP 恰好合法 —— 所以本地怎么都复现不出来（生产一测就现形）。
-    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob: https: wss:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
+    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob: https: wss:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry, { worksLlm: data?.worksLlm })}`
     : '';
   return <Modal title={renamedTitle || work.title || '未命名作品'} wide onClose={onClose}
     // ⭐ 2026-10-05 用户口径：页眉不再挂"只读"那类前缀，直接就是**作品名称**本身。

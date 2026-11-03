@@ -147,7 +147,7 @@ export function WorkPreview({ api, workId, title, kind = 'vibecoding', onClose }
     //    放开的只有"出网"这一项：沙箱仍是不带 allow-same-origin 的 opaque origin（读不到我们的 cookie/localStorage），
     //    form-action / base-uri 仍然 `'none'`，img/media 的来源白名单一个没动。
     //    p173 与 p187 都钉着这条口径（改要显式）。详见 docs/operations/作品调用大模型-平台约定-20261008.md。
-    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob: https: wss:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
+    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: ${mediaSources}; media-src data: blob: ${mediaSources}; font-src data: ${mediaSources}; connect-src blob: https: wss:; frame-src blob: data:; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry, { worksLlm: data?.worksLlm })}`
     : '';
 
   return <PreviewDialog title={title || data?.title} onClose={onClose}>

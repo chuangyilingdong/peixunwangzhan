@@ -21,6 +21,7 @@ import {
 import { hostname } from 'node:os';
 import { Readable } from 'node:stream';
 import { assertTransition } from '../../services/domainState.js';
+import { publicWorksLlmGrant } from '../../services/workLlm.js';
 import { plazaCategoryLabelOf, plazaCategoryMap, plazaCategoryOf } from '../../services/plazaCategories.js';
 import { WEBSITE_CONTENT_KEYS } from '../../services/websiteContentKeys.js';
 import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from '../fileAssets.js';
@@ -237,7 +238,8 @@ export async function handlePublicCommunication(ctx) {
         AND (submission.copyright_confirmed_at IS NOT NULL OR submission.auto_submitted=1)
     `, [publicVibeCodingWorkMatch[1]]);
     if (!work) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');
-    return await publicVibeCodingWorkRow(work, { includeFiles: true });
+    // 2026-11-03 作品调用模型：公开作品页把这条透传给 buildPreviewDocument（Key 只在服务端）。
+    return { ...await publicVibeCodingWorkRow(work, { includeFiles: true }), worksLlm: await publicWorksLlmGrant({ workId: work.id }) };
   }
 
   // ⭐ 2026-09-27：学生**个人主页**（用户口径「学生创建了账号应该就有个主页的专属链接。现在需要把
@@ -357,7 +359,8 @@ export async function handlePublicCommunication(ctx) {
       WHERE submission.id=? AND submission.student_id=? AND submission.org_id=?
     `, [workId, creator.id, creator.org_id]);
     if (!submission) throw errors.notFound('作品不存在', 'PUBLIC_WORK_NOT_FOUND');
-    return await publicVibeCodingWorkRow(submission, { includeFiles: true, mediaBase: base, openUrl: `/u/${token}/w/VIBECODING/${workId}` });
+    // 学生主页对"未公开"作品也开放（口径见上方长注释）；作品模型同样按主页口径放行。
+    return { ...await publicVibeCodingWorkRow(submission, { includeFiles: true, mediaBase: base, openUrl: `/u/${token}/w/VIBECODING/${workId}` }), worksLlm: await publicWorksLlmGrant({ workId: submission.id }) };
   }
 
   // ⭐ 2026-09-30 用户口径：「这个分享只针对于学生的主页」「每个作品都可以有个分享，比如这节课有 1 个图片
@@ -423,6 +426,8 @@ export async function handlePublicCommunication(ctx) {
     const needsDocuments = selected.some((item) => shareRenderOf(item.name) === 'HTML');
     const shareFiles = needsDocuments ? shareCodeSnapshotFiles(submission, link.code) : null;
     const originalFiles = parseJson(submission.files, {});
+    // 2026-11-03 作品调用模型：分享页也是公开入口，grant 跟着作品走（Key 只在服务端）。
+    const worksLlm = await publicWorksLlmGrant({ workId: submission.id });
     const pieces = selected.map((artifact) => {
       const render = shareRenderOf(artifact.name);
       const artifactKind = kindForName(artifact.name);
@@ -444,7 +449,7 @@ export async function handlePublicCommunication(ctx) {
         previewUrl: artifact.fileId ? `${base}/files/${encodeURIComponent(artifact.name)}/preview` : null,
         // 网页这一件就地可玩。⚠️ 入口必须用**这一件自己的文件名**：一件作品可能同时有
         // pptx 主产物 + 另一个 html 产物，拿 `submission.entry_file` 会渲染成「入口文件不存在」。
-        document: playable ? { files: shareFiles, entry: artifact.name } : null,
+        document: playable ? { files: shareFiles, entry: artifact.name, worksLlm } : null,
         // 这件作品里**还指着本地文件、但没随作品交上来**的引用（客户端旧版本不带素材）——
         // 卡面据此说一句人话，而不是让学生对着破图猜（见 vibecoding.js 的 missingLocalAssets）。
         missingAssets: playable ? missingLocalAssets(shareFiles, artifact.name) : [],
@@ -460,6 +465,7 @@ export async function handlePublicCommunication(ctx) {
       allPieces,
       pieceCount: pieces.length,
       pieces,
+      worksLlm,
       // 兼容老前端（只读 `piece` / `document`）—— ALL 时退回第一件，新扫码页用 `pieces`
       piece: pieces[0] || null,
       document: pieces[0]?.document || null,

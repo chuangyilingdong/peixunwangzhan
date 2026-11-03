@@ -2128,6 +2128,26 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 // 这是「每次调用预估单价」，用于折算池子的消耗（不是上游账单）；模型级优先于模态级。
 try { db.exec("ALTER TABLE platform_settings ADD COLUMN compute_pricing TEXT NOT NULL DEFAULT '{}'"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 作品调用模型（2026-11-03）：**独立于 ai_provider_policy** 的一套配置，只给 VibeCoding 作品运行时用。
+// 学生作品里 `POST /api/llm` 不带 Key 时走这套（Key 只在服务端）；Agent 的渠道/路由/模型下拉不受影响。
+// JSON { enabled, endpoint, model, maxTokens, temperature, timeoutMs, scopes, quotas }；Key 走 providerSecret('works-llm')。
+try { db.exec("ALTER TABLE platform_settings ADD COLUMN works_llm TEXT NOT NULL DEFAULT '{}'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
+// 作品模型日计数：按 (day, scope, subject) 一行。scope = classroom / preview / public；
+// subject = 学生 id / 作品 id / IP。只用于配额，不做账单（免费模型也没有金额）。
+db.exec(`CREATE TABLE IF NOT EXISTS work_llm_usage (
+  id TEXT PRIMARY KEY,
+  day TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  calls INTEGER NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)`);
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_work_llm_usage_subject ON work_llm_usage(day, scope, subject_id)');
 
 // Durable upstream attempts are independent of the student charge ledger.
 db.exec(`CREATE TABLE IF NOT EXISTS compute_attempts (

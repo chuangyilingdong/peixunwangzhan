@@ -62,6 +62,8 @@ export function App() {
     <Route path="/compute/names" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
     {/* 2026-11-01：全局提示词（客户端契约：平台级 system 提示词 ≤32KiB，随 client-context 下发） */}
     <Route path="/compute/prompt" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
+    {/* 2026-11-03：作品调用模型（独立于 Agent 渠道，只给作品运行时用） */}
+    <Route path="/compute/works-llm" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
     <Route path="/compute/usage" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
     <Route path="/materials" element={page('ADMIN_CONTENT', <AdminMaterials api={api} />)} />
     <Route path="/website-content" element={page('ADMIN_CONTENT', <WebsiteContent api={api} />)} />

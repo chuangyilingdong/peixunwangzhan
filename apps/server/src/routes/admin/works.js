@@ -18,6 +18,7 @@ import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSet
 import { missingLocalAssets, normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from '../vibecoding.js';
 import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from '../fileAssets.js';
 import { ossRedirectUrl } from '../../services/fileStorage.js';
+import { previewWorksLlmGrant } from '../../services/workLlm.js';
 import {
   ENROLLMENT_STATUSES,
   ORG_MEMBER_ROLES,
@@ -296,7 +297,9 @@ export async function handleWorks(ctx, part, method) {
     }
     // 与机构端同一条口径：这件作品里**还指着本地文件、但没随作品交上来**的引用（旧客户端不带素材），
     // 平台端预览也要能把它说清楚（见 vibecoding.js 的 missingLocalAssets）。
-    return { ...content, fileUrls, imageUrls, ossUrls, missingAssets: missingLocalAssets(content.files, content.entryFile) };
+    return { ...content, fileUrls, imageUrls, ossUrls, missingAssets: missingLocalAssets(content.files, content.entryFile),
+      // 2026-11-03 作品调用模型：平台端预览把这条透传给 buildPreviewDocument（Key 只在服务端）。
+      worksLlm: await previewWorksLlmGrant({ workId: submission.id, userId: ctx.auth?.user?.id }) };
   }
   let vibeDetailFileMatch = part.match(/^\/vibecoding-works\/([^/]+)\/files\/(.+?)\/(preview|download)$/);
   if (vibeDetailFileMatch && method === 'GET') {

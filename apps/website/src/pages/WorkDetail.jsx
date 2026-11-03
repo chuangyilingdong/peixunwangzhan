@@ -233,7 +233,7 @@ export function WorkDetailPage({ api }) {
         </header>
         <div className="work-live-preview">
           <ReplayPreview
-            html={buildPreviewDocument(files, current.name)}
+            html={buildPreviewDocument(files, current.name, { worksLlm: work?.worksLlm })}
             title={work?.title || '作品预览'}
             chrome={false}
             fill={!fitToOneScreen}
@@ -322,7 +322,7 @@ export function WorkDetailPage({ api }) {
                 // ⭐ 2026-09-30 用户口径：「怎么玩？那么小的界面……为什么非要用作品预览把作品框上呢？不需要这些东西」
                 //    → 看作品这一档**去掉面板、去掉缩放**：宽度＝容器真实宽度（学生页自己的媒体查询生效，
                 //      电脑端与手机端各自长成它自己的样子），高度跟着内容走。见 PreviewFrame 的 responsive。
-                <ReplayPreview html={buildPreviewDocument(files, current.name)} title={work.title} chrome={false} fill />
+                <ReplayPreview html={buildPreviewDocument(files, current.name, { worksLlm: work?.worksLlm })} title={work.title} chrome={false} fill />
               )}
             </div>
           </div>

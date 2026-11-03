@@ -82,8 +82,8 @@ check('老师端/平台端那段禁网 meta 认得出来（先说环境、再说
   && bridgeBody.includes('这个预览窗口关掉了作品的联网'));
 const timeout = Number((bridgeBody.match(/var TIMEOUT=(\d+);/) || [])[1] || 0);
 check('超时给够（≥120s：长文 + 推理模型慢起来没谱）', timeout >= 120000, `实际 ${timeout}`);
-check('preamble 顺序：存储替身 → 控制台桥 → 高度上报 → 素材桥 → 大模型桥 → PDF 桥（PDF 仍最后）',
-  /\$\{SANDBOX_STORAGE_SHIM\}\$\{CONSOLE_BRIDGE\}\$\{PREVIEW_HEIGHT_BRIDGE\}\$\{ASSET_FETCH_BRIDGE\}\$\{LLM_BRIDGE\}\$\{PDF_BRIDGE\}/.test(project));
+check('preamble 顺序：存储替身 → 控制台桥 → 高度上报 → 素材桥 → 作品模型授权 → 大模型桥 → PDF 桥（PDF 仍最后）',
+  /\$\{SANDBOX_STORAGE_SHIM\}\$\{CONSOLE_BRIDGE\}\$\{PREVIEW_HEIGHT_BRIDGE\}\$\{ASSET_FETCH_BRIDGE\}\$\{worksLlmContextScript\(worksLlm\)\}\$\{LLM_BRIDGE\}\$\{PDF_BRIDGE\}/.test(project));
 check('/api/config 仍给非敏感默认值（Key 永远来自本机浏览器）',
   bridgeText.includes('/\\/api\\/config$/') && bridgeBody.includes('function platformConfig')
   && bridgeBody.includes("DEFAULT_BASE='https://api.deepseek.com/v1'"));

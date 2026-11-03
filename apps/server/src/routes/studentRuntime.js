@@ -20,6 +20,7 @@ import { documentMime } from '../services/ooxml/documents.js';
 import { ensureRuntimeConversation, recordRuntimeSubmission, rewriteLocalReferences, runtimeSubmissionWorkItem, textDefaultModel, textModelOptions } from './vibecoding.js';
 import { storeStudentArtifactAsset } from './fileAssets.js';
 import { scanUploadBuffers } from '../services/fileUploadSecurity.js';
+import { classroomWorksLlmGrant } from '../services/workLlm.js';
 
 // 客户端运行时（dsh / VibeCoding）**只认"这节课声明了 VibeCoding"**。
 //
@@ -470,6 +471,9 @@ export async function handleStudentRuntime(ctx) {
       //    它会退回内置兜底列表）。
       models: await textModelOptions(),
       defaultModel: await textDefaultModel(),
+      // 2026-11-03 作品调用模型：客户端把它透传给 buildPreviewDocument；
+      // 作品里的 LLM 桥在**没有填自己的 Key** 时会走这条（Key 只在服务端，文档里只有短期 grant）。
+      worksLlm: await classroomWorksLlmGrant({ classroomId: classroom.id, studentId: auth.user.id }),
     };
   }
 
