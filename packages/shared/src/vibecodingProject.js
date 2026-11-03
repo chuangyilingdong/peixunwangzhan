@@ -494,10 +494,11 @@ export const LLM_BRIDGE = `<script>(function(){
     var model=String(body.model||'').trim()||DEFAULT_MODEL;
     // 禁网这条先判：老师端/平台端预览里**填了 Key 也发不出去**，先说环境再说 Key 才不误导人。
     if(metaBlocksNetwork())return Promise.resolve(fail(NET_BLOCKED,'老师端/平台端的预览是故意禁网的安全设置，分享链接与作品页不受影响。'));
-    // 2026-11-03：作品**没填自己的 Key**、但平台给了作品模型授权 → 走平台代理（Key 不出服务端）。
-    // 填了 Key 就仍然按学生自己的 Key 直连厂商 —— 老作品与 BYO-Key 行为完全不变。
+    // 2026-11-03：课时勾了「作品使用平台模型」时，平台**优先** —— 作品里就算带了 Key
+    // （输入框/占位符/sk-xxx）也不影响；只有作品显式写 usePlatform:false 才退回自己的 Key。
+    // 没勾的课时没有 grant，行为与改动前完全一致（有 Key 直连、没 Key 提示填写）。
     var platform=window.__PLATFORM_WORK_LLM__;
-    if(platform&&platform.grant&&!key)return callPlatform(platform,body,init);
+    if(platform&&platform.grant&&body.usePlatform!==false)return callPlatform(platform,body,init);
     if(!key){
       return Promise.resolve(fail('还没有填写 API Key',
         '在这个作品的「接口设置」里，粘贴你自己在模型服务商申请的 Key（只保存在你的浏览器里，不会上传到平台）。'));

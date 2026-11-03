@@ -122,6 +122,16 @@ try {
        JOIN users student ON student.id=part.student_id
       WHERE part.session_id=? AND part.status='ACTIVE' ORDER BY student.created_at LIMIT 1`, [classroom.id]);
   assert.ok(admin && orgToken && student?.login, '登录或夹具失败');
+  // 课时开关：只有勾了「作品使用平台模型」的课时才发 grant。
+  // 测试库里可能不止一场 ACTIVE 课堂（client-context 取学生最近的那场），所以统一开关所有课时。
+  async function setAllLessonsWorksLlm(value) {
+    for (const row of await arows('SELECT id, classroom_config FROM course_lessons')) {
+      const config = JSON.parse(row.classroom_config || '{}');
+      config.vibeCoding = { ...(config.vibeCoding || {}), worksLlm: value };
+      await aq('UPDATE course_lessons SET classroom_config=? WHERE id=?', [JSON.stringify(config), row.id]);
+    }
+  }
+  await setAllLessonsWorksLlm(true);
   const studentToken = await login(student.login, 'study123');
 
   const configBody = {
@@ -225,6 +235,19 @@ try {
     assert.equal(typeof publicDetail.data?.worksLlm?.grant, 'string');
   });
 
+  await check('课时开关：没勾 → 课堂/详情/公开都不发 grant；勾上恢复', async () => {
+    await setAllLessonsWorksLlm(false);
+    const context = await api('/api/student/runtime/client-context', { token: studentToken });
+    assert.equal(context.data?.worksLlm, null);
+    const adminDetail = await api('/api/admin/vibecoding-works/p206_submission', { token: admin });
+    assert.equal(adminDetail.data?.worksLlm, null);
+    const publicDetail = await api('/api/public/vibecoding-works/vbt_p206');
+    assert.equal(publicDetail.data?.worksLlm, null);
+    await setAllLessonsWorksLlm(true);
+    const back = await api('/api/admin/vibecoding-works/p206_submission', { token: admin });
+    assert.equal(typeof back.data?.worksLlm?.grant, 'string');
+  });
+
   await check('无效 grant → 403 WORK_LLM_GRANT_INVALID', async () => {
     const result = await chat('not-a-grant', 'x');
     assert.equal(result.status, 403);
@@ -260,8 +283,10 @@ try {
 
   await check('桥：buildPreviewDocument 注入 grant、不注入 Key；无 worksLlm 时不注入', async () => {
     const { buildPreviewDocument, LLM_BRIDGE } = await import('../packages/shared/src/vibecodingProject.js');
-    // 平台路径必须在「没填 Key」的分支之前判：填了 Key 的作品仍然走 BYO-Key 直连。
+    // 平台优先：有 grant 且作品没显式 usePlatform:false；与作品有没有传 Key 无关。
     assert.match(LLM_BRIDGE, /PLATFORM_LLM_PATH='\/api\/works-llm\/chat'/);
+    assert.ok(LLM_BRIDGE.includes('body.usePlatform!==false'), '桥缺少 usePlatform:false 的退回口');
+    assert.equal(LLM_BRIDGE.includes('platform.grant&&!key'), false, '平台分支不能再看 Key 是否为空');
     const platformCheck = LLM_BRIDGE.indexOf('callPlatform(platform,body,init)');
     const keyCheck = LLM_BRIDGE.indexOf('if(!key)');
     assert.ok(platformCheck >= 0 && keyCheck > platformCheck, '平台分支必须排在 "if(!key)" 之前');

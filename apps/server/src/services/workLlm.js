@@ -211,17 +211,33 @@ export function verifyWorksLlmGrant(grant) {
   }
 }
 
+/**
+ * 课时开关：`course_lessons.classroom_config.vibeCoding.worksLlm === true`。
+ *
+ * 用户口径（2026-11-03）：「这节课需要用到 Key，就用我们封装好的」。
+ * 只有勾了的课时，才给它的作品发平台模型授权；没勾的课时保持「学生自己填 Key」的老行为。
+ * 这是**课时级**的附加门禁：全局总开关 / Key / scope 仍然要先满足。
+ */
+async function lessonWorksLlmEnabled(lessonId) {
+  if (!lessonId) return false;
+  const row = await arow('SELECT classroom_config FROM course_lessons WHERE id=?', [lessonId]);
+  const config = parseJson(row?.classroom_config, {}) || {};
+  return config?.vibeCoding?.worksLlm === true;
+}
+
 /** 课堂内实时预览：grant 给到整节课（12h），每次调用仍会重验课堂是否还在进行。 */
-export async function classroomWorksLlmGrant({ classroomId, studentId } = {}) {
-  if (!classroomId || !studentId) return null;
+export async function classroomWorksLlmGrant({ classroomId, studentId, lessonId } = {}) {
+  if (!classroomId || !studentId || !(await lessonWorksLlmEnabled(lessonId))) return null;
   const config = await readWorksLlmConfig();
   if (!config.enabled || !config.scopes.classroom || !worksLlmReady()) return null;
   return { grant: issueWorksLlmGrant({ scope: 'classroom', subject: studentId, userId: studentId, classroomId, ttlMs: 12 * 60 * 60 * 1000 }) };
 }
 
-/** 老师端 / 平台端作品预览。 */
+/** 老师端 / 平台端 / 学生端作品预览。 */
 export async function previewWorksLlmGrant({ workId, userId } = {}) {
   if (!workId) return null;
+  const work = await arow('SELECT lesson_id FROM vibecoding_submissions WHERE id=?', [workId]);
+  if (!work || !(await lessonWorksLlmEnabled(work.lesson_id))) return null;
   const config = await readWorksLlmConfig();
   if (!config.enabled || !config.scopes.preview || !worksLlmReady()) return null;
   return { grant: issueWorksLlmGrant({ scope: 'preview', subject: workId, userId, workId, ttlMs: 2 * 60 * 60 * 1000 }) };
@@ -230,6 +246,8 @@ export async function previewWorksLlmGrant({ workId, userId } = {}) {
 /** 作品广场 / 学生主页 / 分享页（公开页）。 */
 export async function publicWorksLlmGrant({ workId } = {}) {
   if (!workId) return null;
+  const work = await arow('SELECT lesson_id FROM vibecoding_submissions WHERE id=?', [workId]);
+  if (!work || !(await lessonWorksLlmEnabled(work.lesson_id))) return null;
   const config = await readWorksLlmConfig();
   if (!config.enabled || !config.scopes.public || !worksLlmReady()) return null;
   return { grant: issueWorksLlmGrant({ scope: 'public', subject: workId, workId, ttlMs: 24 * 60 * 60 * 1000 }) };

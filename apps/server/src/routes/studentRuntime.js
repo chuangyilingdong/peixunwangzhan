@@ -473,7 +473,7 @@ export async function handleStudentRuntime(ctx) {
       defaultModel: await textDefaultModel(),
       // 2026-11-03 作品调用模型：客户端把它透传给 buildPreviewDocument；
       // 作品里的 LLM 桥在**没有填自己的 Key** 时会走这条（Key 只在服务端，文档里只有短期 grant）。
-      worksLlm: await classroomWorksLlmGrant({ classroomId: classroom.id, studentId: auth.user.id }),
+      worksLlm: await classroomWorksLlmGrant({ classroomId: classroom.id, studentId: auth.user.id, lessonId }),
     };
   }
 

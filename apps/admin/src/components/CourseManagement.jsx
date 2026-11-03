@@ -473,6 +473,10 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
           ⚠️ 不填 = 不限次（现状一字不改）；填了就由**服务端**按「这个学生在这节课按了几次发送」拦，
           客户端改不掉（计数在服务端，见 services/vibecodingLessonSettings.js）。 */}
       <label>发送次数上限<input type="number" min="0" step="1" value={vibeCodingConfig.sendLimit ?? ''} onChange={(event) => updateVibeCoding({ sendLimit: event.target.value === '' ? undefined : Math.max(0, Math.floor(Number(event.target.value) || 0)) })} placeholder="不填 = 不限次" /><small className="muted">不填或填 0 = 不限次。按「学生在这节课按了几次发送」计，由服务端统计（dsh 自己的内部请求不计数）。</small></label>
+      {/* 作品调用平台模型（2026-11-03）：课时级开关。勾上后本节课的作品自动拿到平台 grant，
+          学生作品里的 LLM 桥优先走平台（哪怕作品里带了 Key 输入框/占位符）；不勾保持老行为。 */}
+      <label className="checkbox-label top-gap"><input type="checkbox" checked={vibeCodingConfig.worksLlm === true} onChange={(event) => updateVibeCoding({ worksLlm: event.target.checked })} />作品使用平台模型</label>
+      <small className="muted">勾上后，这节课的学生作品调用大模型时自动使用平台在「AI 能力与价格 → 作品调用模型」里配置的 Key，学生不用自己填；不勾则保持「学生自己填 Key」。需先在那边开启总开关并配置 Key。</small>
       {/* 预设提示词（2026-09-19 用户口径）：客户端显示成可点的提示词块，点一下把内容填进对话框 */}
       <div className="lesson-config-heading"><strong>预设提示词</strong><button type="button" className="text-button" onClick={addPresetPrompt}>＋预设提示词</button></div>
       <p className="muted">客户端会把它们显示在对话框旁边；学生点一下，就把内容**填进输入框**（不直接发送，还能自己改）。</p>
