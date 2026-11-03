@@ -210,7 +210,10 @@ try {
     await api('/api/admin/works-llm', { method: 'PUT', token: admin, body: { config: configBody.config } });
   });
 
-  await check('老师端/平台端/公开作品详情都带 worksLlm.grant', async () => {
+  await check('学生端/老师端/平台端/公开作品详情都带 worksLlm.grant', async () => {
+    const studentDetail = await api('/api/student/works/VIBECODING/p206_submission', { token: studentToken });
+    assert.equal(studentDetail.status, 200, JSON.stringify(studentDetail.error).slice(0, 200));
+    assert.equal(typeof studentDetail.data?.worksLlm?.grant, 'string');
     const adminDetail = await api('/api/admin/vibecoding-works/p206_submission', { token: admin });
     assert.equal(adminDetail.status, 200, JSON.stringify(adminDetail.error).slice(0, 200));
     assert.equal(typeof adminDetail.data?.worksLlm?.grant, 'string');

@@ -1,4 +1,5 @@
 import { asPositiveInteger, audit, clearAuthCookies, displayAuthorized, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, workCoverFromSnapshot, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, likeKeyword, likeEscapeClause, ensureHomeToken, avatarUrlOf } from '../lib.js';
+import { previewWorksLlmGrant } from '../services/workLlm.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
@@ -1128,7 +1129,9 @@ export async function handleStudent(ctx) {
         preview: `/api/student/file-assets/${encodeURIComponent(item.fileId)}/preview`,
         download: `/api/student/file-assets/${encodeURIComponent(item.fileId)}/download`,
       }]));
-    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: content.artifacts, preview: content.preview, imageUrls, images, fileUrls };
+    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: content.artifacts, preview: content.preview, imageUrls, images, fileUrls,
+      // 2026-11-03 作品调用模型：学生查看自己已提交的作品时也能拿平台模型（签发方已验过归属）。
+      worksLlm: await previewWorksLlmGrant({ workId: work.id, userId: auth.user.id }) };
   }
 
   if (part === '/showcase' && method === 'GET') {
