@@ -44,7 +44,7 @@ export const PROVIDER_ERROR_CODES = Object.freeze({
  *    p30 钉服务端，画布旧快照由前端归一。
  */
 export const CONTENT_REVIEW_MESSAGE = '内容审核没通过。请调整提示词或参考素材后再试。';
-const CONTENT_REVIEW_PATTERN = /content\s*(review|safety|policy)|safety\s*system|moderation|内容审核|内容安全|内容未通过|审核(?:失败|未通过|没通过)|冷却期|filtered\s*by[^.]*safety|rejected[^.]*(?:safety|content)/i;
+const CONTENT_REVIEW_PATTERN = /content\s*(review|safety|security|policy)|safety\s*system|moderation|内容审核|内容安全|内容未通过|审核(?:失败|未通过|没通过)|冷却期|filtered\s*by[^.]*safety|rejected[^.]*(?:safety|content)/i;
 
 export function isContentReviewFailure(value) {
   return CONTENT_REVIEW_PATTERN.test(String(value || ''));

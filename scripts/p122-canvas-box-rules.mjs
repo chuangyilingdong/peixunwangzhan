@@ -236,5 +236,40 @@ check('画布读面：音频那行要标出用法 + 对口型时给"台词写进
   assert.match(nodes, /audioRole: box\??\.audioRole === 'VOICE_REFERENCE' \? 'VOICE_REFERENCE' : 'LIP_SYNC'/, '节点数据要带上（漏了面板就永远显示对口型）');
 });
 
+/* ⑧ 生成状态同步：最新任务成功后必须清掉旧错误（2026-11-04 现场：内容审核失败 → 继续生成成功，提示一直挂着） */
+const { syncNodeGeneration } = await import('../packages/shared/src/canvasNodeSync.js');
+check('生成同步：重试成功后清掉旧的失败状态/错误（即使节点已有素材）', () => {
+  const node = { id: 'n1', data: { boxId: 'b1', assetUrl: 'old.mp4', generationStatus: 'FAILED', generationError: '内容审核没通过。请调整提示词或参考素材后再试。', generationStartedAt: 1 } };
+  const job = { status: 'SUCCEEDED', assets: [{ assetUrl: 'new.mp4', previewUrl: 'new.mp4' }] };
+  const next = syncNodeGeneration(node, job, { assetUrl: 'new.mp4', previewUrl: 'new.mp4' });
+  assert.equal(next.data.generationStatus, null);
+  assert.equal(next.data.generationError, '');
+  assert.equal(next.data.assetUrl, 'old.mp4', '已有成果不覆盖');
+  assert.equal(next.data.generationStartedAt, null);
+});
+check('生成同步：首次成功挂上素材并清状态', () => {
+  const next = syncNodeGeneration(
+    { id: 'n', data: { boxId: 'b' } },
+    { status: 'SUCCEEDED', assets: [{ assetUrl: 'a.png', previewUrl: 'a.png' }] },
+    { assetUrl: 'a.png', previewUrl: 'a.png' },
+  );
+  assert.equal(next.data.assetUrl, 'a.png');
+  assert.equal(next.data.generationError, '');
+  assert.equal(next.data.generationStatus, null);
+});
+check('生成同步：失败只在 PENDING 时落错误，且内容审核归一化', () => {
+  const pending = syncNodeGeneration(
+    { id: 'n', data: { generationStatus: 'PENDING' } },
+    { status: 'FAILED', errorMessage: 'Content security audit did not pass. The output video may be related to copyright restrictions.' },
+  );
+  assert.equal(pending.data.generationStatus, 'FAILED');
+  assert.match(pending.data.generationError, /内容审核没通过/);
+  assert.equal(syncNodeGeneration({ id: 'n', data: { generationStatus: null } }, { status: 'FAILED', errorMessage: 'x' }), null);
+});
+check('画布工作区真的用这份纯函数（不再自己抄一份分支）', () => {
+  const source = read('packages/shared/src/canvasWorkspace.jsx');
+  assert.match(source, /syncNodeGeneration\(node, job/, '必须调用纯函数');
+});
+
 if (failures) { console.log(`\n❌ P122 不通过：${failures} 项`); process.exit(1); }
 console.log('\nP122 PASSED：框体删除规则与未生成占位图都成立');

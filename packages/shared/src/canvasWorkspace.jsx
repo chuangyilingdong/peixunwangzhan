@@ -15,7 +15,8 @@ import { errorText } from '@platform/shared';
 // 画布「可提交产出」的判定与提交/保存互斥的闸门 —— 与服务端**同一份算法**
 // （服务端直接 import packages/shared/src/canvasOutput.js，见 apps/server/src/routes/student.js）。
 import { canvasOutputSignature, createSaveGate, hasUnsubmittedOutput, isCanvasEditableProjectStatus } from './canvasOutput.js';
-import { normalizeGenerationErrorMessage, normalizeSnapshotGenerationErrors } from './generationErrors.js';
+import { normalizeSnapshotGenerationErrors } from './generationErrors.js';
+import { syncNodeGeneration } from './canvasNodeSync.js';
 
 /**
  * 「哪些框体能接收一条提示词（课堂素材里的提示词/文本）」。与 canvas/index.jsx 的 supportsPrompt
@@ -409,18 +410,9 @@ export function CanvasWorkspace({ api, prep = null, ...props }) {
       onCanvas.add(boxId);
       const job = jobByBox.get(boxId);
       if (!job) return node;
-      const status = String(job.status || '');
       const asset = Array.isArray(job.assets) ? job.assets[0] : null;
-      // 已完成：把结果挂上去（已经有结果的节点不覆盖，避免把学生后来生成的成果换掉）
-      if (status === 'SUCCEEDED' && asset && !node.data.assetUrl && !node.data.generatedText) {
-        touched = true;
-        return { ...node, data: { ...node.data, ...assetNodeData(node.data, asset), generationStatus: null, generationError: '' } };
-      }
-      // 已失败：把「生成中」翻成失败并带上原因
-      if (status === 'FAILED' && node.data.generationStatus === 'PENDING') {
-        touched = true;
-        return { ...node, data: { ...node.data, generationStatus: 'FAILED', generationError: normalizeGenerationErrorMessage(job.errorMessage) || '生成失败' } };
-      }
+      const patched = syncNodeGeneration(node, job, asset ? assetNodeData(node.data, asset) : null);
+      if (patched) { touched = true; return patched; }
       return node;
     });
     const missing = boxes.filter((box) => jobByBox.has(box.id) && !onCanvas.has(box.id));
@@ -504,6 +496,8 @@ export function CanvasWorkspace({ api, prep = null, ...props }) {
     if (result.status !== 'SUCCEEDED') throw new Error(result.errorMessage || '生成仍在进行中，请稍后刷新查看');
     const asset = result.assets?.[0];
     if (!asset) throw new Error('AI 未返回可用素材');
+    // 成功后清掉上一次失败留下的错误 toast（错误提示不会自动消失，见上面的 message effect）。
+    setMessage((current) => (isErrorText(current) ? '' : current));
     generations.refresh();
     return asset;
   }
