@@ -244,15 +244,15 @@ export function Monitor({ api, user }) {
 
       <div className="monitor-charts">
         <div className="monitor-card">
-          <div className="monitor-card-title">调用 / 分钟 <span>绿=总调用 · 红=失败</span></div>
+          <div className="monitor-card-title">调用 / 分钟 <span>近 {windowKey} · 绿=总调用 · 红=失败</span></div>
           <Sparkline values={callsSeries} secondary={failedSeries} />
         </div>
         <div className="monitor-card">
-          <div className="monitor-card-title">失败 / 分钟</div>
+          <div className="monitor-card-title">失败 / 分钟 <span>近 {windowKey}</span></div>
           <Sparkline values={failedSeries} />
         </div>
         {canBilling ? <div className="monitor-card">
-          <div className="monitor-card-title">成本 / 分钟 <span>已知上游成本</span></div>
+          <div className="monitor-card-title">成本 / 分钟 <span>近 {windowKey} · 已知上游成本</span></div>
           <Sparkline values={costSeries} />
         </div> : null}
         {canBilling ? <div className="monitor-card">

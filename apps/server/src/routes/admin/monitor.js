@@ -218,7 +218,7 @@ async function fetchErrorRows({ since, orgId = '', sessionId = '', userId = '', 
 async function buildSnapshot({ windowKey, orgId, billingVisible }) {
   const minutes = WINDOWS[windowKey];
   const since = sinceOf(minutes);
-  const seriesSince = sinceOf(60);
+  const seriesSince = since;
   const orgFilter = String(orgId || '').trim();
 
   const [live, usageWindow, attemptsWindow, seriesRows, orgRows, orgStats, sessionRows] = await Promise.all([
@@ -330,10 +330,10 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     };
   });
 
-  // 序列补齐 60 个分钟桶（上游没有调用的分钟补 0，图表才不会跳）
+  // 序列按所选窗口补齐分钟桶（没有调用的分钟补 0，图表才不会跳）
   const byMinute = new Map(seriesRows.map((row) => [String(row.minute), row]));
   const series = [];
-  for (let index = 59; index >= 0; index -= 1) {
+  for (let index = minutes - 1; index >= 0; index -= 1) {
     const minute = new Date(Date.now() - index * 60_000).toISOString().slice(0, 16);
     const row = byMinute.get(minute) || {};
     series.push({

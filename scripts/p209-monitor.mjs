@@ -111,10 +111,12 @@ const call = (suffix, search = {}, auth = rootAuth) => handleMonitor(
 );
 
 const snapshot = await call('/snapshot', { window: '5m' });
-await check('快照：活跃课堂 2 / 在线学生 2 / 60 个分钟桶', () => {
+await check('快照：活跃课堂 2 / 在线学生 2 / 按窗口的分钟桶', async () => {
   assert.equal(snapshot.live.activeSessions, 2);
   assert.equal(snapshot.live.activeStudents, 2);
-  assert.equal(snapshot.series.length, 60);
+  assert.equal(snapshot.series.length, 5);
+  const hour = await call('/snapshot', { window: '60m' });
+  assert.equal(hour.series.length, 60);
 });
 await check('快照：5 分钟调用 4（成功 2 / 失败 2）、错误率 50%、拦截 1', () => {
   assert.equal(snapshot.usage.calls, 4);
