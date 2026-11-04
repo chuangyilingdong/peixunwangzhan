@@ -20,6 +20,7 @@
 import { arow, arows, errors, isRootPlatformAdmin } from '../../lib.js';
 import { classroomBudgetStatus } from '../../services/computePool.js';
 import { getRunningHubBalance } from '../../services/runningHubAccount.js';
+import { getWalletBalances } from '../../services/walletAccounts.js';
 
 const WINDOWS = Object.freeze({ '5m': 5, '15m': 15, '60m': 60 });
 const MAX_SESSIONS = 50;
@@ -485,7 +486,10 @@ export async function handleMonitor(ctx, part, method) {
 
   if (suffix === '/balance' && method === 'GET') {
     if (!billingVisible) throw errors.forbidden('余额属于 AI 能力与价格权限范围', 'PERMISSION_DENIED', { permission: 'ADMIN_BILLING' });
-    return await getRunningHubBalance({ refresh: ctx.search.get('refresh') === '1' });
+    const refresh = ctx.search.get('refresh') === '1';
+    const runningHub = await getRunningHubBalance({ refresh });
+    // 原有字段保持不变（前端 KPI / 守卫都依赖 accounts）；新增 wallets 汇总三家供应商。
+    return { ...runningHub, wallets: await getWalletBalances({ refresh, runningHub }) };
   }
 
   return null;

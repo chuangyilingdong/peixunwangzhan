@@ -7,7 +7,7 @@
  *   ③ 错误流四源合并（attempt / usage / job / vibecoding）+ 按 jobId 去重 + 主备切换降级；
  *   ④ 权限：ADMIN_ANALYTICS 看得到监控，但**看不到**成本/余额字段；余额接口 403。
  * 另外用 fetch stub 验证 RunningHub accountStatus 映射（remainMoney/currency/remainCoins）
- * 和 60 秒缓存（第二次不再打上游）。
+ * 和 60 秒缓存（第二次不再打上游）；供应商钱包三家并出、xkwuai quota→USD、USD 按 7.2 折算。
  *
  * 跑法：node scripts/p209-monitor.mjs
  */
@@ -32,7 +32,8 @@ run(['packages/database/src/db.js', '--init']);
 const { aq, arow, arows } = await import('../packages/database/src/store.js');
 const { handleMonitor } = await import('../apps/server/src/routes/admin/monitor.js');
 const { getRunningHubBalance, resetRunningHubBalanceCache, probeRunningHubAccount } = await import('../apps/server/src/services/runningHubAccount.js');
-const { setProviderApiKey } = await import('../apps/server/src/services/providerSecret.js');
+const { getWalletBalances, resetWalletBalanceCache, probeXkwuaiAccount } = await import('../apps/server/src/services/walletAccounts.js');
+const { setProviderApiKey, clearProviderApiKey } = await import('../apps/server/src/services/providerSecret.js');
 
 const now = new Date().toISOString();
 const checks = [];
@@ -192,9 +193,19 @@ resetRunningHubBalanceCache();
 const realFetch = globalThis.fetch;
 let accountCalls = 0;
 globalThis.fetch = async (url, options) => {
-  if (String(url).includes('/uc/openapi/accountStatus')) {
+  const target = String(url);
+  if (target.includes('runninghub.cn') && target.includes('/uc/openapi/accountStatus')) {
+    return new Response(JSON.stringify({ code: 0, msg: 'success', data: { remainMoney: '720', remainCoins: '0', currency: 'CNY', currentTaskCounts: '1', apiType: 'SHARED' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+  if (target.includes('/uc/openapi/accountStatus')) {
     accountCalls += 1;
     return new Response(JSON.stringify({ code: 0, msg: 'success', data: { remainMoney: '199.5', remainCoins: '9', currency: 'CNY', currentTaskCounts: '2', apiType: 'SHARED' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+  if (target.includes('xkwuai.cn/api/user/self')) {
+    return new Response(JSON.stringify({ success: true, data: { quota: 2500000, used_quota: 100, username: 'xkw' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+  if (target.includes('xkwuai.cn/api/status')) {
+    return new Response(JSON.stringify({ data: { quota_per_unit: 500000, quota_display_type: 'USD' } }), { status: 200, headers: { 'content-type': 'application/json' } });
   }
   return realFetch(url, options);
 };
@@ -216,6 +227,50 @@ try {
     assert.equal(cached.cached, true);
     assert.equal(accountCalls, 1);
   });
+
+  // 供应商钱包：RH 全球 + RH 国内 + xkwuai，USD 统一按 7.2 折人民币
+  setProviderApiKey('cn-test-key', 'wallet-runninghub-cn');
+  setProviderApiKey(JSON.stringify({ token: 'xk-test-token', userId: '7' }), 'wallet-xkwuai');
+  resetWalletBalanceCache();
+  const wallets = await getWalletBalances({ refresh: true, runningHub: balance });
+  await check('钱包：三家并出，CN 原币、xkwuai quota→USD 5、USD 按 7.2 折算', () => {
+    const byId = Object.fromEntries(wallets.sources.map((item) => [item.id, item]));
+    assert.equal(wallets.fx.usdCny, 7.2);
+    assert.deepEqual(Object.keys(byId).sort(), ['runninghub-cn', 'runninghub-global', 'xkwuai']);
+    assert.equal(byId['runninghub-global'].amount, 199.5);
+    assert.equal(byId['runninghub-global'].cny, 199.5);
+    assert.equal(byId['runninghub-cn'].ok, true);
+    assert.equal(byId['runninghub-cn'].amount, 720);
+    assert.equal(byId['runninghub-cn'].cny, 720);
+    assert.equal(byId['xkwuai'].ok, true);
+    assert.equal(byId['xkwuai'].amount, 5);
+    assert.equal(byId['xkwuai'].cny, 36);
+  });
+
+  const usdWallets = await getWalletBalances({ refresh: true, runningHub: { accounts: [{ ok: true, amount: 15.009, currency: 'USD', currencyLike: 'USD' }] } });
+  await check('钱包：全球站 USD 余额折人民币（15.009 → ¥108.06）', () => {
+    assert.equal(usdWallets.sources.find((item) => item.id === 'runninghub-global').cny, 108.06);
+  });
+
+  clearProviderApiKey('wallet-runninghub-cn');
+  clearProviderApiKey('wallet-xkwuai');
+  resetWalletBalanceCache();
+  const emptyWallets = await getWalletBalances({ refresh: true, runningHub: { accounts: [] } });
+  await check('钱包：未配置 Key/令牌时如实报未配置，不记成 0', () => {
+    for (const id of ['runninghub-cn', 'xkwuai']) {
+      const item = emptyWallets.sources.find((source) => source.id === id);
+      assert.equal(item.ok, false);
+      assert.equal(item.reason, 'NOT_CONFIGURED');
+      assert.equal(item.amount, null);
+      assert.equal(item.cny, null);
+    }
+  });
+  const noToken = await probeXkwuaiAccount({});
+  await check('钱包：xkwuai 没有令牌时直接返回 NO_API_KEY', () => {
+    assert.equal(noToken.ok, false);
+    assert.equal(noToken.reason, 'NO_API_KEY');
+  });
+
   let forbidden = null;
   try { await call('/balance', {}, analyticsAuth); } catch (error) { forbidden = error; }
   await check('余额：没有 ADMIN_BILLING 时 403 PERMISSION_DENIED', () => {
@@ -230,6 +285,7 @@ try {
 } finally {
   globalThis.fetch = realFetch;
   resetRunningHubBalanceCache();
+  resetWalletBalanceCache();
 }
 
 const failed = checks.filter((item) => !item.ok);

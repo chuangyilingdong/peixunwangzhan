@@ -128,3 +128,9 @@
 }
 .monitor-drawer header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 8px; }
 .monitor-drawer .top-gap { margin-top: 14px; }
+
+/* 供应商钱包：只读表格，行不可点；站名可点开新窗口 */
+.monitor-wallets { margin-bottom: 12px; }
+.monitor-wallets .monitor-table-wrap tbody tr { cursor: default; }
+.monitor-wallets a { color: var(--m-teal); text-decoration: none; }
+.monitor-wallets a:hover { text-decoration: underline; }
