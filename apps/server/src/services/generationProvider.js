@@ -119,6 +119,41 @@ export function generationProviderInfo(selection = {}) {
     configError: config.reasons.length ? 'AI_PROVIDER_CONFIG_INVALID' : null,
   };
 }
+/**
+ * 切备用渠道时，把请求参数收进备用渠道**真正支持的取值**（2026-11-04）。
+ *
+ * 典型：视频主 seedance 支持 480p/720p/1080p/2k/4k，备用 hailuo 只认 768P/2K。
+ * 主渠道 480p 失败后如果原样把 `resolution: '480p'` 发给备用，上游会 400 —— 备用等于白配。
+ * 这里按「最接近的档位」映射；没有声明能力/已经支持就原样返回。
+ */
+const RESOLUTION_PIXELS = (value) => {
+  const text = String(value || '').trim().toLowerCase();
+  const match = text.match(/^(\d+(?:\.\d+)?)\s*([kp])?$/);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return null;
+  return match[2] === 'k' ? amount * 1024 : amount;
+};
+
+export function adaptOptionsToCandidate(args, candidate) {
+  const options = args?.options;
+  if (!options) return args;
+  const capabilities = candidate?.modelCapabilities?.[candidate?.model] || candidate?.modelCapabilities?.[candidate?.channelModel];
+  const resolutions = Array.isArray(capabilities?.resolutions) ? capabilities.resolutions : [];
+  const requested = String(options.resolution || '').trim();
+  if (!requested || !resolutions.length || resolutions.includes(requested)) return args;
+  const requestedPixels = RESOLUTION_PIXELS(requested);
+  if (requestedPixels === null) return args;
+  // 取「不低于原清晰度」的最小档；都低于就取最高档。宁可贵一点，也不把学生的清晰度降下去。
+  const sorted = resolutions
+    .map((item) => ({ value: item, pixels: RESOLUTION_PIXELS(item) }))
+    .filter((item) => item.pixels !== null)
+    .sort((left, right) => left.pixels - right.pixels);
+  if (!sorted.length) return args;
+  const best = sorted.find((item) => item.pixels >= requestedPixels) || sorted[sorted.length - 1];
+  return { ...args, options: { ...options, resolution: best.value } };
+}
+
 export function getGenerationProvider(selection = {}) {
   const primary = rawGenerationProvider(selection);
   const wrapper = { ...primary, compute: null };
@@ -134,6 +169,8 @@ export function getGenerationProvider(selection = {}) {
     const candidates = [selection, ...(!selection.gateway && selection.backup ? [selection.backup] : [])];
     for (let index = 0; index < candidates.length; index++) {
       const selected = candidates[index]; const provider = index ? rawGenerationProvider(selected) : primary;
+      // 备用渠道支持的档位可能和主渠道不同（视频 480p vs 768P）：切之前先把参数收进它的枚举。
+      const attemptArgs = adaptOptionsToCandidate(args, selected);
       const attemptId = id('attempt'); const clientRequestId = id('req'); let emitted = false; let submitted = false;
       const context = args.computeContext || selection.computeContext || {};
       const project = args.projectId ? await arow('SELECT org_id,class_session_id,course_lesson_id FROM student_projects WHERE id=?',[args.projectId]) : null;
@@ -161,7 +198,7 @@ export function getGenerationProvider(selection = {}) {
       await aq('UPDATE compute_attempts SET org_id=?,class_session_id=?,lesson_id=? WHERE id=?',[session?.org_id || context.orgId || project?.org_id || null,sessionId,session?.lesson_id || context.lessonId || project?.course_lesson_id || null,attemptId]);
       const output = (callback) => async (...values) => { if (values[0]) { emitted = true; await aq('UPDATE compute_attempts SET output_started=1 WHERE id=?',[attemptId]); } return callback?.(...values); };
       try {
-        const result = await provider[method]({ ...args,
+        const result = await provider[method]({ ...attemptArgs,
           clientRequestId,
           onEvidence: async (evidence = {}) => await aq(`UPDATE compute_attempts SET response_request_id=COALESCE(?,response_request_id),response_payload_id=COALESCE(?,response_payload_id),usage_id=COALESCE(?,usage_id),gateway_log_id=COALESCE(?,gateway_log_id),actual_channel_id=COALESCE(?,actual_channel_id) WHERE id=?`, [evidence.responseRequestId || null,evidence.responsePayloadId || null,evidence.usageId || null,evidence.gatewayLogId || null,evidence.actualChannelId || null,attemptId]),
           onDelta: output(args.onDelta), onReasoning: output(args.onReasoning),
@@ -170,7 +207,7 @@ export function getGenerationProvider(selection = {}) {
         const reported = !selected.gateway ? result?.assets?.find(asset => asset?.metadata?.reportedCost)?.metadata?.reportedCost : null;
         // 合同单价折算（P90）：用量证据按模态采集（文本看上游 token 回执，图/视频/音乐看请求参数）。
         // 有单价 + 有用量才算得出来；算不出来就保持 UNKNOWN，**绝不按 0 计**。
-        const usage = collectUsageEvidence({ modality, result, request: args.options || null });
+        const usage = collectUsageEvidence({ modality, result, request: attemptArgs.options || null });
         const contract = reported ? null : computeContractCost({ modality, model: provider.model, unitPrices: selected.upstreamUnitPrices || null, modelUnitPrices: selected.modelUnitPrices || null, usage });
         // 成本来源只剩这三种（见上面那段注释：估算那档已退役）
         const computedSource = provider.name === 'local-mock' ? 'MOCK' : reported ? 'REPORTED' : contract ? 'COMPUTED' : 'UNKNOWN';

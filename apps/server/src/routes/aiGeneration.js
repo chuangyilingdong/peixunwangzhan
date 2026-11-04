@@ -826,8 +826,8 @@ export function providerSelectionForModality(policy, modality, modelOverride = '
   const channelId = mapping?.channelId || defaultChannelId;
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
   const base = channel
-    ? { provider: channel.provider, model: channel.model, channelModel: channel.model, endpoint: channel.endpoint, channelId: channel.id, providerAccountRef: channel.providerAccountRef || null, requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {}, requestPaths: channel.requestPaths || {}, pollPaths: channel.pollPaths || {}, upstreamUnitPrices: channel.upstreamUnitPrices || null, modelUnitPrices: channel.modelUnitPrices || null }
-    : { provider: policy.provider, model: policy.model, channelModel: policy.model, endpoint: policy.endpoint, channelId: 'default', requestTemplates: {}, modelRequestTemplates: {}, requestPaths: {}, pollPaths: {}, upstreamUnitPrices: null, modelUnitPrices: null };
+    ? { provider: channel.provider, model: channel.model, channelModel: channel.model, endpoint: channel.endpoint, channelId: channel.id, providerAccountRef: channel.providerAccountRef || null, requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {}, requestPaths: channel.requestPaths || {}, pollPaths: channel.pollPaths || {}, upstreamUnitPrices: channel.upstreamUnitPrices || null, modelUnitPrices: channel.modelUnitPrices || null, modelCapabilities: channel.modelCapabilities || {} }
+    : { provider: policy.provider, model: policy.model, channelModel: policy.model, endpoint: policy.endpoint, channelId: 'default', requestTemplates: {}, modelRequestTemplates: {}, requestPaths: {}, pollPaths: {}, upstreamUnitPrices: null, modelUnitPrices: null, modelCapabilities: {} };
   const selected = mapping ? { ...base, model: mapping.model } : modelOverride ? { ...base, model: modelOverride } : base;
   // RunningHub 的「模型」就是渠道卡里的 family（endpoint path 由它决定）；课时里的旧模型 ID 不能覆盖它，
   // 否则请求发到 RunningHub 的模型族会错、价格/日志也会记成旧模型。
@@ -839,7 +839,7 @@ export function providerSelectionForModality(policy, modality, modelOverride = '
   const backup = policy?.channels?.find((item) => item.id === backupId);
   if (backup) {
     const backupModel = mapping?.backupModel || backup.model;
-    selected.backup = { ...backup, channelId: backup.id, model: backupModel, channelModel: backupModel, upstreamUnitPrices: backup.upstreamUnitPrices || null, modelUnitPrices: backup.modelUnitPrices || null, estimatedCostFen: backup.modelCosts?.[backupModel] ?? backup.estimatedCostFen ?? null };
+    selected.backup = { ...backup, channelId: backup.id, model: backupModel, channelModel: backupModel, upstreamUnitPrices: backup.upstreamUnitPrices || null, modelUnitPrices: backup.modelUnitPrices || null, modelCapabilities: backup.modelCapabilities || {}, estimatedCostFen: backup.modelCosts?.[backupModel] ?? backup.estimatedCostFen ?? null };
   }
   return selected;
 }

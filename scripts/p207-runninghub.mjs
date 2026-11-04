@@ -27,7 +27,7 @@ process.env.PUBLIC_SITE_URL = 'https://aicyld.com';
 
 const { runningHubProvider } = await import('../apps/server/src/services/runningHubProvider.js');
 const { providerSelectionForModality } = await import('../apps/server/src/routes/aiGeneration.js');
-const { generationProviderInfo, getGenerationProvider } = await import('../apps/server/src/services/generationProvider.js');
+const { generationProviderInfo, getGenerationProvider, adaptOptionsToCandidate } = await import('../apps/server/src/services/generationProvider.js');
 const { RUNNINGHUB_FAMILIES, runningHubFamilyModality, runningHubModelCatalog } = await import('../apps/server/src/services/runningHubProvider.js');
 
 const PORT = 18994;
@@ -315,6 +315,23 @@ await check('family → 模态：未路由渠道的「试一次」不再落回 T
   assert.equal(runningHubFamilyModality('minimax/music-2.6'), 'MUSIC');
   assert.equal(runningHubFamilyModality('not-a-family'), '');
   assert.equal(runningHubFamilyModality(''), '');
+});
+
+await check('切备用时把分辨率收进备用渠道的枚举（视频主 480p → 备 768P）', async () => {
+  // 主 seedance 支持 480p..4k，备 hailuo 只认 768P/2K —— 原样把 480p 发给备用会被 400 拒掉。
+  const backup = { model: 'minimax/hailuo-h3', modelCapabilities: { 'minimax/hailuo-h3': { resolutions: ['768P', '2K'] } } };
+  const args = (resolution) => ({ modality: 'VIDEO', options: { resolution, durationSeconds: 5, aspectRatio: '16:9' } });
+  assert.equal(adaptOptionsToCandidate(args('480p'), backup).options.resolution, '768P');
+  assert.equal(adaptOptionsToCandidate(args('720p'), backup).options.resolution, '768P');
+  assert.equal(adaptOptionsToCandidate(args('1080p'), backup).options.resolution, '2K');
+  assert.equal(adaptOptionsToCandidate(args('2k'), backup).options.resolution, '2K');
+  assert.equal(adaptOptionsToCandidate(args('768P'), backup).options.resolution, '768P');
+  // 没有声明能力 / 没给分辨率 → 原样，不猜
+  assert.equal(adaptOptionsToCandidate(args('480p'), { model: 'x' }).options.resolution, '480p');
+  assert.equal(adaptOptionsToCandidate({ modality: 'VIDEO', options: {} }, backup).options.resolution, undefined);
+  // 其它参数一个都不动
+  assert.equal(adaptOptionsToCandidate(args('480p'), backup).options.durationSeconds, 5);
+  assert.equal(adaptOptionsToCandidate(args('480p'), backup).options.aspectRatio, '16:9');
 });
 
 mock.close();

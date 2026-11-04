@@ -215,12 +215,22 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
   const providerConfig = useData(() => api.get('admin/billing-config/ai-provider'), [api]);
   const providerPolicy = providerConfig.data?.policy;
   const capabilityDefaults = providerConfig.data?.capabilityDefaults || {};
-  function channelOf(modality) {
-    const channelId = providerPolicy?.modalityChannels?.[modality];
+  /**
+   * 该模态/生成方式对应的渠道。
+   * 图片是两条独立 API（文生图 / 图生图），后台也各配了一条渠道：
+   * 图生图框体的模型下拉必须看 `imageModeChannels.IMAGE_REFERENCE`，
+   * 否则永远只列「文生图主」的模型（2026-11-04 用户抽查发现）。
+   */
+  function channelOf(modality, inputMode = '') {
+    const key = String(modality || '').toUpperCase();
+    const modeChannelId = key === 'IMAGE' && inputMode
+      ? providerPolicy?.imageModeChannels?.[inputMode]
+      : '';
+    const channelId = modeChannelId || providerPolicy?.modalityChannels?.[key];
     return (providerPolicy?.channels || []).find((item) => item.id === channelId) || null;
   }
-  function channelModels(modality) {
-    const channel = channelOf(modality);
+  function channelModels(modality, inputMode = '') {
+    const channel = channelOf(modality, inputMode);
     if (!channel) return [];
     if (Array.isArray(channel.models) && channel.models.length) return channel.models;
     return channel.model ? [channel.model] : [];
@@ -239,8 +249,8 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
   //    兜底链于是不生效 → `caps.aspectRatios` 是 undefined → 界面上 `!caps.aspectRatios.length`
   //    当场抛错 → **后台整页白屏**（运营「选 bgm 的模型就白屏」那次）。
   //    现在**逐项归一化**（`resolveCapabilities`，单独一个 .js 就是为了能被守卫测到）。
-  function capabilitiesFor(modality, modelId) {
-    const channel = channelOf(modality);
+  function capabilitiesFor(modality, modelId, inputMode = '') {
+    const channel = channelOf(modality, inputMode);
     const model = String(modelId || '').trim() || String(channel?.model || '').trim();
     return resolveCapabilities({
       configured: channel?.modelCapabilities?.[model],
@@ -408,7 +418,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
     patchBox(groupIndex, materialIndex, uid, (box) => {
       const modality = String(box.modality || 'TEXT').toUpperCase();
       if (modality === 'TEXT' || modality === 'MUSIC') return { ...box, model };
-      const caps = capabilitiesFor(modality, model);
+      const caps = capabilitiesFor(modality, model, box.inputMode);
       const next = { ...box, model };
       if (next.aspectRatio && !caps.aspectRatios.includes(next.aspectRatio)) next.aspectRatio = '';
       if (next.resolution && !caps.resolutions.includes(next.resolution)) next.resolution = '';
@@ -501,7 +511,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
             const isText = ['NOTE', 'PROMPT'].includes(material.materialType);
             const box = isBox ? (snapshot.box || {}) : null;
             const modality = String(box?.modality || 'TEXT').toUpperCase();
-            const caps = isBox ? capabilitiesFor(modality, box.model) : null;
+            const caps = isBox ? capabilitiesFor(modality, box.model, box.inputMode) : null;
             const capabilityLabel = modality === 'IMAGE' ? 'AI 生图' : modality === 'VIDEO' ? 'AI 生视频' : modality === 'MUSIC' ? 'AI 音乐' : 'AI 文字';
             // ⚠️ 2026-09-19 用户口径：把生成框体的「平台预填内容」与「预置图片 / 预置首帧图」两栏**删掉** ——
             //    框体进画布后由学生自己写描述、自己连一张图（学生端本来就有「首帧/尾帧」连线行，
@@ -526,7 +536,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
                 {capabilities.includes(modality.toLowerCase()) ? null : <p className="muted">本课没有开放「{capabilityLabel}」能力，学生看不到这个框体；勾选上方能力后才会出现。</p>}
                 <div className="lesson-field-row">
                   <LessonField label="生成什么"><select value={modality} onChange={(event) => changeBoxModality(groupIndex, materialIndex, material.uid, event.target.value)}>{GENERATION_BOX_MODALITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></LessonField>
-                  <LessonField label="模型">{channelModels(modality).length ? <select value={box.model || ''} onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)}><option value="">使用渠道默认模型</option>{channelModels(modality).map((model) => <option key={model} value={model}>{modelOptionLabel(model)}</option>)}</select> : <input value={box.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)} />}</LessonField>
+                  <LessonField label="模型">{channelModels(modality, box.inputMode).length ? <select value={box.model || ''} onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)}><option value="">使用渠道默认模型</option>{channelModels(modality, box.inputMode).map((model) => <option key={model} value={model}>{modelOptionLabel(model)}</option>)}</select> : <input value={box.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)} />}</LessonField>
                   {modality === 'MUSIC' ? <LessonField label="生成模式"><select value={box.mode || 'LYRICS'} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, mode: event.target.value }))}>{MUSIC_MODE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></LessonField> : null}
                 </div>
                 {/* 生成方式：这节课的这个框体"要哪种"（文生/图生/首尾帧/全能参考、文生图/图生图）。
@@ -536,7 +546,15 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
                     放在「模型」正下方：它是老师配这节课时**最先要定的一件事**，也是学生端连线的依据。 */}
                 {(modality === 'IMAGE' || modality === 'VIDEO') ? <div className="lesson-field-row">
                   <LessonField label="生成方式" hint={generationModeOptions(caps, modality).length > 1 ? '决定画布上能连什么、连过来的素材怎么用' : '当前模型只支持这一种'}>
-                    <select value={box.inputMode || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, inputMode: event.target.value }))}>
+                    <select value={box.inputMode || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => {
+                      const inputMode = event.target.value;
+                      const next = { ...current, inputMode };
+                      // 文生图/图生图是两条渠道：换了生成方式后，原来钉的模型多半不在新渠道里，
+                      // 继续留着会变成「下拉里没有这一项」。直接回到「使用渠道默认模型」最稳。
+                      const allowed = channelModels(modality, inputMode);
+                      if (next.model && allowed.length && !allowed.includes(next.model)) next.model = '';
+                      return next;
+                    })}>
                       <option value="">学生自选（按连线内容自动判断）</option>
                       {generationModeSelectOptions(caps, modality, box.inputMode).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                     </select>
