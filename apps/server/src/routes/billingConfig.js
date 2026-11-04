@@ -129,10 +129,15 @@ function normalizeProviderPolicy(value) {
     ? new Date(costBaselineRaw).toISOString()
     : null;
   const modalityOfChannel = (channelId) => {
-    const direct = Object.entries({ ...modalityBackupChannels, ...modalityChannels }).find(([, id]) => id === channelId)?.[0];
+    // ⚠️ 不能把主/备合并成一个对象再 find：同一个 key（VIDEO）会被后展开的主渠道覆盖，
+    // 备用渠道永远查不到自己的模态 → 能力归一化按 '' 处理，时长/音频/输入方式被静默清空。
+    // 这里用数组保留两份（2026-11-04 修）。
+    const direct = [...Object.entries(modalityChannels), ...Object.entries(modalityBackupChannels)]
+      .find(([, id]) => id === channelId)?.[0];
     if (direct) return direct;
     // 图生图/文生图专用渠道不在 modalityChannels 里：它们的计价单位仍然是「图片」。
-    const imageMode = Object.entries({ ...imageModeBackupChannels, ...imageModeChannels }).find(([, id]) => id === channelId)?.[0];
+    const imageMode = [...Object.entries(imageModeChannels), ...Object.entries(imageModeBackupChannels)]
+      .find(([, id]) => id === channelId)?.[0];
     return imageMode ? 'IMAGE' : '';
   };
   const channels = Array.isArray(parsed.channels) ? parsed.channels.filter((item) => item && item.id).slice(0, 30).map((item) => {
