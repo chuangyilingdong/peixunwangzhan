@@ -32,8 +32,9 @@ run(['packages/database/src/db.js', '--init']);
 
 const { aq, arow, arows } = await import('../packages/database/src/store.js');
 const { handleMonitor } = await import('../apps/server/src/routes/admin/monitor.js');
-const { getRunningHubBalance, resetRunningHubBalanceCache, probeRunningHubAccount } = await import('../apps/server/src/services/runningHubAccount.js');
+const { getRunningHubBalance, resetRunningHubBalanceCache, probeRunningHubAccount, getRunningHubQueue, resetRunningHubQueueCache } = await import('../apps/server/src/services/runningHubAccount.js');
 const { getWalletBalances, resetWalletBalanceCache, probeXkwuaiAccount } = await import('../apps/server/src/services/walletAccounts.js');
+const { recordWalletSamples, getWalletHistory } = await import('../apps/server/src/services/walletHistory.js');
 const { setProviderApiKey, clearProviderApiKey } = await import('../apps/server/src/services/providerSecret.js');
 
 const now = new Date().toISOString();
@@ -195,6 +196,9 @@ const realFetch = globalThis.fetch;
 let accountCalls = 0;
 globalThis.fetch = async (url, options) => {
   const target = String(url);
+  if (target.includes('/openapi/v2/queue/status')) {
+    return new Response(JSON.stringify({ code: 0, msg: 'success', data: { apiKeyType: 'SHARED', concurrentLimit: 100, instanceCount: 0, runningCount: '3', queuedCount: '5', totalCurrentTasks: '8' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
   if (target.includes('runninghub.cn') && target.includes('/uc/openapi/accountStatus')) {
     return new Response(JSON.stringify({ code: 0, msg: 'success', data: { remainMoney: '720', remainCoins: '0', currency: 'CNY', currentTaskCounts: '1', apiType: 'SHARED' } }), { status: 200, headers: { 'content-type': 'application/json' } });
   }
@@ -229,6 +233,17 @@ try {
     assert.equal(accountCalls, 1);
   });
 
+  resetRunningHubQueueCache();
+  const queue = await getRunningHubQueue({ refresh: true });
+  await check('队列：queue/status 映射 running/queued/并发上限', () => {
+    assert.equal(queue.ok, true);
+    assert.equal(queue.running, 3);
+    assert.equal(queue.queued, 5);
+    assert.equal(queue.total, 8);
+    assert.equal(queue.concurrentLimit, 100);
+    assert.equal(queue.channel, 'RH 主');
+  });
+
   // 供应商钱包：RH 全球 + RH 国内 + xkwuai，USD 统一按 7.2 折人民币
   setProviderApiKey('cn-test-key', 'wallet-runninghub-cn');
   setProviderApiKey(JSON.stringify({ token: 'xk-test-token', userId: '7' }), 'wallet-xkwuai');
@@ -251,6 +266,21 @@ try {
   const usdWallets = await getWalletBalances({ refresh: true, runningHub: { accounts: [{ ok: true, amount: 15.009, currency: 'USD', currencyLike: 'USD' }] } });
   await check('钱包：全球站 USD 余额折人民币（15.009 → ¥108.06）', () => {
     assert.equal(usdWallets.sources.find((item) => item.id === 'runninghub-global').cny, 108.06);
+  });
+
+  await recordWalletSamples();
+  const history24h = await getWalletHistory({ hours: 24 });
+  await check('余额趋势：采样落库后 24h 合计 = 199.5 + 720 + 5，15 分钟桶', () => {
+    assert.equal(history24h.bucketMinutes, 15);
+    assert.equal(history24h.total.length, 1);
+    assert.equal(history24h.total[0].cny, 924.5);
+    assert.equal(history24h.total[0].sources, 3);
+    assert.equal(history24h.sources.length, 3);
+  });
+  const history7d = await getWalletHistory({ hours: 168 });
+  await check('余额趋势：7 天窗口用 60 分钟桶', () => {
+    assert.equal(history7d.bucketMinutes, 60);
+    assert.equal(history7d.total[0].cny, 924.5);
   });
 
   clearProviderApiKey('wallet-runninghub-cn');
@@ -286,6 +316,7 @@ try {
 } finally {
   globalThis.fetch = realFetch;
   resetRunningHubBalanceCache();
+  resetRunningHubQueueCache();
   resetWalletBalanceCache();
 }
 

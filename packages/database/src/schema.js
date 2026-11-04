@@ -1772,6 +1772,22 @@ CREATE TABLE IF NOT EXISTS junshi_workbench_douyin_pairings (
 );
 CREATE INDEX IF NOT EXISTS idx_junshi_wb_pair_token ON junshi_workbench_douyin_pairings(token_hash);
 
+-- 监控台 · 供应商钱包采样（2026-11-04）。只用于画余额趋势，不参与计费。
+-- 每 5 分钟一行/供应商；失败也记（ok=0, cny=NULL），趋势里能看出「某家读不到」。
+-- ⚠️ 生产是 RDS(MySQL)，建表要手工跑 deploy/production/migrate/53-monitor-wallet-samples-mysql.sql。
+CREATE TABLE IF NOT EXISTS monitor_wallet_samples (
+  id         TEXT    NOT NULL PRIMARY KEY,
+  source_id  TEXT    NOT NULL,
+  amount     REAL,
+  currency   TEXT,
+  cny        REAL,
+  ok         INTEGER NOT NULL DEFAULT 0,
+  fetched_at TEXT    NOT NULL,
+  created_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wallet_samples_created ON monitor_wallet_samples(created_at);
+CREATE INDEX IF NOT EXISTS idx_wallet_samples_source_created ON monitor_wallet_samples(source_id, created_at);
+
 `;
 
 db.exec(SCHEMA);

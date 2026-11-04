@@ -19,8 +19,9 @@
  */
 import { arow, arows, errors, isRootPlatformAdmin } from '../../lib.js';
 import { classroomBudgetStatus } from '../../services/computePool.js';
-import { getRunningHubBalance } from '../../services/runningHubAccount.js';
+import { getRunningHubBalance, getRunningHubQueue } from '../../services/runningHubAccount.js';
 import { getWalletBalances } from '../../services/walletAccounts.js';
+import { getWalletHistory } from '../../services/walletHistory.js';
 
 const WINDOWS = Object.freeze({ '5m': 5, '15m': 15, '60m': 60 });
 const MAX_SESSIONS = 50;
@@ -222,7 +223,10 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
   const seriesSince = since;
   const orgFilter = String(orgId || '').trim();
 
-  const [live, usageWindow, attemptsWindow, seriesRows, orgRows, orgStats, sessionRows] = await Promise.all([
+  const stuckBefore = sinceOf(15);
+  const stuckSince = sinceOf(6 * 60);
+
+  const [live, usageWindow, attemptsWindow, seriesRows, orgRows, orgStats, sessionRows, stuckAttemptRows, stuckJobRows, costRows, policyRow, queueStatus] = await Promise.all([
     arow(`SELECT
         (SELECT COUNT(*) FROM class_sessions WHERE status='ACTIVE') active_sessions,
         (SELECT COUNT(*) FROM session_students WHERE status='ACTIVE') active_students,
@@ -268,6 +272,22 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
       LEFT JOIN course_lessons l ON l.id=s.lesson_id
       WHERE s.status='ACTIVE' AND (?='' OR s.org_id=?)
       ORDER BY s.started_at DESC LIMIT ?`, [orgFilter, orgFilter, MAX_SESSIONS]),
+    // 卡住任务：只看最近 6 小时内、已超过 15 分钟还没收尾的 —— 历史遗留的脏 attempt 不算。
+    arows(`SELECT id, modality, model, channel_id, status, created_at FROM compute_attempts
+        WHERE status IN ('RUNNING','SUBMITTED') AND created_at>=? AND created_at<?
+        ORDER BY created_at ASC LIMIT 20`, [stuckSince, stuckBefore]),
+    arows(`SELECT id, modality, model, status, created_at FROM generation_jobs
+        WHERE status IN ('QUEUED','RUNNING') AND created_at>=? AND created_at<?
+        ORDER BY created_at ASC LIMIT 20`, [stuckSince, stuckBefore]),
+    arows(`SELECT channel_id, model, modality, COUNT(*) calls,
+        SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) success,
+        SUM(CASE WHEN status='SUCCESS' AND cost_source<>'UNKNOWN' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) known_cost_fen,
+        SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
+      FROM compute_attempts WHERE created_at>=?
+      GROUP BY channel_id, model, modality ORDER BY known_cost_fen DESC LIMIT 8`, [since]),
+    arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1'),
+    // RunningHub 账户级队列（15 秒缓存）；没配 RH 渠道时返回 ok:false，不影响快照。
+    getRunningHubQueue(),
   ]);
 
   const sessionIds = sessionRows.map((row) => row.id);
@@ -348,6 +368,37 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
   const usage = usageWindow || {};
   const errorsResult = await fetchErrorRows({ since, orgId: orgFilter, limit: MAX_ERRORS });
 
+  // 渠道显示名：从策略里取，取不到就只给 id（不再跨模块 import，避免把整条账单路由拖进监控）。
+  const channelNames = new Map();
+  try {
+    const policy = JSON.parse(policyRow?.ai_provider_policy || '{}');
+    for (const channel of policy.channels || []) channelNames.set(channel.id, channel.name || channel.id);
+  } catch { /* 策略坏了不影响监控 */ }
+  const ageMinutes = (iso) => {
+    const time = Date.parse(iso);
+    return Number.isFinite(time) ? Math.max(0, Math.round((Date.now() - time) / 60000)) : null;
+  };
+  const stuck = [
+    ...stuckAttemptRows.map((row) => ({
+      kind: 'ATTEMPT', id: row.id, modality: row.modality || null, model: row.model || null,
+      channelId: row.channel_id || null, channelName: channelNames.get(row.channel_id) || null,
+      status: row.status, createdAt: row.created_at, ageMinutes: ageMinutes(row.created_at),
+    })),
+    ...stuckJobRows.map((row) => ({
+      kind: 'JOB', id: row.id, modality: row.modality || null, model: row.model || null,
+      channelId: null, channelName: null, status: row.status, createdAt: row.created_at, ageMinutes: ageMinutes(row.created_at),
+    })),
+  ].sort((left, right) => (right.ageMinutes || 0) - (left.ageMinutes || 0)).slice(0, 20);
+
+  const costTop = billingVisible ? costRows.map((row) => ({
+    channelId: row.channel_id || null,
+    channelName: channelNames.get(row.channel_id) || null,
+    model: row.model || null,
+    modality: row.modality || null,
+    calls: num(row.calls), success: num(row.success),
+    knownCostFen: num(row.known_cost_fen), unknownCalls: num(row.unknown_calls),
+  })) : undefined;
+
   return {
     generatedAt: new Date().toISOString(),
     window: windowKey,
@@ -360,6 +411,8 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
       runningAttempts: num(live?.running_attempts),
       queuedJobs: num(live?.queued_jobs),
       runningJobs: num(live?.running_jobs),
+      stuckAttempts: stuckAttemptRows.length,
+      stuckJobs: stuckJobRows.length,
     },
     usage: {
       calls: num(attempts.calls),
@@ -371,6 +424,7 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
         saleFen: num(attempts.sale_fen),
         knownCostFen: num(attempts.known_cost_fen),
         unknownCostCalls: num(attempts.unknown_cost_calls),
+        unknownCostRate: pct(num(attempts.unknown_cost_calls), num(attempts.success)),
       } : {}),
     },
     series,
@@ -378,6 +432,9 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     sessions,
     errors: errorsResult.items,
     errorTop: errorsResult.top,
+    stuck,
+    queue: queueStatus,
+    ...(billingVisible ? { costTop } : {}),
     billingVisible,
   };
 }
@@ -482,6 +539,11 @@ export async function handleMonitor(ctx, part, method) {
       limit,
     });
     return { generatedAt: new Date().toISOString(), since, ...result };
+  }
+
+  if (suffix === '/balance/history' && method === 'GET') {
+    if (!billingVisible) throw errors.forbidden('余额属于 AI 能力与价格权限范围', 'PERMISSION_DENIED', { permission: 'ADMIN_BILLING' });
+    return await getWalletHistory({ hours: ctx.search.get('hours') });
   }
 
   if (suffix === '/balance' && method === 'GET') {

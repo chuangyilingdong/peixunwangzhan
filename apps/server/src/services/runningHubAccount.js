@@ -19,8 +19,10 @@ import { arow } from '../lib.js';
 import { getProviderApiKey } from './providerSecret.js';
 
 const ACCOUNT_STATUS_PATH = '/uc/openapi/accountStatus';
+const QUEUE_STATUS_PATH = '/openapi/v2/queue/status';
 const TIMEOUT_MS = 9000;
 const CACHE_TTL_MS = 60_000;
+const QUEUE_CACHE_TTL_MS = 15_000;
 
 const isRunningHubHost = (hostname) => /(^|\.)runninghub\.(ai|cn)$/i.test(String(hostname || ''));
 
@@ -157,4 +159,84 @@ export async function getRunningHubBalance({ refresh = false } = {}) {
 export function resetRunningHubBalanceCache() {
   cache = null;
   inflight = null;
+}
+
+/**
+ * 单次探测 RunningHub 队列：GET /openapi/v2/queue/status（Bearer 即可；
+ * POST 会回 `1001 Invalid URL`，别改成 POST）。永不抛错。
+ */
+export async function probeRunningHubQueue({ endpoint, apiKey } = {}) {
+  const raw = String(endpoint || '').trim();
+  let url = null;
+  try { url = new URL(raw); } catch { url = null; }
+  if (!url || !isRunningHubHost(url.hostname)) return { ok: false, error: '不是 RunningHub 的调用地址' };
+  if (!apiKey) return { ok: false, reason: 'NO_API_KEY', error: '该渠道未配置 API Key' };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const response = await fetch(`${url.origin}${QUEUE_STATUS_PATH}`, {
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    const text = await response.text().catch(() => '');
+    let payload = null;
+    try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
+    if (!response.ok) return { ok: false, error: `上游返回 HTTP ${response.status}` };
+    if (payload && payload.code !== undefined && Number(payload.code) !== 0) {
+      return { ok: false, error: `上游业务错误（code=${scrub(payload.code, apiKey)}）${payload.msg ? `：${scrub(payload.msg, apiKey)}` : ''}` };
+    }
+    const data = payload?.data && typeof payload.data === 'object' ? payload.data : null;
+    if (!data) return { ok: false, error: '上游响应里没有 data' };
+    return {
+      ok: true,
+      running: priceNumber(data.runningCount) ?? 0,
+      queued: priceNumber(data.queuedCount) ?? 0,
+      total: priceNumber(data.totalCurrentTasks) ?? 0,
+      concurrentLimit: priceNumber(data.concurrentLimit),
+      instanceCount: priceNumber(data.instanceCount),
+      apiKeyType: data.apiKeyType ? String(data.apiKeyType).slice(0, 32) : null,
+    };
+  } catch (error) {
+    const aborted = error?.name === 'AbortError';
+    return { ok: false, error: aborted ? `上游 ${TIMEOUT_MS} 毫秒内没有响应` : `连不上上游（${scrub(error?.cause?.code || error?.message || '未知原因', apiKey)}）` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+let queueCache = null; // { at, value }
+let queueInflight = null;
+
+/** 队列是账户级的：用第一条 RunningHub 渠道的 Key 探一次即可，15 秒缓存。 */
+export async function getRunningHubQueue({ refresh = false } = {}) {
+  const fresh = queueCache && Date.now() - queueCache.at < QUEUE_CACHE_TTL_MS;
+  if (!refresh && fresh) return { ...queueCache.value, cached: true };
+  if (!queueInflight) {
+    queueInflight = (async () => {
+      try {
+        const row = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
+        let policy = {};
+        try { policy = JSON.parse(row?.ai_provider_policy || '{}') || {}; } catch { policy = {}; }
+        const channel = (Array.isArray(policy.channels) ? policy.channels : [])
+          .find((item) => String(item?.provider || '').toLowerCase() === 'runninghub' && String(item?.endpoint || '').trim());
+        if (!channel) return { ok: false, fetchedAt: new Date().toISOString(), error: '没有配置 RunningHub 渠道' };
+        const key = getProviderApiKey(channel.id) || '';
+        const result = await probeRunningHubQueue({ endpoint: channel.endpoint, apiKey: key });
+        const value = { ...result, channel: String(channel.name || channel.id), fetchedAt: new Date().toISOString() };
+        queueCache = { at: Date.now(), value };
+        return value;
+      } catch (error) {
+        return { ok: false, fetchedAt: new Date().toISOString(), error: scrub(error?.message || '队列读取失败') };
+      } finally {
+        queueInflight = null;
+      }
+    })();
+  }
+  return { ...(await queueInflight), cached: false };
+}
+
+/** 守卫用：清队列缓存。 */
+export function resetRunningHubQueueCache() {
+  queueCache = null;
+  queueInflight = null;
 }

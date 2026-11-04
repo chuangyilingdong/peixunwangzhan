@@ -133,3 +133,12 @@
 .monitor-wallet-lines { margin-top: 6px; display: grid; gap: 2px; }
 .monitor-wallet-line { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--m-muted); }
 .monitor-wallet-line b { color: var(--m-text); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* 页面内告警：多条纵向排列；warning 用黄色系，danger 复用原有红色 */
+.monitor-alerts { display: grid; gap: 8px; margin-bottom: 12px; }
+.monitor-alerts .monitor-banner { margin: 0; }
+.monitor-banner.is-warning { color: #f5d48a; background: #241d0f; border: 1px solid #6b4e12; }
+.monitor-select-mini {
+  background: var(--m-panel); color: var(--m-text); border: 1px solid var(--m-border);
+  border-radius: 6px; padding: 2px 6px; font-size: 11px;
+}

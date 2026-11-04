@@ -288,6 +288,12 @@ server.listen(PORT, API_HOST, () => {
   initJunshiPeerAutoScheduler();
 }
 
+// 监控台 · 供应商钱包采样：每 5 分钟落一行/供应商，供 24h/7d 趋势。失败只 warn，不影响服务。
+{
+  const { initWalletSampler } = await import('./services/walletHistory.js');
+  initWalletSampler();
+}
+
 let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;

@@ -134,7 +134,8 @@ export function Monitor({ api, user }) {
   const [updatedAt, setUpdatedAt] = useState(null);
   const [balance, setBalance] = useState(null);
   const [balanceError, setBalanceError] = useState(null);
-  const [balanceHistory, setBalanceHistory] = useState([]);
+  const [walletHistory, setWalletHistory] = useState(null);
+  const [historyRange, setHistoryRange] = useState(24);
   const [selectedSessionId, setSelectedSessionId] = useState('');
   const [classroom, setClassroom] = useState(null);
   const [classroomError, setClassroomError] = useState(null);
@@ -153,12 +154,14 @@ export function Monitor({ api, user }) {
     const data = await api.get('admin/dashboard/monitor/balance', { signal, timeoutMs: 20000 });
     setBalance(data);
     setBalanceError(null);
-    const sources = data?.wallets?.sources || [];
-    const total = sources.reduce((sum, item) => sum + (item.ok && item.cny !== null && item.cny !== undefined ? Number(item.cny) : 0), 0);
-    if (sources.some((item) => item.ok && item.cny !== null && item.cny !== undefined)) {
-      setBalanceHistory((current) => [...current.slice(-119), { at: Date.now(), value: Math.round(total * 100) / 100 }]);
-    }
   }, { intervalMs: BALANCE_REFRESH_MS, enabled: canBilling && !paused, deps: [canBilling, paused, tick], onError: (error) => setBalanceError(error) });
+
+  // 余额趋势：服务端 5 分钟采样落库后的历史，刷新页面不丢。
+  usePolling(async (signal) => {
+    if (!canBilling) return;
+    const data = await api.get(`admin/dashboard/monitor/balance/history?hours=${historyRange}`, { signal, timeoutMs: 15000 });
+    setWalletHistory(data);
+  }, { intervalMs: BALANCE_REFRESH_MS, enabled: canBilling && !paused, deps: [canBilling, paused, historyRange, tick], onError: () => {} });
 
   usePolling(async (signal) => {
     if (!selectedSessionId) return;
@@ -178,6 +181,8 @@ export function Monitor({ api, user }) {
   const sessions = snapshot?.sessions || [];
   const errors = snapshot?.errors || [];
   const errorTop = snapshot?.errorTop || [];
+  const stuck = snapshot?.stuck || [];
+  const costTop = snapshot?.costTop || [];
   const wallets = balance?.wallets?.sources || [];
   const walletTotalCny = wallets.some((item) => item.ok && item.cny !== null && item.cny !== undefined)
     ? wallets.reduce((sum, item) => sum + (item.ok && item.cny !== null && item.cny !== undefined ? Number(item.cny) : 0), 0)
@@ -190,10 +195,27 @@ export function Monitor({ api, user }) {
     : (errorRate !== null && errorRate >= 5) || (usage.failed || 0) > 0 ? 'degraded' : 'ok';
   const statusText = status === 'critical' ? '需要处理' : status === 'degraded' ? '有异常' : '正常';
 
+  // 页面内告警：不推飞书，直接列在页头下面（用户口径 2026-11-04）。
+  const alerts = [];
+  if (walletFailed) alerts.push({ key: 'wallet', level: 'warning', text: `${walletFailed} 家供应商余额读取失败（不计入总余额）` });
+  if (walletTotalCny !== null && walletTotalCny < LOW_BALANCE_YUAN) {
+    alerts.push({ key: 'low', level: 'danger', text: `总余额 ¥${walletTotalCny.toFixed(2)} 低于 ¥${LOW_BALANCE_YUAN}` });
+  }
+  if (errorRate !== null && errorRate >= 20) alerts.push({ key: 'error', level: 'danger', text: `错误率 ${errorRate}%（${windowKey} 窗口）` });
+  else if (errorRate !== null && errorRate >= 5) alerts.push({ key: 'error', level: 'warning', text: `错误率 ${errorRate}%（${windowKey} 窗口）` });
+  if (canBilling && usage.unknownCostCalls > 0) {
+    alerts.push({ key: 'unknown', level: 'warning', text: `未知成本 ${usage.unknownCostCalls} 笔（占成功 ${usage.unknownCostRate ?? '—'}%）` });
+  }
+  if ((live.stuckAttempts || 0) + (live.stuckJobs || 0) > 0) {
+    alerts.push({ key: 'stuck', level: 'warning', text: `卡住任务 ${live.stuckAttempts + live.stuckJobs} 个（超过 15 分钟未完成）` });
+  }
+
   const callsSeries = series.map((item) => item.calls);
   const failedSeries = series.map((item) => item.failed);
   const costSeries = series.map((item) => item.costFen || 0);
-  const balanceSeries = balanceHistory.slice(-60).map((item) => item.value);
+  const balanceSeries = (walletHistory?.total || [])
+    .filter((item) => item.cny !== null && item.cny !== undefined)
+    .map((item) => Number(item.cny));
   const orgOptions = useMemo(() => orgs.map((item) => ({ id: item.id, name: item.name })), [orgs]);
 
   const refreshNow = () => setTick((value) => value + 1);
@@ -225,6 +247,10 @@ export function Monitor({ api, user }) {
 
       {snapshotError ? <div className="monitor-banner is-danger">监控数据读取失败：{snapshotError.message || '未知错误'}（显示上一次数据）</div> : null}
 
+      {alerts.length ? <div className="monitor-alerts">
+        {alerts.map((alert) => <div key={alert.key} className={`monitor-banner is-${alert.level}`}>{alert.text}</div>)}
+      </div> : null}
+
       <div className="monitor-kpis">
         <Kpi label="总余额 · 三家供应商" tone={lowBalance ? 'danger' : 'teal'}
           value={canBilling ? (walletTotalCny !== null ? `¥${walletTotalCny.toFixed(2)}` : (balanceError ? '不可用' : '读取中…')) : '无权限'}
@@ -244,7 +270,8 @@ export function Monitor({ api, user }) {
           ) : null}
         </Kpi>
         <Kpi label="活跃课堂" value={live.activeSessions ?? 0} hint={`在线学生 ${live.activeStudents ?? 0}`} />
-        <Kpi label="运行中任务" value={live.runningAttempts ?? 0} hint={`画布排队 ${live.queuedJobs ?? 0} · 运行 ${live.runningJobs ?? 0}`} />
+        <Kpi label="运行中任务" value={live.runningAttempts ?? 0}
+          hint={`画布排队 ${live.queuedJobs ?? 0} · 运行 ${live.runningJobs ?? 0}${snapshot?.queue?.ok ? ` · RH 队列 ${snapshot.queue.queued}/${snapshot.queue.running}` : ''}`} />
         <Kpi label={`${windowKey} 调用`} value={usage.calls ?? 0} hint={`成功 ${usage.success ?? 0} · 失败 ${usage.failed ?? 0} · 拦截 ${usage.blocked ?? 0}`} />
         <Kpi label="错误率" tone={(errorRate || 0) >= 20 ? 'danger' : (errorRate || 0) >= 5 ? 'warning' : 'default'}
           value={pctText(errorRate)} hint={canBilling ? `已知成本 ${fmtYuan(usage.knownCostFen)} · 未知 ${usage.unknownCostCalls ?? 0} 笔` : '按上游尝试计算'} />
@@ -264,7 +291,16 @@ export function Monitor({ api, user }) {
           <Sparkline values={costSeries} />
         </div> : null}
         {canBilling ? <div className="monitor-card">
-          <div className="monitor-card-title">余额趋势 <span>本次打开页面后</span></div>
+          <div className="monitor-card-title">余额趋势
+            <span>
+              <select className="monitor-select-mini" value={historyRange} onChange={(event) => setHistoryRange(Number(event.target.value))}>
+                <option value={6}>近 6 小时</option>
+                <option value={24}>近 24 小时</option>
+                <option value={168}>近 7 天</option>
+              </select>
+              {walletHistory?.bucketMinutes ? ` · ${walletHistory.bucketMinutes} 分钟采样` : ''}
+            </span>
+          </div>
           <Sparkline values={balanceSeries} />
         </div> : null}
       </div>
@@ -317,6 +353,50 @@ export function Monitor({ api, user }) {
             </table>
           </div>
         </section>
+      </div>
+
+      <div className="monitor-grid">
+        <section className="monitor-card">
+          <div className="monitor-card-title">卡住任务 <span>超过 15 分钟 · 最多 20 条</span></div>
+          <div className="monitor-table-wrap">
+            <table>
+              <thead><tr><th>类型</th><th>模态 / 模型</th><th>渠道</th><th>已等</th><th>开始于</th></tr></thead>
+              <tbody>
+                {stuck.map((item) => (
+                  <tr key={`${item.kind}:${item.id}`}>
+                    <td><strong>{item.kind === 'JOB' ? '画布任务' : '上游调用'}</strong><div className="monitor-muted">{item.status}</div></td>
+                    <td>{item.modality || '—'}<div className="monitor-muted">{item.model || '—'}</div></td>
+                    <td>{item.channelName || item.channelId || '—'}</td>
+                    <td>{item.ageMinutes === null ? '—' : `${item.ageMinutes} 分钟`}</td>
+                    <td>{fmtTime(item.createdAt)}</td>
+                  </tr>
+                ))}
+                {!stuck.length ? <tr><td colSpan={5} className="monitor-empty">没有卡住的任务</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {canBilling ? <section className="monitor-card">
+          <div className="monitor-card-title">成本 Top <span>{windowKey} · 已知上游成本</span></div>
+          <div className="monitor-table-wrap">
+            <table>
+              <thead><tr><th>渠道</th><th>模型</th><th>调用</th><th>已知成本</th><th>未知</th></tr></thead>
+              <tbody>
+                {costTop.map((item, index) => (
+                  <tr key={`${item.channelId || 'none'}:${item.model || ''}:${item.modality || ''}:${index}`}>
+                    <td><strong>{item.channelName || item.channelId || '—'}</strong><div className="monitor-muted">{item.modality || '—'}</div></td>
+                    <td>{item.model || '—'}</td>
+                    <td>{item.calls}<div className="monitor-muted">成功 {item.success}</div></td>
+                    <td>{fmtYuan(item.knownCostFen)}</td>
+                    <td>{item.unknownCalls}</td>
+                  </tr>
+                ))}
+                {!costTop.length ? <tr><td colSpan={5} className="monitor-empty">窗口内没有调用</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </section> : null}
       </div>
 
       <div className="monitor-grid monitor-grid-errors">
