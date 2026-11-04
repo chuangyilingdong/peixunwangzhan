@@ -18,6 +18,7 @@ import { modalityChannel } from '../services/modelCapabilities.js';
 import { providerSelectionForModality } from './aiGeneration.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
 import { computePoolSummary, priceFenFor } from '../services/computePool.js';
+import { startVibecodingTask, finishVibecodingTask } from '../services/vibecodingActivity.js';
 
 /** 会话归属的课包 id（算力池的键）。会话只存了课时，所以这里回查一次。 */
 async function conversationSeriesId(conversation) {
@@ -650,6 +651,15 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
   let streamedText = '';
   let reasoningChars = 0;
 
+  // 监控用：这轮 SSE 生成在进程内登记，finally 里必然删除（中止/断线也会走到）。
+  const activityId = `${conversation.id}:${userMessageId}`;
+  startVibecodingTask(activityId, {
+    conversationId: conversation.id,
+    orgId: auth.user.orgId || conversation.org_id || null,
+    userId: auth.user.id || conversation.student_id || null,
+    model: selection.model,
+  });
+
   /** 把这次新闭合的围栏写进产物表并推给前端 */
   async function flushArtifacts(deltas) {
     for (const candidate of deltas) {
@@ -761,6 +771,7 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
       sseSend(ctx, 'error', { code, message: normalized.message || error?.message || 'AI 回复失败' });
     }
   } finally {
+    finishVibecodingTask(activityId);
     clearInterval(heartbeat);
     ctx.res.off?.('close', onClientGone);
     if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end();

@@ -35,6 +35,7 @@ const { handleMonitor } = await import('../apps/server/src/routes/admin/monitor.
 const { getRunningHubBalance, resetRunningHubBalanceCache, probeRunningHubAccount, getRunningHubQueue, resetRunningHubQueueCache } = await import('../apps/server/src/services/runningHubAccount.js');
 const { getWalletBalances, resetWalletBalanceCache, probeXkwuaiAccount } = await import('../apps/server/src/services/walletAccounts.js');
 const { recordWalletSamples, getWalletHistory } = await import('../apps/server/src/services/walletHistory.js');
+const { startVibecodingTask, finishVibecodingTask } = await import('../apps/server/src/services/vibecodingActivity.js');
 const { setProviderApiKey, clearProviderApiKey } = await import('../apps/server/src/services/providerSecret.js');
 
 const now = new Date().toISOString();
@@ -187,6 +188,17 @@ await check('主备切换：attempt>1 计入切换次数与成功数', () => {
   const channel = snapshotAfterFailover.channels.find((item) => item.channelId === 'channel-runhub-img-main');
   assert.equal(channel.failovers, 1);
   assert.equal(channel.failoverSuccess, 1);
+});
+
+startVibecodingTask('conv_a:msg_live', { conversationId: 'conv_a', orgId: 'org_a', userId: 'student_a1', model: 'deepseek-flash' });
+const vibeSnapshot = await call('/snapshot', { window: '15m' });
+await check('运行中任务：VibeCoding 进行中计入 live.vibecodingRunning', () => {
+  assert.equal(vibeSnapshot.live.vibecodingRunning, 1);
+});
+finishVibecodingTask('conv_a:msg_live');
+const vibeAfter = await call('/snapshot', { window: '60m' });
+await check('运行中任务：VibeCoding 结束后不再计数', () => {
+  assert.equal(vibeAfter.live.vibecodingRunning, 0);
 });
 
 const classroom = await call('/classroom/sess_a');

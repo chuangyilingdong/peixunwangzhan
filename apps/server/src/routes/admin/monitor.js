@@ -22,6 +22,7 @@ import { classroomBudgetStatus } from '../../services/computePool.js';
 import { getRunningHubBalance, getRunningHubQueue } from '../../services/runningHubAccount.js';
 import { getWalletBalances } from '../../services/walletAccounts.js';
 import { getWalletHistory } from '../../services/walletHistory.js';
+import { getVibecodingActiveTasks } from '../../services/vibecodingActivity.js';
 
 const WINDOWS = Object.freeze({ '5m': 5, '15m': 15, '60m': 60 });
 const MAX_SESSIONS = 50;
@@ -225,14 +226,17 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
 
   const stuckBefore = sinceOf(15);
   const stuckSince = sinceOf(6 * 60);
+  // 「运行中」只认最近 2 小时：库里有一批 9/10 月遗留的 RUNNING/SUBMITTED，
+  // 不设下界会把它们永远算成"正在跑"（2026-11-04 实测 16 条，最新也是几小时前）。
+  const activeSince = sinceOf(2 * 60);
 
   const [live, usageWindow, attemptsWindow, seriesRows, orgRows, orgStats, sessionRows, stuckAttemptRows, stuckJobRows, costRows, policyRow, queueStatus, channelRows, durationRows, lastSuccessRows, failoverRows, studentCostRows] = await Promise.all([
     arow(`SELECT
         (SELECT COUNT(*) FROM class_sessions WHERE status='ACTIVE') active_sessions,
         (SELECT COUNT(*) FROM session_students WHERE status='ACTIVE') active_students,
-        (SELECT COUNT(*) FROM compute_attempts WHERE status IN ('RUNNING','SUBMITTED')) running_attempts,
-        (SELECT COUNT(*) FROM generation_jobs WHERE status='QUEUED') queued_jobs,
-        (SELECT COUNT(*) FROM generation_jobs WHERE status='RUNNING') running_jobs`),
+        (SELECT COUNT(*) FROM compute_attempts WHERE status IN ('RUNNING','SUBMITTED') AND created_at>=?) running_attempts,
+        (SELECT COUNT(*) FROM generation_jobs WHERE status='QUEUED' AND created_at>=?) queued_jobs,
+        (SELECT COUNT(*) FROM generation_jobs WHERE status='RUNNING' AND created_at>=?) running_jobs`, [activeSince, activeSince, activeSince]),
     arow(`SELECT COUNT(*) calls,
         SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) success,
         SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) failed,
@@ -403,6 +407,9 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     const time = Date.parse(iso);
     return Number.isFinite(time) ? Math.max(0, Math.round((Date.now() - time) / 60000)) : null;
   };
+  // VibeCoding 的进行中任务只在进程内（SSE），库里没有 RUNNING 状态。
+  const vibeTasks = getVibecodingActiveTasks();
+  const nowMs = Date.now();
   const stuck = [
     ...stuckAttemptRows.map((row) => ({
       kind: 'ATTEMPT', id: row.id, modality: row.modality || null, model: row.model || null,
@@ -412,6 +419,12 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     ...stuckJobRows.map((row) => ({
       kind: 'JOB', id: row.id, modality: row.modality || null, model: row.model || null,
       channelId: null, channelName: null, status: row.status, createdAt: row.created_at, ageMinutes: ageMinutes(row.created_at),
+    })),
+    ...vibeTasks.filter((task) => nowMs - task.startedAt > 15 * 60_000).map((task) => ({
+      kind: 'VIBE', id: task.id, modality: 'TEXT', model: task.model || null,
+      channelId: null, channelName: null, status: 'RUNNING',
+      createdAt: new Date(task.startedAt).toISOString(),
+      ageMinutes: Math.round((nowMs - task.startedAt) / 60000),
     })),
   ].sort((left, right) => (right.ageMinutes || 0) - (left.ageMinutes || 0)).slice(0, 20);
 
@@ -489,6 +502,7 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
       runningAttempts: num(live?.running_attempts),
       queuedJobs: num(live?.queued_jobs),
       runningJobs: num(live?.running_jobs),
+      vibecodingRunning: vibeTasks.length,
       stuckAttempts: stuckAttemptRows.length,
       stuckJobs: stuckJobRows.length,
     },

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { hasAdminPermission } from '../shared.jsx';
 import './../monitor.css';
 
@@ -107,8 +107,8 @@ function Kpi({ label, value, hint, tone = 'default', children }) {
   );
 }
 
-function HealthDot({ level }) {
-  return <span className={`monitor-dot is-${level}`} title={level} />;
+function HealthDot({ level, title }) {
+  return <span className={`monitor-dot is-${level}`} title={title || level} />;
 }
 
 function ErrorTable({ items, empty = '窗口内没有错误' }) {
@@ -143,6 +143,7 @@ export function Monitor({ api, user }) {
   const canBilling = hasAdminPermission(user, 'ADMIN_BILLING');
   const [windowKey, setWindowKey] = useState('5m');
   const [orgId, setOrgId] = useState('');
+  const [orgSearch, setOrgSearch] = useState('');
   const [paused, setPaused] = useState(false);
   const [tick, setTick] = useState(0);
   const [snapshot, setSnapshot] = useState(null);
@@ -225,8 +226,8 @@ export function Monitor({ api, user }) {
   if (canBilling && usage.unknownCostCalls > 0) {
     alerts.push({ key: 'unknown', level: 'warning', text: `未知成本 ${usage.unknownCostCalls} 笔（占成功 ${usage.unknownCostRate ?? '—'}%）` });
   }
-  if ((live.stuckAttempts || 0) + (live.stuckJobs || 0) > 0) {
-    alerts.push({ key: 'stuck', level: 'warning', text: `卡住任务 ${live.stuckAttempts + live.stuckJobs} 个（超过 15 分钟未完成）` });
+  if (stuck.length > 0) {
+    alerts.push({ key: 'stuck', level: 'warning', text: `卡住任务 ${stuck.length} 个（超过 15 分钟未完成）` });
   }
 
   const callsSeries = series.map((item) => item.calls);
@@ -235,7 +236,10 @@ export function Monitor({ api, user }) {
   const balanceSeries = (walletHistory?.total || [])
     .filter((item) => item.cny !== null && item.cny !== undefined)
     .map((item) => Number(item.cny));
-  const orgOptions = useMemo(() => orgs.map((item) => ({ id: item.id, name: item.name })), [orgs]);
+  const orgKeyword = orgSearch.trim().toLowerCase();
+  const filteredOrgs = orgKeyword
+    ? orgs.filter((org) => String(org.name || '').toLowerCase().includes(orgKeyword))
+    : orgs;
 
   const refreshNow = () => setTick((value) => value + 1);
 
@@ -251,12 +255,6 @@ export function Monitor({ api, user }) {
           <label>窗口
             <select value={windowKey} onChange={(event) => setWindowKey(event.target.value)}>
               {WINDOWS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-          </label>
-          <label>机构
-            <select value={orgId} onChange={(event) => { setOrgId(event.target.value); setSelectedSessionId(''); }}>
-              <option value="">全部机构</option>
-              {orgOptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
           </label>
           <button type="button" className="monitor-btn" onClick={() => setPaused((value) => !value)}>{paused ? '继续' : '暂停'}</button>
@@ -289,8 +287,8 @@ export function Monitor({ api, user }) {
           ) : null}
         </Kpi>
         <Kpi label="活跃课堂" value={live.activeSessions ?? 0} hint={`在线学生 ${live.activeStudents ?? 0}`} />
-        <Kpi label="运行中任务" value={live.runningAttempts ?? 0}
-          hint={`画布排队 ${live.queuedJobs ?? 0} · 运行 ${live.runningJobs ?? 0}${snapshot?.queue?.ok ? ` · RH 队列 ${snapshot.queue.queued}/${snapshot.queue.running}` : ''}`} />
+        <Kpi label="运行中任务" value={(live.runningAttempts ?? 0) + (live.vibecodingRunning ?? 0)}
+          hint={`画布排队 ${live.queuedJobs ?? 0} · 运行 ${live.runningJobs ?? 0} · VibeCoding ${live.vibecodingRunning ?? 0}${snapshot?.queue?.ok ? ` · RH 队列 ${snapshot.queue.queued}/${snapshot.queue.running}` : ''}`} />
         <Kpi label={`${windowKey} 调用`} value={usage.calls ?? 0} hint={`成功 ${usage.success ?? 0} · 失败 ${usage.failed ?? 0} · 拦截 ${usage.blocked ?? 0}`} />
         <Kpi label="错误率" tone={(errorRate || 0) >= 20 ? 'danger' : (errorRate || 0) >= 5 ? 'warning' : 'default'}
           value={pctText(errorRate)} hint={canBilling ? `已知成本 ${fmtYuan(usage.knownCostFen)} · 未知 ${usage.unknownCostCalls ?? 0} 笔` : '按上游尝试计算'} />
@@ -326,14 +324,21 @@ export function Monitor({ api, user }) {
 
       <div className="monitor-grid">
         <section className="monitor-card">
-          <div className="monitor-card-title">机构 <span>{orgs.length} 家</span></div>
+          <div className="monitor-card-title">机构
+            <span className="monitor-org-tools">
+              {orgId
+                ? <button type="button" className="monitor-link-btn" onClick={() => { setOrgId(''); setSelectedSessionId(''); }}>← 全部机构</button>
+                : <input className="monitor-search" placeholder="搜索机构" value={orgSearch} onChange={(event) => setOrgSearch(event.target.value)} />}
+              <em>{orgs.length} 家</em>
+            </span>
+          </div>
           <div className="monitor-table-wrap">
             <table>
               <thead><tr><th>机构</th><th>老师</th><th>学生</th><th>课堂</th><th>调用</th>{canBilling ? <th>成本</th> : null}<th>错误</th><th /></tr></thead>
               <tbody>
-                {orgs.map((org) => {
-                  const level = org.failed > 0 ? (org.failed >= 5 ? 'crit' : 'warn') : 'ok';
-                  return <tr key={org.id} className={org.id === orgId ? 'is-selected' : undefined} onClick={() => setOrgId(org.id)}>
+                {filteredOrgs.map((org) => {
+                  const hasActive = Number(org.activeSessions) > 0;
+                  return <tr key={org.id} className={org.id === orgId ? 'is-selected' : undefined} onClick={() => { setOrgId(org.id); setSelectedSessionId(''); }}>
                     <td><strong>{org.name}</strong><div className="monitor-muted">{org.status}</div></td>
                     <td>{org.teachers}</td>
                     <td>{org.students}</td>
@@ -341,17 +346,22 @@ export function Monitor({ api, user }) {
                     <td>{org.calls}</td>
                     {canBilling ? <td>{fmtYuan(org.knownCostFen)}</td> : null}
                     <td>{org.failed}</td>
-                    <td><HealthDot level={level} /></td>
+                    <td><HealthDot level={hasActive ? 'ok' : 'off'} title={hasActive ? `进行中课堂 ${org.activeSessions} 场` : '没有进行中的课堂'} /></td>
                   </tr>;
                 })}
-                {!orgs.length ? <tr><td colSpan={canBilling ? 8 : 7} className="monitor-empty">没有机构</td></tr> : null}
+                {!filteredOrgs.length ? <tr><td colSpan={canBilling ? 8 : 7} className="monitor-empty">{orgs.length ? '没有匹配的机构' : '没有机构'}</td></tr> : null}
               </tbody>
             </table>
           </div>
         </section>
 
         <section className="monitor-card">
-          <div className="monitor-card-title">活跃课堂 <span>{sessions.length} 场</span></div>
+          <div className="monitor-card-title">活跃课堂
+            <span>
+              {sessions.length} 场
+              {orgId ? <button type="button" className="monitor-link-btn" onClick={() => { setOrgId(''); setSelectedSessionId(''); }}>查看全部机构</button> : null}
+            </span>
+          </div>
           <div className="monitor-table-wrap">
             <table>
               <thead><tr><th>课堂</th><th>老师</th><th>名单 / 在线</th><th>调用</th>{canBilling ? <th>成本</th> : null}<th>错误</th><th>预算</th></tr></thead>
@@ -383,7 +393,7 @@ export function Monitor({ api, user }) {
               <tbody>
                 {stuck.map((item) => (
                   <tr key={`${item.kind}:${item.id}`}>
-                    <td><strong>{item.kind === 'JOB' ? '画布任务' : '上游调用'}</strong><div className="monitor-muted">{item.status}</div></td>
+                    <td><strong>{item.kind === 'VIBE' ? 'VibeCoding' : item.kind === 'JOB' ? '画布任务' : '上游调用'}</strong><div className="monitor-muted">{item.status}</div></td>
                     <td>{item.modality || '—'}<div className="monitor-muted">{item.model || '—'}</div></td>
                     <td>{item.channelName || item.channelId || '—'}</td>
                     <td>{item.ageMinutes === null ? '—' : `${item.ageMinutes} 分钟`}</td>
