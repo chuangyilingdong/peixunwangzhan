@@ -373,14 +373,14 @@ await check('切备用时把分辨率收进备用渠道的枚举（视频主 480
   assert.equal(adaptOptionsToCandidate(args('480p'), backup).options.aspectRatio, '16:9');
 });
 
-await check('成本：query.usage.thirdPartyConsumeMoney 记 REPORTED（USD × 6.684）', async () => {
+await check('成本：query.usage.thirdPartyConsumeMoney 记 REPORTED（USD × 6.71749）', async () => {
   const image = await make('rhart-image-g-2.5').generate({ modality: 'IMAGE', prompt: '成本', options: {} });
   assert.equal(image.assets[0].metadata.reportedCost.upstreamAmount, 0.05);
-  assert.equal(image.assets[0].metadata.reportedCost.fen, 33);
+  assert.equal(image.assets[0].metadata.reportedCost.fen, 34);
   const video = await make('bytedance/seedance-2.0-global-fast')
     .generate({ modality: 'VIDEO', prompt: '成本', options: { durationSeconds: 5, resolution: '480p' } });
   assert.equal(video.assets[0].metadata.reportedCost.upstreamAmount, 0.4);
-  assert.equal(video.assets[0].metadata.reportedCost.fen, 267);
+  assert.equal(video.assets[0].metadata.reportedCost.fen, 269);
   assert.equal(video.assets[0].metadata.reportedCost.billingSeconds, 5);
 });
 
@@ -391,7 +391,7 @@ await check('成本：站点币种 .ai=USD / .cn=CNY（CN 站实扣字段是人�
   assert.equal(cny.fen, 150, 'CN 1.5 元 = 150 分');
   assert.equal(cny.upstreamCurrency, 'CNY');
   const usd = reportedCostFromUsage({ usage: { thirdPartyConsumeMoney: '0.4', billingSeconds: '5' } }, 'USD');
-  assert.equal(usd.fen, 267, 'USD 0.4 × 6.684 = 267 分');
+  assert.equal(usd.fen, 269, 'USD 0.4 × 6.71749 = 269 分');
   assert.equal(usd.upstreamCurrency, 'USD');
 });
 
@@ -401,7 +401,7 @@ await check('对账：queryTask 能按 taskId 取回结果（重启/TIMEOUT 后�
   assert.equal(ok.state, 'SUCCEEDED');
   assert.match(ok.asset.assetUrl, /\/out\.jpg$/);
   assert.equal(ok.asset.metadata.taskId, 'task_reconcile_1');
-  assert.equal(ok.asset.metadata.reportedCost.fen, 33, '图片 $0.05 × 6.684 = 33 分');
+  assert.equal(ok.asset.metadata.reportedCost.fen, 34, '图片 $0.05 × 6.71749 = 34 分');
   state.queryStatus = 'RUNNING';
   try { assert.equal((await provider.queryTask({ taskId: 'task_reconcile_1', modality: 'IMAGE' })).state, 'PENDING'); }
   finally { state.queryStatus = 'SUCCESS'; }

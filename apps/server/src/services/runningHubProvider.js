@@ -323,7 +323,7 @@ export function runningHubSiteCurrency(endpoint) {
 /**
  * 上游实扣（RunningHub query 的 usage）：
  *   `thirdPartyConsumeMoney` 的币种随站点（.ai=USD / .cn=CNY），`billingSeconds` 是实际计费秒数。
- * .ai 按固定 6.684 折人民币；.cn 本来就是人民币。取不到就返回 null 走 COMPUTED 兜底。
+ * .ai 按固定 6.71749 折人民币；.cn 本来就是人民币。取不到就返回 null 走 COMPUTED 兜底。
  */
 export function reportedCostFromUsage(payload, currency = 'USD') {
   const usage = payload?.usage && typeof payload.usage === 'object' ? payload.usage : null;

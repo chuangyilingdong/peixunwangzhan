@@ -7,7 +7,7 @@
  *   · xkwuai 是 New API 类中转站：访问令牌调 `GET /api/user/self` 取 quota，
  *     `quota_per_unit`（默认 500000）把 quota 换成美元；
  *   · 美元口径分两类（2026-11-04 用户确认）：
- *     - RunningHub 全球站是真美元，按 **固定 6.684**（fxRate.js）折算；
+ *     - RunningHub 全球站是真美元，按 **固定 6.71749**（fxRate.js）折算；
  *     - xkwuai 虽然显示 USD，但站内按人民币 1:1 计价，**不乘汇率**（amount 即人民币）；
  *   · 原币金额始终保留，cny 是展示用的人民币口径；
  *   · Key/令牌存在 provider-secrets 的 `wallet-runninghub-cn` / `wallet-xkwuai`，
@@ -166,7 +166,7 @@ let inflight = null;
 
 async function loadWallets({ runningHub }) {
   const fetchedAt = new Date().toISOString();
-  // RunningHub 全球站是美元，按固定 6.684 折人民币；xkwuai 仍按用户口径 1:1。
+  // RunningHub 全球站是美元，按固定 6.71749 折人民币；xkwuai 仍按用户口径 1:1。
   const fx = await getUsdCnyRate();
   const global = await runningHub;
   const globalAccount = global?.accounts?.find((item) => item.ok) || global?.accounts?.[0] || null;

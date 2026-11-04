@@ -210,7 +210,7 @@ export function getGenerationProvider(selection = {}) {
         // 有单价 + 有用量才算得出来；算不出来就保持 UNKNOWN，**绝不按 0 计**。
         const usage = collectUsageEvidence({ modality, result, request: attemptArgs.options || null });
         // RunningHub 价目是美元（美分）还是人民币（分）取决于站点：
-        //   .ai = USD（按 6.684 折人民币）；.cn = CNY（本来就是人民币分）。
+        //   .ai = USD（按 6.71749 折人民币）；.cn = CNY（本来就是人民币分）。
         const priceCurrency = String(provider.name || '').toLowerCase() === 'runninghub'
           ? runningHubSiteCurrency(selected.endpoint)
           : 'CNY';

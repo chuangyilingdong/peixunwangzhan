@@ -387,7 +387,7 @@ export function Monitor({ api, user }) {
                 )) : <div className="monitor-wallet-line"><span>读取中…</span></div>}
               </div>
               <div className="monitor-kpi-foot">
-                RH 全球 ×{Number(balance?.wallets?.fx?.usdCny ?? 6.684).toFixed(3)}（固定汇率） · xkwuai 1:1 · 更新 {fmtTime(balance?.fetchedAt)}
+                RH 全球 ×{Number(balance?.wallets?.fx?.usdCny ?? 6.71749).toFixed(3)}（固定汇率） · xkwuai 1:1 · 更新 {fmtTime(balance?.fetchedAt)}
               </div>
             </>
           ) : null}

@@ -8,7 +8,7 @@
  *   ④ 权限：ADMIN_ANALYTICS 看得到监控，但**看不到**成本/余额字段；余额接口 403。
  * 另外用 fetch stub 验证 RunningHub accountStatus 映射（remainMoney/currency/remainCoins）
  * 和 60 秒缓存（第二次不再打上游）；供应商钱包三家并出、xkwuai quota→USD 且按人民币 1:1、
- * RunningHub 全球站 USD 按 7.2 折算。
+ * RunningHub 全球站 USD 按 6.71749 折算。
  *
  * 跑法：node scripts/p209-monitor.mjs
  */
@@ -349,15 +349,15 @@ try {
     assert.equal(queue.channel, 'RH 主');
   });
 
-  // 供应商钱包：RH 全球 + RH 国内 + xkwuai，USD 统一按 7.2 折人民币
+  // 供应商钱包：RH 全球 + RH 国内 + xkwuai，USD 统一按 6.71749 折人民币
   setProviderApiKey('cn-test-key', 'wallet-runninghub-cn');
   setProviderApiKey(JSON.stringify({ token: 'xk-test-token', userId: '7' }), 'wallet-xkwuai');
   resetWalletBalanceCache();
   resetUsdCnyRateCache();
   const wallets = await getWalletBalances({ refresh: true, runningHub: balance });
-  await check('钱包：三家并出，CN 原币、xkwuai quota→USD 5 且按人民币 1:1、RH 全球 USD×7.2', () => {
+  await check('钱包：三家并出，CN 原币、xkwuai quota→USD 5 且按人民币 1:1、RH 全球 USD×6.71749', () => {
     const byId = Object.fromEntries(wallets.sources.map((item) => [item.id, item]));
-    assert.equal(wallets.fx.usdCny, 6.684);
+    assert.equal(wallets.fx.usdCny, 6.71749);
     assert.deepEqual(Object.keys(byId).sort(), ['runninghub-cn', 'runninghub-global', 'xkwuai']);
     assert.equal(byId['runninghub-global'].amount, 199.5);
     assert.equal(byId['runninghub-global'].cny, 199.5);
@@ -370,8 +370,8 @@ try {
   });
 
   const usdWallets = await getWalletBalances({ refresh: true, runningHub: { accounts: [{ ok: true, amount: 15.009, currency: 'USD', currencyLike: 'USD' }] } });
-  await check('钱包：全球站 USD 余额按固定 6.684 折人民币（15.009 → ¥100.32）', () => {
-    assert.equal(usdWallets.sources.find((item) => item.id === 'runninghub-global').cny, 100.32);
+  await check('钱包：全球站 USD 余额按固定 6.71749 折人民币（15.009 → ¥100.82）', () => {
+    assert.equal(usdWallets.sources.find((item) => item.id === 'runninghub-global').cny, 100.82);
   });
 
   await recordWalletSamples();
