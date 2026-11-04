@@ -80,6 +80,15 @@ function sanitizeModelDisplayNames(value) {
   return out;
 }
 
+// 图片生成方式（只用于选路）：文生图 / 图生图。键名与框体的 inputMode 取值一致。
+const IMAGE_MODE_KEYS = new Set(['TEXT', 'IMAGE_REFERENCE']);
+function sanitizeImageModeChannels(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key, id]) => IMAGE_MODE_KEYS.has(String(key).toUpperCase()) && typeof id === 'string' && id.trim())
+    .map(([key, id]) => [String(key).toUpperCase(), id.trim().slice(0, 64)]));
+}
+
 function normalizeProviderPolicy(value) {
   const parsed = (() => { try { return JSON.parse(value?.ai_provider_policy || value || '{}') || {}; } catch { return {}; } })();
   const provider = String(parsed.provider || 'local-mock').trim().toLowerCase();
@@ -100,11 +109,21 @@ function normalizeProviderPolicy(value) {
   const modelMappings = Array.isArray(parsed.modelMappings) ? parsed.modelMappings.filter((item) => item && item.model).map((item) => ({ displayName: String(item.displayName || item.model).slice(0,120), model: String(item.model).slice(0,200), contextWindow: Number(item.contextWindow || 0) || null, thinkingLevel: String(item.thinkingLevel || '').slice(0,30) })).slice(0,100) : [];
   const modalityChannels = parsed.modalityChannels && typeof parsed.modalityChannels === 'object' ? Object.fromEntries(Object.entries(parsed.modalityChannels).filter(([k,v]) => VALID_MODALITIES.has(k) && typeof v === 'string').map(([k,v]) => [k, String(v).slice(0,64)])) : {};
   const modalityBackupChannels = parsed.modalityBackupChannels || {};
+  // 图片按生成方式选路（2026-11-04）：文生图 / 图生图是两条独立 API，后台各一条渠道。
+  // 留空 = 用「图片」那条主/备路由（兼容只配一对图片渠道的旧配置）。
+  const imageModeChannels = sanitizeImageModeChannels(parsed.imageModeChannels);
+  const imageModeBackupChannels = sanitizeImageModeChannels(parsed.imageModeBackupChannels);
   // 读图渠道（2026-09-16）：带图的请求走哪条渠道。**留空 = 跟着默认 TEXT 渠道的模型走**（常态：
   // 我们的模型本来就能看图）。只有要把图单独送到另一条渠道时才配它。绝不能变成「不配就用不了」——
   // 上个版本的 409 闸门是错的：学生发图会被挡住，而他的模型明明能读图。
   const visionChannelId = String(parsed.visionChannelId || '').trim().slice(0, 64);
-  const modalityOfChannel = (channelId) => Object.entries({ ...modalityBackupChannels, ...modalityChannels }).find(([, id]) => id === channelId)?.[0] || '';
+  const modalityOfChannel = (channelId) => {
+    const direct = Object.entries({ ...modalityBackupChannels, ...modalityChannels }).find(([, id]) => id === channelId)?.[0];
+    if (direct) return direct;
+    // 图生图/文生图专用渠道不在 modalityChannels 里：它们的计价单位仍然是「图片」。
+    const imageMode = Object.entries({ ...imageModeBackupChannels, ...imageModeChannels }).find(([, id]) => id === channelId)?.[0];
+    return imageMode ? 'IMAGE' : '';
+  };
   const channels = Array.isArray(parsed.channels) ? parsed.channels.filter((item) => item && item.id).slice(0, 30).map((item) => {
     const channelId = String(item.id).slice(0,64);
     return {
@@ -143,6 +162,7 @@ function normalizeProviderPolicy(value) {
     endpoint,
     model,
     displayName, note, websiteUrl, endpointMode, protocol, modelMappings, channels, modalityChannels, modalityBackupChannels, modelRoutes: parsed.modelRoutes || [],
+    imageModeChannels, imageModeBackupChannels,
     visionChannelId,
     modelDisplayNames,
     allowStudentExternalContent,
@@ -402,11 +422,18 @@ export async function handleAdminBillingConfig(ctx) {
     // 这里直接列本地清单，免得界面永远「已读取 0 个模型」；模态优先按已路由的渠道，其次按渠道当前 family。
     if (providerId === 'runninghub') {
       const routedModality = Object.entries({ ...policy.modalityBackupChannels, ...policy.modalityChannels })
-        .find(([, id]) => id === channelId)?.[0] || '';
+        .find(([, id]) => id === channelId)?.[0]
+        || (Object.values({ ...policy.imageModeChannels, ...policy.imageModeBackupChannels }).includes(channelId) ? 'IMAGE' : '');
       const modality = routedModality || runningHubFamilyModality(savedChannel?.model);
+      // 图片渠道已经按方式拆开：文生图渠道只列 -t2i，图生图渠道只列 -i2i，
+      // 免得运营在「文生图主」里勾了一个图生图 family（那条路由永远不会走到它）。
+      const familyId = String(savedChannel?.model || '');
+      const modeSuffix = familyId.endsWith('-t2i') ? '-t2i' : familyId.endsWith('-i2i') ? '-i2i' : '';
+      const items = runningHubModelCatalog(modality)
+        .filter((item) => !modeSuffix || item.id.endsWith(modeSuffix));
       return {
         source: 'runninghub-catalog',
-        items: runningHubModelCatalog(modality),
+        items,
         // 表单里刚敲的 Key 不算：只有保存过才是真的（列表本身不需要 Key，这里只给界面一句实话）。
         keyConfigured: Boolean(channelId && getProviderApiKey(channelId)),
       };
@@ -499,6 +526,10 @@ export async function handleAdminBillingConfig(ctx) {
     if (!info.configured || info.mode === 'adapter-required') {
       return await finish({ ok: false, error: { code: info.configError || 'GENERATION_PROVIDER_UNAVAILABLE', message: '这套配置还没有可用的上游适配器（渠道 / 密钥 / 请求地址不完整）' } });
     }
+    // 图生图渠道的探测必须带一张真实参考图；平台没有稳定的公网样图可发，就别给假结论。
+    if (modality === 'IMAGE' && /-i2i$/.test(String(selection.model || ''))) {
+      return await finish({ ok: false, error: { code: 'GENERATION_PROVIDER_PROBE_UNSUPPORTED', message: '这条渠道是图生图：探测必须带真实参考图，请到课堂里连一张图生成验证' } });
+    }
     const provider = getGenerationProvider(selection);
     const timeoutMs = PROBE_TIMEOUT_MS[modality] || 120000;
     let timer = null;
@@ -565,10 +596,12 @@ export async function handleAdminBillingConfig(ctx) {
     }
     // 模型能力填写校验：非法写法当场报错，避免静默丢弃、或把错值原样发给上游
     const capabilityModalityMap = body.modalityChannels === undefined ? before.modalityChannels : (body.modalityChannels || {});
+    const capabilityImageModes = body.imageModeChannels === undefined ? (before.imageModeChannels || {}) : sanitizeImageModeChannels(body.imageModeChannels);
     for (const channel of channels) {
       const capabilities = channel?.modelCapabilities;
       if (!capabilities || typeof capabilities !== 'object') continue;
-      const channelModality = Object.entries(capabilityModalityMap || {}).find(([, id]) => id === channel?.id)?.[0] || '';
+      const channelModality = Object.entries(capabilityModalityMap || {}).find(([, id]) => id === channel?.id)?.[0]
+        || (Object.values(capabilityImageModes).includes(channel?.id) ? 'IMAGE' : '');
       for (const [modelId, value] of Object.entries(capabilities)) {
         const problems = validateModelCapabilitiesInput(value, channelModality, modelId);
         if (problems.length) throw errors.badRequest(`${channel.name || channel.id || '渠道'} · ${modelId} 的模型能力填写有误：${problems.join('；')}`, 'AI_PROVIDER_CAPABILITY_INVALID');
@@ -576,6 +609,8 @@ export async function handleAdminBillingConfig(ctx) {
     }
     const modalityChannels = body.modalityChannels === undefined ? before.modalityChannels : (body.modalityChannels || {});
     const modalityBackupChannels = body.modalityBackupChannels === undefined ? before.modalityBackupChannels : (body.modalityBackupChannels || {});
+    const imageModeChannels = body.imageModeChannels === undefined ? (before.imageModeChannels || {}) : sanitizeImageModeChannels(body.imageModeChannels);
+    const imageModeBackupChannels = body.imageModeBackupChannels === undefined ? (before.imageModeBackupChannels || {}) : sanitizeImageModeChannels(body.imageModeBackupChannels);
     const ids = new Set();
     for (const channel of channels) {
       if (!channel?.id || ids.has(channel.id)) throw errors.badRequest('渠道编号必须存在且唯一', 'AI_PROVIDER_CHANNEL_INVALID');
@@ -592,6 +627,13 @@ export async function handleAdminBillingConfig(ctx) {
     for (const modality of VALID_MODALITIES) {
       const main = modalityChannels[modality]; const backup = modalityBackupChannels[modality];
       if ((main && !ids.has(main)) || (backup && (!ids.has(backup) || backup === main))) throw errors.badRequest('主备渠道必须存在且不能相同', 'AI_PROVIDER_ROUTE_INVALID');
+    }
+    // 图片按生成方式的两条路由：填了就必须指向真实渠道；备用不能与主相同（留空=回落到「图片」那条）。
+    for (const [mode, id] of Object.entries(imageModeChannels)) {
+      if (!ids.has(id)) throw errors.badRequest(`「图片·${mode === 'TEXT' ? '文生图' : '图生图'}」主渠道必须来自已配置的渠道列表`, 'AI_PROVIDER_ROUTE_INVALID');
+    }
+    for (const [mode, id] of Object.entries(imageModeBackupChannels)) {
+      if (!ids.has(id) || id === imageModeChannels[mode]) throw errors.badRequest(`「图片·${mode === 'TEXT' ? '文生图' : '图生图'}」备用渠道必须存在且不能与主渠道相同`, 'AI_PROVIDER_ROUTE_INVALID');
     }
     // 读图渠道（2026-09-16）：留空是默认（跟着文本渠道走），填了就必须指向一条真实存在的渠道。
     const visionChannelId = body.visionChannelId === undefined ? (before.visionChannelId || '') : String(body.visionChannelId || '').trim().slice(0, 64);
@@ -617,7 +659,7 @@ export async function handleAdminBillingConfig(ctx) {
     if (Array.isArray(body.channels)) body.channels.forEach((channel) => { if (channel?.id && String(channel.apiKey || '').trim()) setProviderApiKey(channel.apiKey, String(channel.id)); });
     const allowStudentExternalContent = body.allowStudentExternalContent === undefined ? before.allowStudentExternalContent : bool(body.allowStudentExternalContent, true);
     const after = {
-      provider, model, endpoint, displayName: provider === 'custom' ? displayName : '', note, websiteUrl, endpointMode, protocol, modelMappings, channels: sanitizeProviderChannels(channels), modalityChannels, modalityBackupChannels, modelRoutes, visionChannelId,
+      provider, model, endpoint, displayName: provider === 'custom' ? displayName : '', note, websiteUrl, endpointMode, protocol, modelMappings, channels: sanitizeProviderChannels(channels), modalityChannels, modalityBackupChannels, imageModeChannels, imageModeBackupChannels, modelRoutes, visionChannelId,
       modelDisplayNames: sanitizeModelDisplayNames(modelDisplayNames),
       allowStudentExternalContent,
     };

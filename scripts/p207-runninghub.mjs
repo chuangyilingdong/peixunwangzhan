@@ -250,14 +250,63 @@ await check('渠道 selection：RunningHub 用渠道 family，课时旧模型不
 
 await check('后台「读取模型」：RunningHub 列本地 family 清单（上游没有 /models）', async () => {
   // 上游对 GET /openapi/v2/models 一律回 200 + PARAMS_INVALID，所以后台只能列适配器这张表。
+  // 旧的双路径 family 只做兼容兜底，不在清单里展示。
+  const legacy = new Set(['rhart-image-g-2.5', 'rhart-image-g-2-official']);
   const all = runningHubModelCatalog();
-  assert.deepEqual(all.map((item) => item.id).sort(), Object.keys(RUNNINGHUB_FAMILIES).sort());
+  assert.deepEqual(all.map((item) => item.id).sort(), Object.keys(RUNNINGHUB_FAMILIES).filter((id) => !legacy.has(id)).sort());
   assert.ok(all.every((item) => item.ownedBy === 'runninghub' && item.capabilities === null));
   assert.ok(all.every((item) => item.displayName.includes(item.id) && /（.+）/.test(item.displayName)));
-  assert.deepEqual(runningHubModelCatalog('IMAGE').map((item) => item.id).sort(), ['rhart-image-g-2-official', 'rhart-image-g-2.5']);
+  assert.deepEqual(runningHubModelCatalog('IMAGE').map((item) => item.id).sort(), [
+    'rhart-image-g-2-official-i2i', 'rhart-image-g-2-official-t2i', 'rhart-image-g-2.5-i2i', 'rhart-image-g-2.5-t2i',
+  ]);
   assert.deepEqual(runningHubModelCatalog('VIDEO').map((item) => item.id).sort(), ['bytedance/seedance-2.0-global-fast', 'minimax/hailuo-h3']);
   assert.deepEqual(runningHubModelCatalog('MUSIC').map((item) => item.id), ['minimax/music-2.6']);
   assert.equal(runningHubModelCatalog('TEXT').length, 0);
+});
+
+await check('图片按生成方式拆 family：文生图渠道不接参考图、图生图渠道必须带图', async () => {
+  // 文生图专用 family：没有参考图 → 走文生图路径
+  await make('rhart-image-g-2.5-t2i').generate({ modality: 'IMAGE', prompt: 'x', options: {} });
+  assert.equal(lastSubmission().path, '/openapi/v2/rhart-image-g-2.5/sunburst/text-to-image');
+  // 同一条渠道被塞了参考图 → 当场报错，不发到别的路径（否则价格会记到另一条 API 上）
+  await assert.rejects(
+    () => make('rhart-image-g-2.5-t2i').generate({ modality: 'IMAGE', prompt: 'x', options: { referenceAssets: [{ type: 'IMAGE', url: 'https://aicyld.com/r.png' }] } }),
+    (error) => error.code === 'GENERATION_PROVIDER_CONFIG_INVALID' && /图生图/.test(error.message),
+  );
+  // 图生图专用 family：有图 → 图生图路径；没图 → 报错（不回落文生图）
+  await make('rhart-image-g-2.5-i2i').generate({ modality: 'IMAGE', prompt: 'x', options: { referenceAssets: [{ type: 'IMAGE', url: 'https://aicyld.com/r.png' }] } });
+  assert.equal(lastSubmission().path, '/openapi/v2/rhart-image-g-2.5/flare/image-to-image');
+  await assert.rejects(
+    () => make('rhart-image-g-2.5-i2i').generate({ modality: 'IMAGE', prompt: 'x', options: {} }),
+    (error) => error.code === 'GENERATION_PROVIDER_CONFIG_INVALID' && /文生图/.test(error.message),
+  );
+});
+
+await check('图片按生成方式选路：文生图/图生图各走自己的渠道与备用', async () => {
+  const policy = {
+    provider: 'custom', model: '', endpoint: '',
+    channels: [
+      { id: 'img-t2i', name: '文生图主', provider: 'runninghub', endpoint: BASE, model: 'rhart-image-g-2.5-t2i', models: ['rhart-image-g-2.5-t2i'], requestPaths: {} },
+      { id: 'img-t2i-bak', name: '文生图备', provider: 'runninghub', endpoint: BASE, model: 'rhart-image-g-2-official-t2i', models: ['rhart-image-g-2-official-t2i'], requestPaths: {} },
+      { id: 'img-i2i', name: '图生图主', provider: 'runninghub', endpoint: BASE, model: 'rhart-image-g-2.5-i2i', models: ['rhart-image-g-2.5-i2i'], requestPaths: {} },
+      { id: 'img-i2i-bak', name: '图生图备', provider: 'runninghub', endpoint: BASE, model: 'rhart-image-g-2-official-i2i', models: ['rhart-image-g-2-official-i2i'], requestPaths: {} },
+    ],
+    modalityChannels: { IMAGE: 'img-t2i' },
+    modalityBackupChannels: { IMAGE: 'img-t2i-bak' },
+    imageModeChannels: { TEXT: 'img-t2i', IMAGE_REFERENCE: 'img-i2i' },
+    imageModeBackupChannels: { TEXT: 'img-t2i-bak', IMAGE_REFERENCE: 'img-i2i-bak' },
+    modelRoutes: [],
+  };
+  const t2i = providerSelectionForModality(policy, 'IMAGE', '', { imageMode: 'TEXT' });
+  assert.equal(t2i.channelId, 'img-t2i');
+  assert.equal(t2i.model, 'rhart-image-g-2.5-t2i');
+  assert.equal(t2i.backup.channelId, 'img-t2i-bak');
+  const i2i = providerSelectionForModality(policy, 'IMAGE', '', { imageMode: 'IMAGE_REFERENCE' });
+  assert.equal(i2i.channelId, 'img-i2i');
+  assert.equal(i2i.model, 'rhart-image-g-2.5-i2i');
+  assert.equal(i2i.backup.channelId, 'img-i2i-bak');
+  // 没传 imageMode（老调用点）→ 仍是「图片」那条路由
+  assert.equal(providerSelectionForModality(policy, 'IMAGE', '').channelId, 'img-t2i');
 });
 
 await check('family → 模态：未路由渠道的「试一次」不再落回 TEXT', async () => {

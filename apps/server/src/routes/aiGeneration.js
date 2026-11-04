@@ -815,12 +815,17 @@ async function settleSuccessfulJob({ auth, project, modality, provider, info, jo
   });
 }
 
-export function providerSelectionForModality(policy, modality, modelOverride = '') {
+export function providerSelectionForModality(policy, modality, modelOverride = '', options = {}) {
   const key = String(modality || '').toUpperCase();
-  const defaultChannel = policy?.channels?.find(item => item.id === policy?.modalityChannels?.[key]);
+  // 图片有「文生图 / 图生图」两条独立 API、两条渠道（2026-11-04）：调用方知道是哪种就传 options.imageMode，
+  // 没配专用路由时回落到「图片」那条（兼容只配一对图片渠道的旧配置）。
+  const imageMode = key === 'IMAGE' ? String(options.imageMode || '').trim().toUpperCase() : '';
+  const imageModeChannelId = imageMode ? String(policy?.imageModeChannels?.[imageMode] || '') : '';
+  const defaultChannelId = imageModeChannelId || policy?.modalityChannels?.[key];
+  const defaultChannel = policy?.channels?.find(item => item.id === defaultChannelId);
   const requestedModel = modelOverride || defaultChannel?.model || policy?.model;
   const mapping = policy?.modelRoutes?.find(item => item.modality === key && item.model === requestedModel);
-  const channelId = mapping?.channelId || policy?.modalityChannels?.[key];
+  const channelId = mapping?.channelId || defaultChannelId;
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
   const base = channel
     ? { provider: channel.provider, model: channel.model, channelModel: channel.model, endpoint: channel.endpoint, channelId: channel.id, providerAccountRef: channel.providerAccountRef || null, requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {}, requestPaths: channel.requestPaths || {}, pollPaths: channel.pollPaths || {}, upstreamUnitPrices: channel.upstreamUnitPrices || null, modelUnitPrices: channel.modelUnitPrices || null }
@@ -830,7 +835,10 @@ export function providerSelectionForModality(policy, modality, modelOverride = '
   // 否则请求发到 RunningHub 的模型族会错、价格/日志也会记成旧模型。
   if (channel?.provider === 'runninghub') selected.model = channel.model;
   selected.estimatedCostFen = channel?.modelCosts?.[selected.model] ?? channel?.estimatedCostFen ?? null;
-  const backup = policy?.channels?.find((item) => item.id === (mapping ? mapping.backupChannelId : policy?.modalityBackupChannels?.[key]));
+  const backupId = mapping
+    ? mapping.backupChannelId
+    : (imageModeChannelId ? policy?.imageModeBackupChannels?.[imageMode] : policy?.modalityBackupChannels?.[key]);
+  const backup = policy?.channels?.find((item) => item.id === backupId);
   if (backup) {
     const backupModel = mapping?.backupModel || backup.model;
     selected.backup = { ...backup, channelId: backup.id, model: backupModel, channelModel: backupModel, upstreamUnitPrices: backup.upstreamUnitPrices || null, modelUnitPrices: backup.modelUnitPrices || null, estimatedCostFen: backup.modelCosts?.[backupModel] ?? backup.estimatedCostFen ?? null };
@@ -1069,6 +1077,20 @@ function auditContext(auth, ctx = null) {
   };
 }
 
+/**
+ * 这次图片生成是「文生图」还是「图生图」——只用于选渠道，不改请求体。
+ *   · 框体锁了生成方式 → 按框体；
+ *   · 框体留空（自动/学生自选）→ 有没有参考图决定。
+ * 参考图此刻还没解析成公网地址，但"有没有"已经够用；解析不出来会在后面单独报错。
+ */
+function imageModeForGeneration({ box = null, referenceAssets = [] } = {}) {
+  const locked = normalizeInputModeValue(box?.inputMode);
+  if (locked === 'TEXT' || locked === 'IMAGE_REFERENCE') return locked;
+  const hasReference = (Array.isArray(referenceAssets) ? referenceAssets : [])
+    .some((item) => item && String(typeof item === 'string' ? item : item.url || '').trim());
+  return hasReference ? 'IMAGE_REFERENCE' : 'TEXT';
+}
+
 export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null, sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssets = [], boxId = '', studentOptions = null }) {
   if (!isCanvasEditableProjectStatus(project.status)) throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
   const policy = await getAiProviderPolicy();
@@ -1076,7 +1098,9 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
   const box = resolveLessonGenerationBox(context, modality, boxId);
   // 走网关的话，这里换成「该学生在这节课的令牌」出口；解析不出来就原样直连。
-  const providerSelection = await applyGatewayRoute(providerSelectionForModality(policy, modality, box?.model || ''), {
+  const providerSelection = await applyGatewayRoute(providerSelectionForModality(policy, modality, box?.model || '', {
+    imageMode: String(modality).toUpperCase() === 'IMAGE' ? imageModeForGeneration({ box, referenceAssets }) : '',
+  }), {
     orgId: (auth.session?.org_id || auth.user.orgId), studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
   });
   const provider = getGenerationProvider(providerSelection);
@@ -1465,7 +1489,9 @@ export async function handleAiGeneration(ctx) {
     const policy = await getAiProviderPolicy();
     const context = await resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
     const box = resolveLessonGenerationBox(context, modality, boxId);
-    const providerSelection = await applyGatewayRoute(providerSelectionForModality(policy, modality, box?.model || ''), {
+    const providerSelection = await applyGatewayRoute(providerSelectionForModality(policy, modality, box?.model || '', {
+      imageMode: modality === 'IMAGE' ? imageModeForGeneration({ box, referenceAssets: body.referenceAssets ?? body.referenceAssetUrls }) : '',
+    }), {
       orgId: (auth.session?.org_id || auth.user.orgId), studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
     });
     const provider = getGenerationProvider(providerSelection);

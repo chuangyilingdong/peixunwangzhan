@@ -21,6 +21,23 @@ import { AI_PROVIDER_MAX_WAIT_MS, AI_PROVIDER_POLL_INTERVAL_MS, AI_PROVIDER_TIME
 import { PROVIDER_ERROR_CODES } from './providerContract.js';
 
 const RUNNINGHUB_FAMILIES = Object.freeze({
+  // 图片按「生成方式」是**两条独立 API**（各有自己的调用地址与计费）：
+  //   文生图 2133100000000800383 / 2046514150500524034
+  //   图生图 2133100000000800382 / 2046514150500524035
+  // 所以 family 也按方式拆开，后台一条渠道只对应一条 API，价目表才分得清成本。
+  'rhart-image-g-2.5-t2i': {
+    IMAGE_TEXT: '/rhart-image-g-2.5/sunburst/text-to-image',
+  },
+  'rhart-image-g-2.5-i2i': {
+    IMAGE_IMAGE: '/rhart-image-g-2.5/flare/image-to-image',
+  },
+  'rhart-image-g-2-official-t2i': {
+    IMAGE_TEXT: '/rhart-image-g-2-official/text-to-image',
+  },
+  'rhart-image-g-2-official-i2i': {
+    IMAGE_IMAGE: '/rhart-image-g-2-official/image-to-image',
+  },
+  // 旧的双路径 family：只给老配置/回滚快照兜底，**不在后台「读取模型」里展示**（见 LEGACY_FAMILIES）。
   'rhart-image-g-2.5': {
     IMAGE_TEXT: '/rhart-image-g-2.5/sunburst/text-to-image',
     IMAGE_IMAGE: '/rhart-image-g-2.5/flare/image-to-image',
@@ -39,6 +56,7 @@ const RUNNINGHUB_FAMILIES = Object.freeze({
     MUSIC: '/minimax/music-2.6',
   },
 });
+const LEGACY_FAMILIES = new Set(['rhart-image-g-2.5', 'rhart-image-g-2-official']);
 
 const MODALITY_LABELS = Object.freeze({ IMAGE: '图片', VIDEO: '视频', MUSIC: '音乐' });
 
@@ -55,6 +73,14 @@ export function runningHubFamilyModality(family) {
   return familyModalities(RUNNINGHUB_FAMILIES[String(family || '').trim()])[0] || '';
 }
 
+function familyLabel(paths) {
+  const keys = Object.keys(paths || {});
+  // 单模态图片 family 直接标出生成方式：后台勾选时不会把「文生图」和「图生图」看混。
+  if (keys.length === 1 && keys[0] === 'IMAGE_TEXT') return '图片·文生图';
+  if (keys.length === 1 && keys[0] === 'IMAGE_IMAGE') return '图片·图生图';
+  return familyModalities(paths).map((item) => MODALITY_LABELS[item] || item).join('/');
+}
+
 /**
  * 「读取模型」用的本地清单（2026-11-04）。
  *
@@ -66,13 +92,12 @@ export function runningHubFamilyModality(family) {
 export function runningHubModelCatalog(modality = '') {
   const wanted = String(modality || '').trim().toUpperCase();
   return Object.entries(RUNNINGHUB_FAMILIES)
+    .filter(([id]) => !LEGACY_FAMILIES.has(id))
     .map(([id, paths]) => {
       const modalities = familyModalities(paths);
-      // 显示名带上模态：勾选框里一眼能看出这条 family 是图片还是视频。
-      const label = modalities.map((item) => MODALITY_LABELS[item] || item).join('/');
       return {
         id,
-        displayName: `${id}（${label}）`,
+        displayName: `${id}（${familyLabel(paths)}）`,
         ownedBy: 'runninghub',
         contextWindow: null,
         capabilities: null,
@@ -116,7 +141,9 @@ function resolvePath(family, modality, withImages) {
   const paths = RUNNINGHUB_FAMILIES[family];
   if (!paths) return '';
   const upper = String(modality || '').toUpperCase();
-  if (upper === 'IMAGE') return withImages ? (paths.IMAGE_IMAGE || paths.IMAGE_TEXT) : paths.IMAGE_TEXT;
+  // 图片不再「有图就用图生图、没有就回落文生图」：文生图/图生图是两条独立 API、两条渠道，
+  // 走错渠道必须报错，而不是悄悄换一条路径出去（否则价格和日志都会记到另一条 API 上）。
+  if (upper === 'IMAGE') return withImages ? (paths.IMAGE_IMAGE || '') : (paths.IMAGE_TEXT || '');
   return paths[upper] || '';
 }
 
@@ -365,7 +392,13 @@ export function runningHubProvider({
       const resolvedFamily = resolveFamily(providerFamily, key);
       const refs = collectReferences(options);
       const path = resolvePath(resolvedFamily, key, refs.imageUrls.length > 0);
-      if (!path) throw providerError(`RunningHub 没有配置 ${key} 的模型路径（family=${resolvedFamily}）`, PROVIDER_ERROR_CODES.CONFIG_INVALID);
+      if (!path) {
+        const hint = key !== 'IMAGE' ? ''
+          : refs.imageUrls.length
+            ? `这条渠道只支持文生图（family=${resolvedFamily}），请求却带了参考图 —— 检查「图片·图生图」路由`
+            : `这条渠道只支持图生图（family=${resolvedFamily}），请求没有参考图 —— 检查「图片·文生图」路由`;
+        throw providerError(hint || `RunningHub 没有配置 ${key} 的模型路径（family=${resolvedFamily}）`, PROVIDER_ERROR_CODES.CONFIG_INVALID);
+      }
       const body = key === 'IMAGE'
         ? buildImageBody({ prompt, options, imageUrls: refs.imageUrls, family: resolvedFamily })
         : key === 'VIDEO'

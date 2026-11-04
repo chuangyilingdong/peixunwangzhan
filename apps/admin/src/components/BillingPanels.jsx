@@ -30,6 +30,8 @@ const MUSIC_MODE_OPTIONS = [['LYRICS', '歌词生音乐'], ['DESCRIPTION', '描�
 
 // 四个模态只有一份清单（原来路由和合同单价各写了一份、顺序还不一样 —— 同一件事两套写法正是这次要清的乱）。
 const MODALITIES = [['TEXT', '文本'], ['IMAGE', '图片'], ['VIDEO', '视频'], ['MUSIC', '音乐']];
+// 图片的两种生成方式是两条独立 API（RunningHub 分开计费），可以各自指定主/备渠道。
+const IMAGE_MODES = [['TEXT', '图片 · 文生图'], ['IMAGE_REFERENCE', '图片 · 图生图']];
 
 /**
  * 上游合同单价（P90）：与上游签的合同价，用来把「用量证据」自动折算成实际计费（来源 COMPUTED）。
@@ -253,6 +255,8 @@ export function AiCapabilityPanel({ api }) {
       channels: form.channels.filter((_, i) => i !== index),
       modalityChannels: Object.fromEntries(Object.entries(form.modalityChannels).filter(([, v]) => v !== id)),
       modalityBackupChannels: Object.fromEntries(Object.entries(form.modalityBackupChannels || {}).filter(([, v]) => v !== id)),
+      imageModeChannels: Object.fromEntries(Object.entries(form.imageModeChannels || {}).filter(([, v]) => v !== id)),
+      imageModeBackupChannels: Object.fromEntries(Object.entries(form.imageModeBackupChannels || {}).filter(([, v]) => v !== id)),
       visionChannelId: form.visionChannelId === id ? '' : (form.visionChannelId || ''),
       modelRoutes: (form.modelRoutes || []).filter((route) => route.channelId !== id && route.backupChannelId !== id),
     });
@@ -260,7 +264,13 @@ export function AiCapabilityPanel({ api }) {
   // provider 也带上：RunningHub 的「读取模型」不请求上游，后端要靠它（或已保存渠道）认出这是哪家。
   function channelRequest(channel) { return { endpoint: channel.endpoint, channelId: channel.id, provider: channel.provider, ...(channel.apiKey ? { apiKey: channel.apiKey } : {}) }; }
   // 渠道按「能力路由」确定模态（价目表按它决定成本价的计价单位）。
-  function channelModality(channelId) { return Object.entries(form?.modalityChannels || {}).find(([, id]) => id === channelId)?.[0] || ''; }
+  // 图片的文生图/图生图专用渠道不在 modalityChannels 里，但计价单位仍是「图片」。
+  function channelModality(channelId) {
+    const direct = Object.entries(form?.modalityChannels || {}).find(([, id]) => id === channelId)?.[0];
+    if (direct) return direct;
+    const imageMode = Object.entries({ ...(form?.imageModeChannels || {}), ...(form?.imageModeBackupChannels || {}) }).find(([, id]) => id === channelId)?.[0];
+    return imageMode ? 'IMAGE' : '';
+  }
   function modalityOf(channel) { return priceModality[channel.id] || channelModality(channel.id) || 'TEXT'; }
   // 只合并「已声明」的能力，不把模态默认值写进模型声明（否则默认值会被当成该模型的真实能力）
   function updateModelCapability(index, modelId, patch) {
@@ -708,6 +718,10 @@ export function AiCapabilityPanel({ api }) {
           已输出、已受理或结果未知<strong>不自动重试</strong>。这里的所有改动都在页面底部的「保存全部配置」里一起保存。</Notice>
         <div className="row-actions top-gap"><strong>能力路由</strong><span className="muted">留空＝用默认渠道（第一条不空的路由规则）</span></div>
         <div className="form-grid top-gap">{MODALITIES.map(([id, name]) => <div key={id}><label>{name} · 主渠道<select value={form.modalityChannels[id] || ''} onChange={e => setForm({ ...form, modalityChannels: { ...form.modalityChannels, [id]: e.target.value } })}><option value="">使用默认渠道</option>{form.channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label>{name} · 备用渠道<select value={form.modalityBackupChannels?.[id] || ''} onChange={e => setForm({ ...form, modalityBackupChannels: { ...(form.modalityBackupChannels || {}), [id]: e.target.value } })}><option value="">不配置备用渠道</option>{form.channels.filter(c => c.id !== form.modalityChannels[id]).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label></div>)}</div>
+        {/* 图片按生成方式选路（2026-11-04）：文生图 / 图生图是两条独立 API、两条渠道，各自计费。
+            留空 = 回落到上面「图片」那条主/备路由（兼容只配一对图片渠道的旧配置）。 */}
+        <div className="row-actions top-gap"><strong>图片按生成方式</strong><span className="muted">留空＝跟着上面「图片」那条走</span></div>
+        <div className="form-grid top-gap">{IMAGE_MODES.map(([id, name]) => <div key={id}><label>{name} · 主渠道<select value={form.imageModeChannels?.[id] || ''} onChange={e => setForm({ ...form, imageModeChannels: { ...(form.imageModeChannels || {}), [id]: e.target.value } })}><option value="">使用「图片」主渠道</option>{form.channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label>{name} · 备用渠道<select value={form.imageModeBackupChannels?.[id] || ''} onChange={e => setForm({ ...form, imageModeBackupChannels: { ...(form.imageModeBackupChannels || {}), [id]: e.target.value } })}><option value="">跟「图片」备用渠道</option>{form.channels.filter(c => c.id !== form.imageModeChannels?.[id]).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label></div>)}</div>
         {/* 读图渠道（2026-09-16）：学生端 dsh 里带图的请求走哪条渠道。
             **留空就是跟着上面的文本渠道走**（默认，也是常态：我们的模型本来就能看图）；
             只有想把图单独送去另一条渠道（比如换了便宜/更会看图的模型）时才配它。 */}
