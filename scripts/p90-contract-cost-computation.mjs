@@ -281,6 +281,21 @@ try {
   attempt = await attemptOf(provider);
   assert.equal(attempt.upstream_cost_fen, 30, '3 秒 × 0.10 元/秒（1080p 档没配 → 回落每秒价）');
 
+  // seedance 最短计费时长（RunningHub 2026-11-04）：5s→9s、10s→17s、15s→25s
+  for (const [seconds, billed] of [[5, 9], [10, 17], [15, 25]]) {
+    provider = getGenerationProvider(selection({ model: 'bytedance/seedance-2.0-global-fast', upstreamUnitPrices: { VIDEO: { perSecondFen: 8 } } }));
+    await provider.generate({ modality: 'VIDEO', prompt: `seedance ${seconds}s`, options: { durationSeconds: seconds, resolution: '480p' } });
+    attempt = await attemptOf(provider);
+    assert.equal(attempt.upstream_cost_fen, billed * 8, `seedance ${seconds}s 按 ${billed}s 计费`);
+    assert.equal(JSON.parse(attempt.cost_rule_snapshot).usage.billedSeconds, billed);
+  }
+
+  // 其它视频模型不套这条规则（hailuo 5s 仍按 5s）
+  provider = getGenerationProvider(selection({ model: 'minimax/hailuo-h3', upstreamUnitPrices: { VIDEO: { perSecondFen: 8 } } }));
+  await provider.generate({ modality: 'VIDEO', prompt: 'hailuo 5s', options: { durationSeconds: 5, resolution: '768P' } });
+  attempt = await attemptOf(provider);
+  assert.equal(attempt.upstream_cost_fen, 40, '非 seedance 不套最低计费');
+
   // 缺秒数（拿不到请求参数）→ UNKNOWN，不按 0
   provider = getGenerationProvider(selection());
   await provider.generate({ modality: 'VIDEO', prompt: '没给时长', options: {} });

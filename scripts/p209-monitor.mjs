@@ -148,6 +148,26 @@ await check('快照：售价/已知成本/未知成本分开（不混 usage_reco
   // 与 classroomBudgetStatus 同口径：只要有一笔成本未知（含失败尝试），整场就是 UNKNOWN，不谎报“没超”
   assert.equal(session.budget.state, 'UNKNOWN');
 });
+await check('渠道健康：按渠道聚合、错误分类、P50/P95、最近成功', () => {
+  const channel = snapshot.channels.find((item) => item.channelId === 'channel-runhub-img-main');
+  assert.ok(channel);
+  assert.equal(channel.calls, 4);
+  assert.equal(channel.success, 2);
+  assert.equal(channel.failed, 2);
+  assert.equal(channel.authFailed, 1);
+  assert.equal(channel.rateLimited, 1);
+  assert.equal(channel.timeout, 0);
+  assert.equal(channel.p50Ms, 0);
+  assert.ok(channel.lastSuccessAt);
+  assert.equal(snapshot.failover.count, 0);
+});
+await check('学生成本 Top：student_a1 ¥3.00，student_a2 未知 1 笔', () => {
+  const a1 = snapshot.studentCostTop.find((item) => item.userId === 'student_a1');
+  const a2 = snapshot.studentCostTop.find((item) => item.userId === 'student_a2');
+  assert.equal(a1.knownCostFen, 300);
+  assert.equal(a2.knownCostFen, 0);
+  assert.equal(a2.unknownCalls, 1);
+});
 await check('权限：只有 ADMIN_ANALYTICS 时不下发成本字段', async () => {
   const limited = await call('/snapshot', { window: '5m' }, analyticsAuth);
   assert.equal(limited.billingVisible, false);
@@ -156,6 +176,17 @@ await check('权限：只有 ADMIN_ANALYTICS 时不下发成本字段', async ()
   assert.equal(limited.orgs[0].knownCostFen, undefined);
   assert.equal(limited.sessions[0].saleFen, undefined);
   assert.equal(limited.sessions[0].budget.knownCostFen, undefined);
+});
+
+await insertAttempt('att_b1_failover_ok', 'call_b1', 2, 'org_b', 'student_b1', 'sess_b', null, 'SUCCESS', { costSource: 'COMPUTED', upstream: 100 });
+await new Promise((resolve) => setTimeout(resolve, 3200));
+const snapshotAfterFailover = await call('/snapshot', { window: '5m' });
+await check('主备切换：attempt>1 计入切换次数与成功数', () => {
+  assert.equal(snapshotAfterFailover.failover.count, 1);
+  assert.equal(snapshotAfterFailover.failover.success, 1);
+  const channel = snapshotAfterFailover.channels.find((item) => item.channelId === 'channel-runhub-img-main');
+  assert.equal(channel.failovers, 1);
+  assert.equal(channel.failoverSuccess, 1);
 });
 
 const classroom = await call('/classroom/sess_a');

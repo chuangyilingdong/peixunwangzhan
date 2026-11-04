@@ -16,6 +16,22 @@ const fmtTime = (value) => {
 };
 const fmtMinute = (value) => (value ? String(value).slice(11, 16) : '');
 const fmtYuan = (fen) => `¥${(Number(fen || 0) / 100).toFixed(2)}`;
+const fmtMs = (ms) => {
+  if (ms === null || ms === undefined) return '—';
+  const value = Number(ms);
+  if (!Number.isFinite(value)) return '—';
+  return value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)}ms`;
+};
+const fmtAgo = (value) => {
+  if (!value) return '—';
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return '—';
+  const minutes = Math.max(0, Math.round((Date.now() - time) / 60000));
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} 小时前`;
+  return `${Math.round(hours / 24)} 天前`;
+};
 const pctText = (value) => (value === null || value === undefined ? '—' : `${value}%`);
 
 function usePolling(fn, { intervalMs = REFRESH_MS, enabled = true, deps = [], onError } = {}) {
@@ -183,6 +199,9 @@ export function Monitor({ api, user }) {
   const errorTop = snapshot?.errorTop || [];
   const stuck = snapshot?.stuck || [];
   const costTop = snapshot?.costTop || [];
+  const channels = snapshot?.channels || [];
+  const failover = snapshot?.failover || { count: 0, success: 0, byChannel: [] };
+  const studentCostTop = snapshot?.studentCostTop || [];
   const wallets = balance?.wallets?.sources || [];
   const walletTotalCny = wallets.some((item) => item.ok && item.cny !== null && item.cny !== undefined)
     ? wallets.reduce((sum, item) => sum + (item.ok && item.cny !== null && item.cny !== undefined ? Number(item.cny) : 0), 0)
@@ -393,6 +412,50 @@ export function Monitor({ api, user }) {
                   </tr>
                 ))}
                 {!costTop.length ? <tr><td colSpan={5} className="monitor-empty">窗口内没有调用</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </section> : null}
+      </div>
+
+      <div className="monitor-grid monitor-grid-errors">
+        <section className="monitor-card">
+          <div className="monitor-card-title">渠道健康 <span>{windowKey} · 主备切换 {failover.count} 次（成功 {failover.success}）</span></div>
+          <div className="monitor-table-wrap">
+            <table>
+              <thead><tr><th>渠道</th><th>调用</th><th>失败</th><th>错误率</th><th>P50 / P95</th><th>最近成功</th><th>主备切换</th></tr></thead>
+              <tbody>
+                {channels.map((item) => (
+                  <tr key={item.channelId || 'none'} title={item.channelId || ''}>
+                    <td><strong>{item.channelName}</strong><div className="monitor-muted">{item.channelId || '—'}</div></td>
+                    <td>{item.calls}<div className="monitor-muted">成功 {item.success}</div></td>
+                    <td>{item.failed}<div className="monitor-muted">认证 {item.authFailed} · 限流 {item.rateLimited} · 超时 {item.timeout} · HTTP {item.httpError} · 其他 {item.otherError}</div></td>
+                    <td>{pctText(item.errorRate)}</td>
+                    <td>{fmtMs(item.p50Ms)} / {fmtMs(item.p95Ms)}</td>
+                    <td>{fmtAgo(item.lastSuccessAt)}</td>
+                    <td>{item.failovers ? `${item.failovers} 次` : '—'}<div className="monitor-muted">{item.failovers ? `成功 ${item.failoverSuccess}` : ''}</div></td>
+                  </tr>
+                ))}
+                {!channels.length ? <tr><td colSpan={7} className="monitor-empty">窗口内没有调用</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {canBilling ? <section className="monitor-card">
+          <div className="monitor-card-title">学生成本 Top <span>{windowKey} · 已知上游成本</span></div>
+          <div className="monitor-table-wrap">
+            <table>
+              <thead><tr><th>学生</th><th>调用 / 未知</th><th>成本</th></tr></thead>
+              <tbody>
+                {studentCostTop.map((item) => (
+                  <tr key={item.userId || item.name}>
+                    <td><strong>{item.name}</strong></td>
+                    <td>{item.calls}<div className="monitor-muted">未知 {item.unknownCalls}</div></td>
+                    <td>{fmtYuan(item.knownCostFen)}</td>
+                  </tr>
+                ))}
+                {!studentCostTop.length ? <tr><td colSpan={3} className="monitor-empty">窗口内没有学生调用</td></tr> : null}
               </tbody>
             </table>
           </div>

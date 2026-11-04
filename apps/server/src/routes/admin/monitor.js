@@ -226,7 +226,7 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
   const stuckBefore = sinceOf(15);
   const stuckSince = sinceOf(6 * 60);
 
-  const [live, usageWindow, attemptsWindow, seriesRows, orgRows, orgStats, sessionRows, stuckAttemptRows, stuckJobRows, costRows, policyRow, queueStatus] = await Promise.all([
+  const [live, usageWindow, attemptsWindow, seriesRows, orgRows, orgStats, sessionRows, stuckAttemptRows, stuckJobRows, costRows, policyRow, queueStatus, channelRows, durationRows, lastSuccessRows, failoverRows, studentCostRows] = await Promise.all([
     arow(`SELECT
         (SELECT COUNT(*) FROM class_sessions WHERE status='ACTIVE') active_sessions,
         (SELECT COUNT(*) FROM session_students WHERE status='ACTIVE') active_students,
@@ -288,6 +288,31 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1'),
     // RunningHub 账户级队列（15 秒缓存）；没配 RH 渠道时返回 ok:false，不影响快照。
     getRunningHubQueue(),
+    // 渠道健康：窗口内调用/失败分类；耗时另查一次算 P50/P95。
+    arows(`SELECT channel_id, COUNT(*) calls,
+        SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) success,
+        SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) failed,
+        SUM(CASE WHEN status='FAILED' AND COALESCE(error_code,'') LIKE '%AUTH%' THEN 1 ELSE 0 END) auth_failed,
+        SUM(CASE WHEN status='FAILED' AND COALESCE(error_code,'') LIKE '%TIMEOUT%' THEN 1 ELSE 0 END) timeout_failed,
+        SUM(CASE WHEN status='FAILED' AND COALESCE(error_code,'') LIKE '%RATE_LIMIT%' THEN 1 ELSE 0 END) rate_failed,
+        SUM(CASE WHEN status='FAILED' AND COALESCE(error_code,'') LIKE '%HTTP_ERROR%' THEN 1 ELSE 0 END) http_failed,
+        SUM(CASE WHEN status='FAILED' AND COALESCE(error_code,'') NOT LIKE '%AUTH%'
+                  AND COALESCE(error_code,'') NOT LIKE '%TIMEOUT%'
+                  AND COALESCE(error_code,'') NOT LIKE '%RATE_LIMIT%'
+                  AND COALESCE(error_code,'') NOT LIKE '%HTTP_ERROR%' THEN 1 ELSE 0 END) other_failed
+      FROM compute_attempts WHERE created_at>=? GROUP BY channel_id`, [since]),
+    arows(`SELECT channel_id, created_at, completed_at FROM compute_attempts
+        WHERE created_at>=? AND completed_at IS NOT NULL AND status IN ('SUCCESS','FAILED') LIMIT 5000`, [since]),
+    arows(`SELECT channel_id, MAX(created_at) last_success FROM compute_attempts
+        WHERE status='SUCCESS' AND created_at>=? GROUP BY channel_id`, [sinceOf(7 * 24 * 60)]),
+    arows(`SELECT channel_id, COUNT(*) attempts, SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) success
+        FROM compute_attempts WHERE attempt>1 AND created_at>=? GROUP BY channel_id`, [since]),
+    arows(`SELECT a.user_id, MAX(u.display_name) name, COUNT(*) calls,
+        SUM(CASE WHEN a.status='SUCCESS' AND a.cost_source<>'UNKNOWN' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) known_cost_fen,
+        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
+      FROM compute_attempts a LEFT JOIN users u ON u.id=a.user_id
+      WHERE a.created_at>=? AND a.user_id IS NOT NULL
+      GROUP BY a.user_id ORDER BY known_cost_fen DESC LIMIT 8`, [since]),
   ]);
 
   const sessionIds = sessionRows.map((row) => row.id);
@@ -399,6 +424,59 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     knownCostFen: num(row.known_cost_fen), unknownCalls: num(row.unknown_calls),
   })) : undefined;
 
+  const lastSuccessByChannel = new Map(lastSuccessRows.map((row) => [row.channel_id, row.last_success]));
+  const failoverByChannel = new Map(failoverRows.map((row) => [row.channel_id, row]));
+  const durationsByChannel = new Map();
+  for (const row of durationRows) {
+    const start = Date.parse(row.created_at);
+    const end = Date.parse(row.completed_at);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) continue;
+    const key = row.channel_id || '';
+    if (!durationsByChannel.has(key)) durationsByChannel.set(key, []);
+    durationsByChannel.get(key).push(end - start);
+  }
+  const percentile = (list, p) => {
+    if (!list.length) return null;
+    const sorted = [...list].sort((left, right) => left - right);
+    return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
+  };
+  const channels = channelRows.map((row) => {
+    const durations = durationsByChannel.get(row.channel_id || '') || [];
+    const success = num(row.success);
+    const failed = num(row.failed);
+    const failoverRow = failoverByChannel.get(row.channel_id) || {};
+    return {
+      channelId: row.channel_id || null,
+      channelName: channelNames.get(row.channel_id) || row.channel_id || '未标记渠道',
+      calls: num(row.calls), success, failed,
+      errorRate: pct(failed, success + failed),
+      authFailed: num(row.auth_failed), timeout: num(row.timeout_failed),
+      rateLimited: num(row.rate_failed),
+      httpError: num(row.http_failed), otherError: num(row.other_failed),
+      p50Ms: percentile(durations, 50), p95Ms: percentile(durations, 95),
+      lastSuccessAt: lastSuccessByChannel.get(row.channel_id) || null,
+      failovers: num(failoverRow.attempts), failoverSuccess: num(failoverRow.success),
+    };
+  }).sort((left, right) => right.calls - left.calls);
+
+  const failover = {
+    count: failoverRows.reduce((sum, row) => sum + num(row.attempts), 0),
+    success: failoverRows.reduce((sum, row) => sum + num(row.success), 0),
+    byChannel: failoverRows.map((row) => ({
+      channelId: row.channel_id || null,
+      channelName: channelNames.get(row.channel_id) || row.channel_id || '未标记渠道',
+      attempts: num(row.attempts), success: num(row.success),
+    })).sort((left, right) => right.attempts - left.attempts).slice(0, 5),
+  };
+
+  const studentCostTop = billingVisible ? studentCostRows.map((row) => ({
+    userId: row.user_id || null,
+    name: row.name || row.user_id || '—',
+    calls: num(row.calls),
+    knownCostFen: num(row.known_cost_fen),
+    unknownCalls: num(row.unknown_calls),
+  })) : undefined;
+
   return {
     generatedAt: new Date().toISOString(),
     window: windowKey,
@@ -434,7 +512,9 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     errorTop: errorsResult.top,
     stuck,
     queue: queueStatus,
-    ...(billingVisible ? { costTop } : {}),
+    channels,
+    failover,
+    ...(billingVisible ? { costTop, studentCostTop } : {}),
     billingVisible,
   };
 }
