@@ -139,7 +139,7 @@ await check('图片·备用 family：/rhart-image-g-2-official/*', async () => {
   await provider.generate({ modality: 'IMAGE', prompt: 'x', options: {} });
   assert.equal(lastSubmission().path, '/openapi/v2/rhart-image-g-2-official/text-to-image');
   // 官方 family 强制 quality（low/medium/high），不给自己就 1007「没有返回 taskId」。
-  assert.equal(lastSubmission().body.quality, 'high');
+  assert.equal(lastSubmission().body.quality, 'low');
   await provider.generate({ modality: 'IMAGE', prompt: 'x', options: { referenceAssets: [{ type: 'IMAGE', url: `${SELF}/r.png` }] } });
   assert.equal(lastSubmission().path, '/openapi/v2/rhart-image-g-2-official/image-to-image');
 });
@@ -148,14 +148,14 @@ await check('图片·文生图主 family：g-2-official-t2i 也补 quality', asy
   const provider = make('rhart-image-g-2-official-t2i');
   await provider.generate({ modality: 'IMAGE', prompt: 'x', options: {} });
   assert.equal(lastSubmission().path, '/openapi/v2/rhart-image-g-2-official/text-to-image');
-  assert.equal(lastSubmission().body.quality, 'high', '带 -t2i 后缀也要补 quality');
+  assert.equal(lastSubmission().body.quality, 'low', '带 -t2i 后缀也要补 quality');
 });
 
 await check('图片·图生图主 family：g-2-official-i2i 补 quality 且走 image-to-image', async () => {
   const provider = make('rhart-image-g-2-official-i2i');
   await provider.generate({ modality: 'IMAGE', prompt: 'x', options: { referenceAssets: [{ type: 'IMAGE', url: `${SELF}/r.png` }] } });
   assert.equal(lastSubmission().path, '/openapi/v2/rhart-image-g-2-official/image-to-image');
-  assert.equal(lastSubmission().body.quality, 'high');
+  assert.equal(lastSubmission().body.quality, 'low');
 });
 
 await check('视频·主：seedance 路径 + 参考/时长/比例/generateAudio', async () => {

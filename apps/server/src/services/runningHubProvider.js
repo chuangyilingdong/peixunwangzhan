@@ -197,10 +197,13 @@ function collectReferences(options = {}) {
 /**
  * rhart-image-g-2-official（gpt-image-2 官方）除了 prompt 还**强制**要 `quality`，
  * 取值只能是 low / medium / high（传 auto 会被 1007 拒掉）——真机验证确认。
- * 平台没有「质量」这个学生选项、后台也没得配，所以给一个稳定默认；
  * 不给的话备用渠道每次都会 `没有返回 taskId`（上游其实回了 1007）。
+ *
+ * 默认 **low**（2026-11-04 用户定档）。1k 实测：low $0.009/52s、medium $0.054/50s、
+ * high $0.198/146s；用户确认的合同价 $0.009（文生）/ $0.027（图生）就是 low 档。
+ * 单次调用可用 `options.quality` 覆盖（学生端没有这个选项，留给后台按渠道配）。
  */
-const OFFICIAL_IMAGE_QUALITY = 'high';
+const OFFICIAL_IMAGE_QUALITY = 'low';
 
 function buildImageBody({ prompt, options, imageUrls, family }) {
   const body = { prompt: String(prompt || '') };
