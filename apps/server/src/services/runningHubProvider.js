@@ -157,10 +157,19 @@ function collectReferences(options = {}) {
   };
 }
 
-function buildImageBody({ prompt, options, imageUrls }) {
+/**
+ * rhart-image-g-2-official（gpt-image-2 官方）除了 prompt 还**强制**要 `quality`，
+ * 取值只能是 low / medium / high（传 auto 会被 1007 拒掉）——真机验证确认。
+ * 平台没有「质量」这个学生选项、后台也没得配，所以给一个稳定默认；
+ * 不给的话备用渠道每次都会 `没有返回 taskId`（上游其实回了 1007）。
+ */
+const OFFICIAL_IMAGE_QUALITY = 'high';
+
+function buildImageBody({ prompt, options, imageUrls, family }) {
   const body = { prompt: String(prompt || '') };
   if (options.aspectRatio) body.aspectRatio = String(options.aspectRatio);
   if (options.resolution) body.resolution = String(options.resolution);
+  if (family === 'rhart-image-g-2-official') body.quality = String(options.quality || OFFICIAL_IMAGE_QUALITY);
   if (imageUrls.length) body.imageUrls = imageUrls;
   return body;
 }
@@ -358,7 +367,7 @@ export function runningHubProvider({
       const path = resolvePath(resolvedFamily, key, refs.imageUrls.length > 0);
       if (!path) throw providerError(`RunningHub 没有配置 ${key} 的模型路径（family=${resolvedFamily}）`, PROVIDER_ERROR_CODES.CONFIG_INVALID);
       const body = key === 'IMAGE'
-        ? buildImageBody({ prompt, options, imageUrls: refs.imageUrls })
+        ? buildImageBody({ prompt, options, imageUrls: refs.imageUrls, family: resolvedFamily })
         : key === 'VIDEO'
           ? buildVideoBody({ prompt, options, family: resolvedFamily, refs })
           : buildMusicBody({ prompt, options });

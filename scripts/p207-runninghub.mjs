@@ -92,6 +92,7 @@ await check('图片·文生图：无参考 → /rhart-image-g-2.5/sunburst/text-
   assert.equal(sub.body.aspectRatio, '16:9');
   assert.equal(sub.body.resolution, '1k');
   assert.equal(sub.body.imageUrls, undefined);
+  assert.equal(sub.body.quality, undefined);
   assert.match(submitted, /^task_/);
   assert.equal(result.assets[0].mimeType, 'image/jpeg');
   assert.match(result.assets[0].assetUrl, /\/out\.jpg$/);
@@ -113,6 +114,8 @@ await check('图片·备用 family：/rhart-image-g-2-official/*', async () => {
   const provider = make('rhart-image-g-2-official');
   await provider.generate({ modality: 'IMAGE', prompt: 'x', options: {} });
   assert.equal(lastSubmission().path, '/openapi/v2/rhart-image-g-2-official/text-to-image');
+  // 官方 family 强制 quality（low/medium/high），不给自己就 1007「没有返回 taskId」。
+  assert.equal(lastSubmission().body.quality, 'high');
   await provider.generate({ modality: 'IMAGE', prompt: 'x', options: { referenceAssets: [{ type: 'IMAGE', url: 'https://aicyld.com/r.png' }] } });
   assert.equal(lastSubmission().path, '/openapi/v2/rhart-image-g-2-official/image-to-image');
 });
