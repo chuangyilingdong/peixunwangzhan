@@ -18,7 +18,6 @@
  *   · 余额单独一个接口（60 秒缓存），不放在 5 秒轮询的快照里，避免首次探测拖慢看板。
  */
 import { arow, arows, aq, errors, id, isRootPlatformAdmin } from '../../lib.js';
-import { classroomBudgetStatus } from '../../services/computePool.js';
 import { getRunningHubBalance, getRunningHubQueue } from '../../services/runningHubAccount.js';
 import { getWalletBalances } from '../../services/walletAccounts.js';
 import { getWalletHistory } from '../../services/walletHistory.js';
@@ -266,7 +265,7 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
         SUM(CASE WHEN status='SUCCESS' THEN COALESCE(sale_price_fen,0) ELSE 0 END) sale_fen,
         SUM(CASE WHEN status='SUCCESS' AND cost_source<>'UNKNOWN' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) known_cost_fen
       FROM compute_attempts WHERE created_at>=? AND org_id IS NOT NULL GROUP BY org_id`, [since]),
-    arows(`SELECT s.id, s.org_id, s.title, s.teacher_id, s.lesson_id, s.series_id, s.started_at, s.platform_budget_fen,
+    arows(`SELECT s.id, s.org_id, s.title, s.teacher_id, s.lesson_id, s.series_id, s.started_at,
         o.name org_name, u.display_name teacher_name, l.title lesson_title,
         (SELECT COUNT(*) FROM session_students ss WHERE ss.session_id=s.id AND ss.status<>'REMOVED') roster,
         (SELECT COUNT(*) FROM session_students ss WHERE ss.session_id=s.id AND ss.status='ACTIVE') active_students,
@@ -347,33 +346,19 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     activeByOrg.set(key, (activeByOrg.get(key) || 0) + 1);
   }
   const sessionIds = activeSessionRows.map((row) => row.id);
-  const [sessionStats, sessionAllTime] = sessionIds.length ? await Promise.all([
-    arows(`SELECT class_session_id, COUNT(*) calls,
+  const sessionStats = sessionIds.length ? await arows(`SELECT class_session_id, COUNT(*) calls,
         SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) success,
         SUM(CASE WHEN status IN ('FAILED','BLOCKED') THEN 1 ELSE 0 END) failed,
         SUM(CASE WHEN status='SUCCESS' THEN COALESCE(sale_price_fen,0) ELSE 0 END) sale_fen,
         SUM(CASE WHEN status='SUCCESS' AND cost_source<>'UNKNOWN' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) known_cost_fen,
         SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_cost_calls
-      FROM compute_attempts WHERE created_at>=? AND class_session_id IN (${placeholders(sessionIds)}) GROUP BY class_session_id`, [since, ...sessionIds]),
-    arows(`SELECT class_session_id,
-        SUM(CASE WHEN cost_source<>'UNKNOWN' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) known_all,
-        SUM(CASE WHEN cost_source='UNKNOWN' OR upstream_cost_fen IS NULL THEN 1 ELSE 0 END) unknown_all
-      FROM compute_attempts WHERE class_session_id IN (${placeholders(sessionIds)}) GROUP BY class_session_id`, sessionIds),
-  ]) : [[], []];
+      FROM compute_attempts WHERE created_at>=? AND class_session_id IN (${placeholders(sessionIds)}) GROUP BY class_session_id`, [since, ...sessionIds]) : [];
 
   const statsBySession = new Map(sessionStats.map((row) => [row.class_session_id, row]));
-  const allTimeBySession = new Map(sessionAllTime.map((row) => [row.class_session_id, row]));
   const statsByOrg = new Map(orgStats.map((row) => [row.org_id, row]));
 
   const sessions = activeSessionRows.map((row) => {
     const stats = statsBySession.get(row.id) || {};
-    const allTime = allTimeBySession.get(row.id) || {};
-    const budgetFen = row.platform_budget_fen === null || row.platform_budget_fen === undefined ? null : Number(row.platform_budget_fen);
-    const knownAll = num(allTime.known_all);
-    const unknownAll = num(allTime.unknown_all);
-    const budgetState = budgetFen === null || !Number.isFinite(budgetFen)
-      ? (unknownAll ? 'UNKNOWN' : 'UNCONFIGURED')
-      : knownAll > budgetFen ? 'OVER_BUDGET' : (unknownAll ? 'UNKNOWN' : 'WITHIN_BUDGET');
     return {
       id: row.id, orgId: row.org_id, orgName: row.org_name,
       title: row.title || row.lesson_title || '未命名课堂',
@@ -386,11 +371,6 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
         saleFen: num(stats.sale_fen), knownCostFen: num(stats.known_cost_fen),
         unknownCostCalls: num(stats.unknown_cost_calls),
       } : {}),
-      budget: {
-        state: budgetState,
-        budgetFen: Number.isFinite(budgetFen) ? budgetFen : null,
-        ...(billingVisible ? { knownCostFen: knownAll, unknownCalls: unknownAll } : {}),
-      },
     };
   });
 
@@ -578,7 +558,7 @@ async function buildClassroom(sessionId) {
     WHERE s.id=?`, [sessionId]);
   if (!session) throw errors.notFound('课堂不存在', 'CLASS_SESSION_NOT_FOUND');
 
-  const [roster, stats, recentErrors, budget] = await Promise.all([
+  const [roster, stats, recentErrors] = await Promise.all([
     arows(`SELECT ss.student_id, ss.status roster_status, u.display_name, u.login
       FROM session_students ss LEFT JOIN users u ON u.id=ss.student_id
       WHERE ss.session_id=? AND ss.status<>'REMOVED' ORDER BY u.display_name, u.login`, [sessionId]),
@@ -591,7 +571,6 @@ async function buildClassroom(sessionId) {
         MAX(created_at) last_at
       FROM compute_attempts WHERE class_session_id=? GROUP BY user_id`, [sessionId]),
     fetchErrorRows({ since: sinceOf(24 * 60), sessionId, limit: 30 }),
-    classroomBudgetStatus(sessionId),
   ]);
 
   const statsByUser = new Map(stats.map((row) => [row.user_id, row]));
@@ -625,7 +604,6 @@ async function buildClassroom(sessionId) {
     },
     students,
     totals,
-    budget,
     errors: recentErrors.items,
     errorTop: recentErrors.top,
   };

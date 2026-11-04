@@ -152,8 +152,8 @@ await check('快照：售价/已知成本/未知成本分开（不混 usage_reco
   assert.equal(session.saleFen, 500);
   assert.equal(session.knownCostFen, 300);
   assert.equal(session.unknownCostCalls, 1);
-  // 与 classroomBudgetStatus 同口径：只要有一笔成本未知（含失败尝试），整场就是 UNKNOWN，不谎报“没超”
-  assert.equal(session.budget.state, 'UNKNOWN');
+  // 课堂没有「预算」概念（2026-11-04 用户口径）：监控不再下发 budget 字段。
+  assert.equal(session.budget, undefined);
 });
 await check('渠道健康：按渠道聚合、错误分类、P50/P95、最近成功', () => {
   const channel = snapshot.channels.find((item) => item.channelId === 'channel-runhub-img-main');
@@ -193,7 +193,7 @@ await check('权限：只有 ADMIN_ANALYTICS 时不下发成本字段', async ()
   assert.equal(limited.usage.knownCostFen, undefined);
   assert.equal(limited.orgs[0].knownCostFen, undefined);
   assert.equal(limited.sessions[0].saleFen, undefined);
-  assert.equal(limited.sessions[0].budget.knownCostFen, undefined);
+  assert.equal(limited.sessions[0].budget, undefined);
 });
 
 await insertAttempt('att_b1_failover_ok', 'call_b1', 2, 'org_b', 'student_b1', 'sess_b', null, 'SUCCESS', { costSource: 'COMPUTED', upstream: 100 });
@@ -230,7 +230,6 @@ await check('课堂下钻：名单 2 人，A1 调用 2 / 成本 300，A2 未知 
   assert.equal(a2.calls, 1);
   assert.equal(a2.unknownCostCalls, 1);
   assert.equal(classroom.totals.calls, 3);
-  assert.equal(classroom.budget.budgetFen, 10000);
 });
 
 const errors = await call('/errors', { since: now, limit: 50 });

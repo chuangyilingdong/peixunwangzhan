@@ -522,7 +522,7 @@ export function Monitor({ api, user }) {
           </div>
           <div className="monitor-table-wrap">
             <table>
-              <thead><tr><th>课堂</th><th>老师</th><th>名单 / 在线</th><th>调用</th>{canBilling ? <th>成本</th> : null}<th>错误</th><th>预算</th></tr></thead>
+              <thead><tr><th>课堂</th><th>老师</th><th>名单 / 在线</th><th>调用</th>{canBilling ? <th>成本</th> : null}<th>错误</th></tr></thead>
               <tbody>
                 {sessions.map((session) => (
                   <tr key={session.id} className={session.id === selectedSessionId ? 'is-selected' : undefined} onClick={() => setSelectedSessionId(session.id)}>
@@ -532,10 +532,9 @@ export function Monitor({ api, user }) {
                     <td>{session.calls}</td>
                     {canBilling ? <td>{fmtYuan(session.knownCostFen)}</td> : null}
                     <td>{session.failed}</td>
-                    <td><span className={`monitor-badge is-${session.budget.state === 'OVER_BUDGET' ? 'danger' : session.budget.state === 'UNKNOWN' ? 'warning' : 'ok'}`}>{session.budget.state === 'OVER_BUDGET' ? '超预算' : session.budget.state === 'UNKNOWN' ? '成本未知' : session.budget.state === 'UNCONFIGURED' ? '未配置' : '正常'}</span></td>
                   </tr>
                 ))}
-                {!sessions.length ? <tr><td colSpan={canBilling ? 7 : 6} className="monitor-empty">当前没有进行中的课堂</td></tr> : null}
+                {!sessions.length ? <tr><td colSpan={canBilling ? 6 : 5} className="monitor-empty">当前没有进行中的课堂</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -676,7 +675,6 @@ export function Monitor({ api, user }) {
               <Kpi label="名单 / 在线" value={`${classroom.students.length} / ${classroom.students.filter((item) => item.rosterStatus === 'ACTIVE').length}`} />
               <Kpi label="调用" value={classroom.totals.calls} hint={`成功 ${classroom.totals.success} · 失败 ${classroom.totals.failed}`} />
               <Kpi label="已知成本" value={fmtYuan(classroom.totals.knownCostFen)} hint={`未知 ${classroom.totals.unknownCostCalls} 笔`} />
-              <Kpi label="预算" value={classroom.budget.budgetFen === null ? '未配置' : fmtYuan(classroom.budget.budgetFen)} hint={classroom.budget.state} />
             </div>
             <div className="monitor-table-wrap">
               <table>
