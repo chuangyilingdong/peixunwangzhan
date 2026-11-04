@@ -686,9 +686,14 @@ function currentChannelId(policy, row) {
 async function buildModelRows(policy) {
   const since = new Date(Date.now() - 15 * 60_000).toISOString();
   const healthRows = await arows(`SELECT channel_id, COUNT(*) calls,
-      SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) failed
+      SUM(CASE WHEN status='FAILED' AND NOT(COALESCE(error_message,'') LIKE '%内容安全%' OR COALESCE(error_message,'') LIKE '%Content security%') THEN 1 ELSE 0 END) failed,
+      SUM(CASE WHEN status='FAILED' AND (COALESCE(error_message,'') LIKE '%内容安全%' OR COALESCE(error_message,'') LIKE '%Content security%') THEN 1 ELSE 0 END) content_safety_failed
     FROM compute_attempts WHERE created_at>=? GROUP BY channel_id`, [since]);
-  const health = new Map(healthRows.map((row) => [row.channel_id, { calls: num(row.calls), failed: num(row.failed) }]));
+  const health = new Map(healthRows.map((row) => [row.channel_id, {
+    calls: num(row.calls),
+    failed: num(row.failed),
+    contentSafetyFailed: num(row.content_safety_failed),
+  }]));
   const channels = new Map((policy.channels || []).map((channel) => [channel.id, channel]));
   return MODEL_ROWS.map((row) => {
     const currentId = currentChannelId(policy, row);
@@ -712,6 +717,7 @@ async function buildModelRows(policy) {
       model: current?.model || null,
       calls: currentHealth.calls,
       failed: currentHealth.failed,
+      contentSafetyFailed: currentHealth.contentSafetyFailed || 0,
       errorRate,
       options,
       recommendation,

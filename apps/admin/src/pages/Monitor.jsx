@@ -412,7 +412,7 @@ export function Monitor({ api, user }) {
                     <tr key={row.key}>
                       <td><strong>{row.label}</strong></td>
                       <td>{row.channelName}<div className="monitor-muted">{row.model || '—'}</div></td>
-                      <td>{row.calls} 次 · 失败 {row.failed}{row.errorRate !== null && row.errorRate !== undefined ? ` · ${row.errorRate}%` : ''}</td>
+                      <td>{row.calls} 次 · 失败 {row.failed}{row.contentSafetyFailed ? ` · 内容安全 ${row.contentSafetyFailed}` : ''}{row.errorRate !== null && row.errorRate !== undefined ? ` · ${row.errorRate}%` : ''}</td>
                       <td>
                         {row.options.length ? (
                           <div className="monitor-model-actions">
