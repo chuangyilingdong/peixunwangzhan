@@ -51,7 +51,7 @@ const IMAGE_MODES = [['TEXT', '图片 · 文生图'], ['IMAGE_REFERENCE', '图�
  * 分模态的计价单位**原样保留**：TEXT 分/百万 token、IMAGE 分/张、VIDEO 分/秒、MUSIC 分/次。
  */
 const UNIT_PRICE_FIELDS = {
-  TEXT: [['inputFenPer1MTokens', '输入（分 / 百万 token）'], ['outputFenPer1MTokens', '输出（分 / 百万 token）']],
+  TEXT: [['inputFenPer1MTokens', '输入（分 / 百万 token）'], ['outputFenPer1MTokens', '输出（分 / 百万 token）'], ['cacheHitFenPer1MTokens', '缓存命中（分 / 百万 token）']],
   IMAGE: [['perImageFen', '每张（分）']],
   VIDEO: [['perSecondFen', '每秒（分）'], ['audioExtraPerSecondFen', '含音频每秒加价（分）']],
   MUSIC: [['perCallFen', '每次（分）'], ['perSecondFen', '每秒（分）']],
@@ -384,11 +384,49 @@ export function AiCapabilityPanel({ api }) {
   function unitPriceFields(index, modality, modelId, bucket) {
     const shared = modelId ? (form.channels[index].upstreamUnitPrices?.[modality] || {}) : null;
     return <div className="form-grid">
-      {(UNIT_PRICE_FIELDS[modality] || []).map(([field, label]) => <label key={field}>{label}<input type="number" min="0" step="1"
+      {(UNIT_PRICE_FIELDS[modality] || []).map(([field, label]) => <label key={field}>{label}<input type="number" min="0" step={modality === 'TEXT' ? '0.1' : '1'}
         value={bucket?.[field] ?? ''}
         placeholder={modelId ? (shared?.[field] == null ? '留空 = 用本渠道共用价（现在没配）' : `留空 = 用共用价 ${shared[field]}`) : '留空 = 未配（折算为 UNKNOWN）'}
         onChange={(event) => (modelId ? setModelUnitPriceValue(index, modelId, modality, field, event.target.value) : setUnitPriceValue(index, modality, field, event.target.value))} /></label>)}
     </div>;
+  }
+  /** 文本分时价（2026-11-04）：只做渠道级；高峰窗口用默认（周一至周五 9-12、14-18），节假日可编辑。 */
+  function setTimePricing(index, patch) {
+    const channel = form.channels[index];
+    const prices = { ...(channel.upstreamUnitPrices || {}) };
+    const bucket = { ...(prices.TEXT || {}) };
+    const next = { ...(bucket.timePricing || {}), ...patch };
+    for (const window of ['peak', 'offPeak']) {
+      if (next[window] && !Object.keys(next[window]).length) delete next[window];
+    }
+    if (Object.keys(next).length) bucket.timePricing = next; else delete bucket.timePricing;
+    if (Object.keys(bucket).length) prices.TEXT = bucket; else delete prices.TEXT;
+    updateChannel(index, { upstreamUnitPrices: Object.keys(prices).length ? prices : null });
+  }
+  function setTimePriceValue(index, window, field, raw) {
+    const current = form.channels[index].upstreamUnitPrices?.TEXT?.timePricing?.[window] || {};
+    const value = unitPriceAmount(raw);
+    const next = { ...current };
+    if (value === null) delete next[field]; else next[field] = value;
+    setTimePricing(index, { [window]: next });
+  }
+  function timePricingFields(index, bucket) {
+    const pricing = bucket?.timePricing || null;
+    const fieldRow = (window, title, hint) => <div className="form-grid top-gap">
+      <strong>{title}</strong>
+      {UNIT_PRICE_FIELDS.TEXT.slice(0, 3).map(([field, label]) => <label key={field}>{label.replace('（分 / 百万 token）', '')}<input type="number" min="0" step="0.1"
+        value={pricing?.[window]?.[field] ?? ''} placeholder={hint}
+        onChange={(event) => setTimePriceValue(index, window, field, event.target.value)} /></label>)}
+    </div>;
+    return <details className="top-gap"><summary>分时计价（可选{ pricing ? '，已启用' : ''}）</summary>
+      <div className="muted">按北京时间：周一至周五 09:00–12:00、14:00–18:00 为高峰；其余时段、周末、下列节假日全天为闲时。填了就覆盖上面的固定价；留空则用固定价。</div>
+      {fieldRow('peak', '高峰价', '分 / 百万 token')}
+      {fieldRow('offPeak', '闲时价', '分 / 百万 token')}
+      <label className="top-gap">法定节假日（YYYY-MM-DD，逗号或换行分隔；每年维护）<textarea rows={2}
+        value={(pricing?.holidays || []).join(', ')}
+        placeholder="2027-01-01, 2027-02-06"
+        onChange={(event) => setTimePricing(index, { holidays: event.target.value.split(/[\s,，]+/).map((item) => item.trim()).filter(Boolean) })} /></label>
+    </details>;
   }
   function unitPriceTiers(index, modality, modelId, bucket) {
     const configured = Object.keys(bucket?.byResolution || {});
@@ -595,6 +633,7 @@ export function AiCapabilityPanel({ api }) {
           </div>
           <div className="top-gap"><strong>本渠道共用价（素材类型价）</strong>（这几行的成本价留空时就回落到它）</div>
           {unitPriceFields(index, modality, '', sharedBucket)}
+          {modality === 'TEXT' ? timePricingFields(index, sharedBucket) : null}
           {unitPriceTiers(index, modality, '', sharedBucket)}
         </td>
       </tr> : <tr><td colSpan={6}><strong>{group.name}</strong><span className="muted"> · 不在任何渠道的模型清单里，只有对外价（历史遗留；要清掉就把对外价清空）</span></td></tr>}

@@ -222,6 +222,8 @@ export function getGenerationProvider(selection = {}) {
           unitPrices: selected.upstreamUnitPrices || null,
           modelUnitPrices: selected.modelUnitPrices || null,
           usage, priceCurrency, usdCnyRate: fx?.rate ?? null,
+          // 文本分时价按「这次调用完成的时间」判定高峰/闲时；改价不追溯。
+          at: nowIso(),
         });
         // 成本来源只剩这三种（见上面那段注释：估算那档已退役）
         const computedSource = provider.name === 'local-mock' ? 'MOCK' : reported ? 'REPORTED' : contract ? 'COMPUTED' : 'UNKNOWN';

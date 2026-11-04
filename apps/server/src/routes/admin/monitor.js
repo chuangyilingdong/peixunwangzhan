@@ -626,8 +626,8 @@ const MODEL_ROWS = Object.freeze([
 // 单价是上游实扣折成分，耗时是提交到出图的端到端时间。i2i 的中/高没有实测（null = 不展示）。
 const IMAGE_QUALITY_OPTIONS = Object.freeze([
   { value: 'low', label: 'low（合同价）', t2iFen: 6, i2iFen: 18, t2iSeconds: 52, i2iSeconds: 27 },
-  { value: 'medium', label: 'medium', t2iFen: 36, i2iFen: null, t2iSeconds: 50, i2iSeconds: null },
-  { value: 'high', label: 'high', t2iFen: 133, i2iFen: null, t2iSeconds: 146, i2iSeconds: null },
+  { value: 'medium', label: 'medium', t2iFen: 36, i2iFen: 36, t2iSeconds: 50, i2iSeconds: null },
+  { value: 'high', label: 'high', t2iFen: 133, i2iFen: 133, t2iSeconds: 146, i2iSeconds: null },
 ]);
 
 function normalizeImageQuality(value) {
@@ -651,13 +651,11 @@ function candidateChannels(policy, row) {
     if (row.key === 'IMAGE_T2I') return !/-i2i/i.test(String(channel.model || ''));
     return true;
   }).flatMap((channel) => {
-    // 候选模型 = channel.models ∪ modelMappings（显示名映射里的真实 id）∪ 默认模型
-    const mapped = Array.isArray(channel.modelMappings)
-      ? channel.modelMappings.map((item) => item?.id).filter(Boolean)
-      : [];
+    // 候选 = 渠道真正勾选的模型（channel.models ∪ 默认模型）。
+    // ⚠️ 不要把 modelMappings 也铺进来：那是「读取模型」拿到的上游全量清单（几十个），
+    // 运营只勾了 1 个，下拉却会列出几十行，看起来像「没保存成功」。切换的是渠道，不是上游目录。
     const models = [
       ...(Array.isArray(channel.models) ? channel.models : []),
-      ...mapped,
       channel.model,
     ].filter(Boolean);
     return [...new Set(models)].map((model) => ({

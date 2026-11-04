@@ -60,11 +60,30 @@ const MODALITY_KEYS = Object.freeze(['TEXT', 'IMAGE', 'VIDEO', 'MUSIC']);
 // deepseek-flash 输入 2 元 / 输出 8 元 → 换算成「分 / 千」是 0.2 分 / 0.8 分，**不是整数分**，
 // 只能填 0 或 1，误差 5 倍以上。改成「分 / 百万 token」后这些价正好是整数（200 / 800）。
 const UNIT_PRICE_FEN_KEYS = Object.freeze({
-  TEXT: ['inputFenPer1MTokens', 'outputFenPer1MTokens'],
+  TEXT: ['inputFenPer1MTokens', 'outputFenPer1MTokens', 'cacheHitFenPer1MTokens'],
   IMAGE: ['perImageFen'],
   VIDEO: ['perSecondFen', 'audioExtraPerSecondFen'],
   MUSIC: ['perCallFen', 'perSecondFen'],
 });
+
+// 文本分时价（2026-11-04 用户口径）：备用渠道分高峰/闲时，按北京时间判断。
+//   · 高峰 = 周一至周五的 peakWindows（默认 9:00-12:00、14:00-18:00），且不在 holidays 里；
+//   · 其余（含周末、法定节假日全天）= 闲时；
+//   · 中国没有夏令时，直接按 UTC+8 算，不依赖服务器时区。
+// holidays 是 YYYY-MM-DD 列表，法定节假日要每年维护（平台不内置日历）。
+const TEXT_TIME_KEYS = Object.freeze(['inputFenPer1MTokens', 'outputFenPer1MTokens', 'cacheHitFenPer1MTokens']);
+const DEFAULT_PEAK_WINDOWS = Object.freeze([
+  Object.freeze({ days: Object.freeze([1, 2, 3, 4, 5]), start: '09:00', end: '12:00' }),
+  Object.freeze({ days: Object.freeze([1, 2, 3, 4, 5]), start: '14:00', end: '18:00' }),
+]);
+
+/** 非负金额；TEXT 的缓存价可能是 0.025 元 = 2.5 分，所以 TEXT 允许小数（保留 4 位）。 */
+function priceAmount(value, allowFraction = false) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return allowFraction ? subFen(n) : Math.round(n);
+}
 
 /** 非负整数分；非法 → null（**不是 0**）。 */
 function fenAmount(value) {
@@ -116,6 +135,49 @@ function normalizeResolutionMap(value) {
   return Object.keys(out).length ? out : null;
 }
 
+function normalizeClock(value) {
+  const text = String(value || '').trim();
+  if (!/^\d{2}:\d{2}$/.test(text)) return null;
+  const [hour, minute] = text.split(':').map(Number);
+  if (hour > 23 || minute > 59) return null;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function normalizeTextWindow(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const key of TEXT_TIME_KEYS) {
+    const fen = priceAmount(raw[key], true);
+    if (fen !== null) out[key] = fen;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+function normalizeTimePricing(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const peak = normalizeTextWindow(raw.peak);
+  const offPeak = normalizeTextWindow(raw.offPeak);
+  if (!peak && !offPeak) return null;
+  const windows = (Array.isArray(raw.peakWindows) ? raw.peakWindows : DEFAULT_PEAK_WINDOWS).flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const days = [...new Set((Array.isArray(item.days) ? item.days : []).map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort();
+    const start = normalizeClock(item.start);
+    const end = normalizeClock(item.end);
+    if (!days.length || !start || !end || start >= end) return [];
+    return [{ days, start, end }];
+  }).slice(0, 14);
+  const holidays = [...new Set((Array.isArray(raw.holidays) ? raw.holidays : [])
+    .map((item) => String(item || '').trim())
+    .filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item)))].slice(0, 400);
+  return {
+    timezone: String(raw.timezone || 'Asia/Shanghai').slice(0, 64),
+    peak,
+    offPeak,
+    peakWindows: windows.length ? windows : DEFAULT_PEAK_WINDOWS.map((item) => ({ ...item, days: [...item.days] })),
+    holidays,
+  };
+}
+
 /** 一层「素材类型 → 单价」的归一化（渠道级与模型级覆盖共用同一套字段）。 */
 function normalizeModalityPriceMap(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -125,8 +187,12 @@ function normalizeModalityPriceMap(raw) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
     const price = {};
     for (const key of UNIT_PRICE_FEN_KEYS[modality]) {
-      const fen = fenAmount(value[key]);
+      const fen = priceAmount(value[key], modality === 'TEXT');
       if (fen !== null) price[key] = fen;
+    }
+    if (modality === 'TEXT') {
+      const timePricing = normalizeTimePricing(value.timePricing);
+      if (timePricing) price.timePricing = timePricing;
     }
     const byResolution = normalizeResolutionMap(value.byResolution);
     if (byResolution) price.byResolution = byResolution;
@@ -140,7 +206,8 @@ function validateModalityPrice(level, modality, raw, problems) {
   const key = String(modality || '').toUpperCase();
   if (!MODALITY_KEYS.includes(key)) { problems.push(`${level}：不支持的类型 ${modality}`); return; }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { problems.push(`${level} · ${modality} 必须是对象`); return; }
-  const allowed = [...UNIT_PRICE_FEN_KEYS[key], 'byResolution'];
+  const allowed = [...UNIT_PRICE_FEN_KEYS[key], 'byResolution', ...(key === 'TEXT' ? ['timePricing'] : [])];
+  const amountOk = (value) => (key === 'TEXT' ? priceAmount(value, true) : fenAmount(value)) !== null;
   for (const [field, amount] of Object.entries(raw)) {
     if (!allowed.includes(field)) { problems.push(`${level} · ${modality}.${field} 不是已知的单价字段`); continue; }
     if (field === 'byResolution') {
@@ -151,7 +218,20 @@ function validateModalityPrice(level, modality, raw, problems) {
       }
       continue;
     }
-    if (fenAmount(amount) === null) problems.push(`${level} · ${modality}.${field} 必须是非负整数分`);
+    if (field === 'timePricing') {
+      if (!amount || typeof amount !== 'object' || Array.isArray(amount)) { problems.push(`${level} · ${modality}.timePricing 必须是对象`); continue; }
+      for (const window of ['peak', 'offPeak']) {
+        const entry = amount[window];
+        if (entry === undefined || entry === null) continue;
+        if (typeof entry !== 'object' || Array.isArray(entry)) { problems.push(`${level} · ${modality}.timePricing.${window} 必须是对象`); continue; }
+        for (const [fieldName, fieldAmount] of Object.entries(entry)) {
+          if (!TEXT_TIME_KEYS.includes(fieldName)) problems.push(`${level} · ${modality}.timePricing.${window}.${fieldName} 不是已知的单价字段`);
+          else if (priceAmount(fieldAmount, true) === null) problems.push(`${level} · ${modality}.timePricing.${window}.${fieldName} 必须是非负金额`);
+        }
+      }
+      continue;
+    }
+    if (!amountOk(amount)) problems.push(`${level} · ${modality}.${field} 必须是${key === 'TEXT' ? '非负金额' : '非负整数分'}`);
   }
 }
 
@@ -255,6 +335,11 @@ export function collectUsageEvidence({ modality, result = null, request = null }
       evidence.evidence = 'UPSTREAM_USAGE';
       evidence.inputTokens = input;
       evidence.outputTokens = output;
+      // 缓存拆分：DeepSeek 系回 prompt_cache_hit_tokens / miss；上游没回就是 null（按全价输入算）。
+      const cacheHit = wholeCount(tokens?.cacheHitTokens);
+      const cacheMiss = wholeCount(tokens?.cacheMissTokens);
+      if (cacheHit !== null) evidence.cacheHitTokens = cacheHit;
+      if (cacheMiss !== null) evidence.cacheMissTokens = cacheMiss;
     }
     return evidence;
   }
@@ -285,13 +370,33 @@ function result(fen, unitPrice, usage, level, layers) {
 }
 
 /**
+ * 北京时间是否高峰：周一至周五的 peakWindows 内，且当天不在 holidays 里。
+ * 中国没有夏令时，直接按 UTC+8 算，不依赖服务器时区。
+ */
+function isPeakTextTime(timePricing, atMs) {
+  if (!timePricing) return false;
+  const bj = new Date(Number(atMs) + 8 * 3600_000);
+  const day = bj.getUTCDay();
+  const today = `${bj.getUTCFullYear()}-${String(bj.getUTCMonth() + 1).padStart(2, '0')}-${String(bj.getUTCDate()).padStart(2, '0')}`;
+  if ((timePricing.holidays || []).includes(today)) return false;
+  const minutes = bj.getUTCHours() * 60 + bj.getUTCMinutes();
+  for (const window of timePricing.peakWindows || []) {
+    if (!window.days.includes(day)) continue;
+    const [startHour, startMinute] = window.start.split(':').map(Number);
+    const [endHour, endMinute] = window.end.split(':').map(Number);
+    if (minutes >= startHour * 60 + startMinute && minutes < endHour * 60 + endMinute) return true;
+  }
+  return false;
+}
+
+/**
  * 按合同单价把用量证据折算成分（整数）。折算不出来 → null（UNKNOWN），绝不返回 0。
  * 选价优先级：模型级覆盖 > 素材类型级 > 没有（null）；模型级缺的字段回退素材类型级同名价。
  * 返回：{ fen, basis:'CONTRACT_UNIT_PRICE', unitPrice, usage, level, layers } | null
  * level  = 实际命中层级：'MODEL'（用到了模型级价）/ 'MODALITY'
  * layers = 实际用到的层级列表，例如 ['MODEL'] 或 ['MODEL','MODALITY']（混合）
  */
-export function computeContractCost({ modality, model = '', unitPrices = null, modelUnitPrices = null, usage = null, priceCurrency = 'CNY', usdCnyRate = null } = {}) {
+export function computeContractCost({ modality, model = '', unitPrices = null, modelUnitPrices = null, usage = null, priceCurrency = 'CNY', usdCnyRate = null, at = null } = {}) {
   const selected = resolveUnitPrice({ unitPrices, modelUnitPrices, model, modality });
   if (!selected) return null;
   const key = String(modality || '').trim().toUpperCase();
@@ -299,11 +404,20 @@ export function computeContractCost({ modality, model = '', unitPrices = null, m
   const evidence = usage && typeof usage === 'object' ? usage : {};
   // 记录这次折算真正用到了哪几层的价，如实写进快照（混合时两层都在）。
   const levels = new Set();
+  // 文本分时价：该层配了 timePricing 就按调用时间选高峰/闲时，并用它的字段覆盖同名字段。
+  const atMs = at ? Date.parse(at) : Date.now();
+  const timed = (price) => {
+    if (!price?.timePricing) return price;
+    const picked = isPeakTextTime(price.timePricing, Number.isFinite(atMs) ? atMs : Date.now())
+      ? price.timePricing.peak
+      : price.timePricing.offPeak;
+    return picked ? { ...price, ...picked } : price;
+  };
   // 逐字段取值：模型级写了这个字段就用模型级，没写才回退素材类型级同名价。
   const field = (name) => {
-    for (const [level, price] of [['MODEL', modelPrice], ['MODALITY', modalityPrice]]) {
+    for (const [level, price] of [['MODEL', timed(modelPrice)], ['MODALITY', timed(modalityPrice)]]) {
       if (!price || !Object.prototype.hasOwnProperty.call(price, name)) continue;
-      const fen = fenAmount(price[name]);
+      const fen = priceAmount(price[name], key === 'TEXT');
       if (fen !== null) return { fen, level };
     }
     return null;
@@ -346,9 +460,27 @@ export function computeContractCost({ modality, model = '', unitPrices = null, m
     // double 精度对任何现实累计额都够）。若按整数分取整，每一笔都会记成 0 ——
     // 一节课的文本成本整块消失，文本那一侧的「机构/学生消耗 vs 我们实际消耗」对照永远是空的。
     // （图片/视频/音乐的单笔都是整数分，各自的分支不需要这层小数。）
-    const inputFen = subFen((input * perInput.fen) / 1000000);
+    // 缓存：配了 cacheHitFenPer1MTokens 且上游回了 cache 命中数，就按「命中价 × 命中 + 未命中价 × 未命中」拆。
+    // 没配缓存价或没有回执 → 全部输入按 inputFenPer1MTokens 算（绝不把命中数当 0 价）。
+    const perCache = field('cacheHitFenPer1MTokens');
+    const hit = wholeCount(evidence.cacheHitTokens);
+    const missed = wholeCount(evidence.cacheMissTokens);
+    let inputFen;
+    let cacheSplit = null;
+    if (perCache && hit !== null && hit > 0) {
+      levels.add(perCache.level);
+      const missTokens = missed !== null ? missed : Math.max(0, input - hit);
+      inputFen = subFen((hit * perCache.fen + missTokens * perInput.fen) / 1000000);
+      cacheSplit = { cacheHitTokens: hit, cacheMissTokens: missTokens, cacheHitFenPer1MTokens: perCache.fen };
+    } else {
+      inputFen = subFen((input * perInput.fen) / 1000000);
+    }
     const outputFen = subFen((output * perOutput.fen) / 1000000);
-    return done(subFen(inputFen + outputFen), { inputFenPer1MTokens: perInput.fen, outputFenPer1MTokens: perOutput.fen }, { inputTokens: input, outputTokens: output, inputFen, outputFen });
+    return done(subFen(inputFen + outputFen), {
+      inputFenPer1MTokens: perInput.fen,
+      outputFenPer1MTokens: perOutput.fen,
+      ...(perCache ? { cacheHitFenPer1MTokens: perCache.fen } : {}),
+    }, { inputTokens: input, outputTokens: output, ...(cacheSplit || {}), inputFen, outputFen });
   }
 
   if (key === 'IMAGE') {

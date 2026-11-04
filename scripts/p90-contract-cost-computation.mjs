@@ -508,6 +508,37 @@ try {
   assert.equal(attempt.cost_source, 'COMPUTED', 'USD 实扣不认，改用合同价折算');
   assert.equal(attempt.upstream_cost_fen, 30);
 
+  // 文本缓存价 + 分时价（2026-11-04 用户口径：主渠道缓存 0.025 元/1M；备用渠道峰谷价）
+  const textPrice = {
+    TEXT: {
+      inputFenPer1MTokens: 50, outputFenPer1MTokens: 200, cacheHitFenPer1MTokens: 2.5,
+      timePricing: {
+        peak: { inputFenPer1MTokens: 120, outputFenPer1MTokens: 480, cacheHitFenPer1MTokens: 2.4 },
+        offPeak: { inputFenPer1MTokens: 60, outputFenPer1MTokens: 240, cacheHitFenPer1MTokens: 1.2 },
+        peakWindows: [
+          { days: [1, 2, 3, 4, 5], start: '09:00', end: '12:00' },
+          { days: [1, 2, 3, 4, 5], start: '14:00', end: '18:00' },
+        ],
+        holidays: ['2026-11-05'],
+      },
+    },
+  };
+  const normalizedText = normalizeUpstreamUnitPrices(textPrice);
+  assert.equal(normalizedText.TEXT.cacheHitFenPer1MTokens, 2.5, '缓存价允许 0.1 分精度');
+  assert.equal(normalizedText.TEXT.timePricing.offPeak.cacheHitFenPer1MTokens, 1.2);
+  assert.equal(normalizedText.TEXT.timePricing.holidays[0], '2026-11-05');
+  const textUsage = { inputTokens: 100000, outputTokens: 1000, cacheHitTokens: 50000, cacheMissTokens: 50000 };
+  // 北京 2026-11-04 10:00（周三高峰）：50000×2.4 + 50000×120 + 1000×480 = 6.6 分
+  assert.equal(computeContractCost({ modality: 'TEXT', unitPrices: textPrice, usage: textUsage, at: '2026-11-04T02:00:00.000Z' }).fen, 6.6);
+  // 北京 20:00（闲时）：50000×1.2 + 50000×60 + 1000×240 = 3.3 分
+  assert.equal(computeContractCost({ modality: 'TEXT', unitPrices: textPrice, usage: textUsage, at: '2026-11-04T12:00:00.000Z' }).fen, 3.3);
+  // 周六 10:00 → 闲时
+  assert.equal(computeContractCost({ modality: 'TEXT', unitPrices: textPrice, usage: textUsage, at: '2026-11-07T02:00:00.000Z' }).fen, 3.3);
+  // 周四但列入法定节假日 → 闲时
+  assert.equal(computeContractCost({ modality: 'TEXT', unitPrices: textPrice, usage: textUsage, at: '2026-11-05T02:00:00.000Z' }).fen, 3.3);
+  // 没配缓存价 → 全部输入按输入价（旧口径），绝不把命中数当 0 价
+  assert.equal(computeContractCost({ modality: 'TEXT', unitPrices: { TEXT: { inputFenPer1MTokens: 50, outputFenPer1MTokens: 200 } }, usage: textUsage, at: '2026-11-04T02:00:00.000Z' }).fen, 5.2);
+
   console.log('P90 合同单价折算：文本 token × 每百万 token 价（分以下保留 4 位小数，不取整）、图片按张/档、视频按秒/档、音乐按次，金额分整数精确断言通过');
   console.log('P90 缺用量与缺单价一律 null（UNKNOWN）不按 0、来源优先级 REPORTED>COMPUTED>ESTIMATED>UNKNOWN、改价不追溯、学生侧恒 0、渠道读写与非法值拒绝通过');
   console.log('P90 Seedance 直连实扣：data.usage / task.usage / 顶层 usage 三处读取位置、实测币种「¥」认成人民币、');
