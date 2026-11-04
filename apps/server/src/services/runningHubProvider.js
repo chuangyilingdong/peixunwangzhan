@@ -422,6 +422,37 @@ export function runningHubProvider({
         family: resolvedFamily, name, maxWaitMs, pollIntervalMs,
       });
     },
+    /**
+     * 按任务号查回结果（对账用，2026-11-04 晚补）。
+     *
+     * 为什么必须有：服务重启/TIMEOUT 时任务已被判 FAILED，但上游往往已经出片并按已受理计费；
+     * 平台的对账（`reconcileStrandedGenerations`）只认适配器的 `queryTask`，
+     * 没有它就只能跳过 —— 学生看不到图、钱照花。返回形状与其它适配器一致：
+     * `{ state: 'PENDING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED', asset?, message? }`。
+     */
+    async queryTask({ taskId, modality = 'IMAGE', title = '' } = {}) {
+      const task = String(taskId || '').trim();
+      if (!task) throw providerError('queryTask 缺少 taskId', PROVIDER_ERROR_CODES.CONFIG_INVALID);
+      if (!base) throw providerError('RunningHub 调用地址未配置', PROVIDER_ERROR_CODES.CONFIG_INVALID);
+      if (!apiKey) throw providerError('RunningHub API Key 未配置', PROVIDER_ERROR_CODES.AUTH_FAILED);
+      const key = String(modality || '').toUpperCase();
+      const { response, payload } = await fetchJson(`${base}/query`, { body: { taskId: task }, apiKey, timeoutMs: 30000 });
+      if (!response.ok) throw httpError(response, payload);
+      const status = String(payload?.status || '').toUpperCase();
+      if (status === 'SUCCESS') {
+        const extracted = extractAsset(payload, {
+          modality: key, title, family: resolveFamily(providerFamily, key), name, taskId: task,
+        });
+        return { state: 'SUCCEEDED', asset: extracted.assets[0] };
+      }
+      if (['FAILED', 'CANCEL', 'CANCELLED'].includes(status)) {
+        return {
+          state: status === 'FAILED' ? 'FAILED' : 'CANCELED',
+          message: String(payload?.errorMessage || payload?.message || '').slice(0, 300),
+        };
+      }
+      return { state: 'PENDING', status };
+    },
   };
 }
 

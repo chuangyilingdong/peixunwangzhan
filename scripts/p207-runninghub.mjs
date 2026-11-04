@@ -334,6 +334,23 @@ await check('切备用时把分辨率收进备用渠道的枚举（视频主 480
   assert.equal(adaptOptionsToCandidate(args('480p'), backup).options.aspectRatio, '16:9');
 });
 
+await check('对账：queryTask 能按 taskId 取回结果（重启/TIMEOUT 后补素材）', async () => {
+  const provider = make('rhart-image-g-2.5-t2i');
+  const ok = await provider.queryTask({ taskId: 'task_reconcile_1', modality: 'IMAGE', title: '对账' });
+  assert.equal(ok.state, 'SUCCEEDED');
+  assert.match(ok.asset.assetUrl, /\/out\.jpg$/);
+  assert.equal(ok.asset.metadata.taskId, 'task_reconcile_1');
+  state.queryStatus = 'RUNNING';
+  try { assert.equal((await provider.queryTask({ taskId: 'task_reconcile_1', modality: 'IMAGE' })).state, 'PENDING'); }
+  finally { state.queryStatus = 'SUCCESS'; }
+  state.queryStatus = 'FAILED';
+  try {
+    const failed = await provider.queryTask({ taskId: 'task_reconcile_1', modality: 'IMAGE' });
+    assert.equal(failed.state, 'FAILED');
+    assert.match(failed.message, /mock failed/);
+  } finally { state.queryStatus = 'SUCCESS'; }
+});
+
 mock.close();
 const failed = checks.filter((item) => !item.ok);
 for (const item of checks) {
