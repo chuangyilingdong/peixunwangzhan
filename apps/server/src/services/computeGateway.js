@@ -339,6 +339,9 @@ export function clearGatewayRouteCache() {
  * 仅明确不使用网关时保持直连；启用但解析失败会抛错。
  */
 export async function applyGatewayRoute(selection, { orgId = '', studentId = '', lessonId = '', modality = 'TEXT', model = '' } = {}) {
+  // RunningHub 是专用异步协议（提交 → taskId → POST /query），new-api 那套 OpenAI 网关接不住；
+  // 配了 runninghub 就直连，不要被算力网关改写。
+  if (String(selection?.provider || '').toLowerCase() === 'runninghub') return selection;
   let route;
   try { route = await resolveGenerationRoute({ orgId, studentId, lessonId, modality, models: model || selection?.model || '' }); }
   catch (error) {

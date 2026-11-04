@@ -653,7 +653,7 @@ export function AiCapabilityPanel({ api }) {
             </div>
             <details className="top-gap"><summary>高级配置</summary>
               <div className="form-grid top-gap">
-                <span className="muted">接口协议固定为 Chat Completions（兼容 OpenAI 形状）。配置里已存的 protocol 字段保留但暂不使用 —— 等真支持多协议时再接上适配器。</span>
+                <span className="muted">RunningHub 使用专用异步协议（提交 → 查 taskId → 取 results）；其他供应商固定 Chat Completions（兼容 OpenAI 形状）。配置里已存的 protocol 字段保留但暂不使用。</span>
                 <label>手动添加模型 ID<input onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target.value.trim(); if (v) { updateChannel(index, { models: [...new Set([...(channel.models || []), v])] }); e.target.value = ''; } } }} placeholder="输入后回车添加" /></label>
               </div>
               {channelModality(channel.id) ? <details className="top-gap"><summary>请求模板</summary><div className="muted">仅在供应商要求特殊请求格式时配置；留空使用平台默认模板。</div><textarea rows={6} value={channelTemplateText(channel)} onChange={(e) => updateChannel(index, { requestTemplates: { ...(channel.requestTemplates || {}), [channelModality(channel.id)]: e.target.value } })} /></details> : null}

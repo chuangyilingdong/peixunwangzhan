@@ -1,6 +1,7 @@
-import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_KEY, AI_PROVIDER_MODALITY_ENDPOINTS, AI_PROVIDER_POLL_INTERVAL_MS, AI_PROVIDER_VOICE, PUBLIC_SITE_URL } from '../config.js';
+import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_KEY, AI_PROVIDER_MODALITY_ENDPOINTS, AI_PROVIDER_POLL_INTERVAL_MS, AI_PROVIDER_VOICE, AI_PROVIDER_MAX_WAIT_MS, AI_PROVIDER_TIMEOUT_MS, PUBLIC_SITE_URL } from '../config.js';
 import { isMockProvider, providerDefinition, unavailableProvider, validateProviderConfig } from './providerContract.js';
 import { openAiCompatibleProvider } from './openaiCompatibleProvider.js';
+import { runningHubProvider } from './runningHubProvider.js';
 import { getProviderApiKey } from './providerSecret.js';
 import { id, json, nowIso, q, row, arow, aq } from '../lib.js';
 import { priceFenFor } from './computePool.js';
@@ -217,6 +218,21 @@ function rawGenerationProvider(selection = {}) {
   const config = providerConfig(selected);  if (isMockProvider(config.provider)) return mockProvider(config.model);
   const definition = providerDefinition(config.provider);
   if (!config.valid || !definition?.adapterAvailable) return unavailableProvider({ name: config.provider, model: config.model, config });
+  if (config.provider === 'runninghub') {
+    // RunningHub 是专用异步协议（提交 → taskId → POST query → results[].url），不能走 new-api 网关。
+    // `channelModel` 是渠道卡里的 family（rhart-image-g-2.5 / …）；课时里的旧模型 ID 不参与选路。
+    const apiKey = selected.gateway?.apiKey || selected.apiKey || getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY;
+    return runningHubProvider({
+      name: config.provider,
+      model: config.model,
+      family: selected.channelModel || config.model,
+      endpoint: config.endpoint,
+      apiKey,
+      timeoutMs: AI_PROVIDER_TIMEOUT_MS,
+      maxWaitMs: AI_PROVIDER_MAX_WAIT_MS,
+      pollIntervalMs: Math.max(5000, Number(AI_PROVIDER_POLL_INTERVAL_MS) || 0),
+    });
+  }
   if (selected.gateway) {
     // 走网关：new-api 提供的是 OpenAI 那套接口，所以**不套**我们自己上游的请求模板/路径
     // （那些是给 MiniMax/Mureka 的私有路径与私有请求体用的，网关不认）→ 用内置的 OpenAI 形状模板。

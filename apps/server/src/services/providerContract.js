@@ -5,6 +5,8 @@ const PROVIDER_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 export const GENERATION_PROVIDER_CATALOG = Object.freeze([
   Object.freeze({ id: 'local-mock', label: '本地模拟（当前生产默认）', kind: 'MOCK', adapterAvailable: true, externalContentAllowed: false, endpointRequired: true, modelRequired: true }),
   Object.freeze({ id: 'openai-compatible', label: 'OpenAI-compatible 通用接口（六类能力）', kind: 'GENERIC', adapterAvailable: true, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
+  // 2026-11-04：RunningHub 是「提交任务 → 查 taskId → 取 results[].url」的异步协议，不能走 openai-compatible。
+  Object.freeze({ id: 'runninghub', label: 'RunningHub（异步任务：图片/视频/音乐）', kind: 'GENERIC', adapterAvailable: true, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
   Object.freeze({ id: 'aliyun-bailian', label: '阿里云百炼', kind: 'GENERIC', adapterAvailable: false, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
   Object.freeze({ id: 'volcengine', label: '火山引擎', kind: 'GENERIC', adapterAvailable: false, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
   Object.freeze({ id: 'zhipu', label: '智谱', kind: 'GENERIC', adapterAvailable: false, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),

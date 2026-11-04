@@ -823,14 +823,17 @@ export function providerSelectionForModality(policy, modality, modelOverride = '
   const channelId = mapping?.channelId || policy?.modalityChannels?.[key];
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
   const base = channel
-    ? { provider: channel.provider, model: channel.model, endpoint: channel.endpoint, channelId: channel.id, providerAccountRef: channel.providerAccountRef || null, requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {}, requestPaths: channel.requestPaths || {}, pollPaths: channel.pollPaths || {}, upstreamUnitPrices: channel.upstreamUnitPrices || null, modelUnitPrices: channel.modelUnitPrices || null }
-    : { provider: policy.provider, model: policy.model, endpoint: policy.endpoint, channelId: 'default', requestTemplates: {}, modelRequestTemplates: {}, requestPaths: {}, pollPaths: {}, upstreamUnitPrices: null, modelUnitPrices: null };
+    ? { provider: channel.provider, model: channel.model, channelModel: channel.model, endpoint: channel.endpoint, channelId: channel.id, providerAccountRef: channel.providerAccountRef || null, requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {}, requestPaths: channel.requestPaths || {}, pollPaths: channel.pollPaths || {}, upstreamUnitPrices: channel.upstreamUnitPrices || null, modelUnitPrices: channel.modelUnitPrices || null }
+    : { provider: policy.provider, model: policy.model, channelModel: policy.model, endpoint: policy.endpoint, channelId: 'default', requestTemplates: {}, modelRequestTemplates: {}, requestPaths: {}, pollPaths: {}, upstreamUnitPrices: null, modelUnitPrices: null };
   const selected = mapping ? { ...base, model: mapping.model } : modelOverride ? { ...base, model: modelOverride } : base;
+  // RunningHub 的「模型」就是渠道卡里的 family（endpoint path 由它决定）；课时里的旧模型 ID 不能覆盖它，
+  // 否则请求发到 RunningHub 的模型族会错、价格/日志也会记成旧模型。
+  if (channel?.provider === 'runninghub') selected.model = channel.model;
   selected.estimatedCostFen = channel?.modelCosts?.[selected.model] ?? channel?.estimatedCostFen ?? null;
   const backup = policy?.channels?.find((item) => item.id === (mapping ? mapping.backupChannelId : policy?.modalityBackupChannels?.[key]));
   if (backup) {
     const backupModel = mapping?.backupModel || backup.model;
-    selected.backup = { ...backup, channelId: backup.id, model: backupModel, upstreamUnitPrices: backup.upstreamUnitPrices || null, modelUnitPrices: backup.modelUnitPrices || null, estimatedCostFen: backup.modelCosts?.[backupModel] ?? backup.estimatedCostFen ?? null };
+    selected.backup = { ...backup, channelId: backup.id, model: backupModel, channelModel: backupModel, upstreamUnitPrices: backup.upstreamUnitPrices || null, modelUnitPrices: backup.modelUnitPrices || null, estimatedCostFen: backup.modelCosts?.[backupModel] ?? backup.estimatedCostFen ?? null };
   }
   return selected;
 }
@@ -900,7 +903,9 @@ export async function generationOptionsFor({ context, modality, policy, selectio
       // 模板里没有能放参考图的位置 → 上游收到的请求体里一张图都没有。
       // 这种情况**必须当场拒绝**：静默丢掉的结果是「出来一张跟参考无关的图」，
       // 比报错糟得多（学生会以为模型不听话，其实是图根本没发出去）。与视频那条门禁同一个口径。
-      if (!/\{\{(referenceItems|referenceImageUrls)\}\}/.test(JSON.stringify(template || {}))) {
+      // ⭐ 2026-11-04：RunningHub 的请求体由专用适配器拼（文生图/图生图两条路径），
+      //    不依赖渠道的 OpenAI 形状模板；所以不拿「模板里有没有参考占位符」拦它。
+      if (channel?.provider !== 'runninghub' && !/\{\{(referenceItems|referenceImageUrls)\}\}/.test(JSON.stringify(template || {}))) {
         throw errors.forbidden('当前图片模型不能带参考图：请去掉连线，或让老师换一个支持参考的模型', 'GENERATION_REFERENCES_UNSUPPORTED');
       }
       options.referenceAssets = references;
@@ -953,7 +958,8 @@ export async function generationOptionsFor({ context, modality, policy, selectio
       //    静默丢掉的结果是「出来一段与参考无关的视频」，比报错糟得多 —— 用户 2026-09-21 撞的就是它
       //    （连了清明上河图当参考，出来的视频跟它毫无关系；根因是默认视频模板里没有 {{referenceItems}}）。
       const referencesTemplate = requestTemplateFor(channel, key, { model: selection?.model, withReferences: true });
-      if (!/\{\{(referenceItems|referenceImageUrls)\}\}/.test(JSON.stringify(referencesTemplate || {}))) {
+      // 同图片那条：RunningHub 由专用适配器拼请求体，不走这里的模板占位符检查。
+      if (channel?.provider !== 'runninghub' && !/\{\{(referenceItems|referenceImageUrls)\}\}/.test(JSON.stringify(referencesTemplate || {}))) {
         throw errors.forbidden('当前视频模型不能带参考素材：请去掉连线，或让老师换一个支持参考的模型', 'GENERATION_REFERENCES_UNSUPPORTED');
       }
       // 「连过来的音频怎么用」由**课包锁**（AUDIO_ROLES：对口型＝驱动+保留原声 / 声音参考＝只借音色）。
