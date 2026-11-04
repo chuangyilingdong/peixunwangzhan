@@ -188,10 +188,15 @@ function normalizeInputModes(value, modelId) {
   return modes.length ? modes : defaultInputModes(modelId);
 }
 
-/** 该模型是否只能靠画面输入（不支持纯文本）：不支持文生就必须给首帧。 */
+/**
+ * 该模型是否**只能**靠画面输入（不支持纯文本）：不支持文生就必须给首帧。
+ * ⚠️ 全能参考（OMNI_REFERENCE）也算支持纯文本（2026-11-04 用户口径：
+ *   「哪怕没图可连，用全能参考也可以的，也可以文生」）——参考是可选的，不是门票。
+ *   只有 FIRST_FRAME / FIRST_LAST_FRAME 这类真·图生模型才强制要图。
+ */
 export function requiresFirstFrameFor(inputModes) {
   const modes = Array.isArray(inputModes) ? inputModes : [];
-  return modes.length > 0 && !modes.includes('TEXT');
+  return modes.length > 0 && !modes.includes('TEXT') && !modes.includes('OMNI_REFERENCE');
 }
 
 /** 该模型是否接受首帧图（图生 / 首尾帧 / 全能参考都算）。 */

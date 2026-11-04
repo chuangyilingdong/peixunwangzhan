@@ -138,6 +138,12 @@ try {
   const framesJob = await arow("SELECT source_asset_url,last_frame_asset_url FROM generation_jobs WHERE id=?", [omniFrames?.job?.id || '']);
   check(framesJob?.source_asset_url === 'mock://asset1' && framesJob?.last_frame_asset_url === 'mock://asset2', `首尾帧来源都应落库，实际 ${JSON.stringify(framesJob)}`);
 
+  // 5.4b 框体锁「全能参考」但不给图：按文生视频生成（参考是可选的，不是门票）
+  await aq("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-omni-locked-text','mg1','锁全能参考·不给图','','GENERATION_BOX',NULL,?,8,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', inputMode: 'OMNI_REFERENCE', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
+  const lockedOmniText = await handleAiGeneration(omniCtx('box-omni-locked-text', {}));
+  check(lockedOmniText?.queued === true, '锁全能参考但不给图也应能生成（按文生）');
+  check(!(await arow("SELECT source_asset_url FROM generation_jobs WHERE id=?", [lockedOmniText?.job?.id || '']))?.source_asset_url, '锁全能参考的文生任务不应带首帧来源');
+
   // 5.5 只支持文生的模型：给图要被拦
   await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-t2v', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' })), 'GENERATION_FIRST_FRAME_UNSUPPORTED', 'text-only model with frame');
 

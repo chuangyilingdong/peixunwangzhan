@@ -174,11 +174,9 @@ function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '', refer
   if (hasFirst && !acceptsFirstFrame(list)) throw errors.forbidden(`${scope}，不需要图片输入 —— 请去掉连线`, 'GENERATION_FIRST_FRAME_UNSUPPORTED');
   if (hasLast && !acceptsLastFrame(list)) throw errors.forbidden(`${scope}，不接受尾帧 —— 请去掉第二张连线图片`, 'GENERATION_LAST_FRAME_UNSUPPORTED');
   // 不支持纯文本（i2v 类）时必须有画面输入，否则上游必然拒绝。
-  if (!hasFirst && !references.length && !list.includes('TEXT')) {
-    // 锁成全能参考时，"缺的"是参考素材而不是首帧 —— 文案要跟着锁定的方式走
-    const need = lockedMode === 'OMNI_REFERENCE' || (acceptsOmni && !acceptsFirstFrame(list))
-      ? '参考素材（图片/视频/音频）'
-      : '画面（首帧）';
+  // ⚠️ 全能参考不在此列：参考是可选的，没连图就按文生视频生成（2026-11-04 用户口径）。
+  if (!hasFirst && !references.length && !list.includes('TEXT') && !acceptsOmni) {
+    const need = acceptsFirstFrame(list) ? '画面（首帧）' : '参考素材（图片/视频/音频）';
     throw errors.forbidden(`${scope}，需要先连接${need}再生成`, 'GENERATION_FIRST_FRAME_REQUIRED');
   }
 }
