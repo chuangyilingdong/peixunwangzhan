@@ -67,9 +67,16 @@ const mock = http.createServer((req, res) => {
       if (state.queryStatus === 'FAILED') return json(res, 200, { status: 'FAILED', errorCode: '1000', errorMessage: 'mock failed' });
       if (state.queryStatus === 'RUNNING') return json(res, 200, { status: 'RUNNING', results: null });
       const sub = submissions.get(String(body.taskId)) || { outputType: 'jpg' };
+      const usageUsd = sub.outputType === 'mp4' ? '0.4' : sub.outputType === 'mp3' ? '0.12' : '0.05';
       return json(res, 200, {
         taskId: body.taskId,
         status: 'SUCCESS',
+        usage: {
+          consumeMoney: null,
+          consumeCoins: null,
+          thirdPartyConsumeMoney: usageUsd,
+          billingSeconds: sub.outputType === 'mp4' ? '5' : null,
+        },
         results: [{ url: `http://127.0.0.1:${PORT}/out.${sub.outputType}`, outputType: sub.outputType }],
       });
     }
@@ -349,12 +356,24 @@ await check('切备用时把分辨率收进备用渠道的枚举（视频主 480
   assert.equal(adaptOptionsToCandidate(args('480p'), backup).options.aspectRatio, '16:9');
 });
 
+await check('成本：query.usage.thirdPartyConsumeMoney 记 REPORTED（USD × 6.684）', async () => {
+  const image = await make('rhart-image-g-2.5').generate({ modality: 'IMAGE', prompt: '成本', options: {} });
+  assert.equal(image.assets[0].metadata.reportedCost.upstreamAmount, 0.05);
+  assert.equal(image.assets[0].metadata.reportedCost.fen, 33);
+  const video = await make('bytedance/seedance-2.0-global-fast')
+    .generate({ modality: 'VIDEO', prompt: '成本', options: { durationSeconds: 5, resolution: '480p' } });
+  assert.equal(video.assets[0].metadata.reportedCost.upstreamAmount, 0.4);
+  assert.equal(video.assets[0].metadata.reportedCost.fen, 267);
+  assert.equal(video.assets[0].metadata.reportedCost.billingSeconds, 5);
+});
+
 await check('对账：queryTask 能按 taskId 取回结果（重启/TIMEOUT 后补素材）', async () => {
   const provider = make('rhart-image-g-2.5-t2i');
   const ok = await provider.queryTask({ taskId: 'task_reconcile_1', modality: 'IMAGE', title: '对账' });
   assert.equal(ok.state, 'SUCCEEDED');
   assert.match(ok.asset.assetUrl, /\/out\.jpg$/);
   assert.equal(ok.asset.metadata.taskId, 'task_reconcile_1');
+  assert.equal(ok.asset.metadata.reportedCost.fen, 33, '图片 $0.05 × 6.684 = 33 分');
   state.queryStatus = 'RUNNING';
   try { assert.equal((await provider.queryTask({ taskId: 'task_reconcile_1', modality: 'IMAGE' })).state, 'PENDING'); }
   finally { state.queryStatus = 'SUCCESS'; }

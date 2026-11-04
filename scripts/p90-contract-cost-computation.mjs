@@ -281,20 +281,18 @@ try {
   attempt = await attemptOf(provider);
   assert.equal(attempt.upstream_cost_fen, 30, '3 秒 × 0.10 元/秒（1080p 档没配 → 回落每秒价）');
 
-  // seedance 最短计费时长（RunningHub 2026-11-04）：5s→9s、10s→17s、15s→25s
-  for (const [seconds, billed] of [[5, 9], [10, 17], [15, 25]]) {
-    provider = getGenerationProvider(selection({ model: 'bytedance/seedance-2.0-global-fast', upstreamUnitPrices: { VIDEO: { perSecondFen: 8 } } }));
-    await provider.generate({ modality: 'VIDEO', prompt: `seedance ${seconds}s`, options: { durationSeconds: seconds, resolution: '480p' } });
-    attempt = await attemptOf(provider);
-    assert.equal(attempt.upstream_cost_fen, billed * 8, `seedance ${seconds}s 按 ${billed}s 计费`);
-    assert.equal(JSON.parse(attempt.cost_rule_snapshot).usage.billedSeconds, billed);
-  }
+  // 2026-11-04 实测 RunningHub `usage.billingSeconds=5`：seedance 5s 就是 5 秒，
+  // 没有「5s 按 9s」的最低计费（此前的规则与实际账单不符，已删除）。
+  provider = getGenerationProvider(selection({ model: 'bytedance/seedance-2.0-global-fast', upstreamUnitPrices: { VIDEO: { perSecondFen: 8 } } }));
+  await provider.generate({ modality: 'VIDEO', prompt: 'seedance 5s', options: { durationSeconds: 5, resolution: '480p' } });
+  attempt = await attemptOf(provider);
+  assert.equal(attempt.upstream_cost_fen, 40, 'seedance 5s 按实际 5 秒计（上游 billingSeconds=5）');
 
-  // 其它视频模型不套这条规则（hailuo 5s 仍按 5s）
+  // 其它视频模型同样按实际秒数
   provider = getGenerationProvider(selection({ model: 'minimax/hailuo-h3', upstreamUnitPrices: { VIDEO: { perSecondFen: 8 } } }));
   await provider.generate({ modality: 'VIDEO', prompt: 'hailuo 5s', options: { durationSeconds: 5, resolution: '768P' } });
   attempt = await attemptOf(provider);
-  assert.equal(attempt.upstream_cost_fen, 40, '非 seedance 不套最低计费');
+  assert.equal(attempt.upstream_cost_fen, 40, 'hailuo 5s 按 5 秒');
 
   /* ②' RunningHub（美元价目）：字段存美分，按调用当时的实时汇率折人民币 */
   const usdImage = computeContractCost({
@@ -310,7 +308,7 @@ try {
     unitPrices: { VIDEO: { perSecondFen: 8 } }, usage: { seconds: 5, resolution: '480p' },
     priceCurrency: 'USD', usdCnyRate: 6.684,
   });
-  assert.equal(usdVideo.fen, 481, 'seedance 5s→9s：9 × 8 美分 × 6.684 = 481 分');
+  assert.equal(usdVideo.fen, 267, '5s × 8 美分 × 6.684 = 267 分');
   assert.equal(computeContractCost({
     modality: 'IMAGE', model: 'x', unitPrices: { IMAGE: { perImageFen: 5 } }, usage: { images: 1 },
     priceCurrency: 'USD', usdCnyRate: null,

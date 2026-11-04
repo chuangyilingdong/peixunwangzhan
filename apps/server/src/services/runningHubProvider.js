@@ -20,6 +20,7 @@
 import { AI_PROVIDER_MAX_WAIT_MS, AI_PROVIDER_POLL_INTERVAL_MS, AI_PROVIDER_TIMEOUT_MS, PUBLIC_SITE_URL } from '../config.js';
 import { PROVIDER_ERROR_CODES } from './providerContract.js';
 import { mirrorSelfHostedMedia } from './upstreamMediaMirror.js';
+import { USD_CNY_RATE } from './fxRate.js';
 
 const RUNNINGHUB_FAMILIES = Object.freeze({
   // 图片按「生成方式」是**两条独立 API**（各有自己的调用地址与计费）：
@@ -299,6 +300,29 @@ function httpError(response, payload) {
   return providerError(`RunningHub 调用失败（HTTP ${status}）${suffix}`, PROVIDER_ERROR_CODES.UPSTREAM, status, true);
 }
 
+/**
+ * 上游实扣（RunningHub query 的 usage）：
+ *   `thirdPartyConsumeMoney` 是美元金额（实测 0.4 = $0.40），`billingSeconds` 是实际计费秒数。
+ * 直接按固定 6.684 折人民币记 REPORTED，不再靠价目表估；取不到就返回 null 走 COMPUTED 兜底。
+ */
+function reportedCostFromUsage(payload) {
+  const usage = payload?.usage && typeof payload.usage === 'object' ? payload.usage : null;
+  if (!usage) return null;
+  const usd = Number(usage.thirdPartyConsumeMoney);
+  if (!Number.isFinite(usd) || usd <= 0) return null;
+  const cny = usd * USD_CNY_RATE;
+  return {
+    source: 'REPORTED',
+    currency: 'CNY',
+    amount: Math.round(cny * 100) / 100,
+    fen: Math.round(cny * 100),
+    upstreamCurrency: 'USD',
+    upstreamAmount: usd,
+    usdCnyRate: USD_CNY_RATE,
+    billingSeconds: Number(usage.billingSeconds) || null,
+  };
+}
+
 function extractAsset(payload, { modality, title, family, name, taskId }) {
   const results = Array.isArray(payload?.results) ? payload.results : [];
   const item = results.find((entry) => entry && (entry.url || entry.outputUrl || entry.output_url));
@@ -307,6 +331,7 @@ function extractAsset(payload, { modality, title, family, name, taskId }) {
     throw providerError('RunningHub 任务成功，但没有返回结果 URL', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
   }
   const { mimeType, ext } = mimeForOutput(item?.outputType, modality, url);
+  const reportedCost = reportedCostFromUsage(payload);
   return {
     assets: [{
       label: String(title || `RunningHub ${modality || '素材'}`).slice(0, 120),
@@ -320,6 +345,7 @@ function extractAsset(payload, { modality, title, family, name, taskId }) {
         external: true,
         taskId,
         outputType: ext || null,
+        ...(reportedCost ? { reportedCost } : {}),
       },
     }],
     usage: null,

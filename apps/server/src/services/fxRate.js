@@ -10,6 +10,7 @@
  *   · 固定汇率不存在"拿不到"的情况，成本一定能算出来。
  */
 const FIXED_USD_CNY_RATE = 6.684;
+export const USD_CNY_RATE = FIXED_USD_CNY_RATE;
 
 /** 固定汇率 6.684；异步签名是为了以后能换回实时接口。 */
 export async function getUsdCnyRate() {

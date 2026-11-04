@@ -66,21 +66,6 @@ const UNIT_PRICE_FEN_KEYS = Object.freeze({
   MUSIC: ['perCallFen', 'perSecondFen'],
 });
 
-/**
- * seedance 的最短计费时长（2026-11-04，RunningHub 官方价目）：
- * 输出 5s 按 9s 计、10s 按 17s 计、15s 按 25s 计。平台原本只按「时长 × 每秒价」，
- * 5s/480p 会算成 40 分，而实际扣 72 分 —— 短视频成本被低估近一半。
- * 只对 seedance 生效（hailuo 等没有这条规则）；命中时 usage 里会带 billedSeconds 供对账。
- */
-const SEEDANCE_MIN_BILLABLE_SECONDS = Object.freeze({ 5: 9, 10: 17, 15: 25 });
-
-function billableVideoSeconds(seconds, model) {
-  const value = Number(seconds);
-  if (!Number.isFinite(value)) return seconds;
-  if (!/seedance/i.test(String(model || ''))) return value;
-  return SEEDANCE_MIN_BILLABLE_SECONDS[Math.round(value)] || value;
-}
-
 /** 非负整数分；非法 → null（**不是 0**）。 */
 function fenAmount(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -381,13 +366,14 @@ export function computeContractCost({ modality, model = '', unitPrices = null, m
     const picked = rate('byResolution', 'perSecondFen');
     if (!picked) return null; // 缺单价
     levels.add(picked.level);
-    const billedSeconds = billableVideoSeconds(seconds, model);
-    let fen = Math.round(billedSeconds * picked.fen);
+    // 2026-11-04 实测：RunningHub `usage.billingSeconds` 就是 5（没有 5→9 的最低计费），
+    // 且 REPORTED 成本优先；这里只做价目兜底，按实际请求秒数算。
+    let fen = Math.round(seconds * picked.fen);
     const audio = evidence.audio === true;
     const audioField = audio ? field('audioExtraPerSecondFen') : null;
     if (audio && !audioField) return null; // 含音频但没配含音频价
-    if (audioField) { levels.add(audioField.level); fen += Math.round(billedSeconds * audioField.fen); }
-    return done(fen, { perSecondFen: picked.fen, ...(picked.matchedResolution ? { matchedResolution: picked.matchedResolution } : {}), ...(audioField ? { audioExtraPerSecondFen: audioField.fen } : {}) }, { seconds, billedSeconds, resolution: String(evidence.resolution || '').trim() || null, audio });
+    if (audioField) { levels.add(audioField.level); fen += Math.round(seconds * audioField.fen); }
+    return done(fen, { perSecondFen: picked.fen, ...(picked.matchedResolution ? { matchedResolution: picked.matchedResolution } : {}), ...(audioField ? { audioExtraPerSecondFen: audioField.fen } : {}) }, { seconds, resolution: String(evidence.resolution || '').trim() || null, audio });
   }
 
   if (key === 'MUSIC') {
@@ -446,8 +432,10 @@ export function reportedCostRuleSnapshot({ provider = null, channelId = null, mo
     model: model ?? null,
     source: 'REPORTED',
     upstreamCurrency: reported.upstreamCurrency ?? reported.currency ?? null,
-    upstreamAmount: Number(reported.amount),
-    reportedFen: Math.round(Number(reported.amount) * 100),
+    upstreamAmount: Number(reported.upstreamAmount ?? reported.amount),
+    reportedFen: Number.isFinite(Number(reported.fen)) ? Number(reported.fen) : Math.round(Number(reported.amount) * 100),
+    ...(reported.usdCnyRate ? { usdCnyRate: Number(reported.usdCnyRate) } : {}),
+    ...(reported.billingSeconds ? { billingSeconds: Number(reported.billingSeconds) } : {}),
     capturedAt: capturedAt || new Date().toISOString(),
   };
 }
