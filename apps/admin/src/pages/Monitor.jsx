@@ -8,13 +8,20 @@ const BALANCE_REFRESH_MS = 60000;
 const LOW_BALANCE_YUAN = 50;
 const WALLET_LABELS = { 'runninghub-global': 'RH 全球站', 'runninghub-cn': 'RH 国内站', xkwuai: 'xkwuai' };
 
+const TZ = 'Asia/Shanghai';
 const fmtTime = (value) => {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value).slice(11, 19) || '—';
-  return date.toLocaleTimeString('zh-CN', { hour12: false });
+  return date.toLocaleTimeString('zh-CN', { timeZone: TZ, hour12: false });
 };
-const fmtMinute = (value) => (value ? String(value).slice(11, 16) : '');
+// 后端分钟桶是 UTC ISO；图上统一显示北京时间。
+const fmtMinute = (value) => {
+  if (!value) return '';
+  const date = new Date(`${String(value).slice(0, 16)}:00Z`);
+  if (Number.isNaN(date.getTime())) return String(value).slice(11, 16);
+  return date.toLocaleTimeString('zh-CN', { timeZone: TZ, hour12: false }).slice(0, 5);
+};
 const fmtYuan = (fen) => `¥${(Number(fen || 0) / 100).toFixed(2)}`;
 const fmtMs = (ms) => {
   if (ms === null || ms === undefined) return '—';
@@ -229,6 +236,7 @@ export function Monitor({ api, user }) {
   const costTop = snapshot?.costTop || [];
   const channels = snapshot?.channels || [];
   const failover = snapshot?.failover || { count: 0, success: 0, byChannel: [] };
+  const failoverReasons = snapshot?.failoverReasons || [];
   const studentCostTop = snapshot?.studentCostTop || [];
   const wallets = balance?.wallets?.sources || [];
   const walletTotalCny = wallets.some((item) => item.ok && item.cny !== null && item.cny !== undefined)
@@ -236,7 +244,8 @@ export function Monitor({ api, user }) {
     : null;
   const walletFailed = wallets.filter((item) => !item.ok).length;
   // 总余额按人民币口径比较（RH 全球 ×7.2、xkwuai 1:1），不再拿美元阈值套。
-  const lowBalance = walletTotalCny !== null && walletTotalCny < LOW_BALANCE_YUAN;
+  const lowBalanceThreshold = snapshot?.thresholds?.balanceLow ?? LOW_BALANCE_YUAN;
+  const lowBalance = walletTotalCny !== null && walletTotalCny < lowBalanceThreshold;
   // 渠道错误率剔除「内容安全审查」拦截：那是学生内容问题，不是渠道故障。
   // 另外样本太小时（<3 笔失败）不报错误率，避免 1/1=100% 把整页打成「需要处理」。
   const errorRate = usage.providerErrorRate ?? usage.errorRate;
@@ -250,8 +259,8 @@ export function Monitor({ api, user }) {
   // 页面内告警：不推飞书，直接列在页头下面（用户口径 2026-11-04）。
   const alerts = [];
   if (walletFailed) alerts.push({ key: 'wallet', level: 'warning', text: `${walletFailed} 家供应商余额读取失败（不计入总余额）` });
-  if (walletTotalCny !== null && walletTotalCny < LOW_BALANCE_YUAN) {
-    alerts.push({ key: 'low', level: 'danger', text: `总余额 ¥${walletTotalCny.toFixed(2)} 低于 ¥${LOW_BALANCE_YUAN}` });
+  if (walletTotalCny !== null && walletTotalCny < lowBalanceThreshold) {
+    alerts.push({ key: 'low', level: 'danger', text: `总余额 ¥${walletTotalCny.toFixed(2)} 低于 ¥${lowBalanceThreshold}` });
   }
   if (errorRateCritical) {
     alerts.push({ key: 'error', level: 'danger', text: `渠道错误率 ${errorRate}%（${providerFailed}/${(usage.success || 0) + providerFailed}，${windowKey}）` });
@@ -261,8 +270,8 @@ export function Monitor({ api, user }) {
   if ((usage.contentSafetyFailed || 0) > 0) {
     alerts.push({ key: 'content', level: 'warning', text: `内容安全拦截 ${usage.contentSafetyFailed} 笔（不是渠道故障，未计入错误率）` });
   }
-  if (canBilling && usage.unknownCostCalls > 0) {
-    alerts.push({ key: 'unknown', level: 'warning', text: `未知成本 ${usage.unknownCostCalls} 笔（占成功 ${usage.unknownCostRate ?? '—'}%）` });
+  if (canBilling && (usage.unknownCostCallsSince || 0) > 0) {
+    alerts.push({ key: 'unknown', level: 'warning', text: `配价后未知成本 ${usage.unknownCostCallsSince} 笔（占成功 ${usage.unknownCostRateSince ?? '—'}%，成本覆盖 ${usage.costCoverageRate ?? '—'}%）` });
   }
   if (stuck.length > 0) {
     alerts.push({ key: 'stuck', level: 'warning', text: `卡住任务 ${stuck.length} 个（超过 15 分钟未完成）` });
@@ -276,9 +285,17 @@ export function Monitor({ api, user }) {
   const callsSeries = series.map((item) => item.calls);
   const failedSeries = series.map((item) => item.failed);
   const costSeries = series.map((item) => item.costFen || 0);
-  const balanceSeries = (walletHistory?.total || [])
-    .filter((item) => item.cny !== null && item.cny !== undefined)
-    .map((item) => Number(item.cny));
+  const balancePoints = (walletHistory?.total || [])
+    .filter((item) => item.cny !== null && item.cny !== undefined && item.at);
+  const balanceSeries = balancePoints.map((item) => Number(item.cny));
+  // 日耗 = 窗口内首尾余额差 / 天数；有充值时为负，不硬算 runway。
+  const balanceSpanMs = balancePoints.length > 1
+    ? Date.parse(balancePoints[balancePoints.length - 1].at) - Date.parse(balancePoints[0].at)
+    : 0;
+  const burnPerDay = balanceSpanMs > 0
+    ? ((Number(balancePoints[0].cny) - Number(balancePoints[balancePoints.length - 1].cny)) / balanceSpanMs) * 86400_000
+    : null;
+  const runwayDays = burnPerDay > 0 ? Number(balancePoints[balancePoints.length - 1].cny) / burnPerDay : null;
   const orgKeyword = orgSearch.trim().toLowerCase();
   // 有进行中课堂的机构排最前（绿点优先），同组内按名称排。
   const sortedOrgs = [...orgs].sort((left, right) => {
@@ -368,7 +385,7 @@ export function Monitor({ api, user }) {
         <div>
           <div className="monitor-eyebrow">平台控制台 / 实时监控</div>
           <h1>实时监控 <span className={`monitor-status is-${status}`}>{statusText}</span></h1>
-          <div className="monitor-sub">每 5 秒刷新 · 快照构建 {snapshot?.buildMs ?? '—'}ms · 最后更新 {updatedAt ? fmtTime(updatedAt) : '—'} · 时间口径 UTC</div>
+          <div className="monitor-sub">每 5 秒刷新 · 快照构建 {snapshot?.buildMs ?? '—'}ms · 最后更新 {updatedAt ? fmtTime(updatedAt) : '—'} · 时间口径 北京时间</div>
         </div>
         <div className="monitor-controls">
           <label>统计窗口
@@ -426,7 +443,7 @@ export function Monitor({ api, user }) {
           hint={`画布排队 ${live.queuedJobs ?? 0} · 运行 ${live.runningJobs ?? 0} · VibeCoding ${live.vibecodingRunning ?? 0}${snapshot?.queue?.ok ? ` · RH 队列 ${snapshot.queue.queued}/${snapshot.queue.running}` : ''}`} />
         <Kpi label={`${windowKey} 调用`} value={usage.calls ?? 0} hint={`成功 ${usage.success ?? 0} · 失败 ${usage.failed ?? 0} · 拦截 ${usage.blocked ?? 0}`} />
         <Kpi label="错误率" tone={(errorRate || 0) >= 20 ? 'danger' : (errorRate || 0) >= 5 ? 'warning' : 'default'}
-          value={pctText(errorRate)} hint={canBilling ? `${windowKey} · 已知成本 ${fmtYuan(usage.knownCostFen)} · 未知 ${usage.unknownCostCalls ?? 0} 笔` : `${windowKey} · 按上游尝试计算`} />
+          value={pctText(errorRate)} hint={canBilling ? `${windowKey} · 已知成本 ${fmtYuan(usage.knownCostFen)} · 配价后未知 ${usage.unknownCostCallsSince ?? 0} 笔（覆盖 ${usage.costCoverageRate ?? '—'}%）` : `${windowKey} · 按上游尝试计算`} />
       </div>
 
       {canBilling ? (
@@ -520,6 +537,11 @@ export function Monitor({ api, user }) {
             </span>
           </div>
           <Sparkline values={balanceSeries} />
+          <div className="monitor-muted">
+            {burnPerDay === null ? '余额样本不足，暂时算不出日耗'
+              : burnPerDay <= 0 ? `近 ${historyRange} 小时没有净消耗（或刚充值）`
+                : `日耗约 ¥${burnPerDay.toFixed(2)} · 按当前余额预计可用 ${runwayDays.toFixed(1)} 天`}
+          </div>
         </div> : null}
       </div>
 
@@ -651,6 +673,11 @@ export function Monitor({ api, user }) {
               </tbody>
             </table>
           </div>
+          {failoverReasons.length ? <div className="monitor-muted monitor-failover-reasons">
+            切换原因：{failoverReasons.slice(0, 6).map((item, index) => <span key={`${item.fromChannelId}:${item.toChannelId}:${item.errorCode}`}>
+              {index ? ' · ' : ''}{item.fromChannelName} → {item.toChannelName} {item.errorCode} ×{item.count}
+            </span>)}
+          </div> : null}
         </section>
 
         {canBilling ? <section className="monitor-card">
@@ -701,6 +728,8 @@ export function Monitor({ api, user }) {
           </> : null}
         </section>
       </div>
+
+      <AlertHistory api={api} />
 
       {selectedSessionId ? <>
         <div className="monitor-drawer-backdrop" onClick={() => setSelectedSessionId('')} />
@@ -768,6 +797,9 @@ function ReconcileView({ api }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [xkwuai, setXkwuai] = useState(null);
+  const [xkwuaiLoading, setXkwuaiLoading] = useState(false);
+  const [xkwuaiError, setXkwuaiError] = useState(null);
 
   const load = async (target) => {
     setLoading(true); setError(null);
@@ -779,7 +811,13 @@ function ReconcileView({ api }) {
       setLoading(false);
     }
   };
-  useEffect(() => { load(day); }, [day]);
+  useEffect(() => { load(day); setXkwuai(null); setXkwuaiError(null); }, [day]);
+  const loadXkwuai = async () => {
+    setXkwuaiLoading(true); setXkwuaiError(null);
+    try { setXkwuai(await api.get('admin/dashboard/monitor/reconcile/xkwuai', { day, timeoutMs: 30000 })); }
+    catch (requestError) { setXkwuaiError(requestError); }
+    finally { setXkwuaiLoading(false); }
+  };
 
   const [todayYear, todayMonth, todayDate] = today.split('-').map(Number);
   const [year, month, date] = day.split('-').map(Number);
@@ -825,12 +863,41 @@ function ReconcileView({ api }) {
     { key: 'computedFen', label: '按价目折算', render: (row) => money(row.computedFen) },
     { key: 'unknownCalls', label: '未知' },
   ];
+  const lessonColumns = [
+    { key: 'seriesTitle', label: '课包 / 课时', render: (row) => <><strong>{row.lessonTitle}</strong><span className="monitor-muted">{row.seriesTitle || '未归属课包'}</span></> },
+    { key: 'calls', label: '调用' },
+    { key: 'costFen', label: '成本', render: (row) => money(row.costFen) },
+    { key: 'unknownCalls', label: '未知' },
+  ];
   const nameColumns = (label, nameKey, extraKey) => [
     { key: nameKey, label, render: (row) => <><strong>{row[nameKey] || '—'}</strong>{extraKey && row[extraKey] ? muted(row[extraKey]) : null}</> },
     { key: 'calls', label: '调用' },
     { key: 'costFen', label: '成本', render: (row) => money(row.costFen) },
     { key: 'unknownCalls', label: '未知' },
   ];
+
+  const exportReconcile = () => {
+    if (!data) return;
+    const escape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const yuan = (fen) => (Number(fen || 0) / 100).toFixed(2);
+    const lines = [['维度', '名称', '子项', '调用', '成本(元)', '上游实报(元)', '按价目折算(元)', '未知'].map(escape).join(',')];
+    const push = (kind, name, sub, row) => lines.push([kind, name, sub, row.calls ?? '', yuan(row.costFen), yuan(row.reportedFen), yuan(row.computedFen), row.unknownCalls ?? ''].map(escape).join(','));
+    for (const row of data.bySupplier || []) push('供应商', row.label, '', row);
+    for (const row of data.byModel || []) push('模型', row.model, row.supplierLabel || '', row);
+    for (const row of data.byOrg || []) push('机构', row.name, '', row);
+    for (const row of data.bySession || []) push('课堂', row.title, row.orgName || '', row);
+    for (const row of data.byStudent || []) push('学生', row.name, row.orgName || '', row);
+    for (const row of data.byLesson || []) push('课时', row.lessonTitle, row.seriesTitle || '', row);
+    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `monitor-reconcile-${data.day || day}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
 
   return <>
     <div className="monitor-card monitor-reconcile-head">
@@ -851,9 +918,14 @@ function ReconcileView({ api }) {
         </label>
         <button type="button" className="monitor-btn" onClick={() => (day === today ? load(today) : setDay(today))}>今天</button>
         <button type="button" className="monitor-btn" onClick={() => load(day)} disabled={loading}>{loading ? '读取中…' : '刷新'}</button>
+        <button type="button" className="monitor-btn" onClick={exportReconcile} disabled={!data}>导出 CSV</button>
         <span className="monitor-control-note">成本口径：上游实报（REPORTED）优先；没有实报才按渠道成本价折算（COMPUTED）；都没有记未知，不按 0。</span>
       </div>
       {error ? <div className="monitor-banner is-danger">对账读取失败：{error.message || '未知错误'}</div> : null}
+      {data?.thresholds?.consumptionSpike !== null && data?.thresholds?.consumptionSpike !== undefined
+        && (totals.costFen || 0) / 100 >= data.thresholds.consumptionSpike ? <div className="monitor-banner is-warning">
+        当日消耗 ¥{((totals.costFen || 0) / 100).toFixed(2)} 已超过平台阈值 ¥{data.thresholds.consumptionSpike}
+      </div> : null}
       {!data && loading ? <div className="monitor-empty">读取中…</div> : null}
     </div>
 
@@ -861,18 +933,66 @@ function ReconcileView({ api }) {
       <div className="monitor-kpis">
         <Kpi label="当日总成本" value={money(totals.costFen)} hint={`上游实报 ${money(totals.reportedFen)} · 折算 ${money(totals.computedFen)}`} />
         <Kpi label="调用" value={totals.calls ?? 0} hint={`成功 ${totals.success ?? 0} · 失败 ${totals.failed ?? 0}`} />
-        <Kpi label="未知成本" value={totals.unknownCalls ?? 0} hint={`占成功 ${totals.unknownRate ?? '—'}%`} tone={(totals.unknownCalls || 0) > 0 ? 'warning' : 'default'} />
+        <Kpi label="未知成本" value={totals.unknownCallsSince ?? 0} hint={`配价后 · 覆盖 ${totals.costCoverageRate ?? '—'}%（全部未知 ${totals.unknownCalls ?? 0}）`} tone={(totals.unknownCallsSince || 0) > 0 ? 'warning' : 'default'} />
         <Kpi label="供应商" value={data.bySupplier?.length ?? 0} hint="按渠道归到实际付款账户" />
       </div>
+      <section className="monitor-card">
+        <div className="monitor-card-title">xkwuai 逐笔账单核对 <span>只读 · 点按钮才去拉，不随页面加载</span></div>
+        <div className="row-actions">
+          <button type="button" className="monitor-btn" onClick={loadXkwuai} disabled={xkwuaiLoading}>{xkwuaiLoading ? '拉取中…' : '拉取当天账单'}</button>
+          <span className="monitor-muted">上游 quota ÷ 500000 = 元（已含缓存折扣）</span>
+        </div>
+        {xkwuaiError ? <div className="monitor-banner is-danger">拉取失败：{xkwuaiError.message || '未知错误'}</div> : null}
+        {xkwuai ? <>
+          <div className="monitor-kpis monitor-kpis-small">
+            <Kpi label="上游实扣" value={money(xkwuai.actualFen)} hint={`${xkwuai.logCount} 条日志`} />
+            <Kpi label="我们记账" value={money(xkwuai.ourFen)} hint={`${xkwuai.ourCalls} 次调用`} />
+            <Kpi label="差异" value={money(xkwuai.diffFen)} hint="我们 − 上游" tone={Math.abs(xkwuai.diffFen) >= 100 ? 'warning' : 'default'} />
+          </div>
+          {xkwuai.byModel?.length ? <div className="monitor-table-wrap top-gap"><table>
+            <thead><tr><th>模型</th><th>日志</th><th>上游实扣</th></tr></thead>
+            <tbody>{xkwuai.byModel.map((row) => <tr key={row.model}><td>{row.model}</td><td>{row.logs}</td><td>{money(row.actualFen)}</td></tr>)}</tbody>
+          </table></div> : null}
+        </> : null}
+      </section>
       <ReconcileTable title="按供应商" rows={data.bySupplier || []} columns={supplierColumns} />
       <ReconcileTable title="按模型" rows={data.byModel || []} columns={modelColumns} />
       <ReconcileTable title="按机构" rows={data.byOrg || []} columns={nameColumns('机构', 'name')} />
       <ReconcileTable title="按课堂" rows={data.bySession || []} columns={nameColumns('课堂', 'title', 'orgName')} />
       <ReconcileTable title="按学生" rows={data.byStudent || []} columns={nameColumns('学生', 'name', 'orgName')} />
+      <ReconcileTable title="按课包 / 课时" rows={data.byLesson || []} columns={lessonColumns} />
       <div className="monitor-muted monitor-reconcile-note">
         RunningHub LLM（备用文本）没有逐笔账单接口，成本按上面配置的峰谷价折算（COMPUTED），可用国内站钱包余额变化做总量核对；
         xkwuai 有逐笔账单（quota ÷ 500000 = 元），可按 request_id 对账。
       </div>
     </> : null}
   </>;
+}
+
+function AlertHistory({ api }) {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const load = async () => {
+    setLoading(true); setError(null);
+    try { setData(await api.get('admin/dashboard/monitor/alerts/history', { hours: 24, timeoutMs: 20000 })); }
+    catch (requestError) { setError(requestError); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { if (open && !data) load(); }, [open]);
+  return <details className="monitor-card monitor-alert-history" onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary className="monitor-card-title">告警历史 <span>近 24 小时 · 按 10 分钟窗口回算{data ? ` · ${data.events.length} 条` : ''}</span></summary>
+    {error ? <div className="monitor-banner is-danger">读取失败：{error.message || '未知错误'}</div> : null}
+    {loading && !data ? <div className="monitor-empty">读取中…</div> : null}
+    {data ? (data.events.length ? <div className="monitor-top">
+      {data.events.map((item, index) => <div key={`${item.at}:${item.type}:${index}`} className="monitor-top-row">
+        <span className={`monitor-dot is-${item.level === 'danger' ? 'crit' : 'warn'}`} />
+        <span className="monitor-code">{item.type}</span>
+        <span className="monitor-muted">{fmtTime(item.at)}</span>
+        <span className="monitor-top-count">{item.text}</span>
+      </div>)}
+    </div> : <div className="monitor-empty">近 24 小时没有触发告警</div>) : null}
+    <div className="monitor-muted">阈值：余额低于 ¥{data?.thresholds?.balanceLow ?? '—'} · 单日消耗超过 ¥{data?.thresholds?.consumptionSpike ?? '—'}；错误率 ≥5%（且失败 ≥3）告警、≥20% 严重。</div>
+  </details>;
 }

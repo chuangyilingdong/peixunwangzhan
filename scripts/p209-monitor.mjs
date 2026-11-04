@@ -31,7 +31,7 @@ const run = (args) => {
 run(['packages/database/src/db.js', '--init']);
 
 const { aq, arow, arows } = await import('../packages/database/src/store.js');
-const { handleMonitor } = await import('../apps/server/src/routes/admin/monitor.js');
+const { handleMonitor, xkwuaiQuotaToFen } = await import('../apps/server/src/routes/admin/monitor.js');
 const { getRunningHubBalance, resetRunningHubBalanceCache, probeRunningHubAccount, getRunningHubQueue, resetRunningHubQueueCache } = await import('../apps/server/src/services/runningHubAccount.js');
 const { getWalletBalances, resetWalletBalanceCache, probeXkwuaiAccount } = await import('../apps/server/src/services/walletAccounts.js');
 const { resetUsdCnyRateCache } = await import('../apps/server/src/services/fxRate.js');
@@ -197,6 +197,19 @@ await check('权限：只有 ADMIN_ANALYTICS 时不下发成本字段', async ()
   assert.equal(limited.sessions[0].budget, undefined);
 });
 
+// 成本覆盖基线：配价后未知单独计数（基线上的调用全算；未来基线全不算）
+await aq('UPDATE platform_settings SET ai_provider_policy=?,updated_at=? WHERE id=1', [JSON.stringify({ costBaselineAt: now }), now]);
+await new Promise((resolve) => setTimeout(resolve, 3200));
+const coverNow = await call('/snapshot', { window: '5m' });
+await aq('UPDATE platform_settings SET ai_provider_policy=?,updated_at=? WHERE id=1', [JSON.stringify({ costBaselineAt: new Date(Date.now() + 60_000).toISOString() }), now]);
+await new Promise((resolve) => setTimeout(resolve, 3200));
+const coverFuture = await call('/snapshot', { window: '15m' });
+await check('成本覆盖：基线之后的未知单独计数', () => {
+  assert.equal(coverNow.usage.costBaselineAt, new Date(now).toISOString());
+  assert.equal(coverNow.usage.unknownCostCallsSince, coverNow.usage.unknownCostCalls);
+  assert.equal(coverFuture.usage.unknownCostCallsSince, 0);
+});
+
 await insertAttempt('att_b1_failover_ok', 'call_b1', 2, 'org_b', 'student_b1', 'sess_b', null, 'SUCCESS', { costSource: 'COMPUTED', upstream: 100 });
 await new Promise((resolve) => setTimeout(resolve, 3200));
 const snapshotAfterFailover = await call('/snapshot', { window: '5m' });
@@ -206,6 +219,11 @@ await check('主备切换：attempt>1 计入切换次数与成功数', () => {
   const channel = snapshotAfterFailover.channels.find((item) => item.channelId === 'channel-runhub-img-main');
   assert.equal(channel.failovers, 1);
   assert.equal(channel.failoverSuccess, 1);
+});
+await check('主备切换：记录切换原因（上一条失败的错误码）', () => {
+  const reason = snapshotAfterFailover.failoverReasons.find((item) => item.errorCode === 'GENERATION_PROVIDER_RATE_LIMITED');
+  assert.equal(reason?.count, 1);
+  assert.equal(reason?.fromChannelId, 'channel-runhub-img-main');
 });
 
 startVibecodingTask('conv_a:msg_live', { conversationId: 'conv_a', orgId: 'org_a', userId: 'student_a1', model: 'deepseek-flash' });
@@ -491,6 +509,26 @@ try {
   const reconPast = await call('/reconcile', { day: '2000-01-01' });
   await check('对账：过去日期按今天返回（用户口径不要历史）', () => {
     assert.equal(reconPast.day, reconDay);
+  });
+  const alertsHistory = await call('/alerts/history', { hours: 24 });
+  await check('告警历史：返回阈值与事件列表', () => {
+    assert.ok(alertsHistory.thresholds && typeof alertsHistory.thresholds === 'object');
+    assert.ok(Array.isArray(alertsHistory.events));
+  });
+  let alertsForbidden = null;
+  try { await call('/alerts/history', { hours: 24 }, analyticsAuth); } catch (error) { alertsForbidden = error; }
+  await check('告警历史：没有 ADMIN_BILLING 时 403', () => {
+    assert.equal(alertsForbidden?.status, 403);
+  });
+  await check('xkwuai 账单换算：quota / 500000 = 元', () => {
+    assert.equal(xkwuaiQuotaToFen(7600), 1.52);
+    assert.equal(xkwuaiQuotaToFen(0), 0);
+    assert.equal(xkwuaiQuotaToFen('bad'), null);
+  });
+  let xkwuaiForbidden = null;
+  try { await call('/reconcile/xkwuai', { day: reconDay }, analyticsAuth); } catch (error) { xkwuaiForbidden = error; }
+  await check('xkwuai 账单：没有 ADMIN_BILLING 时 403', () => {
+    assert.equal(xkwuaiForbidden?.status, 403);
   });
   let reconForbidden = null;
   try { await call('/reconcile', { day: reconDay }, analyticsAuth); } catch (error) { reconForbidden = error; }

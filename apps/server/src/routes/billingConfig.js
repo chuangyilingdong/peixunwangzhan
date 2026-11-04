@@ -122,6 +122,12 @@ function normalizeProviderPolicy(value) {
   const imageQuality = ['low', 'medium', 'high'].includes(String(parsed.imageQuality || '').toLowerCase())
     ? String(parsed.imageQuality).toLowerCase()
     : 'low';
+  // 成本覆盖基线（2026-11-04）：配价完成的时间点。监控只对这条时间之后的调用算「未知成本」，
+  // 之前的无价历史不参与告警；后台保存整个策略时必须原样保留，否则会被归一化丢掉。
+  const costBaselineRaw = String(parsed.costBaselineAt || '').trim();
+  const costBaselineAt = costBaselineRaw && !Number.isNaN(Date.parse(costBaselineRaw))
+    ? new Date(costBaselineRaw).toISOString()
+    : null;
   const modalityOfChannel = (channelId) => {
     const direct = Object.entries({ ...modalityBackupChannels, ...modalityChannels }).find(([, id]) => id === channelId)?.[0];
     if (direct) return direct;
@@ -169,6 +175,7 @@ function normalizeProviderPolicy(value) {
     displayName, note, websiteUrl, endpointMode, protocol, modelMappings, channels, modalityChannels, modalityBackupChannels, modelRoutes: parsed.modelRoutes || [],
     imageModeChannels, imageModeBackupChannels,
     imageQuality,
+    costBaselineAt,
     visionChannelId,
     modelDisplayNames,
     allowStudentExternalContent,

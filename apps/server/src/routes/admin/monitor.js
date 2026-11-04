@@ -18,6 +18,7 @@
  *   · 余额单独一个接口（60 秒缓存），不放在 5 秒轮询的快照里，避免首次探测拖慢看板。
  */
 import { arow, arows, aq, errors, id, isRootPlatformAdmin } from '../../lib.js';
+import { getProviderApiKey } from '../../services/providerSecret.js';
 import { getRunningHubBalance, getRunningHubQueue } from '../../services/runningHubAccount.js';
 import { getWalletBalances } from '../../services/walletAccounts.js';
 import { getWalletHistory } from '../../services/walletHistory.js';
@@ -217,6 +218,51 @@ async function fetchErrorRows({ since, orgId = '', sessionId = '', userId = '', 
 
 // ── 快照 ────────────────────────────────────────────────────────────────────
 
+/** xkwuai 的 quota 换算：quota_per_unit=500000 → 元，再 ×100 得「分」。 */
+export function xkwuaiQuotaToFen(quota) {
+  const value = Number(quota);
+  if (!Number.isFinite(value) || value < 0) return null;
+  return Math.round((value / 500000) * 100 * 10000) / 10000;
+}
+
+/** 拉取 xkwuai 某一天的逐笔日志（new-api `/api/log/self`，分页，只读）。 */
+async function fetchXkwuaiLogs(startSec, endSec) {
+  const raw = getProviderApiKey('wallet-xkwuai');
+  let config = null;
+  try { config = JSON.parse(raw); } catch { config = null; }
+  if (!config?.token) throw errors.badRequest('xkwuai 没有配置访问令牌', 'XKWUAI_NO_API_KEY');
+  const headers = { authorization: `Bearer ${config.token}`, 'new-api-user': String(config.userId || '') };
+  const items = [];
+  for (let page = 1; page <= 30; page += 1) {
+    const response = await fetch(`https://www.xkwuai.cn/api/log/self?p=${page}&page_size=100`, {
+      headers, signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) throw errors.badRequest(`xkwuai 账单接口 HTTP ${response.status}`, 'XKWUAI_LOG_HTTP');
+    const payload = await response.json().catch(() => null);
+    const list = Array.isArray(payload?.data?.items) ? payload.data.items : [];
+    if (!list.length) break;
+    let reachedOlder = false;
+    for (const item of list) {
+      const atMs = Number(item.created_at) * 1000;
+      if (!Number.isFinite(atMs)) continue;
+      if (atMs < startSec * 1000) { reachedOlder = true; continue; }
+      if (atMs >= endSec * 1000) continue;
+      items.push(item);
+    }
+    if (reachedOlder || list.length < 100) break;
+  }
+  return items;
+}
+
+async function readAlertThresholds() {
+  const rows = await arows('SELECT alert_type, threshold FROM platform_alert_thresholds WHERE enabled=1');
+  const pick = (type) => {
+    const row = rows.find((item) => item.alert_type === type);
+    return row ? num(row.threshold) : null;
+  };
+  return { balanceLow: pick('BALANCE_LOW'), consumptionSpike: pick('CONSUMPTION_SPIKE') };
+}
+
 /** 对账日：按北京时间切日（存储是 UTC ISO；中国无夏令时，直接 +08:00）。 */
 function reconcileDayRange(value) {
   const text = String(value || '').trim();
@@ -242,7 +288,15 @@ function supplierResolver(policy) {
 
 async function buildReconcile({ day }) {
   const { start, end } = reconcileDayRange(day);
-  const [policyRow, costRows, orgRows, sessionRows, studentRows] = await Promise.all([
+  const baselineRow = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
+  let baselinePolicy = {};
+  try { baselinePolicy = JSON.parse(baselineRow?.ai_provider_policy || '{}') || {}; } catch { baselinePolicy = {}; }
+  const costBaselineAt = baselinePolicy.costBaselineAt && !Number.isNaN(Date.parse(baselinePolicy.costBaselineAt))
+    ? new Date(baselinePolicy.costBaselineAt).toISOString()
+    : null;
+  const coverageSince = costBaselineAt && costBaselineAt > start ? costBaselineAt : start;
+  const thresholds = await readAlertThresholds();
+  const [policyRow, costRows, orgRows, sessionRows, studentRows, lessonRows] = await Promise.all([
     arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1'),
     arows(`SELECT channel_id, model, modality, COUNT(*) calls,
         SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) success,
@@ -250,8 +304,10 @@ async function buildReconcile({ day }) {
         SUM(CASE WHEN status='SUCCESS' AND cost_source='REPORTED' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) reported_fen,
         SUM(CASE WHEN status='SUCCESS' AND cost_source='COMPUTED' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) computed_fen,
         SUM(CASE WHEN status='SUCCESS' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) cost_fen,
-        SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
-      FROM compute_attempts WHERE created_at>=? AND created_at<? GROUP BY channel_id, model, modality`, [start, end]),
+        SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls,
+        SUM(CASE WHEN status='SUCCESS' AND created_at>=? THEN 1 ELSE 0 END) success_since,
+        SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) AND created_at>=? THEN 1 ELSE 0 END) unknown_calls_since
+      FROM compute_attempts WHERE created_at>=? AND created_at<? GROUP BY channel_id, model, modality`, [coverageSince, coverageSince, start, end]),
     arows(`SELECT a.org_id, COALESCE(o.name,a.org_id) name, COUNT(*) calls,
         SUM(CASE WHEN a.status='SUCCESS' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) cost_fen,
         SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
@@ -269,6 +325,14 @@ async function buildReconcile({ day }) {
       FROM compute_attempts a LEFT JOIN users u ON u.id=a.user_id LEFT JOIN organizations o ON o.id=u.org_id
       WHERE a.created_at>=? AND a.created_at<? AND a.user_id IS NOT NULL
       GROUP BY a.user_id, u.display_name, u.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [start, end]),
+    arows(`SELECT a.lesson_id, COALESCE(l.title,'未命名课时') lesson_title, COALESCE(series.title,'') series_title, COUNT(*) calls,
+        SUM(CASE WHEN a.status='SUCCESS' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) cost_fen,
+        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
+      FROM compute_attempts a
+      LEFT JOIN course_lessons l ON l.id=a.lesson_id
+      LEFT JOIN course_series series ON series.id=l.series_id
+      WHERE a.created_at>=? AND a.created_at<? AND a.lesson_id IS NOT NULL
+      GROUP BY a.lesson_id, l.title, l.series_id, series.title ORDER BY cost_fen DESC LIMIT 50`, [start, end]),
   ]);
 
   let policy = {};
@@ -288,7 +352,7 @@ async function buildReconcile({ day }) {
       supplierLabel: supplier.label,
       calls: num(row.calls), success: num(row.success), failed: num(row.failed),
       costFen: num(row.cost_fen), reportedFen: num(row.reported_fen), computedFen: num(row.computed_fen),
-      unknownCalls: num(row.unknown_calls),
+      unknownCalls: num(row.unknown_calls), successSince: num(row.success_since), unknownCallsSince: num(row.unknown_calls_since),
     };
     models.push(item);
     totals.calls += item.calls; totals.success += item.success; totals.failed += item.failed;
@@ -297,19 +361,27 @@ async function buildReconcile({ day }) {
     const agg = suppliers.get(supplier.key) || { key: supplier.key, label: supplier.label, calls: 0, costFen: 0, reportedFen: 0, computedFen: 0, unknownCalls: 0 };
     agg.calls += item.calls; agg.costFen += item.costFen; agg.reportedFen += item.reportedFen;
     agg.computedFen += item.computedFen; agg.unknownCalls += item.unknownCalls;
+    agg.successSince = (agg.successSince || 0) + item.successSince;
+    agg.unknownCallsSince = (agg.unknownCallsSince || 0) + item.unknownCallsSince;
     suppliers.set(supplier.key, agg);
   }
   const money = (fen) => Math.round(Number(fen || 0) * 10000) / 10000;
   totals.costFen = money(totals.costFen);
   totals.reportedFen = money(totals.reportedFen);
   totals.computedFen = money(totals.computedFen);
+  totals.successSince = costRows.reduce((sum, row) => sum + num(row.success_since), 0);
+  totals.unknownCallsSince = costRows.reduce((sum, row) => sum + num(row.unknown_calls_since), 0);
   totals.unknownRate = pct(totals.unknownCalls, totals.success);
+  totals.unknownRateSince = pct(totals.unknownCallsSince, totals.successSince);
+  totals.costCoverageRate = pct(totals.successSince - totals.unknownCallsSince, totals.successSince);
+  totals.costBaselineAt = costBaselineAt;
 
   return {
     generatedAt: new Date().toISOString(),
     day,
     timezone: 'Asia/Shanghai',
     range: { start, end },
+    thresholds,
     totals,
     bySupplier: [...suppliers.values()].map((item) => ({
       ...item,
@@ -322,6 +394,10 @@ async function buildReconcile({ day }) {
     byOrg: orgRows.map((row) => ({ orgId: row.org_id, name: row.name, calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls) })),
     bySession: sessionRows.map((row) => ({ sessionId: row.class_session_id, title: row.title, orgName: row.org_name || '', calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls) })),
     byStudent: studentRows.map((row) => ({ userId: row.user_id, name: row.name, orgName: row.org_name || '', calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls) })),
+    byLesson: lessonRows.map((row) => ({
+      lessonId: row.lesson_id, lessonTitle: row.lesson_title, seriesTitle: row.series_title || '',
+      calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls),
+    })),
   };
 }
 
@@ -338,7 +414,17 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
   // 不设下界会把它们永远算成"正在跑"（2026-11-04 实测 16 条，最新也是几小时前）。
   const activeSince = sinceOf(2 * 60);
 
-  const [live, usageWindow, attemptsWindow, seriesRows, orgRows, orgStats, sessionRows, stuckAttemptRows, stuckJobRows, costRows, policyRow, queueStatus, channelRows, durationRows, lastSuccessRows, failoverRows, studentCostRows, blockedRows] = await Promise.all([
+  // 成本覆盖基线：配价完成后才算「应该知道成本」的调用；更早的历史无价调用不参与未知告警。
+  const baselineRow = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
+  let baselinePolicy = {};
+  try { baselinePolicy = JSON.parse(baselineRow?.ai_provider_policy || '{}') || {}; } catch { baselinePolicy = {}; }
+  const costBaselineAt = baselinePolicy.costBaselineAt && !Number.isNaN(Date.parse(baselinePolicy.costBaselineAt))
+    ? new Date(baselinePolicy.costBaselineAt).toISOString()
+    : null;
+  const coverageSince = costBaselineAt && costBaselineAt > since ? costBaselineAt : since;
+  const thresholds = await readAlertThresholds();
+
+  const [live, usageWindow, attemptsWindow, seriesRows, orgRows, orgStats, sessionRows, stuckAttemptRows, stuckJobRows, costRows, policyRow, queueStatus, channelRows, durationRows, lastSuccessRows, failoverRows, studentCostRows, blockedRows, failoverReasonRows] = await Promise.all([
     arow(`SELECT
         (SELECT COUNT(*) FROM compute_attempts WHERE status IN ('RUNNING','SUBMITTED') AND created_at>=?) running_attempts,
         (SELECT COUNT(*) FROM generation_jobs WHERE status='QUEUED' AND created_at>=?) queued_jobs,
@@ -354,8 +440,10 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
         SUM(CASE WHEN status='FAILED' AND (COALESCE(error_message,'') LIKE '%内容安全%' OR COALESCE(error_message,'') LIKE '%Content security%') THEN 1 ELSE 0 END) content_safety_failed,
         SUM(CASE WHEN status='SUCCESS' THEN COALESCE(sale_price_fen,0) ELSE 0 END) sale_fen,
         SUM(CASE WHEN status='SUCCESS' AND cost_source<>'UNKNOWN' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) known_cost_fen,
-        SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_cost_calls
-      FROM compute_attempts WHERE created_at>=?`, [since]),
+        SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_cost_calls,
+        SUM(CASE WHEN status='SUCCESS' AND created_at>=? THEN 1 ELSE 0 END) success_since,
+        SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) AND created_at>=? THEN 1 ELSE 0 END) unknown_cost_calls_since
+      FROM compute_attempts WHERE created_at>=?`, [coverageSince, coverageSince, since]),
     arows(`SELECT substr(created_at,1,16) minute,
         COUNT(*) calls,
         SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) success,
@@ -436,6 +524,12 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     arows(`SELECT COALESCE(fail_code,'UNKNOWN') code, COUNT(*) n
         FROM usage_records WHERE created_at>=? AND status='BLOCKED'
         GROUP BY fail_code ORDER BY n DESC LIMIT 8`, [since]),
+    // 主备切换原因：cur 是备用 attempt，prev 是同一 call 的上一条失败（error_code）。
+    arows(`SELECT cur.channel_id to_channel, prev.channel_id from_channel, COALESCE(prev.error_code,'UNKNOWN') error_code, COUNT(*) n
+      FROM compute_attempts cur
+      JOIN compute_attempts prev ON prev.call_id=cur.call_id AND prev.attempt=cur.attempt-1
+      WHERE cur.created_at>=? AND cur.attempt>1
+      GROUP BY cur.channel_id, prev.channel_id, prev.error_code ORDER BY n DESC LIMIT 20`, [since]),
   ]);
 
   const nowMs = Date.now();
@@ -610,6 +704,7 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     generatedAt: new Date().toISOString(),
     buildMs: Date.now() - buildStartedAt,
     window: windowKey,
+    thresholds,
     since,
     until: new Date().toISOString(),
     timezone: 'UTC',
@@ -638,6 +733,11 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
         knownCostFen: num(attempts.known_cost_fen),
         unknownCostCalls: num(attempts.unknown_cost_calls),
         unknownCostRate: pct(num(attempts.unknown_cost_calls), num(attempts.success)),
+        costBaselineAt,
+        successSince: num(attempts.success_since),
+        unknownCostCallsSince: num(attempts.unknown_cost_calls_since),
+        unknownCostRateSince: pct(num(attempts.unknown_cost_calls_since), num(attempts.success_since)),
+        costCoverageRate: pct(num(attempts.success_since) - num(attempts.unknown_cost_calls_since), num(attempts.success_since)),
       } : {}),
     },
     series,
@@ -650,6 +750,14 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     blockedReasons: blockedRows.map((row) => ({ code: row.code || 'UNKNOWN', count: num(row.n) })),
     channels,
     failover,
+    failoverReasons: (failoverReasonRows || []).map((row) => ({
+      fromChannelId: row.from_channel || null,
+      fromChannelName: channelNames.get(row.from_channel) || row.from_channel || '—',
+      toChannelId: row.to_channel || null,
+      toChannelName: channelNames.get(row.to_channel) || row.to_channel || '—',
+      errorCode: row.error_code || 'UNKNOWN',
+      count: num(row.n),
+    })),
     ...(billingVisible ? { costTop, studentCostTop } : {}),
     billingVisible,
   };
@@ -890,10 +998,101 @@ export async function handleMonitor(ctx, part, method) {
     };
   }
 
+  if (suffix === '/alerts/history' && method === 'GET') {
+    if (!billingVisible) throw errors.forbidden('告警历史需要 AI 能力与价格权限', 'PERMISSION_DENIED', { permission: 'ADMIN_BILLING' });
+    const hours = Math.min(168, Math.max(1, Number(ctx.search.get('hours')) || 24));
+    const since = new Date(Date.now() - hours * 3600_000).toISOString();
+    const thresholds = await readAlertThresholds();
+    const [rows, walletRows] = await Promise.all([
+      arows(`SELECT substr(created_at,1,16) minute, COUNT(*) calls,
+          SUM(CASE WHEN status='FAILED' AND NOT(COALESCE(error_message,'') LIKE '%内容安全%' OR COALESCE(error_message,'') LIKE '%Content security%') THEN 1 ELSE 0 END) failed,
+          SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
+        FROM compute_attempts WHERE created_at>=? GROUP BY minute ORDER BY minute`, [since]),
+      arows(`SELECT created_at, SUM(CASE WHEN ok=1 THEN cny ELSE 0 END) total, SUM(CASE WHEN ok=1 THEN 1 ELSE 0 END) okn
+        FROM monitor_wallet_samples WHERE created_at>=? GROUP BY created_at ORDER BY created_at`, [since]),
+    ]);
+    const buckets = new Map();
+    for (const row of rows) {
+      const key = `${String(row.minute).slice(0, 15)}0`;   // 10 分钟桶：YYYY-MM-DDTHH:M0
+      const bucket = buckets.get(key) || { key, calls: 0, failed: 0, unknown: 0 };
+      bucket.calls += num(row.calls);
+      bucket.failed += num(row.failed);
+      bucket.unknown += num(row.unknown_calls);
+      buckets.set(key, bucket);
+    }
+    const atOf = (key) => new Date(`${key.slice(0, 16)}:00Z`).toISOString();
+    const events = [];
+    for (const bucket of buckets.values()) {
+      const rate = pct(bucket.failed, bucket.calls);
+      if (bucket.failed >= 3 && rate !== null && rate >= 5) {
+        events.push({ at: atOf(bucket.key), type: 'ERROR_RATE', level: rate >= 20 ? 'danger' : 'warning', text: `渠道错误率 ${rate}%（${bucket.failed}/${bucket.calls}）` });
+      }
+      if (bucket.unknown >= 3) {
+        events.push({ at: atOf(bucket.key), type: 'UNKNOWN_COST', level: 'warning', text: `未知成本 ${bucket.unknown} 笔（10 分钟）` });
+      }
+    }
+    if (thresholds.balanceLow !== null) {
+      for (const row of walletRows) {
+        if (num(row.okn) > 0 && num(row.total) < thresholds.balanceLow) {
+          events.push({ at: row.created_at, type: 'BALANCE_LOW', level: 'danger', text: `总余额 ¥${num(row.total).toFixed(2)} 低于 ¥${thresholds.balanceLow}` });
+        }
+      }
+    }
+    return {
+      generatedAt: new Date().toISOString(),
+      hours,
+      thresholds,
+      events: events.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 100),
+    };
+  }
+
   if (suffix === '/reconcile' && method === 'GET') {
     if (!billingVisible) throw errors.forbidden('对账需要 AI 能力与价格权限', 'PERMISSION_DENIED', { permission: 'ADMIN_BILLING' });
     const { day } = reconcileDayRange(ctx.search.get('day'));
     return await buildReconcile({ day });
+  }
+
+  if (suffix === '/reconcile/xkwuai' && method === 'GET') {
+    if (!billingVisible) throw errors.forbidden('对账需要 AI 能力与价格权限', 'PERMISSION_DENIED', { permission: 'ADMIN_BILLING' });
+    const { day, start, end } = reconcileDayRange(ctx.search.get('day'));
+    const items = await fetchXkwuaiLogs(Math.floor(Date.parse(start) / 1000), Math.floor(Date.parse(end) / 1000));
+    const actualFen = Math.round(items.reduce((sum, item) => sum + (xkwuaiQuotaToFen(item.quota) || 0), 0) * 10000) / 10000;
+    const byModel = new Map();
+    for (const item of items) {
+      const model = String(item.model_name || '—');
+      const entry = byModel.get(model) || { model, logs: 0, actualFen: 0 };
+      entry.logs += 1;
+      entry.actualFen += xkwuaiQuotaToFen(item.quota) || 0;
+      byModel.set(model, entry);
+    }
+    const policyRow = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
+    let policy = {};
+    try { policy = JSON.parse(policyRow?.ai_provider_policy || '{}') || {}; } catch { policy = {}; }
+    const channelIds = (policy.channels || [])
+      .filter((channel) => String(channel.endpoint || '').toLowerCase().includes('xkwuai'))
+      .map((channel) => channel.id);
+    let ourFen = 0; let ourCalls = 0;
+    if (channelIds.length) {
+      const row = await arow(`SELECT COUNT(*) calls,
+          SUM(CASE WHEN status='SUCCESS' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) fen
+        FROM compute_attempts WHERE created_at>=? AND created_at<? AND channel_id IN (${placeholders(channelIds)})`,
+        [start, end, ...channelIds]);
+      ourCalls = num(row?.calls);
+      ourFen = Math.round(num(row?.fen) * 10000) / 10000;
+    }
+    return {
+      generatedAt: new Date().toISOString(),
+      day,
+      actualFen,
+      ourFen,
+      diffFen: Math.round((ourFen - actualFen) * 10000) / 10000,
+      logCount: items.length,
+      ourCalls,
+      byModel: [...byModel.values()]
+        .map((item) => ({ ...item, actualFen: Math.round(item.actualFen * 10000) / 10000 }))
+        .sort((left, right) => right.actualFen - left.actualFen)
+        .slice(0, 20),
+    };
   }
 
   if (suffix === '/models' && method === 'GET') {
