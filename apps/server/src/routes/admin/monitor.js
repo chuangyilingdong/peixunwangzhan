@@ -280,8 +280,8 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
       LEFT JOIN organizations o ON o.id=s.org_id
       LEFT JOIN users u ON u.id=s.teacher_id
       LEFT JOIN course_lessons l ON l.id=s.lesson_id
-      WHERE s.status='ACTIVE' AND s.started_at>=? AND (?='' OR s.org_id=?)
-      ORDER BY s.started_at DESC LIMIT ?`, [sinceOf(12 * 60), orgFilter, orgFilter, MAX_SESSIONS]),
+      WHERE s.status='ACTIVE' AND (?='' OR s.org_id=?)
+      ORDER BY s.started_at DESC LIMIT ?`, [orgFilter, orgFilter, MAX_SESSIONS]),
     // 卡住任务：只看最近 6 小时内、已超过 15 分钟还没收尾的 —— 历史遗留的脏 attempt 不算。
     arows(`SELECT id, modality, model, channel_id, status, created_at FROM compute_attempts
         WHERE status IN ('RUNNING','SUBMITTED') AND created_at>=? AND created_at<?
@@ -658,7 +658,15 @@ function candidateChannels(policy, row) {
     if (row.key === 'IMAGE_T2I') return !/-i2i/i.test(String(channel.model || ''));
     return true;
   }).flatMap((channel) => {
-    const models = Array.isArray(channel.models) && channel.models.length ? channel.models : [channel.model].filter(Boolean);
+    // 候选模型 = channel.models ∪ modelMappings（显示名映射里的真实 id）∪ 默认模型
+    const mapped = Array.isArray(channel.modelMappings)
+      ? channel.modelMappings.map((item) => item?.id).filter(Boolean)
+      : [];
+    const models = [
+      ...(Array.isArray(channel.models) ? channel.models : []),
+      ...mapped,
+      channel.model,
+    ].filter(Boolean);
     return [...new Set(models)].map((model) => ({
       channelId: channel.id,
       channelName: channel.name || channel.id,
