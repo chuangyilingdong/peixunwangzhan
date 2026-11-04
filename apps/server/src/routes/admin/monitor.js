@@ -854,7 +854,7 @@ function normalizeImageQuality(value) {
 function inferChannelModality(channel) {
   const model = String(channel?.model || '').toLowerCase();
   if (/music|mureka|song/.test(model)) return 'MUSIC';
-  if (/seedance|hailuo|video/.test(model)) return 'VIDEO';
+  if (/seedance|hailuo|video|wan-3\.0|alibaba/.test(model)) return 'VIDEO';
   if (/image|rhart|zhenzhen|flux|sdxl|dall/.test(model)) return 'IMAGE';
   return 'TEXT';
 }

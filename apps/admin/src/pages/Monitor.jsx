@@ -428,7 +428,11 @@ export function Monitor({ api, user }) {
                 {wallets.length ? wallets.map((item) => (
                   <div key={item.id} className="monitor-wallet-line">
                     <span>{WALLET_LABELS[item.id] || item.name}</span>
-                    <b>{item.ok && item.cny !== null && item.cny !== undefined ? `¥${Number(item.cny).toFixed(2)}` : (item.error || '不可用')}</b>
+                    <b>{item.ok && item.cny !== null && item.cny !== undefined
+                      ? (item.currency === 'USD' && item.amount !== null && item.amount !== undefined
+                        ? `$${Number(item.amount).toFixed(2)} ≈ ¥${Number(item.cny).toFixed(2)}`
+                        : `¥${Number(item.cny).toFixed(2)}`)
+                      : (item.error || '不可用')}</b>
                   </div>
                 )) : <div className="monitor-wallet-line"><span>读取中…</span></div>}
               </div>

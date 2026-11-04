@@ -62,6 +62,11 @@ const RUNNINGHUB_FAMILIES = Object.freeze({
   'minimax/hailuo-h3': {
     VIDEO: '/minimax/hailuo-h3/multimodal-to-video',
   },
+  // 2026-11-04 用户指定：视频备用换成 CN 站「万相3.0-参考生视频」（api-detail 2133100000000700019）。
+  // 480P 5 秒实测 ¥1.05（21 分/秒）、约 103 秒；必填 aspectRatio（不是 ratio），音频字段叫 audio。
+  'alibaba/wan-3.0': {
+    VIDEO: '/alibaba/wan-3.0/reference-to-video',
+  },
   'minimax/music-2.6': {
     MUSIC: '/minimax/music-2.6',
   },
@@ -216,10 +221,17 @@ function buildImageBody({ prompt, options, imageUrls, family, imageQuality = OFF
 
 function buildVideoBody({ prompt, options, family, refs }) {
   const body = { prompt: String(prompt || '') };
+  const isWan = String(family || '').startsWith('alibaba/wan-3.0');
   if (options.durationSeconds) body.duration = Number(options.durationSeconds);
-  if (options.resolution) body.resolution = String(options.resolution);
+  if (options.resolution) body.resolution = isWan ? String(options.resolution).toUpperCase() : String(options.resolution);
   const ratio = String(options.aspectRatio || '');
-  if (ratio) body.ratio = ratio === 'auto' ? 'adaptive' : ratio;
+  if (isWan) {
+    // 万相3.0 必填 aspectRatio；请求里没有就用 16:9（S1 的视频框都是 16:9）。
+    body.aspectRatio = !ratio || ratio === 'auto' ? '16:9' : ratio;
+    if (typeof options.audio === 'boolean') body.audio = options.audio;
+  } else if (ratio) {
+    body.ratio = ratio === 'auto' ? 'adaptive' : ratio;
+  }
   if (refs.imageUrls.length) body.imageUrls = refs.imageUrls;
   if (refs.videoUrls.length) body.videoUrls = refs.videoUrls;
   if (refs.audioUrls.length) body.audioUrls = refs.audioUrls;

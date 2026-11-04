@@ -195,6 +195,20 @@ await check('视频·备：hailuo 路径；不带 generateAudio', async () => {
   assert.equal(sub.body.generateAudio, undefined);
 });
 
+await check('视频·备（CN 万相3.0）：aspectRatio 必填、480P、audio 开关', async () => {
+  const provider = make('alibaba/wan-3.0');
+  await provider.generate({
+    modality: 'VIDEO', prompt: 'x',
+    options: { durationSeconds: 5, resolution: '480p', aspectRatio: '16:9', audio: true, referenceAssets: [{ type: 'IMAGE', url: `${SELF}/a.png` }] },
+  });
+  const sub = lastSubmission();
+  assert.equal(sub.path, '/openapi/v2/alibaba/wan-3.0/reference-to-video');
+  assert.equal(sub.body.aspectRatio, '16:9');
+  assert.equal(sub.body.resolution, '480P');
+  assert.equal(sub.body.audio, true);
+  assert.equal(sub.body.ratio, undefined);
+});
+
 await check('音乐：/minimax/music-2.6 + 歌词模式', async () => {
   const provider = make('minimax/music-2.6');
   const result = await provider.generate({
@@ -297,7 +311,7 @@ await check('后台「读取模型」：RunningHub 列本地 family 清单（上
     'rhart-image-g-2.5-official-token-t2i', 'rhart-image-g-2.5-t2i',
   ]);
   assert.deepEqual(runningHubModelCatalog('VIDEO').map((item) => item.id).sort(), [
-    'bytedance/seedance-2.0-global-fast', 'minimax/hailuo-h3', 'rhart-video/sparkvideo-2.0-mini',
+    'alibaba/wan-3.0', 'bytedance/seedance-2.0-global-fast', 'minimax/hailuo-h3', 'rhart-video/sparkvideo-2.0-mini',
   ]);
   assert.deepEqual(runningHubModelCatalog('MUSIC').map((item) => item.id), ['minimax/music-2.6']);
   assert.equal(runningHubModelCatalog('TEXT').length, 0);
