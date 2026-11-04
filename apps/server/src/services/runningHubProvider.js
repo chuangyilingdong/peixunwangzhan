@@ -40,6 +40,48 @@ const RUNNINGHUB_FAMILIES = Object.freeze({
   },
 });
 
+const MODALITY_LABELS = Object.freeze({ IMAGE: '图片', VIDEO: '视频', MUSIC: '音乐' });
+
+// family 支持哪些模态 —— 直接由路径表的键推出来（IMAGE_TEXT / IMAGE_IMAGE 都算 IMAGE），
+// 不要再单独维护第二张表，否则加 family 时两边会漂。
+function familyModalities(paths) {
+  const set = new Set();
+  for (const key of Object.keys(paths || {})) set.add(key.startsWith('IMAGE') ? 'IMAGE' : key);
+  return [...set];
+}
+
+/** 渠道卡里的 family → 它的主模态；不认识的 family 返回 ''（调用方自行回落）。 */
+export function runningHubFamilyModality(family) {
+  return familyModalities(RUNNINGHUB_FAMILIES[String(family || '').trim()])[0] || '';
+}
+
+/**
+ * 「读取模型」用的本地清单（2026-11-04）。
+ *
+ * RunningHub **没有模型列表接口**：`GET /openapi/v2/models` 对任何 Key 都回
+ * `200 {"code":301,"msg":"PARAMS_INVALID"}`，所以后台以前永远显示「已读取 0 个模型」。
+ * 它的可用模型就是适配器这张 family 表 —— 后台该勾的就是能真正跑的那些 key。
+ * 传了 modality 就只列该模态的 family（图片渠道里不会冒出视频 family）。
+ */
+export function runningHubModelCatalog(modality = '') {
+  const wanted = String(modality || '').trim().toUpperCase();
+  return Object.entries(RUNNINGHUB_FAMILIES)
+    .map(([id, paths]) => {
+      const modalities = familyModalities(paths);
+      // 显示名带上模态：勾选框里一眼能看出这条 family 是图片还是视频。
+      const label = modalities.map((item) => MODALITY_LABELS[item] || item).join('/');
+      return {
+        id,
+        displayName: `${id}（${label}）`,
+        ownedBy: 'runninghub',
+        contextWindow: null,
+        capabilities: null,
+        modalities,
+      };
+    })
+    .filter((item) => !wanted || item.modalities.includes(wanted));
+}
+
 const DEFAULT_POLL_MS = 5000;
 const MAX_IMAGE_REFS = 9;
 const MAX_VIDEO_REFS = 3;

@@ -257,7 +257,8 @@ export function AiCapabilityPanel({ api }) {
       modelRoutes: (form.modelRoutes || []).filter((route) => route.channelId !== id && route.backupChannelId !== id),
     });
   }
-  function channelRequest(channel) { return { endpoint: channel.endpoint, channelId: channel.id, ...(channel.apiKey ? { apiKey: channel.apiKey } : {}) }; }
+  // provider 也带上：RunningHub 的「读取模型」不请求上游，后端要靠它（或已保存渠道）认出这是哪家。
+  function channelRequest(channel) { return { endpoint: channel.endpoint, channelId: channel.id, provider: channel.provider, ...(channel.apiKey ? { apiKey: channel.apiKey } : {}) }; }
   // 渠道按「能力路由」确定模态（价目表按它决定成本价的计价单位）。
   function channelModality(channelId) { return Object.entries(form?.modalityChannels || {}).find(([, id]) => id === channelId)?.[0] || ''; }
   function modalityOf(channel) { return priceModality[channel.id] || channelModality(channel.id) || 'TEXT'; }
@@ -434,7 +435,21 @@ export function AiCapabilityPanel({ api }) {
     </>;
   }
   async function testChannel(channel) { setBusy(true); setMessage(''); try { const result = await api.post('admin/billing-config/ai-provider/test', channelRequest(channel)); setMessage(`${channel.name}：${result.message || '连接成功'}`); } catch (e) { setMessage(errorText(`${channel.name}：${e.message || '连接失败'}`)); } finally { setBusy(false); } }
-  async function fetchModels(channel, index) { setBusy(true); setMessage(''); try { const result = await api.post('admin/billing-config/ai-provider/models', channelRequest(channel)); updateChannel(index, { modelMappings: result.items || [] }); setMessage(`${channel.name}：已读取 ${result.items?.length || 0} 个模型，请勾选本渠道可用模型`); } catch (e) { setMessage(errorText(e.message || '获取模型失败')); } finally { setBusy(false); } }
+  async function fetchModels(channel, index) {
+    setBusy(true); setMessage('');
+    try {
+      const result = await api.post('admin/billing-config/ai-provider/models', channelRequest(channel));
+      const items = result.items || [];
+      updateChannel(index, { modelMappings: items });
+      if (result.source === 'runninghub-catalog') {
+        // RunningHub 没有 /models：列的是适配器内置 family，不是从上游读的。
+        const keyHint = result.keyConfigured === false && !channel.apiKey ? '；该渠道还没有保存 API Key' : '';
+        setMessage(`${channel.name}：RunningHub 无模型列表接口，已列出适配器内置 ${items.length} 个 family（${items.map((item) => item.id).join('、')}），勾选后点「保存全部配置」生效${keyHint}`);
+      } else {
+        setMessage(`${channel.name}：已读取 ${items.length} 个模型，请勾选本渠道可用模型`);
+      }
+    } catch (e) { setMessage(errorText(e.message || '获取模型失败')); } finally { setBusy(false); }
+  }
   /**
    * 「用当前渠道试一次」：把这套（可能还没保存的）渠道配置真发一次最小请求。
    * 只验证「上游认不认这套参数」，不扣学生额度，上游可能计费。
@@ -446,9 +461,11 @@ export function AiCapabilityPanel({ api }) {
     try {
       const result = await api.post('admin/billing-config/ai-provider/probe', { modality, channelId: channel.id, model: channel.model, channel, ...(channel.apiKey ? { apiKey: channel.apiKey } : {}) });
       const seconds = Math.round((result.elapsedMs || 0) / 1000);
-      if (result.ok) setMessage(`${channel.name} · ${modality}：✓ ${result.message || '上游接受'}（${seconds} 秒）`);
-      else if (result.accepted) setMessage(`${channel.name} · ${modality}：上游已受理（${seconds} 秒）—— ${result.error?.message || ''}`);
-      else setMessage(`${channel.name} · ${modality}：✗ ${result.error?.message || '上游拒绝了这次请求'}${result.error?.code ? '（' + result.error.code + '）' : ''}`);
+      // RunningHub 会按 family 改写模态（未路由渠道点「试一次」默认是 TEXT，必报不支持）——显示真正试的那一档。
+      const probed = result.modality || modality;
+      if (result.ok) setMessage(`${channel.name} · ${probed}：✓ ${result.message || '上游接受'}（${seconds} 秒）`);
+      else if (result.accepted) setMessage(`${channel.name} · ${probed}：上游已受理（${seconds} 秒）—— ${result.error?.message || ''}`);
+      else setMessage(`${channel.name} · ${probed}：✗ ${result.error?.message || '上游拒绝了这次请求'}${result.error?.code ? '（' + result.error.code + '）' : ''}`);
     } catch (e) { setMessage(errorText(`${channel.name}：${e.message || '探测失败'}`)); }
     finally { setBusy(false); }
   }

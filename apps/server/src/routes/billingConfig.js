@@ -20,6 +20,7 @@ import {
   normalizeChannelModelCapabilities, parseRequestTemplate, validateModelCapabilitiesInput,
 } from '../services/modelCapabilities.js';
 import { AI_PROVIDER_API_KEY, AI_PROVIDER_TIMEOUT_MS } from '../config.js';
+import { runningHubFamilyModality, runningHubModelCatalog } from '../services/runningHubProvider.js';
 import { getProviderApiKey, hasProviderApiKey, setProviderApiKey } from '../services/providerSecret.js';
 import { normalizeModelUnitPrices, normalizeUpstreamUnitPrices, validateModelUnitPrices, validateUpstreamUnitPrices } from '../services/upstreamCost.js';
 
@@ -382,6 +383,11 @@ export async function handleAdminBillingConfig(ctx) {
   if (part === '/billing-config/ai-provider/test' && method === 'POST') {
     requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const endpoint = String(body.endpoint || '').trim(); const apiKey = providerApiKeyForRequest(body);
     if (!apiKey) throw errors.badRequest('尚未配置该渠道 API Key', 'AI_PROVIDER_KEY_NOT_CONFIGURED'); if (!endpoint) throw errors.badRequest('请先填写 Endpoint', 'AI_PROVIDER_ENDPOINT_REQUIRED');
+    // RunningHub 的 /models 对任何 Key 都回 200 + PARAMS_INVALID —— 拿它当探活只会给一个假「连接成功」。
+    // 这里如实说：配置形状对，但真实连通性只能靠「用当前渠道试一次」发一个真任务来验。
+    if (String(body.provider || '').trim().toLowerCase() === 'runninghub') {
+      return { ok: true, verified: false, message: 'RunningHub 没有免计费的探活接口：调用地址与 Key 已填写，真实连通性请用「用当前渠道试一次」验证（会向上游提交任务并可能计费）' };
+    }
     let url; try { url = providerModelsEndpoint(endpoint); } catch { throw errors.badRequest('Endpoint 无效', 'AI_PROVIDER_ENDPOINT_INVALID'); }
     const controller = new AbortController(); const timer=setTimeout(() => controller.abort(), AI_PROVIDER_TIMEOUT_MS);
     try { const response=await fetch(url,{headers:{Authorization:`Bearer ${apiKey}`,Accept:'application/json'},signal:controller.signal}); if(!response.ok) { if(response.status===401||response.status===403) throw errors.badRequest(`渠道 API Key 无效或已过期（HTTP ${response.status}），请重新填写并保存`, 'GENERATION_PROVIDER_AUTH_FAILED'); throw errors.badRequest(`连接失败（HTTP ${response.status}）`, response.status===429?'GENERATION_PROVIDER_RATE_LIMITED':'GENERATION_PROVIDER_UPSTREAM_ERROR'); } return { ok:true, message:'连接成功' }; } catch (error) { if(error?.code) throw error; throw errors.badRequest(error?.name==='AbortError'?'连接超时':'连接失败','GENERATION_PROVIDER_UPSTREAM_ERROR'); } finally { clearTimeout(timer); }
@@ -389,6 +395,22 @@ export async function handleAdminBillingConfig(ctx) {
   if (part === '/billing-config/ai-provider/models' && method === 'POST') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const policy = await getAiProviderPolicy();
+    const channelId = String(ctx.body?.channelId || '').trim();
+    const savedChannel = channelId ? (policy.channels || []).find((item) => item.id === channelId) : null;
+    const providerId = String(ctx.body?.provider || savedChannel?.provider || '').trim().toLowerCase();
+    // RunningHub 没有 /models（实测对它请求 200 + PARAMS_INVALID），可用模型就是适配器里的 family 表。
+    // 这里直接列本地清单，免得界面永远「已读取 0 个模型」；模态优先按已路由的渠道，其次按渠道当前 family。
+    if (providerId === 'runninghub') {
+      const routedModality = Object.entries({ ...policy.modalityBackupChannels, ...policy.modalityChannels })
+        .find(([, id]) => id === channelId)?.[0] || '';
+      const modality = routedModality || runningHubFamilyModality(savedChannel?.model);
+      return {
+        source: 'runninghub-catalog',
+        items: runningHubModelCatalog(modality),
+        // 表单里刚敲的 Key 不算：只有保存过才是真的（列表本身不需要 Key，这里只给界面一句实话）。
+        keyConfigured: Boolean(channelId && getProviderApiKey(channelId)),
+      };
+    }
     const apiKey = providerApiKeyForRequest(ctx.body || {});
     if (!apiKey) throw errors.badRequest('尚未配置 API Key', 'AI_PROVIDER_KEY_NOT_CONFIGURED');
     let url = String(ctx.body?.endpoint || policy.endpoint || '').trim();
@@ -432,7 +454,7 @@ export async function handleAdminBillingConfig(ctx) {
   if (part === '/billing-config/ai-provider/probe' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const body = ctx.body || {};
-    const modality = String(body.modality || 'TEXT').trim().toUpperCase();
+    let modality = String(body.modality || 'TEXT').trim().toUpperCase();
     if (!['TEXT', 'IMAGE', 'MUSIC', 'VIDEO'].includes(modality)) throw errors.badRequest('不支持的素材类型', 'UNSUPPORTED_MODALITY');
     const policy = await getAiProviderPolicy();
     const channelId = String(body.channelId || policy?.modalityChannels?.[modality] || 'default');
@@ -459,6 +481,12 @@ export async function handleAdminBillingConfig(ctx) {
       // 表单上刚敲进去、还没保存的 key 也要能试 —— 这正是「保存前当场知道」的一半价值
       apiKey: providerApiKeyForRequest({ apiKey: source?.apiKey, channelId }),
     };
+    // RunningHub 只有图片/视频/音乐：未路由的渠道在界面上会按默认 TEXT 发起探测，
+    // 那条路必报 MODALITY_UNSUPPORTED。family 自己能说明模态，就以它为准。
+    if (String(selection.provider || '').toLowerCase() === 'runninghub') {
+      const familyModality = runningHubFamilyModality(selection.model) || runningHubFamilyModality(source?.model);
+      if (familyModality) modality = familyModality;
+    }
     const info = generationProviderInfo(selection);
     const started = Date.now();
     const base = { modality, model: selection.model, channelId, provider: selection.provider, mode: info.mode, routedVia: info.routedVia, configured: info.configured };

@@ -28,6 +28,7 @@ process.env.PUBLIC_SITE_URL = 'https://aicyld.com';
 const { runningHubProvider } = await import('../apps/server/src/services/runningHubProvider.js');
 const { providerSelectionForModality } = await import('../apps/server/src/routes/aiGeneration.js');
 const { generationProviderInfo, getGenerationProvider } = await import('../apps/server/src/services/generationProvider.js');
+const { RUNNINGHUB_FAMILIES, runningHubFamilyModality, runningHubModelCatalog } = await import('../apps/server/src/services/runningHubProvider.js');
 
 const PORT = 18994;
 const BASE = `http://127.0.0.1:${PORT}/openapi/v2`;
@@ -230,6 +231,26 @@ await check('渠道 selection：RunningHub 用渠道 family，课时旧模型不
   assert.ok(provider.capabilities.includes('IMAGE'));
   assert.ok(!provider.capabilities.includes('TEXT'));
   assert.equal(generationProviderInfo(selection).adapterAvailable, true);
+});
+
+await check('后台「读取模型」：RunningHub 列本地 family 清单（上游没有 /models）', async () => {
+  // 上游对 GET /openapi/v2/models 一律回 200 + PARAMS_INVALID，所以后台只能列适配器这张表。
+  const all = runningHubModelCatalog();
+  assert.deepEqual(all.map((item) => item.id).sort(), Object.keys(RUNNINGHUB_FAMILIES).sort());
+  assert.ok(all.every((item) => item.ownedBy === 'runninghub' && item.capabilities === null));
+  assert.ok(all.every((item) => item.displayName.includes(item.id) && /（.+）/.test(item.displayName)));
+  assert.deepEqual(runningHubModelCatalog('IMAGE').map((item) => item.id).sort(), ['rhart-image-g-2-official', 'rhart-image-g-2.5']);
+  assert.deepEqual(runningHubModelCatalog('VIDEO').map((item) => item.id).sort(), ['bytedance/seedance-2.0-global-fast', 'minimax/hailuo-h3']);
+  assert.deepEqual(runningHubModelCatalog('MUSIC').map((item) => item.id), ['minimax/music-2.6']);
+  assert.equal(runningHubModelCatalog('TEXT').length, 0);
+});
+
+await check('family → 模态：未路由渠道的「试一次」不再落回 TEXT', async () => {
+  assert.equal(runningHubFamilyModality('rhart-image-g-2.5'), 'IMAGE');
+  assert.equal(runningHubFamilyModality('bytedance/seedance-2.0-global-fast'), 'VIDEO');
+  assert.equal(runningHubFamilyModality('minimax/music-2.6'), 'MUSIC');
+  assert.equal(runningHubFamilyModality('not-a-family'), '');
+  assert.equal(runningHubFamilyModality(''), '');
 });
 
 mock.close();
