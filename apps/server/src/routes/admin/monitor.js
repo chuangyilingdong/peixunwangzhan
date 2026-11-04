@@ -294,7 +294,15 @@ async function buildReconcile({ day }) {
   const costBaselineAt = baselinePolicy.costBaselineAt && !Number.isNaN(Date.parse(baselinePolicy.costBaselineAt))
     ? new Date(baselinePolicy.costBaselineAt).toISOString()
     : null;
-  const coverageSince = costBaselineAt && costBaselineAt > start ? costBaselineAt : start;
+  const accountingStartAt = baselinePolicy.accountingStartAt && !Number.isNaN(Date.parse(baselinePolicy.accountingStartAt))
+    ? new Date(baselinePolicy.accountingStartAt).toISOString()
+    : null;
+  // 正式记账起点之后的账才算；之前的调用保留但不进对账。
+  const effectiveStart = accountingStartAt && accountingStartAt > start ? accountingStartAt : start;
+  const coverageSince = new Date(Math.max(
+    Date.parse(costBaselineAt || start),
+    Date.parse(effectiveStart),
+  )).toISOString();
   const thresholds = await readAlertThresholds();
   const [policyRow, costRows, orgRows, sessionRows, studentRows, lessonRows] = await Promise.all([
     arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1'),
@@ -308,27 +316,27 @@ async function buildReconcile({ day }) {
         SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls,
         SUM(CASE WHEN status='SUCCESS' AND created_at>=? THEN 1 ELSE 0 END) success_since,
         SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) AND created_at>=? THEN 1 ELSE 0 END) unknown_calls_since
-      FROM compute_attempts WHERE created_at>=? AND created_at<? GROUP BY channel_id, model, modality`, [coverageSince, coverageSince, start, end]),
+      FROM compute_attempts WHERE created_at>=? AND created_at<? GROUP BY channel_id, model, modality`, [coverageSince, coverageSince, effectiveStart, end]),
     arows(`SELECT a.org_id, COALESCE(o.name,a.org_id) name, COUNT(*) calls,
         SUM(CASE WHEN a.status='SUCCESS' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) cost_fen,
         SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls,
         SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) AND a.created_at>=? THEN 1 ELSE 0 END) unknown_calls_since
       FROM compute_attempts a LEFT JOIN organizations o ON o.id=a.org_id
-      WHERE a.created_at>=? AND a.created_at<? AND a.org_id IS NOT NULL GROUP BY a.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [coverageSince, start, end]),
+      WHERE a.created_at>=? AND a.created_at<? AND a.org_id IS NOT NULL GROUP BY a.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [coverageSince, effectiveStart, end]),
     arows(`SELECT a.class_session_id, COALESCE(s.title,'未命名课堂') title, s.org_id, o.name org_name, COUNT(*) calls,
         SUM(CASE WHEN a.status='SUCCESS' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) cost_fen,
         SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls,
         SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) AND a.created_at>=? THEN 1 ELSE 0 END) unknown_calls_since
       FROM compute_attempts a LEFT JOIN class_sessions s ON s.id=a.class_session_id LEFT JOIN organizations o ON o.id=s.org_id
       WHERE a.created_at>=? AND a.created_at<? AND a.class_session_id IS NOT NULL
-      GROUP BY a.class_session_id, s.title, s.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [coverageSince, start, end]),
+      GROUP BY a.class_session_id, s.title, s.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [coverageSince, effectiveStart, end]),
     arows(`SELECT a.user_id, COALESCE(u.display_name,a.user_id) name, u.org_id, o.name org_name, COUNT(*) calls,
         SUM(CASE WHEN a.status='SUCCESS' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) cost_fen,
         SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls,
         SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) AND a.created_at>=? THEN 1 ELSE 0 END) unknown_calls_since
       FROM compute_attempts a LEFT JOIN users u ON u.id=a.user_id LEFT JOIN organizations o ON o.id=u.org_id
       WHERE a.created_at>=? AND a.created_at<? AND a.user_id IS NOT NULL
-      GROUP BY a.user_id, u.display_name, u.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [coverageSince, start, end]),
+      GROUP BY a.user_id, u.display_name, u.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [coverageSince, effectiveStart, end]),
     arows(`SELECT a.lesson_id, COALESCE(l.title,'未命名课时') lesson_title, COALESCE(series.title,'') series_title, COUNT(*) calls,
         SUM(CASE WHEN a.status='SUCCESS' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) cost_fen,
         SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls,
@@ -337,7 +345,7 @@ async function buildReconcile({ day }) {
       LEFT JOIN course_lessons l ON l.id=a.lesson_id
       LEFT JOIN course_series series ON series.id=l.series_id
       WHERE a.created_at>=? AND a.created_at<? AND a.lesson_id IS NOT NULL
-      GROUP BY a.lesson_id, l.title, l.series_id, series.title ORDER BY cost_fen DESC LIMIT 50`, [coverageSince, start, end]),
+      GROUP BY a.lesson_id, l.title, l.series_id, series.title ORDER BY cost_fen DESC LIMIT 50`, [coverageSince, effectiveStart, end]),
   ]);
 
   let policy = {};
@@ -386,7 +394,7 @@ async function buildReconcile({ day }) {
     generatedAt: new Date().toISOString(),
     day,
     timezone: 'Asia/Shanghai',
-    range: { start, end },
+    range: { start: effectiveStart, dayStart: start, end },
     thresholds,
     totals,
     bySupplier: [...suppliers.values()].map((item) => ({
@@ -410,7 +418,18 @@ async function buildReconcile({ day }) {
 async function buildSnapshot({ windowKey, orgId, billingVisible }) {
   const buildStartedAt = Date.now();
   const minutes = WINDOWS[windowKey];
-  const since = sinceOf(minutes);
+  // 正式记账起点：比窗口起点更晚时，整个快照只统计起点之后的调用（从 0 开始）。
+  const baselineRow = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
+  let baselinePolicy = {};
+  try { baselinePolicy = JSON.parse(baselineRow?.ai_provider_policy || '{}') || {}; } catch { baselinePolicy = {}; }
+  const costBaselineAt = baselinePolicy.costBaselineAt && !Number.isNaN(Date.parse(baselinePolicy.costBaselineAt))
+    ? new Date(baselinePolicy.costBaselineAt).toISOString()
+    : null;
+  const accountingStartAt = baselinePolicy.accountingStartAt && !Number.isNaN(Date.parse(baselinePolicy.accountingStartAt))
+    ? new Date(baselinePolicy.accountingStartAt).toISOString()
+    : null;
+  const windowSince = sinceOf(minutes);
+  const since = accountingStartAt && accountingStartAt > windowSince ? accountingStartAt : windowSince;
   const seriesSince = since;
   const orgFilter = String(orgId || '').trim();
 
@@ -421,12 +440,6 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
   const activeSince = sinceOf(2 * 60);
 
   // 成本覆盖基线：配价完成后才算「应该知道成本」的调用；更早的历史无价调用不参与未知告警。
-  const baselineRow = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
-  let baselinePolicy = {};
-  try { baselinePolicy = JSON.parse(baselineRow?.ai_provider_policy || '{}') || {}; } catch { baselinePolicy = {}; }
-  const costBaselineAt = baselinePolicy.costBaselineAt && !Number.isNaN(Date.parse(baselinePolicy.costBaselineAt))
-    ? new Date(baselinePolicy.costBaselineAt).toISOString()
-    : null;
   const coverageSince = costBaselineAt && costBaselineAt > since ? costBaselineAt : since;
   const thresholds = await readAlertThresholds();
 
@@ -1068,7 +1081,14 @@ export async function handleMonitor(ctx, part, method) {
   if (suffix === '/reconcile/xkwuai' && method === 'GET') {
     if (!billingVisible) throw errors.forbidden('对账需要 AI 能力与价格权限', 'PERMISSION_DENIED', { permission: 'ADMIN_BILLING' });
     const { day, start, end } = reconcileDayRange(ctx.search.get('day'));
-    const items = await fetchXkwuaiLogs(Math.floor(Date.parse(start) / 1000), Math.floor(Date.parse(end) / 1000));
+    const policyRow = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
+    let policy = {};
+    try { policy = JSON.parse(policyRow?.ai_provider_policy || '{}') || {}; } catch { policy = {}; }
+    const accountingStartAt = policy.accountingStartAt && !Number.isNaN(Date.parse(policy.accountingStartAt))
+      ? new Date(policy.accountingStartAt).toISOString()
+      : null;
+    const effectiveStart = accountingStartAt && accountingStartAt > start ? accountingStartAt : start;
+    const items = await fetchXkwuaiLogs(Math.floor(Date.parse(effectiveStart) / 1000), Math.floor(Date.parse(end) / 1000));
     const actualFen = Math.round(items.reduce((sum, item) => sum + (xkwuaiQuotaToFen(item.quota) || 0), 0) * 10000) / 10000;
     const byModel = new Map();
     for (const item of items) {
@@ -1078,9 +1098,6 @@ export async function handleMonitor(ctx, part, method) {
       entry.actualFen += xkwuaiQuotaToFen(item.quota) || 0;
       byModel.set(model, entry);
     }
-    const policyRow = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
-    let policy = {};
-    try { policy = JSON.parse(policyRow?.ai_provider_policy || '{}') || {}; } catch { policy = {}; }
     const xkwuaiChannels = (policy.channels || [])
       .filter((channel) => String(channel.endpoint || '').toLowerCase().includes('xkwuai'));
     const channelIds = xkwuaiChannels.map((channel) => channel.id);
@@ -1093,7 +1110,7 @@ export async function handleMonitor(ctx, part, method) {
     // 账户级实付：xkwuai 钱包在当天首尾采样的差额（覆盖该账号所有调用，日志可能被上游清理）。
     const walletRows = await arows(`SELECT created_at, cny FROM monitor_wallet_samples
       WHERE source_id='xkwuai' AND ok=1 AND cny IS NOT NULL AND created_at>=? AND created_at<?
-      ORDER BY created_at`, [start, end]);
+      ORDER BY created_at`, [effectiveStart, end]);
     const firstWallet = walletRows[0] || null;
     const lastWallet = walletRows[walletRows.length - 1] || null;
     const walletDeltaFen = firstWallet && lastWallet && walletRows.length >= 2
@@ -1105,7 +1122,7 @@ export async function handleMonitor(ctx, part, method) {
       const row = await arow(`SELECT COUNT(*) calls,
           SUM(CASE WHEN status='SUCCESS' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) fen
         FROM compute_attempts WHERE created_at>=? AND created_at<? AND channel_id IN (${placeholders(channelIds)})`,
-        [start, end, ...channelIds]);
+        [effectiveStart, end, ...channelIds]);
       ourCalls = num(row?.calls);
       ourFen = Math.round(num(row?.fen) * 10000) / 10000;
       const sinceLog = firstLogAt && firstLogAt > start ? firstLogAt : start;

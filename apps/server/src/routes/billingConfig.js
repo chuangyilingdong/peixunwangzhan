@@ -128,6 +128,11 @@ function normalizeProviderPolicy(value) {
   const costBaselineAt = costBaselineRaw && !Number.isNaN(Date.parse(costBaselineRaw))
     ? new Date(costBaselineRaw).toISOString()
     : null;
+  // 正式记账起点（2026-11-04 用户口径）：这一刻之前的成本全部不算，监控/对账从 0 开始。
+  const accountingStartRaw = String(parsed.accountingStartAt || '').trim();
+  const accountingStartAt = accountingStartRaw && !Number.isNaN(Date.parse(accountingStartRaw))
+    ? new Date(accountingStartRaw).toISOString()
+    : null;
   const modalityOfChannel = (channelId) => {
     // ⚠️ 不能把主/备合并成一个对象再 find：同一个 key（VIDEO）会被后展开的主渠道覆盖，
     // 备用渠道永远查不到自己的模态 → 能力归一化按 '' 处理，时长/音频/输入方式被静默清空。
@@ -181,6 +186,7 @@ function normalizeProviderPolicy(value) {
     imageModeChannels, imageModeBackupChannels,
     imageQuality,
     costBaselineAt,
+    accountingStartAt,
     visionChannelId,
     modelDisplayNames,
     allowStudentExternalContent,

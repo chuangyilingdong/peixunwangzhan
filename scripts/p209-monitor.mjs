@@ -510,6 +510,18 @@ try {
   await check('对账：过去日期按今天返回（用户口径不要历史）', () => {
     assert.equal(reconPast.day, reconDay);
   });
+  // 正式记账起点：起点之后的调用才计入（这里设成未来 → 快照/对账都应为 0）
+  const accountingFuture = new Date(Date.now() + 60_000).toISOString();
+  await aq('UPDATE platform_settings SET ai_provider_policy=?,updated_at=? WHERE id=1', [JSON.stringify({ costBaselineAt: now, accountingStartAt: accountingFuture }), now]);
+  await new Promise((resolve) => setTimeout(resolve, 3200));
+  const zeroSnapshot = await call('/snapshot', { window: '60m' });
+  const zeroRecon = await call('/reconcile', { day: reconDay });
+  await check('会计起点：之前的调用不计入快照/对账', () => {
+    assert.equal(zeroSnapshot.usage.calls, 0);
+    assert.equal(zeroRecon.totals.calls, 0);
+  });
+  await aq('UPDATE platform_settings SET ai_provider_policy=?,updated_at=? WHERE id=1', [JSON.stringify({ costBaselineAt: now }), now]);
+
   const alertsHistory = await call('/alerts/history', { hours: 24 });
   await check('告警历史：返回阈值与事件列表', () => {
     assert.ok(alertsHistory.thresholds && typeof alertsHistory.thresholds === 'object');

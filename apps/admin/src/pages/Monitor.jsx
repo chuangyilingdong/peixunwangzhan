@@ -923,7 +923,7 @@ function ReconcileView({ api }) {
         <button type="button" className="monitor-btn" onClick={() => (day === today ? load(today) : setDay(today))}>今天</button>
         <button type="button" className="monitor-btn" onClick={() => load(day)} disabled={loading}>{loading ? '读取中…' : '刷新'}</button>
         <button type="button" className="monitor-btn" onClick={exportReconcile} disabled={!data}>导出 CSV</button>
-        <span className="monitor-control-note">成本口径：上游实报（REPORTED）优先；没有实报才按渠道成本价折算（COMPUTED）；都没有记未知，不按 0。</span>
+        <span className="monitor-control-note">成本口径：上游实报（REPORTED）优先；没有实报才按渠道成本价折算（COMPUTED）；都没有记未知，不按 0。正式记账起点 {data?.range?.start ? fmtTime(data.range.start) : '—'}。</span>
       </div>
       {error ? <div className="monitor-banner is-danger">对账读取失败：{error.message || '未知错误'}</div> : null}
       {data?.thresholds?.consumptionSpike !== null && data?.thresholds?.consumptionSpike !== undefined
