@@ -488,6 +488,10 @@ try {
     const supplier = recon.bySupplier.find((item) => item.key === 'runninghub-global');
     assert.equal(supplier?.costFen, 150);
   });
+  const reconPast = await call('/reconcile', { day: '2000-01-01' });
+  await check('对账：过去日期按今天返回（用户口径不要历史）', () => {
+    assert.equal(reconPast.day, reconDay);
+  });
   let reconForbidden = null;
   try { await call('/reconcile', { day: reconDay }, analyticsAuth); } catch (error) { reconForbidden = error; }
   await check('对账：没有 ADMIN_BILLING 时 403', () => {

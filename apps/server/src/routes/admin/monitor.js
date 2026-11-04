@@ -220,9 +220,9 @@ async function fetchErrorRows({ since, orgId = '', sessionId = '', userId = '', 
 /** 对账日：按北京时间切日（存储是 UTC ISO；中国无夏令时，直接 +08:00）。 */
 function reconcileDayRange(value) {
   const text = String(value || '').trim();
-  const day = /^\d{4}-\d{2}-\d{2}$/.test(text)
-    ? text
-    : new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+  const today = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+  // 用户口径：不要历史，从今天开始 —— 过去日期一律按今天返回（UI 也不给选）。
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(text) && text >= today ? text : today;
   const startMs = Date.parse(`${day}T00:00:00.000+08:00`);
   return { day, start: new Date(startMs).toISOString(), end: new Date(startMs + 24 * 3600_000).toISOString() };
 }

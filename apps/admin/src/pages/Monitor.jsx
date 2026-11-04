@@ -781,9 +781,27 @@ function ReconcileView({ api }) {
   };
   useEffect(() => { load(day); }, [day]);
 
-  const shiftDay = (offset) => {
-    const base = Date.parse(`${day}T00:00:00.000+08:00`);
-    setDay(new Date(base + offset * 86400_000 + 8 * 3600_000).toISOString().slice(0, 10));
+  const [todayYear, todayMonth, todayDate] = today.split('-').map(Number);
+  const [year, month, date] = day.split('-').map(Number);
+  // 只允许今天及以后（用户口径：以前的历史不要了，从今天开始）。
+  const years = [todayYear, todayYear + 1];
+  const months = year === todayYear
+    ? Array.from({ length: 12 - todayMonth + 1 }, (_, index) => todayMonth + index)
+    : Array.from({ length: 12 }, (_, index) => index + 1);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const firstDay = year === todayYear && month === todayMonth ? todayDate : 1;
+  const days = Array.from({ length: daysInMonth - firstDay + 1 }, (_, index) => firstDay + index);
+  const changeDayPart = (part, raw) => {
+    let y = year; let m = month; let d = date;
+    if (part === 'year') y = Number(raw);
+    if (part === 'month') m = Number(raw);
+    if (part === 'day') d = Number(raw);
+    // 换月/换年时先把日收进目标月份，避免 1/31 → 2 月溢出成 3/3。
+    if (part === 'year' || part === 'month') d = Math.min(d, new Date(Date.UTC(y, m, 0)).getUTCDate());
+    const minimum = Date.UTC(todayYear, todayMonth - 1, todayDate);
+    const picked = Math.max(Date.UTC(y, m - 1, d), minimum);
+    const next = new Date(picked);
+    setDay(`${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`);
   };
 
   const totals = data?.totals || {};
@@ -818,9 +836,20 @@ function ReconcileView({ api }) {
     <div className="monitor-card monitor-reconcile-head">
       <div className="monitor-card-title">对账 · 按北京时间日汇总 <span>供应商 / 模型 / 机构 / 课堂 / 学生</span></div>
       <div className="monitor-controls monitor-reconcile-controls">
-        <label>对账日（北京时间）<input type="date" value={day} onChange={(event) => setDay(event.target.value)} /></label>
+        <label>对账日（北京时间）
+          <span className="monitor-date-parts">
+            <select value={year} onChange={(event) => changeDayPart('year', event.target.value)}>
+              {years.map((item) => <option key={item} value={item}>{item} 年</option>)}
+            </select>
+            <select value={month} onChange={(event) => changeDayPart('month', event.target.value)}>
+              {months.map((item) => <option key={item} value={item}>{item} 月</option>)}
+            </select>
+            <select value={date} onChange={(event) => changeDayPart('day', event.target.value)}>
+              {days.map((item) => <option key={item} value={item}>{item} 日</option>)}
+            </select>
+          </span>
+        </label>
         <button type="button" className="monitor-btn" onClick={() => (day === today ? load(today) : setDay(today))}>今天</button>
-        <button type="button" className="monitor-btn" onClick={() => shiftDay(-1)}>昨天</button>
         <button type="button" className="monitor-btn" onClick={() => load(day)} disabled={loading}>{loading ? '读取中…' : '刷新'}</button>
         <span className="monitor-control-note">成本口径：上游实报（REPORTED）优先；没有实报才按渠道成本价折算（COMPUTED）；都没有记未知，不按 0。</span>
       </div>

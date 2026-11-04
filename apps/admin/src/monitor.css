@@ -198,7 +198,8 @@
 }
 .monitor-tabs button.is-active { color: var(--m-text); border-bottom-color: #7ee787; font-weight: 600; }
 .monitor-reconcile-head .monitor-controls { margin-top: 10px; }
-.monitor-reconcile-controls input[type="date"] {
+.monitor-date-parts { display: inline-flex; gap: 4px; margin-left: 6px; }
+.monitor-date-parts select {
   background: var(--m-panel); color: var(--m-text); border: 1px solid var(--m-border);
   border-radius: 6px; padding: 4px 8px; font-size: 12px;
 }
