@@ -1003,11 +1003,18 @@ export async function handleMonitor(ctx, part, method) {
     const hours = Math.min(168, Math.max(1, Number(ctx.search.get('hours')) || 24));
     const since = new Date(Date.now() - hours * 3600_000).toISOString();
     const thresholds = await readAlertThresholds();
+    const baselineRow = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
+    let baselinePolicy = {};
+    try { baselinePolicy = JSON.parse(baselineRow?.ai_provider_policy || '{}') || {}; } catch { baselinePolicy = {}; }
+    const costBaselineAt = baselinePolicy.costBaselineAt && !Number.isNaN(Date.parse(baselinePolicy.costBaselineAt))
+      ? new Date(baselinePolicy.costBaselineAt).toISOString()
+      : null;
+    const coverageSince = costBaselineAt && costBaselineAt > since ? costBaselineAt : since;
     const [rows, walletRows] = await Promise.all([
       arows(`SELECT substr(created_at,1,16) minute, COUNT(*) calls,
           SUM(CASE WHEN status='FAILED' AND NOT(COALESCE(error_message,'') LIKE '%内容安全%' OR COALESCE(error_message,'') LIKE '%Content security%') THEN 1 ELSE 0 END) failed,
-          SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
-        FROM compute_attempts WHERE created_at>=? GROUP BY minute ORDER BY minute`, [since]),
+          SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) AND created_at>=? THEN 1 ELSE 0 END) unknown_calls
+        FROM compute_attempts WHERE created_at>=? GROUP BY minute ORDER BY minute`, [coverageSince, since]),
       arows(`SELECT created_at, SUM(CASE WHEN ok=1 THEN cny ELSE 0 END) total, SUM(CASE WHEN ok=1 THEN 1 ELSE 0 END) okn
         FROM monitor_wallet_samples WHERE created_at>=? GROUP BY created_at ORDER BY created_at`, [since]),
     ]);
@@ -1071,6 +1078,15 @@ export async function handleMonitor(ctx, part, method) {
     const channelIds = (policy.channels || [])
       .filter((channel) => String(channel.endpoint || '').toLowerCase().includes('xkwuai'))
       .map((channel) => channel.id);
+    // 账户级实付：xkwuai 钱包在当天首尾采样的差额（覆盖该账号所有调用，日志可能被上游清理）。
+    const walletRows = await arows(`SELECT created_at, cny FROM monitor_wallet_samples
+      WHERE source_id='xkwuai' AND ok=1 AND cny IS NOT NULL AND created_at>=? AND created_at<?
+      ORDER BY created_at`, [start, end]);
+    const firstWallet = walletRows[0] || null;
+    const lastWallet = walletRows[walletRows.length - 1] || null;
+    const walletDeltaFen = firstWallet && lastWallet && walletRows.length >= 2
+      ? Math.round((Number(firstWallet.cny) - Number(lastWallet.cny)) * 100 * 10000) / 10000
+      : null;
     let ourFen = 0; let ourCalls = 0;
     if (channelIds.length) {
       const row = await arow(`SELECT COUNT(*) calls,
@@ -1088,6 +1104,10 @@ export async function handleMonitor(ctx, part, method) {
       diffFen: Math.round((ourFen - actualFen) * 10000) / 10000,
       logCount: items.length,
       ourCalls,
+      walletDeltaFen,
+      walletSamples: walletRows.length,
+      walletFirst: firstWallet ? Number(firstWallet.cny) : null,
+      walletLast: lastWallet ? Number(lastWallet.cny) : null,
       byModel: [...byModel.values()]
         .map((item) => ({ ...item, actualFen: Math.round(item.actualFen * 10000) / 10000 }))
         .sort((left, right) => right.actualFen - left.actualFen)
