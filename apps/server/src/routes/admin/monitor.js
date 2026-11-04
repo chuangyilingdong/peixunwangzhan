@@ -642,6 +642,36 @@ export async function handleMonitor(ctx, part, method) {
     return { generatedAt: new Date().toISOString(), since, ...result };
   }
 
+  if (suffix === '/export' && method === 'GET') {
+    if (!billingVisible) throw errors.forbidden('导出成本需要 AI 能力与价格权限', 'PERMISSION_DENIED', { permission: 'ADMIN_BILLING' });
+    const hours = Math.min(168, Math.max(1, Number(ctx.search.get('hours')) || 24));
+    const orgFilter = String(ctx.search.get('orgId') || '').trim();
+    const since = new Date(Date.now() - hours * 3600_000).toISOString();
+    const rows = await arows(`SELECT a.created_at, a.org_id, o.name org_name, a.class_session_id, s.title session_title,
+        a.user_id, u.display_name user_name, a.modality, a.channel_id, a.model, a.status, a.cost_source,
+        a.upstream_cost_fen, COALESCE(a.error_code,'') error_code, a.task_id
+      FROM compute_attempts a
+      LEFT JOIN organizations o ON o.id=a.org_id
+      LEFT JOIN users u ON u.id=a.user_id
+      LEFT JOIN class_sessions s ON s.id=a.class_session_id
+      WHERE a.created_at>=?${orgFilter ? ' AND a.org_id=?' : ''}
+      ORDER BY a.created_at DESC LIMIT 20000`, orgFilter ? [since, orgFilter] : [since]);
+    return {
+      generatedAt: new Date().toISOString(),
+      hours,
+      orgId: orgFilter || null,
+      rows: rows.map((row) => ({
+        createdAt: row.created_at, orgId: row.org_id || null, orgName: row.org_name || null,
+        sessionId: row.class_session_id || null, sessionTitle: row.session_title || null,
+        userId: row.user_id || null, userName: row.user_name || null,
+        modality: row.modality || null, channelId: row.channel_id || null, model: row.model || null,
+        status: row.status || null, costSource: row.cost_source || null,
+        costFen: row.upstream_cost_fen === null || row.upstream_cost_fen === undefined ? null : Number(row.upstream_cost_fen),
+        errorCode: row.error_code || null, taskId: row.task_id || null,
+      })),
+    };
+  }
+
   if (suffix === '/balance/history' && method === 'GET') {
     if (!billingVisible) throw errors.forbidden('余额属于 AI 能力与价格权限范围', 'PERMISSION_DENIED', { permission: 'ADMIN_BILLING' });
     return await getWalletHistory({ hours: ctx.search.get('hours') });

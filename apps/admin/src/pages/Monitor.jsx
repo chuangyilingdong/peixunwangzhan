@@ -145,6 +145,7 @@ export function Monitor({ api, user }) {
   const [orgId, setOrgId] = useState('');
   const [orgSearch, setOrgSearch] = useState('');
   const [paused, setPaused] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [tick, setTick] = useState(0);
   const [snapshot, setSnapshot] = useState(null);
   const [snapshotError, setSnapshotError] = useState(null);
@@ -241,11 +242,49 @@ export function Monitor({ api, user }) {
     .filter((item) => item.cny !== null && item.cny !== undefined)
     .map((item) => Number(item.cny));
   const orgKeyword = orgSearch.trim().toLowerCase();
+  // 有进行中课堂的机构排最前（绿点优先），同组内按名称排。
+  const sortedOrgs = [...orgs].sort((left, right) => {
+    const activeDiff = (Number(right.activeSessions) > 0 ? 1 : 0) - (Number(left.activeSessions) > 0 ? 1 : 0);
+    if (activeDiff) return activeDiff;
+    return String(left.name || '').localeCompare(String(right.name || ''), 'zh-CN');
+  });
   const filteredOrgs = orgKeyword
-    ? orgs.filter((org) => String(org.name || '').toLowerCase().includes(orgKeyword))
-    : orgs;
+    ? sortedOrgs.filter((org) => String(org.name || '').toLowerCase().includes(orgKeyword))
+    : sortedOrgs;
 
   const refreshNow = () => setTick((value) => value + 1);
+
+  const exportCsv = async () => {
+    if (!canBilling || exporting) return;
+    setExporting(true);
+    try {
+      const params = new URLSearchParams({ hours: '24' });
+      if (orgId) params.set('orgId', orgId);
+      const data = await api.get(`admin/dashboard/monitor/export?${params.toString()}`, { timeoutMs: 30000 });
+      const header = ['时间', '机构', '课堂', '学生', '模态', '渠道', '模型', '状态', '成本来源', '上游成本(分)', '错误码', '任务ID'];
+      const escape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+      const lines = [header.join(',')];
+      for (const row of data?.rows || []) {
+        lines.push([
+          row.createdAt, row.orgName, row.sessionTitle, row.userName, row.modality,
+          row.channelId, row.model, row.status, row.costSource,
+          row.costFen === null || row.costFen === undefined ? '' : row.costFen,
+          row.errorCode, row.taskId,
+        ].map(escape).join(','));
+      }
+      const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `monitor-attempts-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className={`monitor-page monitor-status-${status}`}>
@@ -263,6 +302,7 @@ export function Monitor({ api, user }) {
           </label>
           <button type="button" className="monitor-btn" onClick={() => setPaused((value) => !value)}>{paused ? '继续' : '暂停'}</button>
           <button type="button" className="monitor-btn" onClick={refreshNow}>刷新</button>
+          {canBilling ? <button type="button" className="monitor-btn" onClick={exportCsv} disabled={exporting} title="导出最近 24 小时调用明细（当前机构筛选生效）">{exporting ? '导出中…' : '导出 CSV'}</button> : null}
         </div>
       </header>
 

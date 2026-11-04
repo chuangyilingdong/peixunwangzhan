@@ -174,6 +174,12 @@ await check('快照：拦截原因按 fail_code 聚合', () => {
   assert.equal(snapshot.blockedReasons[0].count, 1);
   assert.equal(typeof snapshot.buildMs, 'number');
 });
+const exported = await call('/export', { hours: 24 });
+await check('导出：最近 24h 调用明细含成本与错误码', () => {
+  assert.ok(exported.rows.length >= 4);
+  assert.ok(exported.rows.some((row) => row.channelId === 'channel-runhub-img-main' && row.costFen === 300));
+  assert.ok(exported.rows.some((row) => row.errorCode === 'GENERATION_PROVIDER_AUTH_FAILED'));
+});
 await check('权限：只有 ADMIN_ANALYTICS 时不下发成本字段', async () => {
   const limited = await call('/snapshot', { window: '5m' }, analyticsAuth);
   assert.equal(limited.billingVisible, false);
@@ -355,6 +361,11 @@ try {
   await check('余额：没有 ADMIN_BILLING 时 403 PERMISSION_DENIED', () => {
     assert.equal(forbidden?.code, 'PERMISSION_DENIED');
     assert.equal(forbidden?.status, 403);
+  });
+  let exportForbidden = null;
+  try { await call('/export', {}, analyticsAuth); } catch (error) { exportForbidden = error; }
+  await check('导出：没有 ADMIN_BILLING 时 403', () => {
+    assert.equal(exportForbidden?.status, 403);
   });
   await check('余额：单次探测拒绝非 RunningHub 地址', async () => {
     const result = await probeRunningHubAccount({ endpoint: 'https://api.example.com/v1', apiKey: 'x' });
