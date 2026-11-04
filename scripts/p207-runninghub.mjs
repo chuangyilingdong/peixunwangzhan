@@ -31,7 +31,7 @@ process.env.AI_PROVIDER_SECRET_FILE = path.join(temp, 'secrets.json');
 process.env.PUBLIC_SITE_URL = SELF;
 
 const { runningHubProvider, runningHubSiteCurrency, reportedCostFromUsage } = await import('../apps/server/src/services/runningHubProvider.js');
-const { providerSelectionForModality } = await import('../apps/server/src/routes/aiGeneration.js');
+const { providerSelectionForModality, imageModeForGeneration } = await import('../apps/server/src/routes/aiGeneration.js');
 const { generationProviderInfo, getGenerationProvider, adaptOptionsToCandidate } = await import('../apps/server/src/services/generationProvider.js');
 const { RUNNINGHUB_FAMILIES, runningHubFamilyModality, runningHubModelCatalog } = await import('../apps/server/src/services/runningHubProvider.js');
 const submissions = new Map();
@@ -346,6 +346,36 @@ await check('图片按生成方式选路：文生图/图生图各走自己的渠
   assert.equal(i2i.backup.channelId, 'img-i2i-bak');
   // 没传 imageMode（老调用点）→ 仍是「图片」那条路由
   assert.equal(providerSelectionForModality(policy, 'IMAGE', '').channelId, 'img-t2i');
+});
+
+await check('图片·自动框体：按本次是否连参考图切文生图/图生图模型', async () => {
+  const policy = {
+    provider: 'custom', model: '', endpoint: '',
+    channels: [
+      { id: 'img-t2i', provider: 'runninghub', model: 'rhart-image-g-2.5-t2i', requestPaths: {} },
+      { id: 'img-i2i', provider: 'runninghub', model: 'rhart-image-g-2.5-i2i', requestPaths: {} },
+    ],
+    modalityChannels: { IMAGE: 'img-t2i' },
+    imageModeChannels: { TEXT: 'img-t2i', IMAGE_REFERENCE: 'img-i2i' },
+    modelRoutes: [],
+  };
+  const autoBox = { modality: 'IMAGE', inputMode: '' };
+  const ref = [{ type: 'IMAGE', url: 'https://cdn.example.com/a.png', nodeId: 'n1' }];
+  // 没连线 → 文生图 → 文生图渠道
+  assert.equal(imageModeForGeneration({ box: autoBox, referenceAssets: [] }), 'TEXT');
+  assert.equal(providerSelectionForModality(policy, 'IMAGE', '', {
+    imageMode: imageModeForGeneration({ box: autoBox, referenceAssets: [] }),
+  }).channelId, 'img-t2i');
+  // 连了图 → 图生图 → 图生图渠道
+  assert.equal(imageModeForGeneration({ box: autoBox, referenceAssets: ref }), 'IMAGE_REFERENCE');
+  assert.equal(providerSelectionForModality(policy, 'IMAGE', '', {
+    imageMode: imageModeForGeneration({ box: autoBox, referenceAssets: ref }),
+  }).channelId, 'img-i2i');
+  // 空引用（连线但源框体还没出图）不算参考 → 仍走文生图
+  assert.equal(imageModeForGeneration({ box: autoBox, referenceAssets: [{ type: 'IMAGE', url: '  ' }] }), 'TEXT');
+  // 框体锁了生成方式 → 锁优先，不因连线改道
+  assert.equal(imageModeForGeneration({ box: { inputMode: 'TEXT' }, referenceAssets: ref }), 'TEXT');
+  assert.equal(imageModeForGeneration({ box: { inputMode: 'IMAGE_REFERENCE' }, referenceAssets: [] }), 'IMAGE_REFERENCE');
 });
 
 await check('family → 模态：未路由渠道的「试一次」不再落回 TEXT', async () => {

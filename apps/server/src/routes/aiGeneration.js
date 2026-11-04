@@ -1142,7 +1142,7 @@ function auditContext(auth, ctx = null) {
  *   · 框体留空（自动/学生自选）→ 有没有参考图决定。
  * 参考图此刻还没解析成公网地址，但"有没有"已经够用；解析不出来会在后面单独报错。
  */
-function imageModeForGeneration({ box = null, referenceAssets = [] } = {}) {
+export function imageModeForGeneration({ box = null, referenceAssets = [] } = {}) {
   const locked = normalizeInputModeValue(box?.inputMode);
   if (locked === 'TEXT' || locked === 'IMAGE_REFERENCE') return locked;
   const hasReference = (Array.isArray(referenceAssets) ? referenceAssets : [])
