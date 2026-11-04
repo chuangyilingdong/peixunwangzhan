@@ -469,6 +469,7 @@ try {
   const recon = await call('/reconcile', { day: reconDay });
   await check('对账：北京时间日汇总机构/课堂/学生/模型/供应商', () => {
     assert.equal(recon.timezone, 'Asia/Shanghai');
+    assert.ok(Number.isFinite(recon.totals.unknownCalls) && recon.totals.unknownCalls >= 1, '总计未知笔数必须是数字');
     const org = recon.byOrg.find((item) => item.orgId === 'org_rec');
     assert.equal(org?.calls, 3);
     assert.equal(org?.costFen, 150);

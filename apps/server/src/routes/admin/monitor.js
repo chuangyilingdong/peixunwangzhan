@@ -293,7 +293,7 @@ async function buildReconcile({ day }) {
     models.push(item);
     totals.calls += item.calls; totals.success += item.success; totals.failed += item.failed;
     totals.costFen += item.costFen; totals.reportedFen += item.reportedFen;
-    totals.computedFen += item.computedFen; totals.unknownCalls += item.unknown_calls;
+    totals.computedFen += item.computedFen; totals.unknownCalls += item.unknownCalls;
     const agg = suppliers.get(supplier.key) || { key: supplier.key, label: supplier.label, calls: 0, costFen: 0, reportedFen: 0, computedFen: 0, unknownCalls: 0 };
     agg.calls += item.calls; agg.costFen += item.costFen; agg.reportedFen += item.reportedFen;
     agg.computedFen += item.computedFen; agg.unknownCalls += item.unknownCalls;
