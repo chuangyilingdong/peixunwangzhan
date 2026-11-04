@@ -6,7 +6,10 @@
  *   · RunningHub 两个站是同一套 `POST /uc/openapi/accountStatus`，差别只在站点和 Key；
  *   · xkwuai 是 New API 类中转站：访问令牌调 `GET /api/user/self` 取 quota，
  *     `quota_per_unit`（默认 500000）把 quota 换成美元；
- *   · 美元统一按 **1 USD = 7.2 元** 折算成人民币展示，同时保留原币金额；
+ *   · 美元口径分两类（2026-11-04 用户确认）：
+ *     - RunningHub 全球站是真美元，按 **1 USD = 7.2 元** 折算；
+ *     - xkwuai 虽然显示 USD，但站内按人民币 1:1 计价，**不乘 7.2**（amount 即人民币）；
+ *   · 原币金额始终保留，cny 是展示用的人民币口径；
  *   · Key/令牌存在 provider-secrets 的 `wallet-runninghub-cn` / `wallet-xkwuai`，
  *     永不回显、永不进日志；未配置时如实返回「未配置」而不是 0；
  *   · 60 秒缓存：监控页 5 秒轮询，不能每 5 秒打三家上游。
@@ -185,7 +188,8 @@ async function loadWallets({ runningHub }) {
     reason: xkwuai ? undefined : 'NOT_CONFIGURED',
     amount: numberOrNull(xkwuai?.amount),
     currency: xkwuai?.currency || null,
-    cny: xkwuai?.ok ? toCny(xkwuai.amount, xkwuai.currency) : null,
+    // xkwuai 的 USD 是站内计价单位，按人民币 1:1 记（用户口径）
+    cny: xkwuai?.ok ? numberOrNull(xkwuai.amount) : null,
     quota: numberOrNull(xkwuai?.quota),
     usedQuota: numberOrNull(xkwuai?.usedQuota),
     userName: xkwuai?.userName || null,

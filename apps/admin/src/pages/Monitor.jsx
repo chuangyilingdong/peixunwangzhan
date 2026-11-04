@@ -266,7 +266,7 @@ export function Monitor({ api, user }) {
 
       {canBilling ? (
         <div className="monitor-card monitor-wallets">
-          <div className="monitor-card-title">供应商钱包 <span>USD 按 1 : {fxRate} 折算 · 60 秒缓存</span></div>
+          <div className="monitor-card-title">供应商钱包 <span>RH 全球 USD ×{fxRate} · xkwuai 按人民币 1:1 · 60 秒缓存</span></div>
           <div className="monitor-table-wrap">
             <table>
               <thead><tr><th>站点</th><th>余额</th><th>折合人民币</th><th>状态</th></tr></thead>

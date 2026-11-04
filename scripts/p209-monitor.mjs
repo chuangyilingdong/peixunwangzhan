@@ -7,7 +7,8 @@
  *   ③ 错误流四源合并（attempt / usage / job / vibecoding）+ 按 jobId 去重 + 主备切换降级；
  *   ④ 权限：ADMIN_ANALYTICS 看得到监控，但**看不到**成本/余额字段；余额接口 403。
  * 另外用 fetch stub 验证 RunningHub accountStatus 映射（remainMoney/currency/remainCoins）
- * 和 60 秒缓存（第二次不再打上游）；供应商钱包三家并出、xkwuai quota→USD、USD 按 7.2 折算。
+ * 和 60 秒缓存（第二次不再打上游）；供应商钱包三家并出、xkwuai quota→USD 且按人民币 1:1、
+ * RunningHub 全球站 USD 按 7.2 折算。
  *
  * 跑法：node scripts/p209-monitor.mjs
  */
@@ -233,7 +234,7 @@ try {
   setProviderApiKey(JSON.stringify({ token: 'xk-test-token', userId: '7' }), 'wallet-xkwuai');
   resetWalletBalanceCache();
   const wallets = await getWalletBalances({ refresh: true, runningHub: balance });
-  await check('钱包：三家并出，CN 原币、xkwuai quota→USD 5、USD 按 7.2 折算', () => {
+  await check('钱包：三家并出，CN 原币、xkwuai quota→USD 5 且按人民币 1:1、RH 全球 USD×7.2', () => {
     const byId = Object.fromEntries(wallets.sources.map((item) => [item.id, item]));
     assert.equal(wallets.fx.usdCny, 7.2);
     assert.deepEqual(Object.keys(byId).sort(), ['runninghub-cn', 'runninghub-global', 'xkwuai']);
@@ -244,7 +245,7 @@ try {
     assert.equal(byId['runninghub-cn'].cny, 720);
     assert.equal(byId['xkwuai'].ok, true);
     assert.equal(byId['xkwuai'].amount, 5);
-    assert.equal(byId['xkwuai'].cny, 36);
+    assert.equal(byId['xkwuai'].cny, 5);
   });
 
   const usdWallets = await getWalletBalances({ refresh: true, runningHub: { accounts: [{ ok: true, amount: 15.009, currency: 'USD', currencyLike: 'USD' }] } });
