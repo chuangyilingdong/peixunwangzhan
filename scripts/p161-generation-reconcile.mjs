@@ -57,7 +57,7 @@ await run(['packages/database/src/seed.js']);
 
 const { aq, arow } = await import('../packages/database/src/store.js');
 const { setProviderApiKey } = await import('../apps/server/src/services/providerSecret.js');
-const { reconcileStrandedGenerations } = await import('../apps/server/src/routes/aiGeneration.js');
+const { reconcileStrandedGenerations, syncTerminalJobAttempts, closeOrphanedAttempts } = await import('../apps/server/src/routes/aiGeneration.js');
 // ⚠️ 没配 key 时 providerConfig 判 invalid → 退回 unavailableProvider（它**没有** queryTask）→
 //    对账会报 UNSUPPORTED。所以夹具必须给这个渠道一把 key（假上游不看它，但装配链路要它）。
 setProviderApiKey('p161-fake-key', 'p161-main');
@@ -203,6 +203,38 @@ const [sweepA, sweepB] = await Promise.all([
 const busy = [sweepA, sweepB].filter((item) => item.skipped === 'BUSY');
 check('⑥ 两轮里有一轮被判 BUSY 跳过', busy.length === 1, JSON.stringify([sweepA.skipped || sweepA.scanned, sweepB.skipped || sweepB.scanned]));
 check('⑥ 跑起来的那一轮照常扫到候选', [sweepA, sweepB].some((item) => item.scanned >= 1), JSON.stringify([sweepA, sweepB]));
+
+/* ────────── ⑦ 卡住任务：任务已收尾的 attempt 同步 + 孤儿超时关闭 ────────── */
+console.log('\n⑦ 任务已收尾但 attempt 还挂着 → 同步；无 job 的超时孤儿 → 按放弃关闭');
+const baseJob = await arow('SELECT org_id, user_id, project_id FROM generation_jobs WHERE id=?', [jobId]);
+const insertJob = (id, status, errorCode = null, completedAt = null) => aq(
+  `INSERT INTO generation_jobs(id,org_id,user_id,project_id,modality,provider,model,prompt,status,error_code,error_message,created_at,completed_at)
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  [id, baseJob.org_id, baseJob.user_id, baseJob.project_id, 'IMAGE', 'runninghub', 'rhart-image-g-2.5-t2i', 'p',
+    status, errorCode, errorCode ? '测试' : null, new Date().toISOString(), completedAt],
+);
+const insertAttempt = (id, jobId, status, createdAt = new Date().toISOString()) => aq(
+  `INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,generation_job_id,modality,channel_id,provider,model,routed_via,status,task_id,cost_source,upstream_cost_fen,sale_price_fen,sale_snapshot,error_code,error_message,class_session_id,created_at,completed_at)
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  [id, `call_${id}`, 1, null, null, jobId, 'IMAGE', 'ch-sweep', 'runninghub', 'rhart-image-g-2.5-t2i',
+    'direct', status, null, 'UNKNOWN', null, 0, '{}', null, null, null, createdAt, null],
+);
+await insertJob('job_sweep_succ', 'SUCCEEDED', null, new Date().toISOString());
+await insertAttempt('att_sweep_succ', 'job_sweep_succ', 'SUBMITTED');
+await insertJob('job_sweep_fail', 'FAILED', 'GENERATION_INTERRUPTED', new Date().toISOString());
+await insertAttempt('att_sweep_fail', 'job_sweep_fail', 'RUNNING');
+await insertJob('job_sweep_live', 'RUNNING');
+await insertAttempt('att_sweep_live', 'job_sweep_live', 'RUNNING');
+await insertAttempt('att_sweep_orphan', null, 'RUNNING', new Date(Date.now() - 3 * 3600_000).toISOString());
+const synced = await syncTerminalJobAttempts();
+const closed = await closeOrphanedAttempts();
+check('⑦ 同步了任务已收尾的 attempt', synced >= 2, `synced=${synced}`);
+check('⑦ 成功的 attempt 变 SUCCESS', (await arow('SELECT status FROM compute_attempts WHERE id=?', ['att_sweep_succ']))?.status === 'SUCCESS');
+check('⑦ 失败的 attempt 变 FAILED 且带 job 错误码',
+  (await arow('SELECT status,error_code FROM compute_attempts WHERE id=?', ['att_sweep_fail']))?.error_code === 'GENERATION_INTERRUPTED');
+check('⑦ 还在跑的 job/attempt 不动', (await arow('SELECT status FROM compute_attempts WHERE id=?', ['att_sweep_live']))?.status === 'RUNNING');
+check('⑦ 无 job 的超时孤儿按放弃关闭',
+  closed >= 1 && (await arow('SELECT status,error_code FROM compute_attempts WHERE id=?', ['att_sweep_orphan']))?.error_code === 'GENERATION_STALE_ABANDONED');
 
 await new Promise((resolve) => { upstream.closeAllConnections?.(); upstream.close(resolve); });
 

@@ -283,9 +283,11 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
       WHERE s.status='ACTIVE' AND (?='' OR s.org_id=?)
       ORDER BY s.started_at DESC LIMIT ?`, [orgFilter, orgFilter, MAX_SESSIONS]),
     // 卡住任务：只看最近 6 小时内、已超过 15 分钟还没收尾的 —— 历史遗留的脏 attempt 不算。
-    arows(`SELECT id, modality, model, channel_id, status, created_at FROM compute_attempts
-        WHERE status IN ('RUNNING','SUBMITTED') AND created_at>=? AND created_at<?
-        ORDER BY created_at ASC LIMIT 20`, [stuckSince, stuckBefore]),
+    arows(`SELECT a.id, a.modality, a.model, a.channel_id, a.status, a.created_at
+        FROM compute_attempts a LEFT JOIN generation_jobs j ON j.id=a.generation_job_id
+        WHERE a.status IN ('RUNNING','SUBMITTED') AND a.created_at>=? AND a.created_at<?
+          AND (a.generation_job_id IS NULL OR j.status IN ('QUEUED','RUNNING'))
+        ORDER BY a.created_at ASC LIMIT 20`, [stuckSince, stuckBefore]),
     arows(`SELECT id, modality, model, status, created_at FROM generation_jobs
         WHERE status IN ('QUEUED','RUNNING') AND created_at>=? AND created_at<?
         ORDER BY created_at ASC LIMIT 20`, [stuckSince, stuckBefore]),

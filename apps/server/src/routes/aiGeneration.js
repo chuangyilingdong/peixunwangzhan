@@ -563,6 +563,63 @@ export async function interruptOwnJobsOnShutdown() {
   catch (error) { console.error('[GENERATION SHUTDOWN ERROR]', error); return 0; }
 }
 
+/**
+ * 把「generation_jobs 已收尾、compute_attempts 还挂着」的行同步掉。
+ *
+ * 为什么会有：成功 / 失败 / 中断 / 对账几条路径都只改 generation_jobs；
+ * attempt 停在 RUNNING/SUBMITTED，监控台就会一直显示「卡住任务」。
+ * 这里只同步 job 已到终态的（SUCCEEDED/FAILED），真正在跑的（QUEUED/RUNNING）不动。
+ */
+export async function syncTerminalJobAttempts({ limit = 500 } = {}) {
+  const rows = await arows(`SELECT a.id, j.status job_status, j.error_code job_error, j.completed_at
+      FROM compute_attempts a
+      JOIN generation_jobs j ON j.id = a.generation_job_id
+      WHERE a.status IN ('RUNNING','SUBMITTED') AND j.status IN ('SUCCEEDED','FAILED')
+      LIMIT ?`, [limit]);
+  for (const row of rows) {
+    if (row.job_status === 'SUCCEEDED') {
+      await aq(`UPDATE compute_attempts SET status='SUCCESS', completed_at=COALESCE(completed_at,?)
+          WHERE id=? AND status IN ('RUNNING','SUBMITTED')`, [row.completed_at || nowIso(), row.id]);
+    } else {
+      await aq(`UPDATE compute_attempts SET status='FAILED', completed_at=COALESCE(completed_at,?),
+          error_code=COALESCE(error_code,?), error_message=COALESCE(error_message,?)
+          WHERE id=? AND status IN ('RUNNING','SUBMITTED')`,
+      [row.completed_at || nowIso(), row.job_error || 'GENERATION_FAILED', '任务已收尾（与 generation_jobs 同步）', row.id]);
+    }
+  }
+  return rows.length;
+}
+
+/**
+ * 没有 generation_job 的孤儿 attempt：超过 2 小时还在 RUNNING/SUBMITTED 的按放弃收掉。
+ * 有 job 的不在这里管（job 还开着的说明真在跑；已收尾的由上面的 sync 处理）。
+ */
+export async function closeOrphanedAttempts({ olderThanMs = 2 * 3600_000, limit = 200 } = {}) {
+  const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+  const rows = await arows(`SELECT id FROM compute_attempts
+      WHERE status IN ('RUNNING','SUBMITTED') AND generation_job_id IS NULL AND created_at < ?
+      LIMIT ?`, [cutoff, limit]);
+  for (const row of rows) {
+    await aq(`UPDATE compute_attempts SET status='FAILED', completed_at=?,
+        error_code='GENERATION_STALE_ABANDONED', error_message='长时间没有任务收尾，按放弃处理'
+        WHERE id=? AND status IN ('RUNNING','SUBMITTED')`, [nowIso(), row.id]);
+  }
+  return rows.length;
+}
+
+/** 收尾同步 + 孤儿清理；失败只打日志，不影响生成主流程。 */
+export async function sweepStaleAttempts(log = null) {
+  try {
+    const synced = await syncTerminalJobAttempts();
+    const closed = await closeOrphanedAttempts();
+    if (synced || closed) (log || console.log)(`[ATTEMPT SWEEP] 同步 ${synced} 条任务收尾、关闭 ${closed} 条孤儿调用`);
+    return { synced, closed };
+  } catch (error) {
+    console.error('[ATTEMPT SWEEP ERROR]', error);
+    return { synced: 0, closed: 0 };
+  }
+}
+
 export async function initializeAsyncGenerationQueue() {
   const now = nowIso();
   console.log(`[生成队列] 并发 ${ASYNC_GENERATION_CONCURRENCY} 路，其中视频最多 ${ASYNC_GENERATION_CONCURRENCY - ASYNC_GENERATION_RESERVED_LIGHT} 路（为图片/文本/音乐预留 ${ASYNC_GENERATION_RESERVED_LIGHT} 路；AI_GENERATION_CONCURRENCY / AI_GENERATION_RESERVED_LIGHT 可覆盖）`);
@@ -571,6 +628,8 @@ export async function initializeAsyncGenerationQueue() {
   if (interrupted) console.warn(`[生成队列] 回收了 ${interrupted} 条被中断的生成任务（服务重启，上游结果未知）`);
   // 租约兜底保留：崩溃重启（没走关服钩子）时它照样会把老任务收掉。
   await aq("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code='UPSTREAM_OUTCOME_UNKNOWN',error_message='执行中断，上游结果未知；请核查后人工处理',completed_at=? WHERE status='RUNNING' AND (started_at IS NULL OR started_at < ?)", [now, new Date(Date.now() - ASYNC_RUNNING_LEASE_MS).toISOString()]);
+  // 启动时先把「任务已收尾、attempt 还挂着」的历史行同步掉（监控台不再误报卡住）。
+  await sweepStaleAttempts();
   for (const { id: jobId } of (await arows("SELECT id FROM generation_jobs WHERE status='QUEUED' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at", [now]))) { await enqueuePersistedJob(jobId); };
   // ⭐ 2026-11-01（B2）：后台归档队列。先把上次被中断（进程被杀时停在 ARCHIVING）的认领收回，
   //    再启动循环 —— 不收回的话那些行永远停在 ARCHIVING，而认领只认 PENDING，学生就一直拿上游地址。
@@ -757,6 +816,8 @@ async function runReconcileSweep({ jobIds, limit, minAgeMs, maxAgeMs, dryRun, lo
 // 对账定时器：每 3 分钟看一眼「已受理但被判失败」的任务。
 // ⚠️ `unref()`：不能因为它把进程吊住（验收脚本会 in-process import 这个模块，见 p161）。
 const reconcileTimer = setInterval(() => {
+  // 先同步「任务已收尾、attempt 还挂着」的行，再做上游对账。
+  void sweepStaleAttempts((message) => console.log(message));
   reconcileStrandedGenerations({ limit: 10, log: (message) => console.log(message) })
     .then((outcome) => { if (outcome.results.length) console.log(`[RECONCILE] 本轮扫了 ${outcome.scanned} 条`); })
     .catch((error) => console.error('[RECONCILE ERROR]', error));
