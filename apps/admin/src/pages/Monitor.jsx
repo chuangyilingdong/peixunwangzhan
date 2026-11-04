@@ -145,6 +145,7 @@ export function Monitor({ api, user }) {
   const [orgId, setOrgId] = useState('');
   const [orgSearch, setOrgSearch] = useState('');
   const [paused, setPaused] = useState(false);
+  const [view, setView] = useState('live');
   const [exporting, setExporting] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState([]);
   const [tick, setTick] = useState(0);
@@ -382,6 +383,12 @@ export function Monitor({ api, user }) {
         </div>
       </header>
 
+      <div className="monitor-tabs">
+        <button type="button" className={view === 'live' ? 'is-active' : ''} onClick={() => setView('live')}>实时监控</button>
+        {canBilling ? <button type="button" className={view === 'reconcile' ? 'is-active' : ''} onClick={() => setView('reconcile')}>对账</button> : null}
+      </div>
+
+      {view === 'reconcile' ? <ReconcileView api={api} /> : <>
       {snapshotError ? <div className="monitor-banner is-danger">监控数据读取失败：{snapshotError.message || '未知错误'}（显示上一次数据）</div> : null}
 
       {visibleAlerts.length ? <div className="monitor-alerts">
@@ -735,6 +742,108 @@ export function Monitor({ api, user }) {
           </> : null}
         </aside>
       </> : null}
+      </>}
     </div>
   );
+}
+
+function ReconcileTable({ title, rows, columns, empty = '这一天没有数据' }) {
+  return <section className="monitor-card">
+    <div className="monitor-card-title">{title}</div>
+    <div className="monitor-table-wrap"><table>
+      <thead><tr>{columns.map((column) => <th key={column.key}>{column.label}</th>)}</tr></thead>
+      <tbody>
+        {rows.map((row, index) => <tr key={row.id || row.sessionId || row.userId || row.orgId || `${row.model}:${index}`}>
+          {columns.map((column) => <td key={column.key}>{column.render ? column.render(row) : row[column.key]}</td>)}
+        </tr>)}
+        {!rows.length ? <tr><td colSpan={columns.length} className="monitor-empty">{empty}</td></tr> : null}
+      </tbody>
+    </table></div>
+  </section>;
+}
+
+function ReconcileView({ api }) {
+  const today = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+  const [day, setDay] = useState(today);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const load = async (target) => {
+    setLoading(true); setError(null);
+    try {
+      setData(await api.get('admin/dashboard/monitor/reconcile', { day: target, timeoutMs: 20000 }));
+    } catch (requestError) {
+      setError(requestError);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { load(day); }, [day]);
+
+  const shiftDay = (offset) => {
+    const base = Date.parse(`${day}T00:00:00.000+08:00`);
+    setDay(new Date(base + offset * 86400_000 + 8 * 3600_000).toISOString().slice(0, 10));
+  };
+
+  const totals = data?.totals || {};
+  const money = (fen) => fmtYuan(fen);
+  const muted = (text) => <span className="monitor-muted">{text}</span>;
+
+  const supplierColumns = [
+    { key: 'label', label: '供应商', render: (row) => <strong>{row.label}</strong> },
+    { key: 'calls', label: '调用' },
+    { key: 'costFen', label: '成本', render: (row) => money(row.costFen) },
+    { key: 'reportedFen', label: '上游实报', render: (row) => money(row.reportedFen) },
+    { key: 'computedFen', label: '按价目折算', render: (row) => money(row.computedFen) },
+    { key: 'unknownCalls', label: '未知' },
+  ];
+  const modelColumns = [
+    { key: 'model', label: '模型', render: (row) => <><strong>{row.model}</strong>{muted(row.supplierLabel || '')}</> },
+    { key: 'modality', label: '类型' },
+    { key: 'calls', label: '调用' },
+    { key: 'costFen', label: '成本', render: (row) => money(row.costFen) },
+    { key: 'reportedFen', label: '上游实报', render: (row) => money(row.reportedFen) },
+    { key: 'computedFen', label: '按价目折算', render: (row) => money(row.computedFen) },
+    { key: 'unknownCalls', label: '未知' },
+  ];
+  const nameColumns = (label, nameKey, extraKey) => [
+    { key: nameKey, label, render: (row) => <><strong>{row[nameKey] || '—'}</strong>{extraKey && row[extraKey] ? muted(row[extraKey]) : null}</> },
+    { key: 'calls', label: '调用' },
+    { key: 'costFen', label: '成本', render: (row) => money(row.costFen) },
+    { key: 'unknownCalls', label: '未知' },
+  ];
+
+  return <>
+    <div className="monitor-card monitor-reconcile-head">
+      <div className="monitor-card-title">对账 · 按北京时间日汇总 <span>供应商 / 模型 / 机构 / 课堂 / 学生</span></div>
+      <div className="monitor-controls monitor-reconcile-controls">
+        <label>对账日（北京时间）<input type="date" value={day} onChange={(event) => setDay(event.target.value)} /></label>
+        <button type="button" className="monitor-btn" onClick={() => (day === today ? load(today) : setDay(today))}>今天</button>
+        <button type="button" className="monitor-btn" onClick={() => shiftDay(-1)}>昨天</button>
+        <button type="button" className="monitor-btn" onClick={() => load(day)} disabled={loading}>{loading ? '读取中…' : '刷新'}</button>
+        <span className="monitor-control-note">成本口径：上游实报（REPORTED）优先；没有实报才按渠道成本价折算（COMPUTED）；都没有记未知，不按 0。</span>
+      </div>
+      {error ? <div className="monitor-banner is-danger">对账读取失败：{error.message || '未知错误'}</div> : null}
+      {!data && loading ? <div className="monitor-empty">读取中…</div> : null}
+    </div>
+
+    {data ? <>
+      <div className="monitor-kpis">
+        <Kpi label="当日总成本" value={money(totals.costFen)} hint={`上游实报 ${money(totals.reportedFen)} · 折算 ${money(totals.computedFen)}`} />
+        <Kpi label="调用" value={totals.calls ?? 0} hint={`成功 ${totals.success ?? 0} · 失败 ${totals.failed ?? 0}`} />
+        <Kpi label="未知成本" value={totals.unknownCalls ?? 0} hint={`占成功 ${totals.unknownRate ?? '—'}%`} tone={(totals.unknownCalls || 0) > 0 ? 'warning' : 'default'} />
+        <Kpi label="供应商" value={data.bySupplier?.length ?? 0} hint="按渠道归到实际付款账户" />
+      </div>
+      <ReconcileTable title="按供应商" rows={data.bySupplier || []} columns={supplierColumns} />
+      <ReconcileTable title="按模型" rows={data.byModel || []} columns={modelColumns} />
+      <ReconcileTable title="按机构" rows={data.byOrg || []} columns={nameColumns('机构', 'name')} />
+      <ReconcileTable title="按课堂" rows={data.bySession || []} columns={nameColumns('课堂', 'title', 'orgName')} />
+      <ReconcileTable title="按学生" rows={data.byStudent || []} columns={nameColumns('学生', 'name', 'orgName')} />
+      <div className="monitor-muted monitor-reconcile-note">
+        RunningHub LLM（备用文本）没有逐笔账单接口，成本按上面配置的峰谷价折算（COMPUTED），可用国内站钱包余额变化做总量核对；
+        xkwuai 有逐笔账单（quota ÷ 500000 = 元），可按 request_id 对账。
+      </div>
+    </> : null}
+  </>;
 }

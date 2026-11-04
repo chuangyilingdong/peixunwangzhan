@@ -217,6 +217,114 @@ async function fetchErrorRows({ since, orgId = '', sessionId = '', userId = '', 
 
 // ── 快照 ────────────────────────────────────────────────────────────────────
 
+/** 对账日：按北京时间切日（存储是 UTC ISO；中国无夏令时，直接 +08:00）。 */
+function reconcileDayRange(value) {
+  const text = String(value || '').trim();
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(text)
+    ? text
+    : new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+  const startMs = Date.parse(`${day}T00:00:00.000+08:00`);
+  return { day, start: new Date(startMs).toISOString(), end: new Date(startMs + 24 * 3600_000).toISOString() };
+}
+
+/** 渠道 → 供应商（按 endpoint 认，认不出就用渠道名）。对账表按这个维度汇总。 */
+function supplierResolver(policy) {
+  const channels = Array.isArray(policy?.channels) ? policy.channels : [];
+  return (channelId) => {
+    const channel = channels.find((item) => item.id === channelId);
+    const endpoint = String(channel?.endpoint || '').toLowerCase();
+    if (endpoint.includes('xkwuai')) return { key: 'xkwuai', label: '星空无穷（xkwuai）' };
+    if (endpoint.includes('runninghub.cn')) return { key: 'runninghub-cn', label: 'RunningHub 国内站' };
+    if (endpoint.includes('runninghub.ai')) return { key: 'runninghub-global', label: 'RunningHub 全球站' };
+    return { key: channelId || 'unknown', label: channel?.name || channelId || '未标记渠道' };
+  };
+}
+
+async function buildReconcile({ day }) {
+  const { start, end } = reconcileDayRange(day);
+  const [policyRow, costRows, orgRows, sessionRows, studentRows] = await Promise.all([
+    arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1'),
+    arows(`SELECT channel_id, model, modality, COUNT(*) calls,
+        SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) success,
+        SUM(CASE WHEN status IN ('FAILED','BLOCKED') THEN 1 ELSE 0 END) failed,
+        SUM(CASE WHEN status='SUCCESS' AND cost_source='REPORTED' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) reported_fen,
+        SUM(CASE WHEN status='SUCCESS' AND cost_source='COMPUTED' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) computed_fen,
+        SUM(CASE WHEN status='SUCCESS' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) cost_fen,
+        SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
+      FROM compute_attempts WHERE created_at>=? AND created_at<? GROUP BY channel_id, model, modality`, [start, end]),
+    arows(`SELECT a.org_id, COALESCE(o.name,a.org_id) name, COUNT(*) calls,
+        SUM(CASE WHEN a.status='SUCCESS' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) cost_fen,
+        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
+      FROM compute_attempts a LEFT JOIN organizations o ON o.id=a.org_id
+      WHERE a.created_at>=? AND a.created_at<? AND a.org_id IS NOT NULL GROUP BY a.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [start, end]),
+    arows(`SELECT a.class_session_id, COALESCE(s.title,'未命名课堂') title, s.org_id, o.name org_name, COUNT(*) calls,
+        SUM(CASE WHEN a.status='SUCCESS' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) cost_fen,
+        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
+      FROM compute_attempts a LEFT JOIN class_sessions s ON s.id=a.class_session_id LEFT JOIN organizations o ON o.id=s.org_id
+      WHERE a.created_at>=? AND a.created_at<? AND a.class_session_id IS NOT NULL
+      GROUP BY a.class_session_id, s.title, s.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [start, end]),
+    arows(`SELECT a.user_id, COALESCE(u.display_name,a.user_id) name, u.org_id, o.name org_name, COUNT(*) calls,
+        SUM(CASE WHEN a.status='SUCCESS' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) cost_fen,
+        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
+      FROM compute_attempts a LEFT JOIN users u ON u.id=a.user_id LEFT JOIN organizations o ON o.id=u.org_id
+      WHERE a.created_at>=? AND a.created_at<? AND a.user_id IS NOT NULL
+      GROUP BY a.user_id, u.display_name, u.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [start, end]),
+  ]);
+
+  let policy = {};
+  try { policy = JSON.parse(policyRow?.ai_provider_policy || '{}') || {}; } catch { policy = {}; }
+  const supplierOf = supplierResolver(policy);
+
+  const totals = { calls: 0, success: 0, failed: 0, costFen: 0, reportedFen: 0, computedFen: 0, unknownCalls: 0 };
+  const suppliers = new Map();
+  const models = [];
+  for (const row of costRows) {
+    const supplier = supplierOf(row.channel_id);
+    const item = {
+      channelId: row.channel_id || null,
+      model: row.model || '—',
+      modality: row.modality || '',
+      supplierKey: supplier.key,
+      supplierLabel: supplier.label,
+      calls: num(row.calls), success: num(row.success), failed: num(row.failed),
+      costFen: num(row.cost_fen), reportedFen: num(row.reported_fen), computedFen: num(row.computed_fen),
+      unknownCalls: num(row.unknown_calls),
+    };
+    models.push(item);
+    totals.calls += item.calls; totals.success += item.success; totals.failed += item.failed;
+    totals.costFen += item.costFen; totals.reportedFen += item.reportedFen;
+    totals.computedFen += item.computedFen; totals.unknownCalls += item.unknown_calls;
+    const agg = suppliers.get(supplier.key) || { key: supplier.key, label: supplier.label, calls: 0, costFen: 0, reportedFen: 0, computedFen: 0, unknownCalls: 0 };
+    agg.calls += item.calls; agg.costFen += item.costFen; agg.reportedFen += item.reportedFen;
+    agg.computedFen += item.computedFen; agg.unknownCalls += item.unknownCalls;
+    suppliers.set(supplier.key, agg);
+  }
+  const money = (fen) => Math.round(Number(fen || 0) * 10000) / 10000;
+  totals.costFen = money(totals.costFen);
+  totals.reportedFen = money(totals.reportedFen);
+  totals.computedFen = money(totals.computedFen);
+  totals.unknownRate = pct(totals.unknownCalls, totals.success);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    day,
+    timezone: 'Asia/Shanghai',
+    range: { start, end },
+    totals,
+    bySupplier: [...suppliers.values()].map((item) => ({
+      ...item,
+      costFen: money(item.costFen), reportedFen: money(item.reportedFen), computedFen: money(item.computedFen),
+      unknownRate: pct(item.unknownCalls, item.calls),
+    })).sort((a, b) => b.costFen - a.costFen),
+    byModel: models.map((item) => ({
+      ...item, costFen: money(item.costFen), reportedFen: money(item.reportedFen), computedFen: money(item.computedFen),
+    })).sort((a, b) => b.costFen - a.costFen).slice(0, 50),
+    byOrg: orgRows.map((row) => ({ orgId: row.org_id, name: row.name, calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls) })),
+    bySession: sessionRows.map((row) => ({ sessionId: row.class_session_id, title: row.title, orgName: row.org_name || '', calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls) })),
+    byStudent: studentRows.map((row) => ({ userId: row.user_id, name: row.name, orgName: row.org_name || '', calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls) })),
+  };
+}
+
 async function buildSnapshot({ windowKey, orgId, billingVisible }) {
   const buildStartedAt = Date.now();
   const minutes = WINDOWS[windowKey];
@@ -780,6 +888,12 @@ export async function handleMonitor(ctx, part, method) {
         errorCode: row.error_code || null, taskId: row.task_id || null,
       })),
     };
+  }
+
+  if (suffix === '/reconcile' && method === 'GET') {
+    if (!billingVisible) throw errors.forbidden('对账需要 AI 能力与价格权限', 'PERMISSION_DENIED', { permission: 'ADMIN_BILLING' });
+    const { day } = reconcileDayRange(ctx.search.get('day'));
+    return await buildReconcile({ day });
   }
 
   if (suffix === '/models' && method === 'GET') {

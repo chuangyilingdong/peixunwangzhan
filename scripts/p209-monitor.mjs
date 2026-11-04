@@ -38,6 +38,7 @@ const { resetUsdCnyRateCache } = await import('../apps/server/src/services/fxRat
 const { recordWalletSamples, getWalletHistory } = await import('../apps/server/src/services/walletHistory.js');
 const { startVibecodingTask, finishVibecodingTask } = await import('../apps/server/src/services/vibecodingActivity.js');
 const { setProviderApiKey, clearProviderApiKey } = await import('../apps/server/src/services/providerSecret.js');
+const { recordAiUsage } = await import('../apps/server/src/services/creditUsage.js');
 
 const now = new Date().toISOString();
 const checks = [];
@@ -449,6 +450,61 @@ try {
     const result = await probeRunningHubAccount({ endpoint: 'https://api.example.com/v1', apiKey: 'x' });
     assert.equal(result.ok, false);
     assert.match(result.error, /RunningHub/);
+  });
+  // 对账：按北京时间日汇总供应商 / 模型 / 机构 / 课堂 / 学生
+  const reconDay = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+  const reconAt = new Date().toISOString();
+  await aq('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?)',
+    ['org_rec', '对账机构', 'ACTIVE', reconAt, future, reconAt, reconAt]);
+  await insertUser('user_rec', 'org_rec', 'user_rec', '对账学生', 'STUDENT');
+  await aq(`INSERT INTO class_sessions(id,title,org_id,teacher_id,status,delivery_mode,started_at,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?)`, ['sess_rec', '对账课堂', 'org_rec', null, 'ACTIVE', 'CANVAS', reconAt, reconAt, reconAt]);
+  const insertAttempt = (id, orgId, sessionId, userId, channelId, model, source, fen) => aq(
+    `INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,class_session_id,modality,channel_id,provider,model,status,cost_source,upstream_cost_fen,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [id, `call_${id}`, 1, orgId, userId, sessionId, 'IMAGE', channelId, 'runninghub', model, 'SUCCESS', source, fen, '{}', reconAt],
+  );
+  await insertAttempt('attempt_rec_1', 'org_rec', 'sess_rec', 'user_rec', 'channel-rh', 'rhart-image-g-2-official-t2i', 'REPORTED', 120);
+  await insertAttempt('attempt_rec_2', 'org_rec', 'sess_rec', 'user_rec', 'channel-rh', 'rhart-image-g-2-official-i2i', 'COMPUTED', 30);
+  await insertAttempt('attempt_rec_3', 'org_rec', 'sess_rec', 'user_rec', 'channel-rh', 'rhart-image-g-2-official-t2i', 'UNKNOWN', null);
+  const recon = await call('/reconcile', { day: reconDay });
+  await check('对账：北京时间日汇总机构/课堂/学生/模型/供应商', () => {
+    assert.equal(recon.timezone, 'Asia/Shanghai');
+    const org = recon.byOrg.find((item) => item.orgId === 'org_rec');
+    assert.equal(org?.calls, 3);
+    assert.equal(org?.costFen, 150);
+    assert.equal(org?.unknownCalls, 1);
+    const session = recon.bySession.find((item) => item.sessionId === 'sess_rec');
+    assert.equal(session?.costFen, 150);
+    const student = recon.byStudent.find((item) => item.userId === 'user_rec');
+    assert.equal(student?.costFen, 150);
+    const t2i = recon.byModel.find((item) => item.model === 'rhart-image-g-2-official-t2i');
+    assert.equal(t2i?.costFen, 120);
+    assert.equal(t2i?.reportedFen, 120);
+    assert.equal(t2i?.unknownCalls, 1);
+    const i2i = recon.byModel.find((item) => item.model === 'rhart-image-g-2-official-i2i');
+    assert.equal(i2i?.costFen, 30);
+    assert.equal(i2i?.computedFen, 30);
+    const supplier = recon.bySupplier.find((item) => item.key === 'runninghub-global');
+    assert.equal(supplier?.costFen, 150);
+  });
+  let reconForbidden = null;
+  try { await call('/reconcile', { day: reconDay }, analyticsAuth); } catch (error) { reconForbidden = error; }
+  await check('对账：没有 ADMIN_BILLING 时 403', () => {
+    assert.equal(reconForbidden?.status, 403);
+  });
+
+  // 用量回填：VibeCoding / runtime gateway 的 attempt 先插入、recordAiUsage 后补 user_id
+  await aq(`INSERT INTO compute_attempts(id,call_id,attempt,modality,channel_id,provider,model,status,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    ['attempt_backfill', 'call_backfill', 1, 'TEXT', 'channel-rh', 'custom', 'm', 'RUNNING', '{}', reconAt]);
+  await recordAiUsage({
+    orgId: 'org_rec', userId: 'user_rec', sessionId: 'sess_rec',
+    modality: 'TEXT', model: 'm', status: 'SUCCESS',
+    pricing: { compute: { callId: 'call_backfill' } },
+  });
+  const backfilled = await arow('SELECT user_id, org_id, class_session_id FROM compute_attempts WHERE id=?', ['attempt_backfill']);
+  await check('用量回填：compute_attempts.user_id 不再漏（课堂能看到这个学生的调用）', () => {
+    assert.equal(backfilled?.user_id, 'user_rec');
+    assert.equal(backfilled?.class_session_id, 'sess_rec');
   });
 } finally {
   globalThis.fetch = realFetch;

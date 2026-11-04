@@ -24,8 +24,8 @@ export async function recordAiUsage({
   const reportedCacheMiss = usage?.cacheMissTokens ?? cacheMissTokens;
   if (pricing?.compute?.callId) {
     // COALESCE：provider 侧在成功分支已经写过用量证据，这里只补空、不覆盖。
-    await aq('UPDATE compute_attempts SET org_id=?,class_session_id=COALESCE(class_session_id,?),lesson_id=COALESCE(lesson_id,?),usage_snapshot=COALESCE(usage_snapshot,?) WHERE call_id=?',
-      [orgId, sessionId, session?.lesson_id || null, usageSnapshot ? json(usageSnapshot) : null, pricing.compute.callId]);
+    await aq('UPDATE compute_attempts SET org_id=?,user_id=COALESCE(user_id,?),class_session_id=COALESCE(class_session_id,?),lesson_id=COALESCE(lesson_id,?),usage_snapshot=COALESCE(usage_snapshot,?) WHERE call_id=?',
+      [orgId, userId || null, sessionId, session?.lesson_id || null, usageSnapshot ? json(usageSnapshot) : null, pricing.compute.callId]);
   }
   const usageRecordId = id('usage');
   await aq(
