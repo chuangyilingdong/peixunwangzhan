@@ -205,11 +205,11 @@ function collectReferences(options = {}) {
  */
 const OFFICIAL_IMAGE_QUALITY = 'low';
 
-function buildImageBody({ prompt, options, imageUrls, family }) {
+function buildImageBody({ prompt, options, imageUrls, family, imageQuality = OFFICIAL_IMAGE_QUALITY }) {
   const body = { prompt: String(prompt || '') };
   if (options.aspectRatio) body.aspectRatio = String(options.aspectRatio);
   if (options.resolution) body.resolution = String(options.resolution);
-  if (String(family || '').startsWith('rhart-image-g-2-official')) body.quality = String(options.quality || OFFICIAL_IMAGE_QUALITY);
+  if (String(family || '').startsWith('rhart-image-g-2-official')) body.quality = String(options.quality || imageQuality || OFFICIAL_IMAGE_QUALITY);
   if (imageUrls.length) body.imageUrls = imageUrls;
   return body;
 }
@@ -434,6 +434,7 @@ export function runningHubProvider({
   family = '',
   endpoint = '',
   apiKey = '',
+  imageQuality = OFFICIAL_IMAGE_QUALITY,
   timeoutMs = AI_PROVIDER_TIMEOUT_MS,
   maxWaitMs = AI_PROVIDER_MAX_WAIT_MS,
   pollIntervalMs = Math.max(DEFAULT_POLL_MS, Number(AI_PROVIDER_POLL_INTERVAL_MS) || 0),
@@ -471,7 +472,7 @@ export function runningHubProvider({
         throw providerError(hint || `RunningHub 没有配置 ${key} 的模型路径（family=${resolvedFamily}）`, PROVIDER_ERROR_CODES.CONFIG_INVALID);
       }
       const body = key === 'IMAGE'
-        ? buildImageBody({ prompt, options: mirroredOptions, imageUrls: refs.imageUrls, family: resolvedFamily })
+        ? buildImageBody({ prompt, options: mirroredOptions, imageUrls: refs.imageUrls, family: resolvedFamily, imageQuality })
         : key === 'VIDEO'
           ? buildVideoBody({ prompt, options: mirroredOptions, family: resolvedFamily, refs })
           : buildMusicBody({ prompt: prompt, options: mirroredOptions });

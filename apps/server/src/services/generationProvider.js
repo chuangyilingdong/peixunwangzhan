@@ -72,7 +72,7 @@ function mockProvider(model = AI_PROVIDER_MODEL) {
   };
 }
 
-export function providerSelection({ provider, model, endpoint, channelId, providerAccountRef, requestTemplates, modelRequestTemplates, requestPaths, pollPaths, gateway, apiKey, upstreamUnitPrices, modelUnitPrices } = {}) {
+export function providerSelection({ provider, model, endpoint, channelId, providerAccountRef, requestTemplates, modelRequestTemplates, requestPaths, pollPaths, gateway, apiKey, upstreamUnitPrices, modelUnitPrices, imageQuality } = {}) {
   return {
     provider: String(provider || AI_PROVIDER).trim(),
     model: String(model || AI_PROVIDER_MODEL).trim(),
@@ -90,6 +90,8 @@ export function providerSelection({ provider, model, endpoint, channelId, provid
     // 调用方可以带一把**临时密钥**（例如平台端「用当前渠道试一次」探测一个还没保存的新 key）：
     // 有它就用它，不落库、不影响已保存的配置。
     apiKey: String(apiKey || '').trim(),
+    // 官方图 quality（runninghub gpt-image-2）：策略级配置，默认 low。
+    imageQuality: ['low', 'medium', 'high'].includes(String(imageQuality || '').toLowerCase()) ? String(imageQuality).toLowerCase() : 'low',
     // 算力网关出口（由 services/computeGateway.js 的 applyGatewayRoute 挂上）：
     // 有它就用网关的地址 + 该学生的令牌 key 发请求，否则直连上游。
     gateway: gateway && gateway.endpoint && gateway.apiKey ? { endpoint: String(gateway.endpoint), apiKey: String(gateway.apiKey), tokenName: String(gateway.tokenName || '') } : null,
@@ -277,6 +279,7 @@ function rawGenerationProvider(selection = {}) {
       family: selected.channelModel || config.model,
       endpoint: config.endpoint,
       apiKey,
+      imageQuality: selected.imageQuality,
       timeoutMs: AI_PROVIDER_TIMEOUT_MS,
       maxWaitMs: AI_PROVIDER_MAX_WAIT_MS,
       pollIntervalMs: Math.max(5000, Number(AI_PROVIDER_POLL_INTERVAL_MS) || 0),

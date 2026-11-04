@@ -158,6 +158,8 @@ export function Monitor({ api, user }) {
   const [models, setModels] = useState(null);
   const [modelPicks, setModelPicks] = useState({});
   const [switching, setSwitching] = useState('');
+  const [qualityPick, setQualityPick] = useState('');
+  const [qualitySaving, setQualitySaving] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState('');
   const [classroom, setClassroom] = useState(null);
   const [classroomError, setClassroomError] = useState(null);
@@ -321,6 +323,26 @@ export function Monitor({ api, user }) {
     }
   };
 
+  useEffect(() => {
+    if (models?.imageQuality) setQualityPick((current) => current || models.imageQuality);
+  }, [models?.imageQuality]);
+
+  const saveImageQuality = async () => {
+    if (!qualityPick || qualityPick === models?.imageQuality) return;
+    setQualitySaving(true);
+    try {
+      await api.post('admin/dashboard/monitor/models/image-quality', { quality: qualityPick });
+      const data = await api.get('admin/dashboard/monitor/models', { timeoutMs: 15000 });
+      setModels(data);
+      setQualityPick(data?.imageQuality || qualityPick);
+    } catch (error) {
+      window.alert(error?.message || '调整失败');
+      setQualityPick(models?.imageQuality || 'low');
+    } finally {
+      setQualitySaving(false);
+    }
+  };
+
   const switchModel = async (row, override = null) => {
     const pick = override || modelPicks[row.key] || { channelId: row.channelId, model: row.model };
     if (!pick?.channelId) return;
@@ -447,6 +469,21 @@ export function Monitor({ api, user }) {
                 {!models ? <tr><td colSpan={4} className="monitor-empty">读取中…</td></tr> : null}
               </tbody>
             </table>
+          </div>
+          <div className="monitor-quality">
+            <strong>官方图质量</strong>
+            <select value={qualityPick || models?.imageQuality || 'low'} onChange={(event) => setQualityPick(event.target.value)}>
+              {(models?.imageQualityOptions || [{ value: 'low', label: 'low' }]).map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label} · 文生 {option.t2iFen === null ? '—' : `¥${(option.t2iFen / 100).toFixed(2)}/张`}
+                  {option.i2iFen === null ? '' : ` · 图生 ¥${(option.i2iFen / 100).toFixed(2)}/张`}
+                  {option.t2iSeconds === null ? '' : ` · 约 ${option.t2iSeconds}s`}
+                </option>
+              ))}
+            </select>
+            <button type="button" className="monitor-btn" disabled={qualitySaving || !qualityPick || qualityPick === models?.imageQuality}
+              onClick={saveImageQuality}>{qualitySaving ? '保存中…' : '保存'}</button>
+            <span className="monitor-muted">只对 gpt-image-2 官方（g-2-official）生效，文生/图生共用；改完立即影响新任务</span>
           </div>
         </section>
       ) : null}

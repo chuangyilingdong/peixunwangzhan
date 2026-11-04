@@ -117,6 +117,11 @@ function normalizeProviderPolicy(value) {
   // 我们的模型本来就能看图）。只有要把图单独送到另一条渠道时才配它。绝不能变成「不配就用不了」——
   // 上个版本的 409 闸门是错的：学生发图会被挡住，而他的模型明明能读图。
   const visionChannelId = String(parsed.visionChannelId || '').trim().slice(0, 64);
+  // 官方图 quality（2026-11-04 用户定档，监控台可调）：low / medium / high，默认 low。
+  // 只对 runninghub 的 rhart-image-g-2-official（gpt-image-2 官方）生效；g-2.5 备用不认这个参数。
+  const imageQuality = ['low', 'medium', 'high'].includes(String(parsed.imageQuality || '').toLowerCase())
+    ? String(parsed.imageQuality).toLowerCase()
+    : 'low';
   const modalityOfChannel = (channelId) => {
     const direct = Object.entries({ ...modalityBackupChannels, ...modalityChannels }).find(([, id]) => id === channelId)?.[0];
     if (direct) return direct;
@@ -163,6 +168,7 @@ function normalizeProviderPolicy(value) {
     model,
     displayName, note, websiteUrl, endpointMode, protocol, modelMappings, channels, modalityChannels, modalityBackupChannels, modelRoutes: parsed.modelRoutes || [],
     imageModeChannels, imageModeBackupChannels,
+    imageQuality,
     visionChannelId,
     modelDisplayNames,
     allowStudentExternalContent,

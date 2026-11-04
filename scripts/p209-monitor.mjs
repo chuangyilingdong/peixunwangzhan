@@ -291,6 +291,32 @@ await check('模型面板：没有 ADMIN_BILLING 时切换 403', async () => {
   assert.equal(forbiddenSwitch?.status, 403);
 });
 
+await check('模型面板：官方图质量默认 low、三档可选、可改并写策略', async () => {
+  assert.equal(modelRows.imageQuality, 'low');
+  assert.deepEqual(modelRows.imageQualityOptions.map((item) => item.value), ['low', 'medium', 'high']);
+  assert.equal(modelRows.imageQualityOptions[0].t2iFen, 6);
+  assert.equal(modelRows.imageQualityOptions[0].i2iFen, 18);
+  const saved = await callPost('/models/image-quality', { quality: 'medium' });
+  assert.equal(saved.ok, true);
+  assert.equal(saved.previous, 'low');
+  const after = await call('/models');
+  assert.equal(after.imageQuality, 'medium');
+  const policy = JSON.parse((await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1')).ai_provider_policy);
+  assert.equal(policy.imageQuality, 'medium');
+  const log = await arow("SELECT old_value,new_value FROM platform_config_change_logs WHERE field_name='imageQuality' ORDER BY created_at DESC LIMIT 1");
+  assert.equal(log?.old_value, 'low');
+  assert.equal(log?.new_value, 'medium');
+  await callPost('/models/image-quality', { quality: 'low' });
+});
+await check('模型面板：非法图片质量 400、无权限 403', async () => {
+  let rejected = null;
+  try { await callPost('/models/image-quality', { quality: 'ultra' }); } catch (error) { rejected = error; }
+  assert.equal(rejected?.code, 'MONITOR_IMAGE_QUALITY_INVALID');
+  let forbidden = null;
+  try { await callPost('/models/image-quality', { quality: 'high' }, analyticsAuth); } catch (error) { forbidden = error; }
+  assert.equal(forbidden?.status, 403);
+});
+
 // 余额：stub 掉 fetch，验证映射与 60s 缓存
 await aq('UPDATE platform_settings SET ai_provider_policy=?,updated_at=? WHERE id=1', [
   JSON.stringify({ channels: [{ id: 'channel-rh', name: 'RH 主', provider: 'runninghub', endpoint: 'https://www.runninghub.ai/openapi/v2' }] }), now,

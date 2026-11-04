@@ -146,6 +146,19 @@
 }
 .monitor-model-actions .monitor-btn { padding: 4px 10px; font-size: 11px; }
 
+/* 官方图质量（low/medium/high）：模型卡片底部一行，改完立即影响新任务 */
+.monitor-quality {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--m-border);
+}
+.monitor-quality strong { font-size: 12px; }
+.monitor-quality select {
+  background: var(--m-panel); color: var(--m-text); border: 1px solid var(--m-border);
+  border-radius: 6px; padding: 5px 8px; font-size: 11px; max-width: 460px;
+}
+.monitor-quality .monitor-btn { padding: 4px 10px; font-size: 11px; }
+.monitor-quality .monitor-muted { font-size: 10px; }
+
 /* 统计窗口说明：只影响按窗口聚合的卡片，实时/固定口径单独标注 */
 .monitor-control-note { color: var(--m-muted); font-size: 10px; line-height: 1.4; max-width: 190px; }
 

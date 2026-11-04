@@ -622,6 +622,19 @@ const MODEL_ROWS = Object.freeze([
   { key: 'MUSIC', label: '音乐', modality: 'MUSIC' },
 ]);
 
+// 官方图 quality 档位（2026-11-04 实测，1k，runninghub gpt-image-2 官方）：
+// 单价是上游实扣折成分，耗时是提交到出图的端到端时间。i2i 的中/高没有实测（null = 不展示）。
+const IMAGE_QUALITY_OPTIONS = Object.freeze([
+  { value: 'low', label: 'low（合同价）', t2iFen: 6, i2iFen: 18, t2iSeconds: 52, i2iSeconds: 27 },
+  { value: 'medium', label: 'medium', t2iFen: 36, i2iFen: null, t2iSeconds: 50, i2iSeconds: null },
+  { value: 'high', label: 'high', t2iFen: 133, i2iFen: null, t2iSeconds: 146, i2iSeconds: null },
+]);
+
+function normalizeImageQuality(value) {
+  const key = String(value || '').toLowerCase();
+  return ['low', 'medium', 'high'].includes(key) ? key : 'low';
+}
+
 function inferChannelModality(channel) {
   const model = String(channel?.model || '').toLowerCase();
   if (/music|mureka|song/.test(model)) return 'MUSIC';
@@ -775,7 +788,38 @@ export async function handleMonitor(ctx, part, method) {
     const row = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
     let policy = {};
     try { policy = JSON.parse(row?.ai_provider_policy || '{}') || {}; } catch { policy = {}; }
-    return { generatedAt: new Date().toISOString(), rows: await buildModelRows(policy) };
+    return {
+      generatedAt: new Date().toISOString(),
+      rows: await buildModelRows(policy),
+      imageQuality: normalizeImageQuality(policy.imageQuality),
+      imageQualityOptions: IMAGE_QUALITY_OPTIONS,
+    };
+  }
+
+  if (suffix === '/models/image-quality' && method === 'POST') {
+    if (!billingVisible) throw errors.forbidden('调整图片质量需要 AI 能力与价格权限', 'PERMISSION_DENIED', { permission: 'ADMIN_BILLING' });
+    const body = ctx.body && typeof ctx.body === 'object' ? ctx.body : {};
+    const quality = String(body.quality || '').toLowerCase();
+    if (!['low', 'medium', 'high'].includes(quality)) {
+      throw errors.badRequest('图片质量只能是 low / medium / high', 'MONITOR_IMAGE_QUALITY_INVALID');
+    }
+    const stored = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
+    const before = stored?.ai_provider_policy || '{}';
+    let policy = null;
+    try { policy = JSON.parse(before); } catch { policy = null; }
+    if (!policy || typeof policy !== 'object') throw errors.badRequest('渠道策略不是合法 JSON，拒绝写入', 'MONITOR_MODEL_POLICY_INVALID');
+    const previous = normalizeImageQuality(policy.imageQuality);
+    policy.imageQuality = quality;
+    const after = JSON.stringify(policy);
+    const now = new Date().toISOString();
+    await aq('UPDATE platform_settings SET ai_provider_policy=?, updated_at=? WHERE id=1', [after, now]);
+    await aq(`INSERT INTO platform_config_change_logs(id,config_type,record_id,field_name,old_value,new_value,changed_by,reason,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`, [
+      id('ccl'), 'AI_PROVIDER_POLICY', '1', 'imageQuality', previous, quality,
+      ctx.auth?.user?.id || 'monitor',
+      `监控台调整官方图质量：${previous} → ${quality}`, now,
+    ]);
+    return { ok: true, imageQuality: quality, previous };
   }
 
   if (suffix === '/models/switch' && method === 'POST') {
