@@ -39,6 +39,14 @@ const RUNNINGHUB_FAMILIES = Object.freeze({
   'rhart-image-g-2-official-i2i': {
     IMAGE_IMAGE: '/rhart-image-g-2-official/image-to-image',
   },
+  // 2026-11-04 用户指定：文生图备用换成 gpt-image-2.5 Flare（api-detail 2133100000000800377）
+  'rhart-image-g-2.5-official-token-t2i': {
+    IMAGE_TEXT: '/rhart-image-g-2.5-official-token/flare/text-to-image',
+  },
+  // 2026-11-04 用户指定：视频主换成 seedance 2.0 Mini 多模态（CN 站 api-detail 2133000000000504043）
+  'rhart-video/sparkvideo-2.0-mini': {
+    VIDEO: '/rhart-video/sparkvideo-2.0-mini/multimodal-video',
+  },
   // 旧的双路径 family：只给老配置/回滚快照兜底，**不在后台「读取模型」里展示**（见 LEGACY_FAMILIES）。
   'rhart-image-g-2.5': {
     IMAGE_TEXT: '/rhart-image-g-2.5/sunburst/text-to-image',
