@@ -146,6 +146,7 @@ export function Monitor({ api, user }) {
   const [orgSearch, setOrgSearch] = useState('');
   const [paused, setPaused] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [dismissedAlerts, setDismissedAlerts] = useState([]);
   const [tick, setTick] = useState(0);
   const [snapshot, setSnapshot] = useState(null);
   const [snapshotError, setSnapshotError] = useState(null);
@@ -154,6 +155,9 @@ export function Monitor({ api, user }) {
   const [balanceError, setBalanceError] = useState(null);
   const [walletHistory, setWalletHistory] = useState(null);
   const [historyRange, setHistoryRange] = useState(24);
+  const [models, setModels] = useState(null);
+  const [modelPicks, setModelPicks] = useState({});
+  const [switching, setSwitching] = useState('');
   const [selectedSessionId, setSelectedSessionId] = useState('');
   const [classroom, setClassroom] = useState(null);
   const [classroomError, setClassroomError] = useState(null);
@@ -180,6 +184,24 @@ export function Monitor({ api, user }) {
     const data = await api.get(`admin/dashboard/monitor/balance/history?hours=${historyRange}`, { signal, timeoutMs: 15000 });
     setWalletHistory(data);
   }, { intervalMs: BALANCE_REFRESH_MS, enabled: canBilling && !paused, deps: [canBilling, paused, historyRange, tick], onError: () => {} });
+
+  // 当前模型（各能力当前渠道/模型 + 候选 + 15 分钟健康）。
+  usePolling(async (signal) => {
+    if (!canBilling) return;
+    const data = await api.get('admin/dashboard/monitor/models', { signal, timeoutMs: 15000 });
+    setModels(data);
+  }, { intervalMs: BALANCE_REFRESH_MS, enabled: canBilling && !paused, deps: [canBilling, paused, tick], onError: () => {} });
+
+  useEffect(() => {
+    if (!models?.rows) return;
+    setModelPicks((current) => {
+      const next = { ...current };
+      for (const row of models.rows) {
+        if (!next[row.key]?.channelId) next[row.key] = { channelId: row.channelId || '', model: row.model || '' };
+      }
+      return next;
+    });
+  }, [models]);
 
   usePolling(async (signal) => {
     if (!selectedSessionId) return;
@@ -212,9 +234,14 @@ export function Monitor({ api, user }) {
   const walletFailed = wallets.filter((item) => !item.ok).length;
   // 总余额按人民币口径比较（RH 全球 ×7.2、xkwuai 1:1），不再拿美元阈值套。
   const lowBalance = walletTotalCny !== null && walletTotalCny < LOW_BALANCE_YUAN;
-  const errorRate = usage.errorRate;
-  const status = lowBalance || (errorRate !== null && errorRate >= 20) ? 'critical'
-    : (errorRate !== null && errorRate >= 5) || (usage.failed || 0) > 0 ? 'degraded' : 'ok';
+  // 渠道错误率剔除「内容安全审查」拦截：那是学生内容问题，不是渠道故障。
+  // 另外样本太小时（<3 笔失败）不报错误率，避免 1/1=100% 把整页打成「需要处理」。
+  const errorRate = usage.providerErrorRate ?? usage.errorRate;
+  const providerFailed = usage.providerFailed ?? usage.failed ?? 0;
+  const errorRateCritical = errorRate !== null && errorRate !== undefined && errorRate >= 20 && providerFailed >= 3;
+  const errorRateWarn = errorRate !== null && errorRate !== undefined && errorRate >= 5 && providerFailed >= 3;
+  const status = lowBalance || errorRateCritical ? 'critical'
+    : errorRateWarn || providerFailed > 0 ? 'degraded' : 'ok';
   const statusText = status === 'critical' ? '需要处理' : status === 'degraded' ? '有异常' : '正常';
 
   // 页面内告警：不推飞书，直接列在页头下面（用户口径 2026-11-04）。
@@ -223,8 +250,14 @@ export function Monitor({ api, user }) {
   if (walletTotalCny !== null && walletTotalCny < LOW_BALANCE_YUAN) {
     alerts.push({ key: 'low', level: 'danger', text: `总余额 ¥${walletTotalCny.toFixed(2)} 低于 ¥${LOW_BALANCE_YUAN}` });
   }
-  if (errorRate !== null && errorRate >= 20) alerts.push({ key: 'error', level: 'danger', text: `错误率 ${errorRate}%（${windowKey} 窗口）` });
-  else if (errorRate !== null && errorRate >= 5) alerts.push({ key: 'error', level: 'warning', text: `错误率 ${errorRate}%（${windowKey} 窗口）` });
+  if (errorRateCritical) {
+    alerts.push({ key: 'error', level: 'danger', text: `渠道错误率 ${errorRate}%（${providerFailed}/${(usage.success || 0) + providerFailed}，${windowKey}）` });
+  } else if (errorRateWarn) {
+    alerts.push({ key: 'error', level: 'warning', text: `渠道错误率 ${errorRate}%（${providerFailed}/${(usage.success || 0) + providerFailed}，${windowKey}）` });
+  }
+  if ((usage.contentSafetyFailed || 0) > 0) {
+    alerts.push({ key: 'content', level: 'warning', text: `内容安全拦截 ${usage.contentSafetyFailed} 笔（不是渠道故障，未计入错误率）` });
+  }
   if (canBilling && usage.unknownCostCalls > 0) {
     alerts.push({ key: 'unknown', level: 'warning', text: `未知成本 ${usage.unknownCostCalls} 笔（占成功 ${usage.unknownCostRate ?? '—'}%）` });
   }
@@ -234,6 +267,8 @@ export function Monitor({ api, user }) {
   if (snapshot?.queue && snapshot.queue.ok === false && snapshot.queue.error) {
     alerts.push({ key: 'queue', level: 'warning', text: `RH 队列读取失败：${String(snapshot.queue.error).slice(0, 60)}` });
   }
+  for (const alert of alerts) alert.id = `${alert.key}:${alert.text}`;
+  const visibleAlerts = alerts.filter((alert) => !dismissedAlerts.includes(alert.id));
 
   const callsSeries = series.map((item) => item.calls);
   const failedSeries = series.map((item) => item.failed);
@@ -286,6 +321,24 @@ export function Monitor({ api, user }) {
     }
   };
 
+  const switchModel = async (row, override = null) => {
+    const pick = override || modelPicks[row.key] || { channelId: row.channelId, model: row.model };
+    if (!pick?.channelId) return;
+    const option = row.options.find((item) => item.channelId === pick.channelId && item.model === pick.model);
+    if (!window.confirm(`把「${row.label}」切到 ${option?.channelName || pick.channelId} · ${pick.model || '渠道默认模型'}？\n切换会立即影响学生端调用。`)) return;
+    setSwitching(row.key);
+    try {
+      await api.post('admin/dashboard/monitor/models/switch', { key: row.key, channelId: pick.channelId, model: pick.model });
+      const data = await api.get('admin/dashboard/monitor/models', { timeoutMs: 15000 });
+      setModels(data);
+      setModelPicks((current) => ({ ...current, [row.key]: { channelId: pick.channelId, model: pick.model } }));
+    } catch (error) {
+      window.alert(error?.message || '切换失败');
+    } finally {
+      setSwitching('');
+    }
+  };
+
   return (
     <div className={`monitor-page monitor-status-${status}`}>
       <header className="monitor-head">
@@ -308,8 +361,14 @@ export function Monitor({ api, user }) {
 
       {snapshotError ? <div className="monitor-banner is-danger">监控数据读取失败：{snapshotError.message || '未知错误'}（显示上一次数据）</div> : null}
 
-      {alerts.length ? <div className="monitor-alerts">
-        {alerts.map((alert) => <div key={alert.key} className={`monitor-banner is-${alert.level}`}>{alert.text}</div>)}
+      {visibleAlerts.length ? <div className="monitor-alerts">
+        {visibleAlerts.map((alert) => (
+          <div key={alert.id} className={`monitor-banner is-${alert.level}`}>
+            <span>{alert.text}</span>
+            <button type="button" className="monitor-banner-close" aria-label="关闭"
+              onClick={() => setDismissedAlerts((current) => [...current, alert.id])}>×</button>
+          </div>
+        ))}
       </div> : null}
 
       <div className="monitor-kpis">
@@ -337,6 +396,57 @@ export function Monitor({ api, user }) {
         <Kpi label="错误率" tone={(errorRate || 0) >= 20 ? 'danger' : (errorRate || 0) >= 5 ? 'warning' : 'default'}
           value={pctText(errorRate)} hint={canBilling ? `已知成本 ${fmtYuan(usage.knownCostFen)} · 未知 ${usage.unknownCostCalls ?? 0} 笔` : '按上游尝试计算'} />
       </div>
+
+      {canBilling ? (
+        <section className="monitor-card monitor-models">
+          <div className="monitor-card-title">当前模型 <span>手动切换 · 15 分钟健康 · 有异常时给建议</span></div>
+          <div className="monitor-table-wrap">
+            <table>
+              <thead><tr><th>能力</th><th>当前渠道 / 模型</th><th>15 分钟</th><th>切换</th></tr></thead>
+              <tbody>
+                {(models?.rows || []).map((row) => {
+                  const pick = modelPicks[row.key] || { channelId: row.channelId || '', model: row.model || '' };
+                  const pickedValue = `${pick.channelId}|${pick.model}`;
+                  const unchanged = pick.channelId === row.channelId && pick.model === row.model;
+                  return (
+                    <tr key={row.key}>
+                      <td><strong>{row.label}</strong></td>
+                      <td>{row.channelName}<div className="monitor-muted">{row.model || '—'}</div></td>
+                      <td>{row.calls} 次 · 失败 {row.failed}{row.errorRate !== null && row.errorRate !== undefined ? ` · ${row.errorRate}%` : ''}</td>
+                      <td>
+                        {row.options.length ? (
+                          <div className="monitor-model-actions">
+                            <select value={pickedValue} onChange={(event) => {
+                              const separator = event.target.value.indexOf('|');
+                              const channelId = event.target.value.slice(0, separator);
+                              const model = event.target.value.slice(separator + 1);
+                              setModelPicks((current) => ({ ...current, [row.key]: { channelId, model } }));
+                            }}>
+                              {row.options.map((option) => (
+                                <option key={`${option.channelId}|${option.model}`} value={`${option.channelId}|${option.model}`}>
+                                  {option.channelName} · {option.model}
+                                </option>
+                              ))}
+                            </select>
+                            <button type="button" className="monitor-btn" disabled={unchanged || switching === row.key}
+                              onClick={() => switchModel(row)}>{switching === row.key ? '切换中…' : '切换'}</button>
+                            {row.recommendation ? (
+                              <button type="button" className="monitor-link-btn" onClick={() => switchModel(row, row.recommendation)}>
+                                建议切到 {row.recommendation.channelName}
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : <span className="monitor-muted">没有可用渠道</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!models ? <tr><td colSpan={4} className="monitor-empty">读取中…</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       <div className="monitor-charts">
         <div className="monitor-card">
@@ -403,6 +513,7 @@ export function Monitor({ api, user }) {
           <div className="monitor-card-title">活跃课堂
             <span>
               {sessions.length} 场
+              {live.staleActiveSessions ? ` · 另有 ${live.staleActiveSessions} 场未结束但 90 分钟无活动` : ''}
               {orgId ? <button type="button" className="monitor-link-btn" onClick={() => { setOrgId(''); setSelectedSessionId(''); }}>查看全部机构</button> : null}
             </span>
           </div>

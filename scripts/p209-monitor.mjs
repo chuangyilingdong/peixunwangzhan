@@ -113,6 +113,11 @@ const call = (suffix, search = {}, auth = rootAuth) => handleMonitor(
   `/dashboard/monitor${suffix}`,
   'GET',
 );
+const callPost = (suffix, body, auth = rootAuth) => handleMonitor(
+  { auth, body, search: new URLSearchParams(), pathname: `/api/admin/dashboard/monitor${suffix}`, method: 'POST' },
+  `/dashboard/monitor${suffix}`,
+  'POST',
+);
 
 const snapshot = await call('/snapshot', { window: '5m' });
 await check('快照：活跃课堂 2 / 在线学生 2 / 按窗口的分钟桶', async () => {
@@ -238,6 +243,52 @@ await check('错误流：四源合并、jobId 去重、主备切换降级为 war
   assert.ok(errors.items.some((item) => item.errorCode === 'SESSION_AI_PAUSED'));
   assert.ok(errors.items.some((item) => item.errorCode === 'GENERATION_INTERRUPTED' && item.severity === 'critical'));
   assert.ok(errors.items.some((item) => item.errorCode === 'GENERATION_PROVIDER_UPSTREAM_ERROR' && item.source === 'VIBE'));
+});
+
+// 当前模型：5 个能力、候选渠道、手动切换
+await aq('UPDATE platform_settings SET ai_provider_policy=?,updated_at=? WHERE id=1', [
+  JSON.stringify({
+    channels: [
+      { id: 'ch-text', name: '文本渠道', model: 'deepseek-flash', models: ['deepseek-flash', 'deepseek-v4-pro'] },
+      { id: 'ch-img-a', name: '图 A', model: 'rhart-image-g-2.5-t2i' },
+      { id: 'ch-img-b', name: '图 B', model: 'rhart-image-g-2-official-t2i' },
+      { id: 'ch-img-i2i', name: '图 I', model: 'rhart-image-g-2.5-i2i' },
+      { id: 'ch-video', name: '视频渠道', model: 'bytedance/seedance-2.0-global-fast' },
+      { id: 'ch-music', name: '音乐渠道', model: 'minimax/music-2.6' },
+    ],
+    modalityChannels: { TEXT: 'ch-text', IMAGE: 'ch-img-a', VIDEO: 'ch-video', MUSIC: 'ch-music' },
+    modalityBackupChannels: {},
+    imageModeChannels: { TEXT: 'ch-img-a', IMAGE_REFERENCE: 'ch-img-i2i' },
+  }), now,
+]);
+const modelRows = await call('/models');
+await check('模型面板：5 个能力、文生/图生候选分开、文本可切 pro', () => {
+  assert.equal(modelRows.rows.length, 5);
+  const text = modelRows.rows.find((row) => row.key === 'TEXT');
+  assert.equal(text.channelId, 'ch-text');
+  assert.ok(text.options.some((option) => option.model === 'deepseek-v4-pro'));
+  const t2i = modelRows.rows.find((row) => row.key === 'IMAGE_T2I');
+  assert.equal(t2i.channelName, '图 A');
+  assert.ok(t2i.options.every((option) => !option.model.includes('i2i')));
+  const i2i = modelRows.rows.find((row) => row.key === 'IMAGE_I2I');
+  assert.equal(i2i.channelId, 'ch-img-i2i');
+});
+await check('模型面板：不能把图片渠道切给文本', async () => {
+  let rejected = null;
+  try { await callPost('/models/switch', { key: 'TEXT', channelId: 'ch-img-b' }); } catch (error) { rejected = error; }
+  assert.equal(rejected?.code, 'MONITOR_MODEL_CHANNEL_INVALID');
+});
+await check('模型面板：切换文本到 deepseek-v4-pro 并写策略', async () => {
+  await callPost('/models/switch', { key: 'TEXT', channelId: 'ch-text', model: 'deepseek-v4-pro' });
+  const after = await call('/models');
+  assert.equal(after.rows.find((row) => row.key === 'TEXT').model, 'deepseek-v4-pro');
+  const policy = JSON.parse((await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1')).ai_provider_policy);
+  assert.equal(policy.channels.find((channel) => channel.id === 'ch-text').model, 'deepseek-v4-pro');
+});
+await check('模型面板：没有 ADMIN_BILLING 时切换 403', async () => {
+  let forbiddenSwitch = null;
+  try { await callPost('/models/switch', { key: 'TEXT', channelId: 'ch-text' }, analyticsAuth); } catch (error) { forbiddenSwitch = error; }
+  assert.equal(forbiddenSwitch?.status, 403);
 });
 
 // 余额：stub 掉 fetch，验证映射与 60s 缓存

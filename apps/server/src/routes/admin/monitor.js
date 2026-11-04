@@ -17,7 +17,7 @@
  *   · 所有查询都有时间下界 + LIMIT；快照 3 秒进程内缓存（key 里带权限位，避免串权）；
  *   · 余额单独一个接口（60 秒缓存），不放在 5 秒轮询的快照里，避免首次探测拖慢看板。
  */
-import { arow, arows, errors, isRootPlatformAdmin } from '../../lib.js';
+import { arow, arows, aq, errors, id, isRootPlatformAdmin } from '../../lib.js';
 import { classroomBudgetStatus } from '../../services/computePool.js';
 import { getRunningHubBalance, getRunningHubQueue } from '../../services/runningHubAccount.js';
 import { getWalletBalances } from '../../services/walletAccounts.js';
@@ -233,8 +233,6 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
 
   const [live, usageWindow, attemptsWindow, seriesRows, orgRows, orgStats, sessionRows, stuckAttemptRows, stuckJobRows, costRows, policyRow, queueStatus, channelRows, durationRows, lastSuccessRows, failoverRows, studentCostRows, blockedRows] = await Promise.all([
     arow(`SELECT
-        (SELECT COUNT(*) FROM class_sessions WHERE status='ACTIVE') active_sessions,
-        (SELECT COUNT(*) FROM session_students WHERE status='ACTIVE') active_students,
         (SELECT COUNT(*) FROM compute_attempts WHERE status IN ('RUNNING','SUBMITTED') AND created_at>=?) running_attempts,
         (SELECT COUNT(*) FROM generation_jobs WHERE status='QUEUED' AND created_at>=?) queued_jobs,
         (SELECT COUNT(*) FROM generation_jobs WHERE status='RUNNING' AND created_at>=?) running_jobs`, [activeSince, activeSince, activeSince]),
@@ -246,6 +244,7 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     arow(`SELECT COUNT(*) calls,
         SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) success,
         SUM(CASE WHEN status IN ('FAILED','BLOCKED') THEN 1 ELSE 0 END) failed,
+        SUM(CASE WHEN status='FAILED' AND (COALESCE(error_message,'') LIKE '%内容安全%' OR COALESCE(error_message,'') LIKE '%Content security%') THEN 1 ELSE 0 END) content_safety_failed,
         SUM(CASE WHEN status='SUCCESS' THEN COALESCE(sale_price_fen,0) ELSE 0 END) sale_fen,
         SUM(CASE WHEN status='SUCCESS' AND cost_source<>'UNKNOWN' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) known_cost_fen,
         SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_cost_calls
@@ -270,13 +269,19 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     arows(`SELECT s.id, s.org_id, s.title, s.teacher_id, s.lesson_id, s.series_id, s.started_at, s.platform_budget_fen,
         o.name org_name, u.display_name teacher_name, l.title lesson_title,
         (SELECT COUNT(*) FROM session_students ss WHERE ss.session_id=s.id AND ss.status<>'REMOVED') roster,
-        (SELECT COUNT(*) FROM session_students ss WHERE ss.session_id=s.id AND ss.status='ACTIVE') active_students
+        (SELECT COUNT(*) FROM session_students ss WHERE ss.session_id=s.id AND ss.status='ACTIVE') active_students,
+        (SELECT MAX(t.at) FROM (
+           SELECT MAX(a.created_at) AS at FROM compute_attempts a WHERE a.class_session_id=s.id
+           UNION ALL SELECT MAX(u2.created_at) FROM usage_records u2 WHERE u2.class_session_id=s.id
+           UNION ALL SELECT MAX(m.created_at) FROM vibecoding_messages m
+             JOIN vibecoding_conversations c ON c.id=m.conversation_id WHERE c.class_session_id=s.id
+         ) t) last_activity
       FROM class_sessions s
       LEFT JOIN organizations o ON o.id=s.org_id
       LEFT JOIN users u ON u.id=s.teacher_id
       LEFT JOIN course_lessons l ON l.id=s.lesson_id
-      WHERE s.status='ACTIVE' AND (?='' OR s.org_id=?)
-      ORDER BY s.started_at DESC LIMIT ?`, [orgFilter, orgFilter, MAX_SESSIONS]),
+      WHERE s.status='ACTIVE' AND s.started_at>=? AND (?='' OR s.org_id=?)
+      ORDER BY s.started_at DESC LIMIT ?`, [sinceOf(12 * 60), orgFilter, orgFilter, MAX_SESSIONS]),
     // 卡住任务：只看最近 6 小时内、已超过 15 分钟还没收尾的 —— 历史遗留的脏 attempt 不算。
     arows(`SELECT id, modality, model, channel_id, status, created_at FROM compute_attempts
         WHERE status IN ('RUNNING','SUBMITTED') AND created_at>=? AND created_at<?
@@ -324,7 +329,22 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
         GROUP BY fail_code ORDER BY n DESC LIMIT 8`, [since]),
   ]);
 
-  const sessionIds = sessionRows.map((row) => row.id);
+  const nowMs = Date.now();
+  const ACTIVE_WINDOW_MS = 90 * 60_000;
+  const recentEnough = (iso) => {
+    const time = Date.parse(iso);
+    return Number.isFinite(time) && nowMs - time <= ACTIVE_WINDOW_MS;
+  };
+  // 「活跃课堂」= 开课中且 90 分钟内有活动（AI 调用 / 用量 / VibeCoding），或刚开课 90 分钟内。
+  // 只按 status='ACTIVE' 会把 9/29、10/24 那些没点「结束」的课堂永远算成活跃。
+  const activeSessionRows = sessionRows.filter((row) => recentEnough(row.started_at) || recentEnough(row.last_activity));
+  const staleSessionCount = sessionRows.length - activeSessionRows.length;
+  const activeByOrg = new Map();
+  for (const row of activeSessionRows) {
+    const key = row.org_id || '';
+    activeByOrg.set(key, (activeByOrg.get(key) || 0) + 1);
+  }
+  const sessionIds = activeSessionRows.map((row) => row.id);
   const [sessionStats, sessionAllTime] = sessionIds.length ? await Promise.all([
     arows(`SELECT class_session_id, COUNT(*) calls,
         SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) success,
@@ -343,7 +363,7 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
   const allTimeBySession = new Map(sessionAllTime.map((row) => [row.class_session_id, row]));
   const statsByOrg = new Map(orgStats.map((row) => [row.org_id, row]));
 
-  const sessions = sessionRows.map((row) => {
+  const sessions = activeSessionRows.map((row) => {
     const stats = statsBySession.get(row.id) || {};
     const allTime = allTimeBySession.get(row.id) || {};
     const budgetFen = row.platform_budget_fen === null || row.platform_budget_fen === undefined ? null : Number(row.platform_budget_fen);
@@ -377,7 +397,7 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     return {
       id: row.id, name: row.name, status: row.status,
       teachers: num(row.teachers), students: num(row.students),
-      activeSessions: num(row.active_sessions),
+      activeSessions: activeByOrg.get(row.id) || 0,
       calls: num(stats.calls), success: num(stats.success), failed: num(stats.failed),
       ...(billingVisible ? {
         saleFen: num(stats.sale_fen), knownCostFen: num(stats.known_cost_fen),
@@ -400,6 +420,8 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
 
   const attempts = attemptsWindow || {};
   const usage = usageWindow || {};
+  const contentSafetyFailed = num(attempts.content_safety_failed);
+  const providerFailed = Math.max(0, num(attempts.failed) - contentSafetyFailed);
   const errorsResult = await fetchErrorRows({ since, orgId: orgFilter, limit: MAX_ERRORS });
 
   // 渠道显示名：从策略里取，取不到就只给 id（不再跨模块 import，避免把整条账单路由拖进监控）。
@@ -414,7 +436,6 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
   };
   // VibeCoding 的进行中任务只在进程内（SSE），库里没有 RUNNING 状态。
   const vibeTasks = getVibecodingActiveTasks();
-  const nowMs = Date.now();
   const stuck = [
     ...stuckAttemptRows.map((row) => ({
       kind: 'ATTEMPT', id: row.id, modality: row.modality || null, model: row.model || null,
@@ -503,8 +524,9 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     until: new Date().toISOString(),
     timezone: 'UTC',
     live: {
-      activeSessions: num(live?.active_sessions),
-      activeStudents: num(live?.active_students),
+      activeSessions: activeSessionRows.length,
+      activeStudents: activeSessionRows.reduce((sum, row) => sum + num(row.active_students), 0),
+      staleActiveSessions: staleSessionCount,
       runningAttempts: num(live?.running_attempts),
       queuedJobs: num(live?.queued_jobs),
       runningJobs: num(live?.running_jobs),
@@ -518,6 +540,9 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
       failed: num(attempts.failed),
       blocked: num(usage.blocked),
       errorRate: pct(num(attempts.failed), num(attempts.success) + num(attempts.failed)),
+      providerFailed,
+      contentSafetyFailed,
+      providerErrorRate: pct(providerFailed, num(attempts.success) + providerFailed),
       ...(billingVisible ? {
         saleFen: num(attempts.sale_fen),
         knownCostFen: num(attempts.known_cost_fen),
@@ -606,6 +631,86 @@ async function buildClassroom(sessionId) {
 
 // ── 路由 ────────────────────────────────────────────────────────────────────
 
+// ── 当前模型（监控台手动切换）──────────────────────────────────────────────
+// 行 = 学生实际用到的能力；候选 = 策略里能服务这个能力的渠道（按模型名推断模态）。
+// 切换只改路由（modalityChannels / imageModeChannels）与渠道默认模型，不删不改渠道本身。
+const MODEL_ROWS = Object.freeze([
+  { key: 'TEXT', label: '文本', modality: 'TEXT' },
+  { key: 'IMAGE_T2I', label: '文生图', modality: 'IMAGE' },
+  { key: 'IMAGE_I2I', label: '图生图', modality: 'IMAGE' },
+  { key: 'VIDEO', label: '视频', modality: 'VIDEO' },
+  { key: 'MUSIC', label: '音乐', modality: 'MUSIC' },
+]);
+
+function inferChannelModality(channel) {
+  const model = String(channel?.model || '').toLowerCase();
+  if (/music|mureka|song/.test(model)) return 'MUSIC';
+  if (/seedance|hailuo|video/.test(model)) return 'VIDEO';
+  if (/image|rhart|zhenzhen|flux|sdxl|dall/.test(model)) return 'IMAGE';
+  return 'TEXT';
+}
+
+function candidateChannels(policy, row) {
+  const channels = Array.isArray(policy?.channels) ? policy.channels : [];
+  return channels.filter((channel) => {
+    if (inferChannelModality(channel) !== row.modality) return false;
+    if (row.key === 'IMAGE_I2I') return /-i2i/i.test(String(channel.model || ''));
+    if (row.key === 'IMAGE_T2I') return !/-i2i/i.test(String(channel.model || ''));
+    return true;
+  }).flatMap((channel) => {
+    const models = Array.isArray(channel.models) && channel.models.length ? channel.models : [channel.model].filter(Boolean);
+    return [...new Set(models)].map((model) => ({
+      channelId: channel.id,
+      channelName: channel.name || channel.id,
+      model,
+    }));
+  });
+}
+
+function currentChannelId(policy, row) {
+  const modality = policy?.modalityChannels || {};
+  const imageModes = policy?.imageModeChannels || {};
+  if (row.key === 'IMAGE_T2I') return imageModes.TEXT || modality.IMAGE || '';
+  if (row.key === 'IMAGE_I2I') return imageModes.IMAGE_REFERENCE || modality.IMAGE || '';
+  return modality[row.modality] || '';
+}
+
+async function buildModelRows(policy) {
+  const since = new Date(Date.now() - 15 * 60_000).toISOString();
+  const healthRows = await arows(`SELECT channel_id, COUNT(*) calls,
+      SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) failed
+    FROM compute_attempts WHERE created_at>=? GROUP BY channel_id`, [since]);
+  const health = new Map(healthRows.map((row) => [row.channel_id, { calls: num(row.calls), failed: num(row.failed) }]));
+  const channels = new Map((policy.channels || []).map((channel) => [channel.id, channel]));
+  return MODEL_ROWS.map((row) => {
+    const currentId = currentChannelId(policy, row);
+    const current = channels.get(currentId) || null;
+    const options = candidateChannels(policy, row);
+    const currentHealth = health.get(currentId) || { calls: 0, failed: 0 };
+    const errorRate = pct(currentHealth.failed, currentHealth.calls);
+    const recommendation = errorRate !== null && errorRate >= 50 && currentHealth.calls >= 3
+      ? options.find((option) => {
+        if (option.channelId === currentId) return false;
+        const item = health.get(option.channelId) || { calls: 0, failed: 0 };
+        return item.calls === 0 || (pct(item.failed, item.calls) ?? 0) < 20;
+      }) || null
+      : null;
+    return {
+      key: row.key,
+      label: row.label,
+      modality: row.modality,
+      channelId: currentId || null,
+      channelName: current?.name || currentId || '未配置',
+      model: current?.model || null,
+      calls: currentHealth.calls,
+      failed: currentHealth.failed,
+      errorRate,
+      options,
+      recommendation,
+    };
+  });
+}
+
 export async function handleMonitor(ctx, part, method) {
   if (!part.startsWith('/dashboard/monitor')) return null;
   const suffix = part.slice('/dashboard/monitor'.length) || '/';
@@ -670,6 +775,57 @@ export async function handleMonitor(ctx, part, method) {
         errorCode: row.error_code || null, taskId: row.task_id || null,
       })),
     };
+  }
+
+  if (suffix === '/models' && method === 'GET') {
+    const row = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
+    let policy = {};
+    try { policy = JSON.parse(row?.ai_provider_policy || '{}') || {}; } catch { policy = {}; }
+    return { generatedAt: new Date().toISOString(), rows: await buildModelRows(policy) };
+  }
+
+  if (suffix === '/models/switch' && method === 'POST') {
+    if (!billingVisible) throw errors.forbidden('切换模型需要 AI 能力与价格权限', 'PERMISSION_DENIED', { permission: 'ADMIN_BILLING' });
+    const body = ctx.body && typeof ctx.body === 'object' ? ctx.body : {};
+    const key = String(body.key || '').toUpperCase();
+    const row = MODEL_ROWS.find((item) => item.key === key);
+    if (!row) throw errors.badRequest('未知的能力', 'MONITOR_MODEL_KEY_INVALID');
+    const stored = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
+    const before = stored?.ai_provider_policy || '{}';
+    let policy = null;
+    try { policy = JSON.parse(before); } catch { policy = null; }
+    if (!policy || typeof policy !== 'object') throw errors.badRequest('渠道策略不是合法 JSON，拒绝写入', 'MONITOR_MODEL_POLICY_INVALID');
+    const channelId = String(body.channelId || '').trim();
+    const channel = (Array.isArray(policy.channels) ? policy.channels : []).find((item) => item.id === channelId);
+    if (!channel) throw errors.badRequest('渠道不存在', 'MONITOR_MODEL_CHANNEL_INVALID');
+    const options = candidateChannels(policy, row);
+    if (!options.some((option) => option.channelId === channelId)) {
+      throw errors.badRequest('这个渠道不能服务该能力', 'MONITOR_MODEL_CHANNEL_INVALID');
+    }
+    const model = String(body.model || channel.model || '').trim();
+    const channelModels = [...(channel.models || []), channel.model].filter(Boolean);
+    if (model && !channelModels.includes(model)) throw errors.badRequest('模型不属于该渠道', 'MONITOR_MODEL_INVALID');
+    const oldChannelId = currentChannelId(policy, row);
+    if (model && channel.model !== model) channel.model = model;
+    policy.modalityChannels = { ...(policy.modalityChannels || {}) };
+    if (row.key === 'IMAGE_T2I') {
+      policy.modalityChannels.IMAGE = channelId;
+      policy.imageModeChannels = { ...(policy.imageModeChannels || {}), TEXT: channelId };
+    } else if (row.key === 'IMAGE_I2I') {
+      policy.imageModeChannels = { ...(policy.imageModeChannels || {}), IMAGE_REFERENCE: channelId };
+    } else {
+      policy.modalityChannels[row.modality] = channelId;
+    }
+    const after = JSON.stringify(policy);
+    const now = new Date().toISOString();
+    await aq('UPDATE platform_settings SET ai_provider_policy=?, updated_at=? WHERE id=1', [after, now]);
+    await aq(`INSERT INTO platform_config_change_logs(id,config_type,record_id,field_name,old_value,new_value,changed_by,reason,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`, [
+      id('ccl'), 'AI_PROVIDER_POLICY', '1', 'aiProviderPolicy', before, after,
+      ctx.auth?.user?.id || 'monitor',
+      `监控台切换模型：${row.label} ${oldChannelId || '未配置'} → ${channelId} · ${model}`, now,
+    ]);
+    return { ok: true, key: row.key, channelId, channelName: channel.name || channelId, model };
   }
 
   if (suffix === '/balance/history' && method === 'GET') {

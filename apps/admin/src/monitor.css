@@ -131,6 +131,15 @@
 .monitor-link-btn:hover { text-decoration: underline; }
 .monitor-card .top-gap { margin-top: 14px; }
 
+/* 当前模型：每行一个能力，右侧下拉 + 切换 */
+.monitor-models { margin-bottom: 12px; }
+.monitor-model-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.monitor-model-actions select {
+  background: var(--m-panel); color: var(--m-text); border: 1px solid var(--m-border);
+  border-radius: 6px; padding: 4px 8px; font-size: 11px; max-width: 280px;
+}
+.monitor-model-actions .monitor-btn { padding: 4px 10px; font-size: 11px; }
+
 .monitor-badge { font-size: 10px; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
 .monitor-badge.is-ok { color: #7ee787; background: #0f2a1a; }
 .monitor-badge.is-warning { color: #f0c674; background: #2a2110; }
