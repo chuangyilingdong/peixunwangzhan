@@ -30,7 +30,7 @@ process.env.PLATFORM_DATA_DIR = temp;
 process.env.AI_PROVIDER_SECRET_FILE = path.join(temp, 'secrets.json');
 process.env.PUBLIC_SITE_URL = SELF;
 
-const { runningHubProvider } = await import('../apps/server/src/services/runningHubProvider.js');
+const { runningHubProvider, runningHubSiteCurrency, reportedCostFromUsage } = await import('../apps/server/src/services/runningHubProvider.js');
 const { providerSelectionForModality } = await import('../apps/server/src/routes/aiGeneration.js');
 const { generationProviderInfo, getGenerationProvider, adaptOptionsToCandidate } = await import('../apps/server/src/services/generationProvider.js');
 const { RUNNINGHUB_FAMILIES, runningHubFamilyModality, runningHubModelCatalog } = await import('../apps/server/src/services/runningHubProvider.js');
@@ -279,9 +279,12 @@ await check('后台「读取模型」：RunningHub 列本地 family 清单（上
   assert.ok(all.every((item) => item.ownedBy === 'runninghub' && item.capabilities === null));
   assert.ok(all.every((item) => item.displayName.includes(item.id) && /（.+）/.test(item.displayName)));
   assert.deepEqual(runningHubModelCatalog('IMAGE').map((item) => item.id).sort(), [
-    'rhart-image-g-2-official-i2i', 'rhart-image-g-2-official-t2i', 'rhart-image-g-2.5-i2i', 'rhart-image-g-2.5-t2i',
+    'rhart-image-g-2-official-i2i', 'rhart-image-g-2-official-t2i', 'rhart-image-g-2.5-i2i',
+    'rhart-image-g-2.5-official-token-t2i', 'rhart-image-g-2.5-t2i',
   ]);
-  assert.deepEqual(runningHubModelCatalog('VIDEO').map((item) => item.id).sort(), ['bytedance/seedance-2.0-global-fast', 'minimax/hailuo-h3']);
+  assert.deepEqual(runningHubModelCatalog('VIDEO').map((item) => item.id).sort(), [
+    'bytedance/seedance-2.0-global-fast', 'minimax/hailuo-h3', 'rhart-video/sparkvideo-2.0-mini',
+  ]);
   assert.deepEqual(runningHubModelCatalog('MUSIC').map((item) => item.id), ['minimax/music-2.6']);
   assert.equal(runningHubModelCatalog('TEXT').length, 0);
 });
@@ -365,6 +368,17 @@ await check('成本：query.usage.thirdPartyConsumeMoney 记 REPORTED（USD × 6
   assert.equal(video.assets[0].metadata.reportedCost.upstreamAmount, 0.4);
   assert.equal(video.assets[0].metadata.reportedCost.fen, 267);
   assert.equal(video.assets[0].metadata.reportedCost.billingSeconds, 5);
+});
+
+await check('成本：站点币种 .ai=USD / .cn=CNY（CN 站实扣字段是人民币）', () => {
+  assert.equal(runningHubSiteCurrency('https://www.runninghub.ai/openapi/v2'), 'USD');
+  assert.equal(runningHubSiteCurrency('https://www.runninghub.cn/openapi/v2'), 'CNY');
+  const cny = reportedCostFromUsage({ usage: { thirdPartyConsumeMoney: '1.5', billingSeconds: '5' } }, 'CNY');
+  assert.equal(cny.fen, 150, 'CN 1.5 元 = 150 分');
+  assert.equal(cny.upstreamCurrency, 'CNY');
+  const usd = reportedCostFromUsage({ usage: { thirdPartyConsumeMoney: '0.4', billingSeconds: '5' } }, 'USD');
+  assert.equal(usd.fen, 267, 'USD 0.4 × 6.684 = 267 分');
+  assert.equal(usd.upstreamCurrency, 'USD');
 });
 
 await check('对账：queryTask 能按 taskId 取回结果（重启/TIMEOUT 后补素材）', async () => {

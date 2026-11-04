@@ -309,29 +309,53 @@ function httpError(response, payload) {
 }
 
 /**
- * 上游实扣（RunningHub query 的 usage）：
- *   `thirdPartyConsumeMoney` 是美元金额（实测 0.4 = $0.40），`billingSeconds` 是实际计费秒数。
- * 直接按固定 6.684 折人民币记 REPORTED，不再靠价目表估；取不到就返回 null 走 COMPUTED 兜底。
+ * 站点币种：runninghub.ai 的 `thirdPartyConsumeMoney` 是美元；
+ * runninghub.cn 的同一字段是**人民币**（2026-11-04 实测：CN 视频 usage=1.5，钱包余额 197.90→196.40）。
+ * 价格字段（upstreamUnitPrices）也按这个币种解释：.ai 存美分，.cn 存人民币分。
  */
-function reportedCostFromUsage(payload) {
+export function runningHubSiteCurrency(endpoint) {
+  try {
+    const host = new URL(String(endpoint || '').trim()).hostname.toLowerCase();
+    return host.endsWith('runninghub.cn') ? 'CNY' : 'USD';
+  } catch { return 'USD'; }
+}
+
+/**
+ * 上游实扣（RunningHub query 的 usage）：
+ *   `thirdPartyConsumeMoney` 的币种随站点（.ai=USD / .cn=CNY），`billingSeconds` 是实际计费秒数。
+ * .ai 按固定 6.684 折人民币；.cn 本来就是人民币。取不到就返回 null 走 COMPUTED 兜底。
+ */
+export function reportedCostFromUsage(payload, currency = 'USD') {
   const usage = payload?.usage && typeof payload.usage === 'object' ? payload.usage : null;
   if (!usage) return null;
-  const usd = Number(usage.thirdPartyConsumeMoney);
-  if (!Number.isFinite(usd) || usd <= 0) return null;
-  const cny = usd * USD_CNY_RATE;
+  const amount = Number(usage.thirdPartyConsumeMoney);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const billingSeconds = Number(usage.billingSeconds) || null;
+  if (String(currency || 'USD').toUpperCase() === 'CNY') {
+    return {
+      source: 'REPORTED',
+      currency: 'CNY',
+      amount: Math.round(amount * 100) / 100,
+      fen: Math.round(amount * 100),
+      upstreamCurrency: 'CNY',
+      upstreamAmount: amount,
+      billingSeconds,
+    };
+  }
+  const cny = amount * USD_CNY_RATE;
   return {
     source: 'REPORTED',
     currency: 'CNY',
     amount: Math.round(cny * 100) / 100,
     fen: Math.round(cny * 100),
     upstreamCurrency: 'USD',
-    upstreamAmount: usd,
+    upstreamAmount: amount,
     usdCnyRate: USD_CNY_RATE,
-    billingSeconds: Number(usage.billingSeconds) || null,
+    billingSeconds,
   };
 }
 
-function extractAsset(payload, { modality, title, family, name, taskId }) {
+function extractAsset(payload, { modality, title, family, name, taskId, currency = 'USD' }) {
   const results = Array.isArray(payload?.results) ? payload.results : [];
   const item = results.find((entry) => entry && (entry.url || entry.outputUrl || entry.output_url));
   const url = item ? String(item.url || item.outputUrl || item.output_url) : '';
@@ -339,7 +363,7 @@ function extractAsset(payload, { modality, title, family, name, taskId }) {
     throw providerError('RunningHub 任务成功，但没有返回结果 URL', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
   }
   const { mimeType, ext } = mimeForOutput(item?.outputType, modality, url);
-  const reportedCost = reportedCostFromUsage(payload);
+  const reportedCost = reportedCostFromUsage(payload, currency);
   return {
     assets: [{
       label: String(title || `RunningHub ${modality || '素材'}`).slice(0, 120),
@@ -360,7 +384,7 @@ function extractAsset(payload, { modality, title, family, name, taskId }) {
   };
 }
 
-async function pollTask({ base, taskId, apiKey, modality, title, family, name, maxWaitMs, pollIntervalMs }) {
+async function pollTask({ base, taskId, apiKey, modality, title, family, name, maxWaitMs, pollIntervalMs, currency = 'USD' }) {
   const startedAt = Date.now();
   let waitMs = Math.max(1000, Number(pollIntervalMs) || DEFAULT_POLL_MS);
   let transientFailures = 0;
@@ -388,7 +412,7 @@ async function pollTask({ base, taskId, apiKey, modality, title, family, name, m
       throw httpError(response, payload);
     }
     const status = String(payload?.status || '').toUpperCase();
-    if (status === 'SUCCESS') return extractAsset(payload, { modality, title, family, name, taskId });
+    if (status === 'SUCCESS') return extractAsset(payload, { modality, title, family, name, taskId, currency });
     if (['FAILED', 'CANCEL', 'CANCELLED'].includes(status)) {
       const reason = String(payload?.errorMessage || payload?.message || payload?.errorCode || 'RunningHub 任务失败').slice(0, 400);
       throw providerError(reason, PROVIDER_ERROR_CODES.UPSTREAM);
@@ -464,6 +488,7 @@ export function runningHubProvider({
       return pollTask({
         base, taskId, apiKey, modality: key, title,
         family: resolvedFamily, name, maxWaitMs, pollIntervalMs,
+        currency: runningHubSiteCurrency(base),
       });
     },
     /**
@@ -486,6 +511,7 @@ export function runningHubProvider({
       if (status === 'SUCCESS') {
         const extracted = extractAsset(payload, {
           modality: key, title, family: resolveFamily(providerFamily, key), name, taskId: task,
+          currency: runningHubSiteCurrency(base),
         });
         return { state: 'SUCCEEDED', asset: extracted.assets[0] };
       }

@@ -1,7 +1,7 @@
 import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_KEY, AI_PROVIDER_MODALITY_ENDPOINTS, AI_PROVIDER_POLL_INTERVAL_MS, AI_PROVIDER_VOICE, AI_PROVIDER_MAX_WAIT_MS, AI_PROVIDER_TIMEOUT_MS, PUBLIC_SITE_URL } from '../config.js';
 import { isMockProvider, providerDefinition, unavailableProvider, validateProviderConfig } from './providerContract.js';
 import { openAiCompatibleProvider } from './openaiCompatibleProvider.js';
-import { runningHubProvider } from './runningHubProvider.js';
+import { runningHubProvider, runningHubSiteCurrency } from './runningHubProvider.js';
 import { getProviderApiKey } from './providerSecret.js';
 import { id, json, nowIso, q, row, arow, aq } from '../lib.js';
 import { priceFenFor } from './computePool.js';
@@ -209,9 +209,11 @@ export function getGenerationProvider(selection = {}) {
         // 合同单价折算（P90）：用量证据按模态采集（文本看上游 token 回执，图/视频/音乐看请求参数）。
         // 有单价 + 有用量才算得出来；算不出来就保持 UNKNOWN，**绝不按 0 计**。
         const usage = collectUsageEvidence({ modality, result, request: attemptArgs.options || null });
-        // RunningHub 价目是美元（存的是美分），按固定 6.684 折人民币；
-        // 其它渠道（DeepSeek / 国内站）本来就是人民币，不换算。
-        const priceCurrency = String(provider.name || '').toLowerCase() === 'runninghub' ? 'USD' : 'CNY';
+        // RunningHub 价目是美元（美分）还是人民币（分）取决于站点：
+        //   .ai = USD（按 6.684 折人民币）；.cn = CNY（本来就是人民币分）。
+        const priceCurrency = String(provider.name || '').toLowerCase() === 'runninghub'
+          ? runningHubSiteCurrency(selected.endpoint)
+          : 'CNY';
         const fx = priceCurrency === 'USD' ? await getUsdCnyRate() : null;
         const contract = reported ? null : computeContractCost({
           modality, model: provider.model,
