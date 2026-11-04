@@ -348,11 +348,12 @@ export function Monitor({ api, user }) {
           <div className="monitor-sub">每 5 秒刷新 · 快照构建 {snapshot?.buildMs ?? '—'}ms · 最后更新 {updatedAt ? fmtTime(updatedAt) : '—'} · 时间口径 UTC</div>
         </div>
         <div className="monitor-controls">
-          <label>窗口
+          <label>统计窗口
             <select value={windowKey} onChange={(event) => setWindowKey(event.target.value)}>
               {WINDOWS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
+          <span className="monitor-control-note">只影响调用/成本/错误/渠道健康；钱包、活跃课堂、模型健康是实时或固定口径</span>
           <button type="button" className="monitor-btn" onClick={() => setPaused((value) => !value)}>{paused ? '继续' : '暂停'}</button>
           <button type="button" className="monitor-btn" onClick={refreshNow}>刷新</button>
           {canBilling ? <button type="button" className="monitor-btn" onClick={exportCsv} disabled={exporting} title="导出最近 24 小时调用明细（当前机构筛选生效）">{exporting ? '导出中…' : '导出 CSV'}</button> : null}
@@ -396,7 +397,7 @@ export function Monitor({ api, user }) {
           hint={`画布排队 ${live.queuedJobs ?? 0} · 运行 ${live.runningJobs ?? 0} · VibeCoding ${live.vibecodingRunning ?? 0}${snapshot?.queue?.ok ? ` · RH 队列 ${snapshot.queue.queued}/${snapshot.queue.running}` : ''}`} />
         <Kpi label={`${windowKey} 调用`} value={usage.calls ?? 0} hint={`成功 ${usage.success ?? 0} · 失败 ${usage.failed ?? 0} · 拦截 ${usage.blocked ?? 0}`} />
         <Kpi label="错误率" tone={(errorRate || 0) >= 20 ? 'danger' : (errorRate || 0) >= 5 ? 'warning' : 'default'}
-          value={pctText(errorRate)} hint={canBilling ? `已知成本 ${fmtYuan(usage.knownCostFen)} · 未知 ${usage.unknownCostCalls ?? 0} 笔` : '按上游尝试计算'} />
+          value={pctText(errorRate)} hint={canBilling ? `${windowKey} · 已知成本 ${fmtYuan(usage.knownCostFen)} · 未知 ${usage.unknownCostCalls ?? 0} 笔` : `${windowKey} · 按上游尝试计算`} />
       </div>
 
       {canBilling ? (
@@ -480,7 +481,7 @@ export function Monitor({ api, user }) {
 
       <div className="monitor-grid">
         <section className="monitor-card">
-          <div className="monitor-card-title">机构
+          <div className="monitor-card-title">机构 · {windowKey} 用量
             <span className="monitor-org-tools">
               {orgId
                 ? <button type="button" className="monitor-link-btn" onClick={() => { setOrgId(''); setSelectedSessionId(''); }}>← 全部机构</button>
@@ -512,7 +513,7 @@ export function Monitor({ api, user }) {
         </section>
 
         <section className="monitor-card">
-          <div className="monitor-card-title">活跃课堂
+          <div className="monitor-card-title">活跃课堂 · {windowKey} 用量
             <span>
               {sessions.length} 场
               {live.staleActiveSessions ? ` · 另有 ${live.staleActiveSessions} 场未结束但 90 分钟无活动` : ''}

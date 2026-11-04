@@ -91,6 +91,12 @@
 .monitor-table-wrap td { padding: 7px 8px; border-bottom: 1px solid #18222e; vertical-align: top; }
 .monitor-table-wrap tbody tr { cursor: pointer; }
 .monitor-table-wrap tbody tr:hover { background: #16202b; }
+/* 后台全局 .admin-console tbody tr:hover 是白底，特异性比这里高，必须显式覆盖 */
+.admin-console .monitor-page .monitor-table-wrap tbody tr:hover,
+.monitor-page .monitor-table-wrap tbody tr:hover { background: #16202b; }
+.admin-console .monitor-page .monitor-table-wrap tbody tr.is-selected:hover,
+.monitor-page .monitor-table-wrap tbody tr.is-selected:hover { background: #0f2a2a; }
+.monitor-models tbody tr { cursor: default; }
 .monitor-table-wrap tbody tr.is-selected { background: #0f2a2a; box-shadow: inset 2px 0 0 var(--m-teal); }
 .monitor-table-wrap td strong { color: var(--m-strong); font-weight: 600; }
 .monitor-empty { color: var(--m-muted); font-size: 12px; padding: 14px 4px; text-align: center; }
@@ -139,6 +145,9 @@
   border-radius: 6px; padding: 4px 8px; font-size: 11px; max-width: 280px;
 }
 .monitor-model-actions .monitor-btn { padding: 4px 10px; font-size: 11px; }
+
+/* 统计窗口说明：只影响按窗口聚合的卡片，实时/固定口径单独标注 */
+.monitor-control-note { color: var(--m-muted); font-size: 10px; line-height: 1.4; max-width: 190px; }
 
 .monitor-badge { font-size: 10px; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
 .monitor-badge.is-ok { color: #7ee787; background: #0f2a1a; }
