@@ -198,6 +198,7 @@ export function Monitor({ api, user }) {
   const sessions = snapshot?.sessions || [];
   const errors = snapshot?.errors || [];
   const errorTop = snapshot?.errorTop || [];
+  const blockedReasons = snapshot?.blockedReasons || [];
   const stuck = snapshot?.stuck || [];
   const costTop = snapshot?.costTop || [];
   const channels = snapshot?.channels || [];
@@ -229,6 +230,9 @@ export function Monitor({ api, user }) {
   if (stuck.length > 0) {
     alerts.push({ key: 'stuck', level: 'warning', text: `卡住任务 ${stuck.length} 个（超过 15 分钟未完成）` });
   }
+  if (snapshot?.queue && snapshot.queue.ok === false && snapshot.queue.error) {
+    alerts.push({ key: 'queue', level: 'warning', text: `RH 队列读取失败：${String(snapshot.queue.error).slice(0, 60)}` });
+  }
 
   const callsSeries = series.map((item) => item.calls);
   const failedSeries = series.map((item) => item.failed);
@@ -249,7 +253,7 @@ export function Monitor({ api, user }) {
         <div>
           <div className="monitor-eyebrow">平台控制台 / 实时监控</div>
           <h1>实时监控 <span className={`monitor-status is-${status}`}>{statusText}</span></h1>
-          <div className="monitor-sub">每 5 秒刷新 · 最后更新 {updatedAt ? fmtTime(updatedAt) : '—'} · 时间口径 UTC</div>
+          <div className="monitor-sub">每 5 秒刷新 · 快照构建 {snapshot?.buildMs ?? '—'}ms · 最后更新 {updatedAt ? fmtTime(updatedAt) : '—'} · 时间口径 UTC</div>
         </div>
         <div className="monitor-controls">
           <label>窗口
@@ -487,6 +491,17 @@ export function Monitor({ api, user }) {
               <span className="monitor-muted">{fmtTime(item.lastAt)}</span>
             </div>)}
           </div> : <div className="monitor-empty">没有错误</div>}
+          {blockedReasons.length ? <>
+            <div className="monitor-card-title top-gap">拦截原因 <span>{windowKey}</span></div>
+            <div className="monitor-top">
+              {blockedReasons.map((item) => <div key={item.code} className="monitor-top-row">
+                <span className="monitor-dot is-warn" />
+                <span className="monitor-code">{item.code}</span>
+                <span className="monitor-top-count">{item.count}</span>
+                <span />
+              </div>)}
+            </div>
+          </> : null}
         </section>
       </div>
 

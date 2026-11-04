@@ -219,6 +219,7 @@ async function fetchErrorRows({ since, orgId = '', sessionId = '', userId = '', 
 // ── 快照 ────────────────────────────────────────────────────────────────────
 
 async function buildSnapshot({ windowKey, orgId, billingVisible }) {
+  const buildStartedAt = Date.now();
   const minutes = WINDOWS[windowKey];
   const since = sinceOf(minutes);
   const seriesSince = since;
@@ -230,7 +231,7 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
   // 不设下界会把它们永远算成"正在跑"（2026-11-04 实测 16 条，最新也是几小时前）。
   const activeSince = sinceOf(2 * 60);
 
-  const [live, usageWindow, attemptsWindow, seriesRows, orgRows, orgStats, sessionRows, stuckAttemptRows, stuckJobRows, costRows, policyRow, queueStatus, channelRows, durationRows, lastSuccessRows, failoverRows, studentCostRows] = await Promise.all([
+  const [live, usageWindow, attemptsWindow, seriesRows, orgRows, orgStats, sessionRows, stuckAttemptRows, stuckJobRows, costRows, policyRow, queueStatus, channelRows, durationRows, lastSuccessRows, failoverRows, studentCostRows, blockedRows] = await Promise.all([
     arow(`SELECT
         (SELECT COUNT(*) FROM class_sessions WHERE status='ACTIVE') active_sessions,
         (SELECT COUNT(*) FROM session_students WHERE status='ACTIVE') active_students,
@@ -317,6 +318,10 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
       FROM compute_attempts a LEFT JOIN users u ON u.id=a.user_id
       WHERE a.created_at>=? AND a.user_id IS NOT NULL
       GROUP BY a.user_id ORDER BY known_cost_fen DESC LIMIT 8`, [since]),
+    // 拦截原因（usage_records.status='BLOCKED'）：额度/并发/课堂暂停/内容审核等。
+    arows(`SELECT COALESCE(fail_code,'UNKNOWN') code, COUNT(*) n
+        FROM usage_records WHERE created_at>=? AND status='BLOCKED'
+        GROUP BY fail_code ORDER BY n DESC LIMIT 8`, [since]),
   ]);
 
   const sessionIds = sessionRows.map((row) => row.id);
@@ -492,6 +497,7 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
 
   return {
     generatedAt: new Date().toISOString(),
+    buildMs: Date.now() - buildStartedAt,
     window: windowKey,
     since,
     until: new Date().toISOString(),
@@ -526,6 +532,7 @@ async function buildSnapshot({ windowKey, orgId, billingVisible }) {
     errorTop: errorsResult.top,
     stuck,
     queue: queueStatus,
+    blockedReasons: blockedRows.map((row) => ({ code: row.code || 'UNKNOWN', count: num(row.n) })),
     channels,
     failover,
     ...(billingVisible ? { costTop, studentCostTop } : {}),

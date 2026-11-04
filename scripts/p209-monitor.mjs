@@ -169,6 +169,11 @@ await check('学生成本 Top：student_a1 ¥3.00，student_a2 未知 1 笔', ()
   assert.equal(a2.knownCostFen, 0);
   assert.equal(a2.unknownCalls, 1);
 });
+await check('快照：拦截原因按 fail_code 聚合', () => {
+  assert.equal(snapshot.blockedReasons[0].code, 'SESSION_AI_PAUSED');
+  assert.equal(snapshot.blockedReasons[0].count, 1);
+  assert.equal(typeof snapshot.buildMs, 'number');
+});
 await check('权限：只有 ADMIN_ANALYTICS 时不下发成本字段', async () => {
   const limited = await call('/snapshot', { window: '5m' }, analyticsAuth);
   assert.equal(limited.billingVisible, false);

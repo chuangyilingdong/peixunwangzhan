@@ -129,6 +129,7 @@
   background: none; border: 0; padding: 0; color: var(--m-teal); font-size: 11px; cursor: pointer;
 }
 .monitor-link-btn:hover { text-decoration: underline; }
+.monitor-card .top-gap { margin-top: 14px; }
 
 .monitor-badge { font-size: 10px; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
 .monitor-badge.is-ok { color: #7ee787; background: #0f2a1a; }
