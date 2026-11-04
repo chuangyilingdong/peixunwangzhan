@@ -179,19 +179,33 @@ function buildVideoBody({ prompt, options, family, refs }) {
   return body;
 }
 
+/**
+ * MiniMax Music 2.6 的歌词规则（2026-11-04 真机验证，花了 3 个 FAILED 任务才确认）：
+ *   · 有人声：`lyrics` 必填；空歌词会以 `FAILED / 模型响应异常` 结束（提交时是正常 QUEUED，很容易被当成偶发故障）。
+ *   · 纯音乐：必须 `isInstrumental: true`，且**不能带 `lyrics` 字段**（空串也不行）。
+ * 平台侧：歌词模式用学生输入当词；描述模式的词由平台 LLM 代写，写不出来会先报错，
+ * 所以空歌词只剩「学生没写词」这一种 —— 这时出纯音乐，比甩一个上游故障合理。
+ */
 function buildMusicBody({ prompt, options }) {
   const mode = String(options.mode || '').toUpperCase();
-  const lyrics = mode === 'LYRICS' ? String(prompt || '') : String(options.lyrics || '');
+  const lyrics = (mode === 'LYRICS' ? String(prompt || '') : String(options.lyrics || '')).trim();
   const style = mode === 'LYRICS'
     ? String(options.defaultStyle || '流行音乐').trim()
     : String(prompt || '').trim();
-  return {
+  const body = {
     prompt: style || '流行音乐',
-    lyrics,
     format: 'mp3',
     sampleRate: 44100,
     bitrate: 256000,
   };
+  if (lyrics) {
+    body.lyrics = lyrics;
+    body.isInstrumental = false;
+    body.lyricsOptimizer = false;
+  } else {
+    body.isInstrumental = true;
+  }
+  return body;
 }
 
 function mimeForOutput(outputType, modality, url = '') {

@@ -165,7 +165,19 @@ await check('音乐：/minimax/music-2.6 + 歌词模式', async () => {
   assert.equal(sub.body.prompt, '轻快儿童音乐');
   assert.equal(sub.body.lyrics, '小小少年慢慢走');
   assert.equal(sub.body.format, 'mp3');
+  assert.equal(sub.body.isInstrumental, false);
+  assert.equal(sub.body.lyricsOptimizer, false);
   assert.equal(result.assets[0].mimeType, 'audio/mpeg');
+});
+
+await check('音乐·无歌词 → isInstrumental=true 且不带 lyrics（空串会被上游判「模型响应异常」）', async () => {
+  const provider = make('minimax/music-2.6');
+  await provider.generate({ modality: 'MUSIC', prompt: '轻快的儿童电子音乐', options: {} });
+  const sub = lastSubmission();
+  assert.equal(sub.body.isInstrumental, true);
+  assert.equal('lyrics' in sub.body, false);
+  assert.equal('lyricsOptimizer' in sub.body, false);
+  assert.equal(sub.body.prompt, '轻快的儿童电子音乐');
 });
 
 await check('参考素材：相对地址补公网；data: 明确拒绝', async () => {
