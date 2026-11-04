@@ -129,8 +129,7 @@
 .monitor-drawer header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 8px; }
 .monitor-drawer .top-gap { margin-top: 14px; }
 
-/* 供应商钱包：只读表格，行不可点；站名可点开新窗口 */
-.monitor-wallets { margin-bottom: 12px; }
-.monitor-wallets .monitor-table-wrap tbody tr { cursor: default; }
-.monitor-wallets a { color: var(--m-teal); text-decoration: none; }
-.monitor-wallets a:hover { text-decoration: underline; }
+/* 总余额 KPI：下面列各供应商的人民币余额 */
+.monitor-wallet-lines { margin-top: 6px; display: grid; gap: 2px; }
+.monitor-wallet-line { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--m-muted); }
+.monitor-wallet-line b { color: var(--m-text); font-weight: 600; font-variant-numeric: tabular-nums; }

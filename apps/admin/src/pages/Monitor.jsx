@@ -6,6 +6,7 @@ const WINDOWS = [['5m', '5 分钟'], ['15m', '15 分钟'], ['60m', '60 分钟']]
 const REFRESH_MS = 5000;
 const BALANCE_REFRESH_MS = 60000;
 const LOW_BALANCE_YUAN = 50;
+const WALLET_LABELS = { 'runninghub-global': 'RH 全球站', 'runninghub-cn': 'RH 国内站', xkwuai: 'xkwuai' };
 
 const fmtTime = (value) => {
   if (!value) return '—';
@@ -15,7 +16,6 @@ const fmtTime = (value) => {
 };
 const fmtMinute = (value) => (value ? String(value).slice(11, 16) : '');
 const fmtYuan = (fen) => `¥${(Number(fen || 0) / 100).toFixed(2)}`;
-const fmtAmount = (amount, currency) => (amount === null || amount === undefined ? '—' : `${Number(amount).toFixed(2)} ${currency || ''}`.trim());
 const pctText = (value) => (value === null || value === undefined ? '—' : `${value}%`);
 
 function usePolling(fn, { intervalMs = REFRESH_MS, enabled = true, deps = [], onError } = {}) {
@@ -153,9 +153,10 @@ export function Monitor({ api, user }) {
     const data = await api.get('admin/dashboard/monitor/balance', { signal, timeoutMs: 20000 });
     setBalance(data);
     setBalanceError(null);
-    const primary = data?.accounts?.find((item) => item.ok && item.amount !== null && item.amount !== undefined);
-    if (primary) {
-      setBalanceHistory((current) => [...current.slice(-119), { at: Date.now(), value: Number(primary.amount) }]);
+    const sources = data?.wallets?.sources || [];
+    const total = sources.reduce((sum, item) => sum + (item.ok && item.cny !== null && item.cny !== undefined ? Number(item.cny) : 0), 0);
+    if (sources.some((item) => item.ok && item.cny !== null && item.cny !== undefined)) {
+      setBalanceHistory((current) => [...current.slice(-119), { at: Date.now(), value: Math.round(total * 100) / 100 }]);
     }
   }, { intervalMs: BALANCE_REFRESH_MS, enabled: canBilling && !paused, deps: [canBilling, paused, tick], onError: (error) => setBalanceError(error) });
 
@@ -177,19 +178,13 @@ export function Monitor({ api, user }) {
   const sessions = snapshot?.sessions || [];
   const errors = snapshot?.errors || [];
   const errorTop = snapshot?.errorTop || [];
-  const account = balance?.accounts?.find((item) => item.ok) || balance?.accounts?.[0] || null;
   const wallets = balance?.wallets?.sources || [];
-  const globalWallet = wallets.find((item) => item.id === 'runninghub-global') || null;
-  const fxRate = balance?.wallets?.fx?.usdCny ?? 7.2;
-  // accountStatus 返回的币种以账户实际为准（生产实测是 USD + RH 币）；阈值按币种分开，
-  // 不要拿人民币阈值去套美元余额。
-  const lowBalance = (() => {
-    if (!account || account.amount === null || account.amount === undefined) return false;
-    const amount = Number(account.amount);
-    if (account.currencyLike === 'CNY' || !account.currency) return amount < LOW_BALANCE_YUAN;
-    if (account.currencyLike === 'USD') return amount < 10;
-    return false;
-  })();
+  const walletTotalCny = wallets.some((item) => item.ok && item.cny !== null && item.cny !== undefined)
+    ? wallets.reduce((sum, item) => sum + (item.ok && item.cny !== null && item.cny !== undefined ? Number(item.cny) : 0), 0)
+    : null;
+  const walletFailed = wallets.filter((item) => !item.ok).length;
+  // 总余额按人民币口径比较（RH 全球 ×7.2、xkwuai 1:1），不再拿美元阈值套。
+  const lowBalance = walletTotalCny !== null && walletTotalCny < LOW_BALANCE_YUAN;
   const errorRate = usage.errorRate;
   const status = lowBalance || (errorRate !== null && errorRate >= 20) ? 'critical'
     : (errorRate !== null && errorRate >= 5) || (usage.failed || 0) > 0 ? 'degraded' : 'ok';
@@ -231,12 +226,22 @@ export function Monitor({ api, user }) {
       {snapshotError ? <div className="monitor-banner is-danger">监控数据读取失败：{snapshotError.message || '未知错误'}（显示上一次数据）</div> : null}
 
       <div className="monitor-kpis">
-        <Kpi label="RunningHub 余额" tone={lowBalance ? 'danger' : 'teal'}
-          value={canBilling ? (account ? fmtAmount(account.amount, account.currency) : (balanceError ? '不可用' : '读取中…')) : '无权限'}
-          hint={canBilling
-            ? (account ? `${account.channels?.join('、') || '—'}${account.remainCoins !== null && account.remainCoins !== undefined ? ` · RH 币 ${account.remainCoins}` : ''}` : (balanceError?.message || '等待上游余额'))
-            : '需要「AI 能力与价格」权限'}>
-          {canBilling && account ? <div className="monitor-kpi-foot">当前任务 {account.currentTaskCounts ?? '—'} · {account.apiType || '—'}{globalWallet?.cny != null ? ` · ≈ ¥${Number(globalWallet.cny).toFixed(2)}` : ''} · 更新 {fmtTime(balance?.fetchedAt)}</div> : null}
+        <Kpi label="总余额 · 三家供应商" tone={lowBalance ? 'danger' : 'teal'}
+          value={canBilling ? (walletTotalCny !== null ? `¥${walletTotalCny.toFixed(2)}` : (balanceError ? '不可用' : '读取中…')) : '无权限'}
+          hint={canBilling ? (walletFailed ? `${walletFailed} 家读取失败` : undefined) : '需要「AI 能力与价格」权限'}>
+          {canBilling ? (
+            <>
+              <div className="monitor-wallet-lines">
+                {wallets.length ? wallets.map((item) => (
+                  <div key={item.id} className="monitor-wallet-line">
+                    <span>{WALLET_LABELS[item.id] || item.name}</span>
+                    <b>{item.ok && item.cny !== null && item.cny !== undefined ? `¥${Number(item.cny).toFixed(2)}` : (item.error || '不可用')}</b>
+                  </div>
+                )) : <div className="monitor-wallet-line"><span>读取中…</span></div>}
+              </div>
+              <div className="monitor-kpi-foot">RH 全球 ×7.2 · xkwuai 1:1 · 更新 {fmtTime(balance?.fetchedAt)}</div>
+            </>
+          ) : null}
         </Kpi>
         <Kpi label="活跃课堂" value={live.activeSessions ?? 0} hint={`在线学生 ${live.activeStudents ?? 0}`} />
         <Kpi label="运行中任务" value={live.runningAttempts ?? 0} hint={`画布排队 ${live.queuedJobs ?? 0} · 运行 ${live.runningJobs ?? 0}`} />
@@ -263,29 +268,6 @@ export function Monitor({ api, user }) {
           <Sparkline values={balanceSeries} />
         </div> : null}
       </div>
-
-      {canBilling ? (
-        <div className="monitor-card monitor-wallets">
-          <div className="monitor-card-title">供应商钱包 <span>RH 全球 USD ×{fxRate} · xkwuai 按人民币 1:1 · 60 秒缓存</span></div>
-          <div className="monitor-table-wrap">
-            <table>
-              <thead><tr><th>站点</th><th>余额</th><th>折合人民币</th><th>状态</th></tr></thead>
-              <tbody>
-                {wallets.length ? wallets.map((item) => (
-                  <tr key={item.id} title={item.channels?.length ? `渠道：${item.channels.join('、')}` : ''}>
-                    <td><strong><a href={item.site} target="_blank" rel="noreferrer">{item.name}</a></strong></td>
-                    <td>{item.ok ? `${fmtAmount(item.amount, item.currency)}${item.remainCoins !== null && item.remainCoins !== undefined ? ` · RH 币 ${item.remainCoins}` : ''}` : '—'}</td>
-                    <td>{item.cny !== null && item.cny !== undefined ? `¥${Number(item.cny).toFixed(2)}` : '—'}</td>
-                    <td>{item.ok ? '正常' : (item.error || '不可用')}</td>
-                  </tr>
-                )) : (
-                  <tr><td colSpan={4}>{balanceError ? (balanceError.message || '读取失败') : '读取中…'}</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : null}
 
       <div className="monitor-grid">
         <section className="monitor-card">
