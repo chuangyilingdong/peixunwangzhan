@@ -854,38 +854,38 @@ function ReconcileView({ api }) {
     { key: 'label', label: '供应商', render: (row) => <strong>{row.label}</strong> },
     { key: 'calls', label: '调用' },
     { key: 'costFen', label: '成本', render: (row) => money(row.costFen) },
-    { key: 'reportedFen', label: '上游实报', render: (row) => money(row.reportedFen) },
+    { key: 'reportedFen', label: '上游实报', render: (row) => row.reportedCalls ? money(row.reportedFen) : '—（不逐笔回报）' },
     { key: 'computedFen', label: '按价目折算', render: (row) => money(row.computedFen) },
-    { key: 'unknownCalls', label: '未知' },
+    { key: 'unknownCallsSince', label: '未知（配价后）' },
   ];
   const modelColumns = [
     { key: 'model', label: '模型', render: (row) => <><strong>{row.model}</strong>{muted(row.supplierLabel || '')}</> },
     { key: 'modality', label: '类型' },
     { key: 'calls', label: '调用' },
     { key: 'costFen', label: '成本', render: (row) => money(row.costFen) },
-    { key: 'reportedFen', label: '上游实报', render: (row) => money(row.reportedFen) },
+    { key: 'reportedFen', label: '上游实报', render: (row) => row.reportedCalls ? money(row.reportedFen) : '—（不逐笔回报）' },
     { key: 'computedFen', label: '按价目折算', render: (row) => money(row.computedFen) },
-    { key: 'unknownCalls', label: '未知' },
+    { key: 'unknownCallsSince', label: '未知（配价后）' },
   ];
   const lessonColumns = [
     { key: 'seriesTitle', label: '课包 / 课时', render: (row) => <><strong>{row.lessonTitle}</strong><span className="monitor-muted">{row.seriesTitle || '未归属课包'}</span></> },
     { key: 'calls', label: '调用' },
     { key: 'costFen', label: '成本', render: (row) => money(row.costFen) },
-    { key: 'unknownCalls', label: '未知' },
+    { key: 'unknownCallsSince', label: '未知（配价后）' },
   ];
   const nameColumns = (label, nameKey, extraKey) => [
     { key: nameKey, label, render: (row) => <><strong>{row[nameKey] || '—'}</strong>{extraKey && row[extraKey] ? muted(row[extraKey]) : null}</> },
     { key: 'calls', label: '调用' },
     { key: 'costFen', label: '成本', render: (row) => money(row.costFen) },
-    { key: 'unknownCalls', label: '未知' },
+    { key: 'unknownCallsSince', label: '未知（配价后）' },
   ];
 
   const exportReconcile = () => {
     if (!data) return;
     const escape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
     const yuan = (fen) => (Number(fen || 0) / 100).toFixed(2);
-    const lines = [['维度', '名称', '子项', '调用', '成本(元)', '上游实报(元)', '按价目折算(元)', '未知'].map(escape).join(',')];
-    const push = (kind, name, sub, row) => lines.push([kind, name, sub, row.calls ?? '', yuan(row.costFen), yuan(row.reportedFen), yuan(row.computedFen), row.unknownCalls ?? ''].map(escape).join(','));
+    const lines = [['维度', '名称', '子项', '调用', '成本(元)', '上游实报(元)', '按价目折算(元)', '未知（配价后）'].map(escape).join(',')];
+    const push = (kind, name, sub, row) => lines.push([kind, name, sub, row.calls ?? '', yuan(row.costFen), yuan(row.reportedFen), yuan(row.computedFen), row.unknownCallsSince ?? ''].map(escape).join(','));
     for (const row of data.bySupplier || []) push('供应商', row.label, '', row);
     for (const row of data.byModel || []) push('模型', row.model, row.supplierLabel || '', row);
     for (const row of data.byOrg || []) push('机构', row.name, '', row);
@@ -963,6 +963,7 @@ function ReconcileView({ api }) {
           </table></div> : null}
         </> : null}
       </section>
+      <div className="monitor-muted">上游实报 = 供应商逐笔回传的金额（REPORTED）；xkwuai 不逐笔回传，所以显示「—」，它的实际支出看上面的逐笔账单核对。未知列只算配价基线之后的调用。</div>
       <ReconcileTable title="按供应商" rows={data.bySupplier || []} columns={supplierColumns} />
       <ReconcileTable title="按模型" rows={data.byModel || []} columns={modelColumns} />
       <ReconcileTable title="按机构" rows={data.byOrg || []} columns={nameColumns('机构', 'name')} />

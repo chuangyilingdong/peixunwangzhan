@@ -302,6 +302,7 @@ async function buildReconcile({ day }) {
         SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) success,
         SUM(CASE WHEN status IN ('FAILED','BLOCKED') THEN 1 ELSE 0 END) failed,
         SUM(CASE WHEN status='SUCCESS' AND cost_source='REPORTED' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) reported_fen,
+        SUM(CASE WHEN status='SUCCESS' AND cost_source='REPORTED' THEN 1 ELSE 0 END) reported_calls,
         SUM(CASE WHEN status='SUCCESS' AND cost_source='COMPUTED' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) computed_fen,
         SUM(CASE WHEN status='SUCCESS' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) cost_fen,
         SUM(CASE WHEN status='SUCCESS' AND (cost_source='UNKNOWN' OR upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls,
@@ -310,29 +311,33 @@ async function buildReconcile({ day }) {
       FROM compute_attempts WHERE created_at>=? AND created_at<? GROUP BY channel_id, model, modality`, [coverageSince, coverageSince, start, end]),
     arows(`SELECT a.org_id, COALESCE(o.name,a.org_id) name, COUNT(*) calls,
         SUM(CASE WHEN a.status='SUCCESS' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) cost_fen,
-        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
+        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls,
+        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) AND a.created_at>=? THEN 1 ELSE 0 END) unknown_calls_since
       FROM compute_attempts a LEFT JOIN organizations o ON o.id=a.org_id
-      WHERE a.created_at>=? AND a.created_at<? AND a.org_id IS NOT NULL GROUP BY a.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [start, end]),
+      WHERE a.created_at>=? AND a.created_at<? AND a.org_id IS NOT NULL GROUP BY a.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [coverageSince, start, end]),
     arows(`SELECT a.class_session_id, COALESCE(s.title,'未命名课堂') title, s.org_id, o.name org_name, COUNT(*) calls,
         SUM(CASE WHEN a.status='SUCCESS' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) cost_fen,
-        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
+        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls,
+        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) AND a.created_at>=? THEN 1 ELSE 0 END) unknown_calls_since
       FROM compute_attempts a LEFT JOIN class_sessions s ON s.id=a.class_session_id LEFT JOIN organizations o ON o.id=s.org_id
       WHERE a.created_at>=? AND a.created_at<? AND a.class_session_id IS NOT NULL
-      GROUP BY a.class_session_id, s.title, s.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [start, end]),
+      GROUP BY a.class_session_id, s.title, s.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [coverageSince, start, end]),
     arows(`SELECT a.user_id, COALESCE(u.display_name,a.user_id) name, u.org_id, o.name org_name, COUNT(*) calls,
         SUM(CASE WHEN a.status='SUCCESS' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) cost_fen,
-        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
+        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls,
+        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) AND a.created_at>=? THEN 1 ELSE 0 END) unknown_calls_since
       FROM compute_attempts a LEFT JOIN users u ON u.id=a.user_id LEFT JOIN organizations o ON o.id=u.org_id
       WHERE a.created_at>=? AND a.created_at<? AND a.user_id IS NOT NULL
-      GROUP BY a.user_id, u.display_name, u.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [start, end]),
+      GROUP BY a.user_id, u.display_name, u.org_id, o.name ORDER BY cost_fen DESC LIMIT 50`, [coverageSince, start, end]),
     arows(`SELECT a.lesson_id, COALESCE(l.title,'未命名课时') lesson_title, COALESCE(series.title,'') series_title, COUNT(*) calls,
         SUM(CASE WHEN a.status='SUCCESS' AND a.upstream_cost_fen IS NOT NULL THEN a.upstream_cost_fen ELSE 0 END) cost_fen,
-        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls
+        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) THEN 1 ELSE 0 END) unknown_calls,
+        SUM(CASE WHEN a.status='SUCCESS' AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL) AND a.created_at>=? THEN 1 ELSE 0 END) unknown_calls_since
       FROM compute_attempts a
       LEFT JOIN course_lessons l ON l.id=a.lesson_id
       LEFT JOIN course_series series ON series.id=l.series_id
       WHERE a.created_at>=? AND a.created_at<? AND a.lesson_id IS NOT NULL
-      GROUP BY a.lesson_id, l.title, l.series_id, series.title ORDER BY cost_fen DESC LIMIT 50`, [start, end]),
+      GROUP BY a.lesson_id, l.title, l.series_id, series.title ORDER BY cost_fen DESC LIMIT 50`, [coverageSince, start, end]),
   ]);
 
   let policy = {};
@@ -352,15 +357,16 @@ async function buildReconcile({ day }) {
       supplierLabel: supplier.label,
       calls: num(row.calls), success: num(row.success), failed: num(row.failed),
       costFen: num(row.cost_fen), reportedFen: num(row.reported_fen), computedFen: num(row.computed_fen),
+      reportedCalls: num(row.reported_calls),
       unknownCalls: num(row.unknown_calls), successSince: num(row.success_since), unknownCallsSince: num(row.unknown_calls_since),
     };
     models.push(item);
     totals.calls += item.calls; totals.success += item.success; totals.failed += item.failed;
     totals.costFen += item.costFen; totals.reportedFen += item.reportedFen;
     totals.computedFen += item.computedFen; totals.unknownCalls += item.unknownCalls;
-    const agg = suppliers.get(supplier.key) || { key: supplier.key, label: supplier.label, calls: 0, costFen: 0, reportedFen: 0, computedFen: 0, unknownCalls: 0 };
+    const agg = suppliers.get(supplier.key) || { key: supplier.key, label: supplier.label, calls: 0, costFen: 0, reportedFen: 0, computedFen: 0, reportedCalls: 0, unknownCalls: 0 };
     agg.calls += item.calls; agg.costFen += item.costFen; agg.reportedFen += item.reportedFen;
-    agg.computedFen += item.computedFen; agg.unknownCalls += item.unknownCalls;
+    agg.computedFen += item.computedFen; agg.unknownCalls += item.unknownCalls; agg.reportedCalls += item.reportedCalls;
     agg.successSince = (agg.successSince || 0) + item.successSince;
     agg.unknownCallsSince = (agg.unknownCallsSince || 0) + item.unknownCallsSince;
     suppliers.set(supplier.key, agg);
@@ -391,12 +397,12 @@ async function buildReconcile({ day }) {
     byModel: models.map((item) => ({
       ...item, costFen: money(item.costFen), reportedFen: money(item.reportedFen), computedFen: money(item.computedFen),
     })).sort((a, b) => b.costFen - a.costFen).slice(0, 50),
-    byOrg: orgRows.map((row) => ({ orgId: row.org_id, name: row.name, calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls) })),
-    bySession: sessionRows.map((row) => ({ sessionId: row.class_session_id, title: row.title, orgName: row.org_name || '', calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls) })),
-    byStudent: studentRows.map((row) => ({ userId: row.user_id, name: row.name, orgName: row.org_name || '', calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls) })),
+    byOrg: orgRows.map((row) => ({ orgId: row.org_id, name: row.name, calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls), unknownCallsSince: num(row.unknown_calls_since) })),
+    bySession: sessionRows.map((row) => ({ sessionId: row.class_session_id, title: row.title, orgName: row.org_name || '', calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls), unknownCallsSince: num(row.unknown_calls_since) })),
+    byStudent: studentRows.map((row) => ({ userId: row.user_id, name: row.name, orgName: row.org_name || '', calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls), unknownCallsSince: num(row.unknown_calls_since) })),
     byLesson: lessonRows.map((row) => ({
       lessonId: row.lesson_id, lessonTitle: row.lesson_title, seriesTitle: row.series_title || '',
-      calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls),
+      calls: num(row.calls), costFen: money(row.cost_fen), unknownCalls: num(row.unknown_calls), unknownCallsSince: num(row.unknown_calls_since),
     })),
   };
 }
