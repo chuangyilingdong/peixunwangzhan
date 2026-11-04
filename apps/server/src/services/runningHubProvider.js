@@ -206,7 +206,7 @@ function buildImageBody({ prompt, options, imageUrls, family }) {
   const body = { prompt: String(prompt || '') };
   if (options.aspectRatio) body.aspectRatio = String(options.aspectRatio);
   if (options.resolution) body.resolution = String(options.resolution);
-  if (family === 'rhart-image-g-2-official') body.quality = String(options.quality || OFFICIAL_IMAGE_QUALITY);
+  if (String(family || '').startsWith('rhart-image-g-2-official')) body.quality = String(options.quality || OFFICIAL_IMAGE_QUALITY);
   if (imageUrls.length) body.imageUrls = imageUrls;
   return body;
 }
