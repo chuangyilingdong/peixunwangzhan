@@ -209,7 +209,7 @@ export function getGenerationProvider(selection = {}) {
         // 合同单价折算（P90）：用量证据按模态采集（文本看上游 token 回执，图/视频/音乐看请求参数）。
         // 有单价 + 有用量才算得出来；算不出来就保持 UNKNOWN，**绝不按 0 计**。
         const usage = collectUsageEvidence({ modality, result, request: attemptArgs.options || null });
-        // RunningHub 价目是美元（存的是美分），按**调用当时**的实时汇率折人民币；
+        // RunningHub 价目是美元（存的是美分），按固定 6.684 折人民币；
         // 其它渠道（DeepSeek / 国内站）本来就是人民币，不换算。
         const priceCurrency = String(provider.name || '').toLowerCase() === 'runninghub' ? 'USD' : 'CNY';
         const fx = priceCurrency === 'USD' ? await getUsdCnyRate() : null;

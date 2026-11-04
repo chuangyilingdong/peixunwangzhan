@@ -386,8 +386,7 @@ export function Monitor({ api, user }) {
                 )) : <div className="monitor-wallet-line"><span>读取中…</span></div>}
               </div>
               <div className="monitor-kpi-foot">
-                RH 全球 ×{balance?.wallets?.fx?.usdCny ? Number(balance.wallets.fx.usdCny).toFixed(3) : '—'}
-                {balance?.wallets?.fx?.stale ? '（汇率离线，回落到 7.2）' : '（实时汇率）'} · xkwuai 1:1 · 更新 {fmtTime(balance?.fetchedAt)}
+                RH 全球 ×{Number(balance?.wallets?.fx?.usdCny ?? 6.684).toFixed(3)}（固定汇率） · xkwuai 1:1 · 更新 {fmtTime(balance?.fetchedAt)}
               </div>
             </>
           ) : null}

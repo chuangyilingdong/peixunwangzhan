@@ -85,7 +85,7 @@ async function referenceFor(lessons, policy) {
         usage.audio = box.audio === true;
         if (box.audio === null || box.audio === undefined) { entry.assumed = true; caveats.push('视频框体没定「是否含音频」，参考值按不含音频估'); }
       }
-      // RunningHub 价目是美元（美分），按实时汇率折人民币；其它渠道本来就是人民币。
+      // RunningHub 价目是美元（美分），按固定 6.684 折人民币；其它渠道本来就是人民币。
       const priceCurrency = String(channel.provider || '').toLowerCase() === 'runninghub' ? 'USD' : 'CNY';
       const fx = priceCurrency === 'USD' ? await getUsdCnyRate() : null;
       const computed = computeContractCost({

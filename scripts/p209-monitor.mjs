@@ -302,9 +302,6 @@ const realFetch = globalThis.fetch;
 let accountCalls = 0;
 globalThis.fetch = async (url, options) => {
   const target = String(url);
-  if (target.includes('open.er-api.com')) {
-    return new Response(JSON.stringify({ result: 'success', rates: { CNY: 7.2 }, time_last_update_unix: 0 }), { status: 200, headers: { 'content-type': 'application/json' } });
-  }
   if (target.includes('/openapi/v2/queue/status')) {
     return new Response(JSON.stringify({ code: 0, msg: 'success', data: { apiKeyType: 'SHARED', concurrentLimit: 100, instanceCount: 0, runningCount: '3', queuedCount: '5', totalCurrentTasks: '8' } }), { status: 200, headers: { 'content-type': 'application/json' } });
   }
@@ -361,7 +358,7 @@ try {
   const wallets = await getWalletBalances({ refresh: true, runningHub: balance });
   await check('钱包：三家并出，CN 原币、xkwuai quota→USD 5 且按人民币 1:1、RH 全球 USD×7.2', () => {
     const byId = Object.fromEntries(wallets.sources.map((item) => [item.id, item]));
-    assert.equal(wallets.fx.usdCny, 7.2);
+    assert.equal(wallets.fx.usdCny, 6.684);
     assert.deepEqual(Object.keys(byId).sort(), ['runninghub-cn', 'runninghub-global', 'xkwuai']);
     assert.equal(byId['runninghub-global'].amount, 199.5);
     assert.equal(byId['runninghub-global'].cny, 199.5);
@@ -374,8 +371,8 @@ try {
   });
 
   const usdWallets = await getWalletBalances({ refresh: true, runningHub: { accounts: [{ ok: true, amount: 15.009, currency: 'USD', currencyLike: 'USD' }] } });
-  await check('钱包：全球站 USD 余额折人民币（15.009 → ¥108.06）', () => {
-    assert.equal(usdWallets.sources.find((item) => item.id === 'runninghub-global').cny, 108.06);
+  await check('钱包：全球站 USD 余额按固定 6.684 折人民币（15.009 → ¥100.32）', () => {
+    assert.equal(usdWallets.sources.find((item) => item.id === 'runninghub-global').cny, 100.32);
   });
 
   await recordWalletSamples();

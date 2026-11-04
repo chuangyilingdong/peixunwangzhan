@@ -338,7 +338,7 @@ export function computeContractCost({ modality, model = '', unitPrices = null, m
     const layers = ['MODEL', 'MODALITY'].filter((level) => levels.has(level));
     const currency = String(priceCurrency || 'CNY').toUpperCase();
     if (currency === 'USD') {
-      // RunningHub 的价目是美元（字段里存的是**美分**）。按调用当时的实时汇率折人民币；
+      // RunningHub 的价目是美元（字段里存的是**美分**）。按固定 6.684 折人民币；
       // 拿不到汇率宁可回落 UNKNOWN，绝不按 0 记成本。
       const rate = Number(usdCnyRate);
       if (!Number.isFinite(rate) || rate <= 0) return null;
