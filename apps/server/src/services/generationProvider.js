@@ -6,6 +6,7 @@ import { getProviderApiKey } from './providerSecret.js';
 import { id, json, nowIso, q, row, arow, aq } from '../lib.js';
 import { priceFenFor } from './computePool.js';
 import { collectUsageEvidence, computeContractCost, contractCostRuleSnapshot, normalizeModelUnitPrices, normalizeUpstreamUnitPrices, reportedCostRuleSnapshot } from './upstreamCost.js';
+import { getUsdCnyRate } from './fxRate.js';
 
 // 「我们自己站点上的素材」是哪些域名。上游在境外**抓不到它们**（2026-09-21 实测：
 // 要么压根连不上、要么读一半就断），所以适配器会把这些 URL 先传到上游再用上游自己的地址发
@@ -208,7 +209,16 @@ export function getGenerationProvider(selection = {}) {
         // 合同单价折算（P90）：用量证据按模态采集（文本看上游 token 回执，图/视频/音乐看请求参数）。
         // 有单价 + 有用量才算得出来；算不出来就保持 UNKNOWN，**绝不按 0 计**。
         const usage = collectUsageEvidence({ modality, result, request: attemptArgs.options || null });
-        const contract = reported ? null : computeContractCost({ modality, model: provider.model, unitPrices: selected.upstreamUnitPrices || null, modelUnitPrices: selected.modelUnitPrices || null, usage });
+        // RunningHub 价目是美元（存的是美分），按**调用当时**的实时汇率折人民币；
+        // 其它渠道（DeepSeek / 国内站）本来就是人民币，不换算。
+        const priceCurrency = String(provider.name || '').toLowerCase() === 'runninghub' ? 'USD' : 'CNY';
+        const fx = priceCurrency === 'USD' ? await getUsdCnyRate() : null;
+        const contract = reported ? null : computeContractCost({
+          modality, model: provider.model,
+          unitPrices: selected.upstreamUnitPrices || null,
+          modelUnitPrices: selected.modelUnitPrices || null,
+          usage, priceCurrency, usdCnyRate: fx?.rate ?? null,
+        });
         // 成本来源只剩这三种（见上面那段注释：估算那档已退役）
         const computedSource = provider.name === 'local-mock' ? 'MOCK' : reported ? 'REPORTED' : contract ? 'COMPUTED' : 'UNKNOWN';
         const upstreamCostFen = computedSource === 'MOCK' ? 0

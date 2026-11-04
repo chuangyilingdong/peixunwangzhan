@@ -306,7 +306,7 @@ function result(fen, unitPrice, usage, level, layers) {
  * level  = 实际命中层级：'MODEL'（用到了模型级价）/ 'MODALITY'
  * layers = 实际用到的层级列表，例如 ['MODEL'] 或 ['MODEL','MODALITY']（混合）
  */
-export function computeContractCost({ modality, model = '', unitPrices = null, modelUnitPrices = null, usage = null } = {}) {
+export function computeContractCost({ modality, model = '', unitPrices = null, modelUnitPrices = null, usage = null, priceCurrency = 'CNY', usdCnyRate = null } = {}) {
   const selected = resolveUnitPrice({ unitPrices, modelUnitPrices, model, modality });
   if (!selected) return null;
   const key = String(modality || '').trim().toUpperCase();
@@ -336,6 +336,15 @@ export function computeContractCost({ modality, model = '', unitPrices = null, m
   };
   const done = (fen, unitPrice, usedUsage) => {
     const layers = ['MODEL', 'MODALITY'].filter((level) => levels.has(level));
+    const currency = String(priceCurrency || 'CNY').toUpperCase();
+    if (currency === 'USD') {
+      // RunningHub 的价目是美元（字段里存的是**美分**）。按调用当时的实时汇率折人民币；
+      // 拿不到汇率宁可回落 UNKNOWN，绝不按 0 记成本。
+      const rate = Number(usdCnyRate);
+      if (!Number.isFinite(rate) || rate <= 0) return null;
+      const converted = key === 'TEXT' ? subFen(fen * rate) : Math.round(fen * rate);
+      return result(converted, { ...unitPrice, priceCurrency: 'USD', usdCnyRate: rate }, usedUsage, layers.includes('MODEL') ? 'MODEL' : 'MODALITY', layers.length ? layers : ['MODALITY']);
+    }
     return result(fen, unitPrice, usedUsage, layers.includes('MODEL') ? 'MODEL' : 'MODALITY', layers.length ? layers : ['MODALITY']);
   };
 

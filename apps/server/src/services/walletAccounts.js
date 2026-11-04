@@ -7,8 +7,8 @@
  *   · xkwuai 是 New API 类中转站：访问令牌调 `GET /api/user/self` 取 quota，
  *     `quota_per_unit`（默认 500000）把 quota 换成美元；
  *   · 美元口径分两类（2026-11-04 用户确认）：
- *     - RunningHub 全球站是真美元，按 **1 USD = 7.2 元** 折算；
- *     - xkwuai 虽然显示 USD，但站内按人民币 1:1 计价，**不乘 7.2**（amount 即人民币）；
+ *     - RunningHub 全球站是真美元，按 **实时汇率**（fxRate.js，open.er-api.com，1 小时缓存）折算；
+ *     - xkwuai 虽然显示 USD，但站内按人民币 1:1 计价，**不乘汇率**（amount 即人民币）；
  *   · 原币金额始终保留，cny 是展示用的人民币口径；
  *   · Key/令牌存在 provider-secrets 的 `wallet-runninghub-cn` / `wallet-xkwuai`，
  *     永不回显、永不进日志；未配置时如实返回「未配置」而不是 0；
@@ -16,8 +16,8 @@
  */
 import { getProviderApiKey } from './providerSecret.js';
 import { getRunningHubBalance, probeRunningHubAccount } from './runningHubAccount.js';
+import { getUsdCnyRate } from './fxRate.js';
 
-const USD_CNY_RATE = 7.2;
 const CACHE_TTL_MS = 60_000;
 const TIMEOUT_MS = 9000;
 const XKWUAI_BASE = 'https://www.xkwuai.cn';
@@ -41,10 +41,12 @@ function numberOrNull(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-function toCny(amount, currency) {
+function toCny(amount, currency, rate) {
   const n = numberOrNull(amount);
   if (n === null) return null;
-  return String(currency || '').toUpperCase() === 'USD' ? Math.round(n * USD_CNY_RATE * 100) / 100 : n;
+  if (String(currency || '').toUpperCase() !== 'USD') return n;
+  const fx = Number(rate);
+  return Number.isFinite(fx) && fx > 0 ? Math.round(n * fx * 100) / 100 : null;
 }
 
 /** xkwuai 的 quota 换算参数（quota_per_unit 可能被站方改过，不写死）。 */
@@ -136,7 +138,7 @@ function parseXkwuaiSecret(raw) {
   return { token: text, userId: '' };
 }
 
-async function runningHubSource({ id, name, site, account, configured }) {
+async function runningHubSource({ id, name, site, account, configured, rate }) {
   if (!configured) {
     return { id, name, site, ok: false, reason: 'NOT_CONFIGURED', error: '未配置 Key', amount: null, currency: null, cny: null };
   }
@@ -151,7 +153,7 @@ async function runningHubSource({ id, name, site, account, configured }) {
     error: account.ok ? null : (account.error || '余额读取失败'),
     amount: numberOrNull(account.amount),
     currency: account.currency || null,
-    cny: account.ok ? toCny(account.amount, account.currency) : null,
+    cny: account.ok ? toCny(account.amount, account.currency, rate) : null,
     remainCoins: numberOrNull(account.remainCoins),
     currentTaskCounts: numberOrNull(account.currentTaskCounts),
     apiType: account.apiType || null,
@@ -164,6 +166,8 @@ let inflight = null;
 
 async function loadWallets({ runningHub }) {
   const fetchedAt = new Date().toISOString();
+  // RunningHub 全球站是美元，按实时汇率折人民币；xkwuai 仍按用户口径 1:1。
+  const fx = await getUsdCnyRate();
   const global = await runningHub;
   const globalAccount = global?.accounts?.find((item) => item.ok) || global?.accounts?.[0] || null;
 
@@ -176,8 +180,8 @@ async function loadWallets({ runningHub }) {
   ]);
 
   const sources = [
-    await runningHubSource({ id: 'runninghub-global', name: 'RunningHub 全球站', site: GLOBAL_SITE, account: globalAccount, configured: Boolean(globalAccount) }),
-    await runningHubSource({ id: 'runninghub-cn', name: 'RunningHub 国内站', site: CN_SITE, account: cn, configured: Boolean(cnKey) }),
+    await runningHubSource({ id: 'runninghub-global', name: 'RunningHub 全球站', site: GLOBAL_SITE, account: globalAccount, configured: Boolean(globalAccount), rate: fx.rate }),
+    await runningHubSource({ id: 'runninghub-cn', name: 'RunningHub 国内站', site: CN_SITE, account: cn, configured: Boolean(cnKey), rate: fx.rate }),
   ];
   sources.push({
     id: 'xkwuai',
@@ -198,7 +202,13 @@ async function loadWallets({ runningHub }) {
   return {
     ok: sources.some((item) => item.ok),
     fetchedAt,
-    fx: { usdCny: USD_CNY_RATE },
+    fx: {
+      usdCny: fx.rate,
+      source: fx.source,
+      fetchedAt: fx.fetchedAt,
+      updatedAt: fx.updatedAt,
+      stale: Boolean(fx.stale),
+    },
     sources,
   };
 }
@@ -216,7 +226,7 @@ export async function getWalletBalances({ refresh = false, runningHub = null } =
         return value;
       } catch (error) {
         if (cache) return { ...cache.value, stale: true, error: scrub(error?.message || '钱包刷新失败') };
-        return { ok: false, fetchedAt: new Date().toISOString(), fx: { usdCny: USD_CNY_RATE }, sources: [], error: scrub(error?.message || '钱包刷新失败') };
+        return { ok: false, fetchedAt: new Date().toISOString(), fx: { usdCny: null }, sources: [], error: scrub(error?.message || '钱包刷新失败') };
       } finally {
         inflight = null;
       }

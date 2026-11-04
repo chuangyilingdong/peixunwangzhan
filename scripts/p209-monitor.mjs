@@ -34,6 +34,7 @@ const { aq, arow, arows } = await import('../packages/database/src/store.js');
 const { handleMonitor } = await import('../apps/server/src/routes/admin/monitor.js');
 const { getRunningHubBalance, resetRunningHubBalanceCache, probeRunningHubAccount, getRunningHubQueue, resetRunningHubQueueCache } = await import('../apps/server/src/services/runningHubAccount.js');
 const { getWalletBalances, resetWalletBalanceCache, probeXkwuaiAccount } = await import('../apps/server/src/services/walletAccounts.js');
+const { resetUsdCnyRateCache } = await import('../apps/server/src/services/fxRate.js');
 const { recordWalletSamples, getWalletHistory } = await import('../apps/server/src/services/walletHistory.js');
 const { startVibecodingTask, finishVibecodingTask } = await import('../apps/server/src/services/vibecodingActivity.js');
 const { setProviderApiKey, clearProviderApiKey } = await import('../apps/server/src/services/providerSecret.js');
@@ -301,6 +302,9 @@ const realFetch = globalThis.fetch;
 let accountCalls = 0;
 globalThis.fetch = async (url, options) => {
   const target = String(url);
+  if (target.includes('open.er-api.com')) {
+    return new Response(JSON.stringify({ result: 'success', rates: { CNY: 7.2 }, time_last_update_unix: 0 }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
   if (target.includes('/openapi/v2/queue/status')) {
     return new Response(JSON.stringify({ code: 0, msg: 'success', data: { apiKeyType: 'SHARED', concurrentLimit: 100, instanceCount: 0, runningCount: '3', queuedCount: '5', totalCurrentTasks: '8' } }), { status: 200, headers: { 'content-type': 'application/json' } });
   }
@@ -353,6 +357,7 @@ try {
   setProviderApiKey('cn-test-key', 'wallet-runninghub-cn');
   setProviderApiKey(JSON.stringify({ token: 'xk-test-token', userId: '7' }), 'wallet-xkwuai');
   resetWalletBalanceCache();
+  resetUsdCnyRateCache();
   const wallets = await getWalletBalances({ refresh: true, runningHub: balance });
   await check('钱包：三家并出，CN 原币、xkwuai quota→USD 5 且按人民币 1:1、RH 全球 USD×7.2', () => {
     const byId = Object.fromEntries(wallets.sources.map((item) => [item.id, item]));
@@ -428,6 +433,7 @@ try {
   resetRunningHubBalanceCache();
   resetRunningHubQueueCache();
   resetWalletBalanceCache();
+  resetUsdCnyRateCache();
 }
 
 const failed = checks.filter((item) => !item.ok);

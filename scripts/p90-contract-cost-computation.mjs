@@ -18,7 +18,7 @@ process.env.AI_PROVIDER_API_KEY = 'p90-secret';
 const { getGenerationProvider } = await import('../apps/server/src/services/generationProvider.js');
 const { recordAiUsage } = await import('../apps/server/src/services/creditUsage.js');
 const {
-  compareCostSources, costSourcePriority, normalizeModelUnitPrices, normalizeUpstreamUnitPrices, validateModelUnitPrices, validateUpstreamUnitPrices,
+  compareCostSources, costSourcePriority, normalizeModelUnitPrices, normalizeUpstreamUnitPrices, validateModelUnitPrices, validateUpstreamUnitPrices, computeContractCost,
 } = await import('../apps/server/src/services/upstreamCost.js');
 const { normalizeAiProviderPolicy, getAiProviderPolicy, handleAdminBillingConfig } = await import('../apps/server/src/routes/billingConfig.js');
 const { providerSelectionForModality } = await import('../apps/server/src/routes/aiGeneration.js');
@@ -295,6 +295,26 @@ try {
   await provider.generate({ modality: 'VIDEO', prompt: 'hailuo 5s', options: { durationSeconds: 5, resolution: '768P' } });
   attempt = await attemptOf(provider);
   assert.equal(attempt.upstream_cost_fen, 40, '非 seedance 不套最低计费');
+
+  /* ②' RunningHub（美元价目）：字段存美分，按调用当时的实时汇率折人民币 */
+  const usdImage = computeContractCost({
+    modality: 'IMAGE', model: 'rhart-image-g-2.5-t2i',
+    unitPrices: { IMAGE: { perImageFen: 5 } }, usage: { images: 1 },
+    priceCurrency: 'USD', usdCnyRate: 6.684,
+  });
+  assert.equal(usdImage.fen, 33, '5 美分 × 6.684 = 33 分');
+  assert.equal(usdImage.unitPrice.priceCurrency, 'USD');
+  assert.equal(usdImage.unitPrice.usdCnyRate, 6.684);
+  const usdVideo = computeContractCost({
+    modality: 'VIDEO', model: 'bytedance/seedance-2.0-global-fast',
+    unitPrices: { VIDEO: { perSecondFen: 8 } }, usage: { seconds: 5, resolution: '480p' },
+    priceCurrency: 'USD', usdCnyRate: 6.684,
+  });
+  assert.equal(usdVideo.fen, 481, 'seedance 5s→9s：9 × 8 美分 × 6.684 = 481 分');
+  assert.equal(computeContractCost({
+    modality: 'IMAGE', model: 'x', unitPrices: { IMAGE: { perImageFen: 5 } }, usage: { images: 1 },
+    priceCurrency: 'USD', usdCnyRate: null,
+  }), null, '美元价目但拿不到汇率 → UNKNOWN，不按 0');
 
   // 缺秒数（拿不到请求参数）→ UNKNOWN，不按 0
   provider = getGenerationProvider(selection());

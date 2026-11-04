@@ -20,6 +20,7 @@
 import { count, lessonCanvasConfig, parseJson, row, rows, arow, arows, acount } from '../lib.js';
 import { normalizeModelUnitPrices, normalizeUpstreamUnitPrices, computeContractCost, resolveUnitPrice } from './upstreamCost.js';
 import { effectiveCapabilities, modalityChannel } from './modelCapabilities.js';
+import { getUsdCnyRate } from './fxRate.js';
 
 /** 金额一律按「分」保留 4 位小数：文本单笔成本天然小于 1 分（见 upstreamCost.js 的说明）。 */
 function fen(value) {
@@ -84,7 +85,13 @@ async function referenceFor(lessons, policy) {
         usage.audio = box.audio === true;
         if (box.audio === null || box.audio === undefined) { entry.assumed = true; caveats.push('视频框体没定「是否含音频」，参考值按不含音频估'); }
       }
-      const computed = computeContractCost({ modality, model, unitPrices, modelUnitPrices, usage });
+      // RunningHub 价目是美元（美分），按实时汇率折人民币；其它渠道本来就是人民币。
+      const priceCurrency = String(channel.provider || '').toLowerCase() === 'runninghub' ? 'USD' : 'CNY';
+      const fx = priceCurrency === 'USD' ? await getUsdCnyRate() : null;
+      const computed = computeContractCost({
+        modality, model, unitPrices, modelUnitPrices, usage,
+        priceCurrency, usdCnyRate: fx?.rate ?? null,
+      });
       if (!computed) {
         if (modality === 'TEXT') {
           entry.reason = 'TEXT_PER_TOKEN';
