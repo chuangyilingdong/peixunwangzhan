@@ -225,20 +225,6 @@ export function xkwuaiQuotaToFen(quota) {
   return Math.round((value / 500000) * 100 * 10000) / 10000;
 }
 
-/** 用一个 token 问 xkwuai `/api/user/self` 的账号 id；不是用户令牌就返回 null。 */
-async function probeXkwuaiAccountId(token) {
-  if (!token) return null;
-  try {
-    const response = await fetch('https://www.xkwuai.cn/api/user/self', {
-      headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000),
-    });
-    const payload = await response.json().catch(() => null);
-    return payload?.data?.id ?? null;
-  } catch {
-    return null;
-  }
-}
-
 /** 拉取 xkwuai 某一天的逐笔日志（new-api `/api/log/self`，分页，只读）。 */
 async function fetchXkwuaiLogs(startSec, endSec) {
   const raw = getProviderApiKey('wallet-xkwuai');
@@ -1092,12 +1078,12 @@ export async function handleMonitor(ctx, part, method) {
     const xkwuaiChannels = (policy.channels || [])
       .filter((channel) => String(channel.endpoint || '').toLowerCase().includes('xkwuai'));
     const channelIds = xkwuaiChannels.map((channel) => channel.id);
-    // 渠道 Key 与钱包令牌是不是同一个 xkwuai 账号？不是的话，钱包日志核对不了渠道账单。
-    let walletAccountId = null;
-    try { walletAccountId = JSON.parse(getProviderApiKey('wallet-xkwuai') || '{}').userId ?? null; } catch { walletAccountId = null; }
-    const channelKey = xkwuaiChannels[0] ? getProviderApiKey(xkwuaiChannels[0].id) : '';
-    const channelAccountId = await probeXkwuaiAccountId(channelKey);
-    const sameAccount = Boolean(channelAccountId && walletAccountId && String(channelAccountId) === String(walletAccountId));
+    // 渠道 Key 是 API 令牌（sk-…），不是账号的访问令牌；它和钱包是同一个账号（2026-11-04 实测：
+    // 用渠道 Key 发一条最小请求，钱包账号日志 28→29）。所以这里不能用 /api/user/self 判账号。
+    // 日志只覆盖当前账号“看得见”的记录：换 Key/账号之前的历史调用不在其中，比较时以日志首条为起点。
+    const firstLogAt = items.length
+      ? new Date(Math.min(...items.map((item) => Number(item.created_at) * 1000))).toISOString()
+      : null;
     // 账户级实付：xkwuai 钱包在当天首尾采样的差额（覆盖该账号所有调用，日志可能被上游清理）。
     const walletRows = await arows(`SELECT created_at, cny FROM monitor_wallet_samples
       WHERE source_id='xkwuai' AND ok=1 AND cny IS NOT NULL AND created_at>=? AND created_at<?
@@ -1108,6 +1094,7 @@ export async function handleMonitor(ctx, part, method) {
       ? Math.round((Number(firstWallet.cny) - Number(lastWallet.cny)) * 100 * 10000) / 10000
       : null;
     let ourFen = 0; let ourCalls = 0;
+    let ourFenSinceLog = 0; let ourCallsSinceLog = 0;
     if (channelIds.length) {
       const row = await arow(`SELECT COUNT(*) calls,
           SUM(CASE WHEN status='SUCCESS' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) fen
@@ -1115,22 +1102,29 @@ export async function handleMonitor(ctx, part, method) {
         [start, end, ...channelIds]);
       ourCalls = num(row?.calls);
       ourFen = Math.round(num(row?.fen) * 10000) / 10000;
+      const sinceLog = firstLogAt && firstLogAt > start ? firstLogAt : start;
+      const sinceRow = await arow(`SELECT COUNT(*) calls,
+          SUM(CASE WHEN status='SUCCESS' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) fen
+        FROM compute_attempts WHERE created_at>=? AND created_at<? AND channel_id IN (${placeholders(channelIds)})`,
+        [sinceLog, end, ...channelIds]);
+      ourCallsSinceLog = num(sinceRow?.calls);
+      ourFenSinceLog = Math.round(num(sinceRow?.fen) * 10000) / 10000;
     }
     return {
       generatedAt: new Date().toISOString(),
       day,
       actualFen,
       ourFen,
-      diffFen: Math.round((ourFen - actualFen) * 10000) / 10000,
+      diffFen: Math.round((ourFenSinceLog - actualFen) * 10000) / 10000,
       logCount: items.length,
       ourCalls,
+      logFirstAt: firstLogAt,
+      ourFenSinceLog,
+      ourCallsSinceLog,
       walletDeltaFen,
       walletSamples: walletRows.length,
       walletFirst: firstWallet ? Number(firstWallet.cny) : null,
       walletLast: lastWallet ? Number(lastWallet.cny) : null,
-      walletAccountId: walletAccountId === null ? null : String(walletAccountId),
-      channelAccountId: channelAccountId === null ? null : String(channelAccountId),
-      sameAccount,
       byModel: [...byModel.values()]
         .map((item) => ({ ...item, actualFen: Math.round(item.actualFen * 10000) / 10000 }))
         .sort((left, right) => right.actualFen - left.actualFen)

@@ -944,20 +944,15 @@ function ReconcileView({ api }) {
         </div>
         {xkwuaiError ? <div className="monitor-banner is-danger">拉取失败：{xkwuaiError.message || '未知错误'}</div> : null}
         {xkwuai ? <>
-          {!xkwuai.sameAccount ? <div className="monitor-banner is-warning">
-            文本渠道 Key 与钱包令牌不是同一 xkwuai 账号（渠道 {xkwuai.channelAccountId || '不是用户令牌'} / 钱包 {xkwuai.walletAccountId || '未配置'}）——
-            下面的日志和余额变化只代表钱包账号，不能用来核对渠道账单；渠道记账 {money(xkwuai.ourFen)} / {xkwuai.ourCalls} 次。
-          </div> : null}
           <div className="monitor-kpis monitor-kpis-small">
-            <Kpi label="上游实扣" value={money(xkwuai.actualFen)} hint={`${xkwuai.logCount} 条日志`} />
-            <Kpi label="我们记账" value={money(xkwuai.ourFen)} hint={`${xkwuai.ourCalls} 次调用`} />
+            <Kpi label="上游日志实扣" value={money(xkwuai.actualFen)} hint={`${xkwuai.logCount} 条 · 首条 ${xkwuai.logFirstAt ? fmtTime(xkwuai.logFirstAt) : '—'}`} />
+            <Kpi label="日志之后我们记账" value={money(xkwuai.ourFenSinceLog)} hint={`${xkwuai.ourCallsSinceLog} 次调用（同账号）`} />
             <Kpi label="账户余额变化" value={xkwuai.walletDeltaFen === null ? '—' : money(xkwuai.walletDeltaFen)}
-              hint={xkwuai.walletDeltaFen === null ? '当天采样不足' : `${xkwuai.walletSamples} 次采样 · 覆盖账号全部调用`} />
-            <Kpi label="日志差异" value={xkwuai.sameAccount ? money(xkwuai.diffFen) : '—'}
-              hint={xkwuai.sameAccount ? '我们 − 日志可见实扣' : '账号不同，无法核对'}
-              tone={xkwuai.sameAccount && Math.abs(xkwuai.diffFen) >= 100 ? 'warning' : 'default'} />
+              hint={xkwuai.walletDeltaFen === null ? '当天采样不足' : `${xkwuai.walletSamples} 次采样 · 账号全部支出`} />
+            <Kpi label="日志差异" value={money(xkwuai.diffFen)} hint="日志之后我们 − 上游实扣"
+              tone={Math.abs(xkwuai.diffFen) >= 100 ? 'warning' : 'default'} />
           </div>
-          <div className="monitor-muted">日志只覆盖当前 xkwuai 账号可见的记录（可能被上游清理或来自其它 token）；账户余额变化是该账号当天的真实支出，优先看这个。</div>
+          <div className="monitor-muted">渠道 Key 是 API 令牌，与钱包同账号（已实测）；日志只覆盖当前账号看得见的记录，换 Key/账号前的历史调用不在其中，所以差异按「日志首条之后」比较。全天渠道记账 {money(xkwuai.ourFen)} / {xkwuai.ourCalls} 次。</div>
           {xkwuai.byModel?.length ? <div className="monitor-table-wrap top-gap"><table>
             <thead><tr><th>模型</th><th>日志</th><th>上游实扣</th></tr></thead>
             <tbody>{xkwuai.byModel.map((row) => <tr key={row.model}><td>{row.model}</td><td>{row.logs}</td><td>{money(row.actualFen)}</td></tr>)}</tbody>
