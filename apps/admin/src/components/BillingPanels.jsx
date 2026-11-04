@@ -1,14 +1,16 @@
 // 平台端「AI 能力与价格」页的面板（2026-09-13：从原 PlatformBilling.jsx 拆出）。
 //
-// AiCapabilityPanel  「渠道与价格」整页就是三块（2026-09-18 用户口径「大量减法、简单明了」）：
-//   ① 渠道         —— 每张卡只有 4 项必填（名称 / 调用地址 / 可用模型 / 默认模型）+ 供应商账户标识 + API Key，
-//                     外加折叠的「高级配置」（手动模型 ID、请求模板）。
-//   ② 价目表       —— 一行 = 渠道 × 模型，**成本价 / 实测价 / 对外价并排**（"这个渠道的这个模型多少钱"的唯一真相表）。
-//                     实测价（2026-09-18 P92）= 上游逐笔实扣 ÷ 用量（滚动近 N 天，只算 REPORTED），
-//                     用来校合同价；样本不足不给数，要写进合同价由人点「采纳为成本价」。
-//   ③ 路由与开关   —— 能力路由 / 读图渠道 / 平台路由策略 / 学生外发开关 / 四个模态总开关（原来散在三个折叠里）。
-//   ④ 上游账户余额（实时）—— 平台内部口径：我们这把 key 在供应商那边还剩多少钱。**必须手动点才去问上游**
-//                     （不随页面加载、不轮询）。机构端 / 学生端没有这块。
+// AiCapabilityPanel  「渠道与价格」整页就是三块（2026-11-04 用户口径「看不懂、没法填」再减法）：
+//   ① 渠道         —— 每张卡：名称 / 调用地址 / 可用模型 / 默认模型 / 供应商账户标识 / API Key
+//                     + **成本价（上游合同价）**（含文本缓存价、备用渠道峰谷价、分辨率档位）
+//                     + 折叠的「高级配置」（手动模型 ID、请求模板）。
+//   ② 模型能力     —— 一行 = 渠道 × 模型，只配「课时框体能选什么参数」（比例/清晰度/时长/输入方式/音频/风格）。
+//   ③ 路由与开关   —— 能力路由 / 读图渠道 / 平台路由策略 / 学生外发开关 / 四个模态总开关。
+//
+// 2026-11-04 下线（用户口径「根本看不懂、也没法填」）：
+//   · 「实测 / 对外价 / 毛利」三列 + 「采纳为成本价」——实测仍是后台能力（P92），但不再占界面；
+//     对外价只观测、不做学生售价，编辑界面撤掉，保存链路原样保留。
+//   · 「④ 上游账户余额（实时）」——实时监控页已有三家供应商余额 + 6h/24h/7d 历史 + 低余额告警，这里不再重复。
 //
 // OrgStudentUsagePanel  机构 → 学生 消耗下钻（「用量与成本」页用，不动）。
 //
@@ -663,7 +665,7 @@ export function AiCapabilityPanel({ api }) {
     <form onSubmit={save}>
       <Panel title="① 渠道（怎么连上游）">
         <Notice tone="warning">渠道只负责「连哪家上游」：名称 / 调用地址 / 可用模型 / 默认模型 + 密钥。
-          <strong>模型单价与能力都在下面的价目表里填</strong>（一个模型只填一次）。「测试连接」只探接口可达；
+          <strong>成本价在本渠道卡里填</strong>，模型能力在 ② 里填。「测试连接」只探接口可达；
           「用当前渠道试一次」会发起真实生成、可能运行数分钟并产生上游费用。</Notice>
         {message ? <Notice tone="success">{message}</Notice> : null}
         <div className="row-actions top-gap"><strong>渠道列表</strong><button type="button" className="secondary-button" onClick={addChannel}>＋添加渠道</button></div>
@@ -717,6 +719,23 @@ export function AiCapabilityPanel({ api }) {
               <label>供应商账户标识<input value={channel.providerAccountRef || ''} onChange={(e) => updateChannel(index, { providerAccountRef: e.target.value })} placeholder="上游账户/合同编号，留个记号" /></label>
               <label>API Key<input type="password" value={channel.apiKey || ''} onChange={(e) => updateChannel(index, { apiKey: e.target.value })} placeholder="留空保持原密钥" autoComplete="new-password" /></label>
             </div>
+            <div className="top-gap">
+              <div className="row-actions"><strong>成本价（上游合同价）</strong>
+                <label>计价模态<select value={priceModality[channel.id] || channelModality(channel.id) || 'TEXT'} onChange={(event) => setPriceModality((current) => ({ ...current, [channel.id]: event.target.value }))}>{MODALITIES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+              </div>
+              <div className="muted">用于平台按用量自动折算上游成本（COMPUTED）；上游回传逐笔实扣时以实扣为准（REPORTED），
+                不等于供应商最终账单。合同价两层：模型级覆盖 &gt; 素材类型价；模型级留空 = 用素材类型价。
+                留空 = 未配（成本记 UNKNOWN，绝不按 0 计）。文本可填缓存命中价，备用渠道可开分时计价。</div>
+              {(() => {
+                const modality = priceModality[channel.id] || channelModality(channel.id) || 'TEXT';
+                const bucket = channel.upstreamUnitPrices?.[modality] || {};
+                return <>
+                  {unitPriceFields(index, modality, '', bucket)}
+                  {modality === 'TEXT' ? timePricingFields(index, bucket) : null}
+                  {unitPriceTiers(index, modality, '', bucket)}
+                </>;
+              })()}
+            </div>
             <details className="top-gap"><summary>高级配置</summary>
               <div className="form-grid top-gap">
                 <span className="muted">RunningHub 使用专用异步协议（提交 → 查 taskId → 取 results）；其他供应商固定 Chat Completions（兼容 OpenAI 形状）。配置里已存的 protocol 字段保留但暂不使用。</span>
@@ -729,25 +748,24 @@ export function AiCapabilityPanel({ api }) {
         </div>)}
       </Panel>
 
-      {/* ② 价目表：取代原来散落的「上游合同单价」+「上游估算成本」+「逐模型估算成本」+「对外售价」四处定价。 */}
-      <Panel title="② 价目表（每行 = 渠道 × 模型）" actions={<><select value={measuredDays} onChange={(event) => setMeasuredDays(event.target.value)} title="实测单价统计窗口"><option value="7">实测：近 7 天</option><option value="30">实测：近 30 天</option><option value="90">实测：近 90 天</option></select><button type="button" className="secondary-button" disabled={pricing.loading} onClick={() => { config.refresh(); pricing.refresh(); measured.refresh(); }}>刷新</button></>}>
-        <Notice tone="info">这是<strong>唯一</strong>填价格的地方。<strong>成本价</strong>＝与上游签的合同价（单位随模态：文本分/百万 token、图片分/张、视频分/秒、音乐分/次），
-          平台按用量证据自动折算上游计费（来源 <b>COMPUTED</b>），但<strong>不等于供应商开出的最终账单</strong>；<strong>对外价</strong>只用于统计「这次调用对外值多少」，
-          <strong>不扣学生、不计收入、不是上游成本</strong>。留在库里没配的项一律折算为 <b>UNKNOWN</b>，绝不按 0 计。毛利列只是把两个数相减给你看，不参与任何计算。
-          成本价两层：模型级覆盖 &gt; 素材类型价；模型级覆盖（留空 = 用素材类型价）。
-          <br /><strong>实测（近 {measuredDays} 天）＝ 上游逐笔实回扣金额 ÷ 用量</strong>，滚动近 {measuredDays} 天；
-          <strong>只统计上游逐笔回报的实扣</strong>（cost_source=REPORTED），<strong>不含我们自己按合同价折算的</strong>（COMPUTED）——
-          否则就是拿自己的假设验证自己，偏差永远是 0。样本不足（少于 {MEASURED_MIN_SAMPLES} 笔，或快照里取不到用量）时<strong>不给数</strong>，
-          只显示「样本不足（N 笔）」。实测只是给你校价用的，<strong>不会自动改价</strong>；要写进合同价，点那一行的「采纳为成本价」（仍走本页的保存路径，由你决定）。</Notice>
-        {!priceGroups.length ? <div className="muted top-gap">还没有渠道和模型：先在 ① 里加一条渠道并勾选可用模型，价目表就会按「渠道 × 模型」列出来。</div> : <div className="table-wrap top-gap"><table>
-          <thead><tr><th>模型</th><th>成本价（与上游合同价 · 用于自动折算实际计费）</th><th>实测（近 {measuredDays} 天）</th><th>对外价（仅统计）</th><th>毛利（对外价 − 成本价）</th><th>能力（决定课时里能选什么）</th></tr></thead>
-          {priceGroups.map((group) => priceRows(group))}
+      {/* ② 模型能力：课时框体里能选什么参数。成本价已移到 ① 渠道卡，不再在这里重复。 */}
+      <Panel title="② 模型能力（决定课时里能选什么）">
+        <Notice tone="info">只影响<strong>学生端 / 课时框体</strong>能选哪些参数（比例、清晰度、时长、输入方式、音频、风格）。
+          不填就用平台默认值；文本模型没有这些参数，显示「—」。<strong>成本价不在这里</strong> —— 在 ① 每条渠道卡里的「成本价（上游合同价）」。</Notice>
+        {!priceGroups.length ? <div className="muted top-gap">还没有渠道和模型：先在 ① 里加一条渠道并勾选可用模型。</div> : <div className="table-wrap top-gap"><table>
+          <thead><tr><th>渠道 / 模型</th><th>能力（决定课时里能选什么）</th></tr></thead>
+          {priceGroups.map((group) => <tbody key={group.id}>
+            {group.channel ? group.models.map((model) => {
+              const modality = modalityOf(group.channel);
+              return <tr key={`${group.id}:${model}`}>
+                <td><strong>{group.name}</strong><div className="muted">{model}{group.channel.model === model ? ' · 渠道默认模型' : ''}</div></td>
+                <td>{['IMAGE', 'VIDEO', 'MUSIC'].includes(modality)
+                  ? <details><summary>{Object.keys(group.channel.modelCapabilities?.[model] || {}).length ? '已声明（点开改）' : '未声明（用默认值）'}</summary>{capabilityFields(group.index, modality, model)}</details>
+                  : <span className="muted">—</span>}</td>
+              </tr>;
+            }) : null}
+          </tbody>)}
         </table></div>}
-        <details className="top-gap"><summary>模态基础价（没有单独定价的模型按它算，单位：分 / 次）</summary>
-          <div className="muted">对外价留空的模型回落到这里；留空表示这个模态没配对外价，报表里会显示「未知」而不是 0。</div>
-          <div className="form-grid top-gap">{MODALITIES.map(([id, name]) => <label key={id}>{name}<input type="number" min="0" step="1" value={perCall[id] ?? ''} onChange={(event) => setPerCall({ ...perCall, [id]: event.target.value === '' ? '' : Number(event.target.value) })} /></label>)}</div>
-        </details>
-        {pricing.data?.pricing?.updatedAt ? <div className="muted top-gap">对外价上次更新 {formatDate(pricing.data.pricing.updatedAt)}</div> : null}
       </Panel>
 
       {/* ③ 路由与开关：把原来散在「能力路由 / 平台路由策略 / 高级：算力网关与能力总开关」三处的全局配置合成一块。
@@ -797,13 +815,11 @@ export function AiCapabilityPanel({ api }) {
       {saveError ? <Notice tone="danger">保存失败：{saveError}。修正后重试（合同单价必须是「非负整数分」，留空表示没配）。</Notice> : null}
       {saveMessage ? <Notice tone="success">{saveMessage}</Notice> : null}
       <div className="row-actions top-gap">
-        <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存全部配置（渠道 · 价目表 · 路由与开关）'}</button>
+        <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存全部配置（渠道 · 成本价 · 路由与开关）'}</button>
         <span className="muted">一次保存会写两处：渠道 / 价目表成本价 / 路由与开关 走 AI 渠道配置，对外价走对外价配置。模态总开关在 ③ 里单独保存。</span>
       </div>
     </form>
-    {/* ④ 上游账户余额（实时）—— 放在 form 外面：它只读、不参与「保存全部配置」，
-        按钮也不会误提交表单；且必须人工点「查询余额」才去打上游。 */}
-    <UpstreamWalletPanel api={api} />
+    {/* ④ 上游账户余额已移到「实时监控」页（三家供应商 + 历史 + 低余额告警），这里不再重复。 */}
   </>;
 }
 

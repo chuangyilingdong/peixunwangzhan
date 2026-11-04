@@ -212,25 +212,22 @@ const billingPanelSource = fs.readFileSync(path.join(root, 'apps/admin/src/compo
 // 2026-09-18：合同单价编辑器从「渠道卡里默认展开的一大块」搬进了「② 价目表」（一行 = 渠道 × 模型），
 // 断言随界面的新落点改写 —— 这是口径变更/界面重排，不是测试漂移。断言的意图一条没少：
 // 成本价与对外价并排、分模态计价单位、两层契约写回键名、模型级留空回落、优先级、错误回显、按渠道分组。
-assert.match(billingPanelSource, /成本价（与上游合同价 · 用于自动折算实际计费）/, '价目表必须有成本价一列（与上游的合同价）');
-for (const field of ['inputFenPer1MTokens', 'outputFenPer1MTokens', 'perImageFen', 'perSecondFen', 'audioExtraPerSecondFen', 'perCallFen', 'byResolution']) {
+// 2026-11-04：用户口径「价目表看不懂、也没法填」——成本价编辑搬进 ① 渠道卡，
+// ② 只保留模型能力；对外价/实测/毛利/余额面板下线（余额在实时监控页）。
+// 断言的意图一条没少：分模态计价单位、两层契约写回键名、模型级回落、优先级、错误回显、按渠道落地。
+assert.match(billingPanelSource, /成本价（上游合同价）/, '渠道卡必须有成本价区块');
+for (const field of ['inputFenPer1MTokens', 'outputFenPer1MTokens', 'cacheHitFenPer1MTokens', 'perImageFen', 'perSecondFen', 'audioExtraPerSecondFen', 'perCallFen', 'byResolution']) {
   assert.ok(billingPanelSource.includes(field), `合同单价的字段名必须与后端 upstreamCost 一致：${field}`);
 }
 assert.match(billingPanelSource, /upstreamUnitPrices/, '素材类型价写回 channel.upstreamUnitPrices');
 assert.match(billingPanelSource, /modelUnitPrices/, '模型级覆盖写回 channel.modelUnitPrices');
-assert.match(billingPanelSource, /模型级覆盖（留空 = 用素材类型价）/, '必须说明模型级留空 = 回落素材类型价');
+assert.match(billingPanelSource, /模型级留空 = 用素材类型价/, '必须说明模型级留空 = 回落素材类型价');
 assert.match(billingPanelSource, /模型级覆盖 &gt; 素材类型价/, '必须写明优先级 模型 > 素材类型');
-assert.match(billingPanelSource, /不等于供应商开出的最终账单/, '必须写明合同价折算≠供应商最终账单');
+assert.match(billingPanelSource, /不等于供应商最终账单/, '必须写明合同价折算≠供应商最终账单');
 assert.match(billingPanelSource, /保存失败：\{saveError\}/, '后端拒绝非法合同单价时必须展示错误');
-assert.match(billingPanelSource, /priceGroups\.map\(\(group\) => priceRows\(group\)\)/, '合同单价编辑器必须按渠道分组渲染（现在并进价目表）');
-// 2026-09-18：对外价（原 PricingPanel）与成本价并排进同一张表，断言随之改到 BillingPanels.jsx。口径一条没变：
-// 对外价不扣学生、不是上游成本、走 admin/compute-pricing、模态基础价与模型级覆盖都要能改。
-assert.match(billingPanelSource, /不扣学生/, '价目表必须写明对外价不扣学生');
-assert.match(billingPanelSource, /不是上游成本/, '价目表必须写明对外价不是上游成本');
-assert.match(billingPanelSource, /api\.put\('admin\/compute-pricing'/, '价目表必须 PUT 对外价配置');
-assert.match(billingPanelSource, /perCall/, '价目表必须能改模态基础价');
-assert.match(billingPanelSource, /models\[model\]/, '价目表必须能改模型级对外价覆盖');
-assert.match(billingPanelSource, /channels\.map/, '价目表必须按渠道分组');
+assert.match(billingPanelSource, /unitPriceFields\(index, modality, '', bucket\)/, '成本价编辑器必须落在渠道卡里');
+assert.match(billingPanelSource, /timePricingFields\(index, bucket\)/, '文本必须能配分时价');
+assert.match(billingPanelSource, /api\.put\('admin\/compute-pricing'/, '对外价配置仍随保存提交（编辑界面已按用户口径下线）');
 assert.match(modelSource, /<FinancialReconciliation api=\{api\} view="calls"/, '调用账是默认视图');
 assert.match(modelSource, /<FinancialReconciliation api=\{api\} view="margin"/, '两账与毛利');
 // 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
