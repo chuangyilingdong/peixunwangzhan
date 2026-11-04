@@ -225,6 +225,20 @@ export function xkwuaiQuotaToFen(quota) {
   return Math.round((value / 500000) * 100 * 10000) / 10000;
 }
 
+/** 用一个 token 问 xkwuai `/api/user/self` 的账号 id；不是用户令牌就返回 null。 */
+async function probeXkwuaiAccountId(token) {
+  if (!token) return null;
+  try {
+    const response = await fetch('https://www.xkwuai.cn/api/user/self', {
+      headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000),
+    });
+    const payload = await response.json().catch(() => null);
+    return payload?.data?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** 拉取 xkwuai 某一天的逐笔日志（new-api `/api/log/self`，分页，只读）。 */
 async function fetchXkwuaiLogs(startSec, endSec) {
   const raw = getProviderApiKey('wallet-xkwuai');
@@ -1075,9 +1089,15 @@ export async function handleMonitor(ctx, part, method) {
     const policyRow = await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1');
     let policy = {};
     try { policy = JSON.parse(policyRow?.ai_provider_policy || '{}') || {}; } catch { policy = {}; }
-    const channelIds = (policy.channels || [])
-      .filter((channel) => String(channel.endpoint || '').toLowerCase().includes('xkwuai'))
-      .map((channel) => channel.id);
+    const xkwuaiChannels = (policy.channels || [])
+      .filter((channel) => String(channel.endpoint || '').toLowerCase().includes('xkwuai'));
+    const channelIds = xkwuaiChannels.map((channel) => channel.id);
+    // 渠道 Key 与钱包令牌是不是同一个 xkwuai 账号？不是的话，钱包日志核对不了渠道账单。
+    let walletAccountId = null;
+    try { walletAccountId = JSON.parse(getProviderApiKey('wallet-xkwuai') || '{}').userId ?? null; } catch { walletAccountId = null; }
+    const channelKey = xkwuaiChannels[0] ? getProviderApiKey(xkwuaiChannels[0].id) : '';
+    const channelAccountId = await probeXkwuaiAccountId(channelKey);
+    const sameAccount = Boolean(channelAccountId && walletAccountId && String(channelAccountId) === String(walletAccountId));
     // 账户级实付：xkwuai 钱包在当天首尾采样的差额（覆盖该账号所有调用，日志可能被上游清理）。
     const walletRows = await arows(`SELECT created_at, cny FROM monitor_wallet_samples
       WHERE source_id='xkwuai' AND ok=1 AND cny IS NOT NULL AND created_at>=? AND created_at<?
@@ -1108,6 +1128,9 @@ export async function handleMonitor(ctx, part, method) {
       walletSamples: walletRows.length,
       walletFirst: firstWallet ? Number(firstWallet.cny) : null,
       walletLast: lastWallet ? Number(lastWallet.cny) : null,
+      walletAccountId: walletAccountId === null ? null : String(walletAccountId),
+      channelAccountId: channelAccountId === null ? null : String(channelAccountId),
+      sameAccount,
       byModel: [...byModel.values()]
         .map((item) => ({ ...item, actualFen: Math.round(item.actualFen * 10000) / 10000 }))
         .sort((left, right) => right.actualFen - left.actualFen)
