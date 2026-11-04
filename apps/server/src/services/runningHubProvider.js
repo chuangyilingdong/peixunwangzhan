@@ -19,6 +19,7 @@
  */
 import { AI_PROVIDER_MAX_WAIT_MS, AI_PROVIDER_POLL_INTERVAL_MS, AI_PROVIDER_TIMEOUT_MS, PUBLIC_SITE_URL } from '../config.js';
 import { PROVIDER_ERROR_CODES } from './providerContract.js';
+import { mirrorSelfHostedMedia } from './upstreamMediaMirror.js';
 
 const RUNNINGHUB_FAMILIES = Object.freeze({
   // 图片按「生成方式」是**两条独立 API**（各有自己的调用地址与计费）：
@@ -390,7 +391,16 @@ export function runningHubProvider({
       if (!base) throw providerError('RunningHub 调用地址未配置', PROVIDER_ERROR_CODES.CONFIG_INVALID);
       if (!apiKey) throw providerError('RunningHub API Key 未配置', PROVIDER_ERROR_CODES.AUTH_FAILED);
       const resolvedFamily = resolveFamily(providerFamily, key);
-      const refs = collectReferences(options);
+      // 自站素材（学生上传 / 归档产物）上游抓不到：/api/student/... 要登录，/api/public/... 只服务公开文件。
+      // 先传到 RunningHub 的素材暂存接口，换成它自己的 download_url 再发（上传免费，镜像有缓存）。
+      const selfOrigins = [PUBLIC_SITE_URL].map((item) => String(item || '').trim()).filter(Boolean);
+      const mirroredOptions = await mirrorSelfHostedMedia(options, {
+        selfOrigins,
+        uploadUrl: `${base}/media/upload/binary`,
+        apiKey,
+        pickUploadedUrl: (payload) => payload?.data?.download_url || payload?.download_url || payload?.url,
+      });
+      const refs = collectReferences(mirroredOptions);
       const path = resolvePath(resolvedFamily, key, refs.imageUrls.length > 0);
       if (!path) {
         const hint = key !== 'IMAGE' ? ''
@@ -400,10 +410,10 @@ export function runningHubProvider({
         throw providerError(hint || `RunningHub 没有配置 ${key} 的模型路径（family=${resolvedFamily}）`, PROVIDER_ERROR_CODES.CONFIG_INVALID);
       }
       const body = key === 'IMAGE'
-        ? buildImageBody({ prompt, options, imageUrls: refs.imageUrls, family: resolvedFamily })
+        ? buildImageBody({ prompt, options: mirroredOptions, imageUrls: refs.imageUrls, family: resolvedFamily })
         : key === 'VIDEO'
-          ? buildVideoBody({ prompt, options, family: resolvedFamily, refs })
-          : buildMusicBody({ prompt, options });
+          ? buildVideoBody({ prompt, options: mirroredOptions, family: resolvedFamily, refs })
+          : buildMusicBody({ prompt: prompt, options: mirroredOptions });
 
       const submitted = await fetchJson(`${base}${path}`, { body, apiKey, timeoutMs });
       if (!submitted.response.ok) throw httpError(submitted.response, submitted.payload);

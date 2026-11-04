@@ -142,7 +142,7 @@ function mediaFileName(contentType, sourceUrl) {
 }
 
 /** 把一张素材传到上游，返回上游自己的 URL（带缓存）。 */
-export async function mirrorMediaUrl(url, { uploadUrl, apiKey = '', timeoutMs = MIRROR_TIMEOUT_MS, fetchImpl = null, fitRatioValue = '', selfOrigin = '' } = {}) {
+export async function mirrorMediaUrl(url, { uploadUrl, apiKey = '', timeoutMs = MIRROR_TIMEOUT_MS, fetchImpl = null, fitRatioValue = '', selfOrigin = '', pickUploadedUrl = null } = {}) {
   const source = String(url || '').trim();
   const doFetch = fetchImpl || globalThis.fetch;
   if (!source || !uploadUrl || typeof doFetch !== 'function') return source;
@@ -155,12 +155,12 @@ export async function mirrorMediaUrl(url, { uploadUrl, apiKey = '', timeoutMs = 
   // （上游限流是每令牌每分钟 10 次，一次生成里重复传同一张很浪费）。
   const pending = inflight.get(cacheKey);
   if (pending) return pending;
-  const task = uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue, selfOrigin });
+  const task = uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue, selfOrigin, pickUploadedUrl });
   inflight.set(cacheKey, task);
   try { return await task; } finally { inflight.delete(cacheKey); }
 }
 
-async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue = '', selfOrigin = '' }) {
+async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue = '', selfOrigin = '', pickUploadedUrl = null }) {
   // ① 取源文件（我们自己的站点，取的是同机房的一次回环请求）
   let bytes;
   let contentType = '';
@@ -227,7 +227,9 @@ async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl:
       payload = await response.json().catch(() => ({}));
       if (!response?.ok) throw new Error(`HTTP ${status}${upstreamDetail(payload)}`);
     } finally { clearTimeout(timer); }
-    const mirrored = String(payload?.url || '').trim();
+    // 不同上游的响应形状不一样：默认 OpenAI 风格 `url`，RunningHub 是 `data.download_url`。
+    const picked = typeof pickUploadedUrl === 'function' ? pickUploadedUrl(payload) : payload?.url;
+    const mirrored = String(picked || '').trim();
     if (!/^https?:\/\//i.test(mirrored)) throw new Error(`响应里没有素材 URL（HTTP ${status}）`);
     cache.set(source, { url: mirrored, at: Date.now() });
     while (cache.size > MIRROR_CACHE_MAX) cache.delete(cache.keys().next().value);
@@ -251,7 +253,7 @@ function upstreamDetail(payload) {
  *  · 参考素材只镜像、**不裁**（参考是"启发素材"，裁它等于改内容；而且它的比例不决定输出比例）
  * 没配上传地址、或没有任何要处理的素材时原样返回（不改形状）。
  */
-export async function mirrorSelfHostedMedia(options, { selfOrigins = [], uploadUrl = '', apiKey = '', timeoutMs = MIRROR_TIMEOUT_MS, fetchImpl = null, frameFitRatio = '' } = {}) {
+export async function mirrorSelfHostedMedia(options, { selfOrigins = [], uploadUrl = '', apiKey = '', timeoutMs = MIRROR_TIMEOUT_MS, fetchImpl = null, frameFitRatio = '', pickUploadedUrl = null } = {}) {
   const source = options && typeof options === 'object' ? options : {};
   if (!uploadUrl || !Array.isArray(selfOrigins) || !selfOrigins.length) return source;
   const ratio = parseRatio(frameFitRatio) ? frameFitRatio : '';
@@ -260,10 +262,10 @@ export async function mirrorSelfHostedMedia(options, { selfOrigins = [], uploadU
   const prepareFrame = (value, fitRatioValue) => {
     if (!value) return Promise.resolve(value);
     if (!fitRatioValue && !isSelfHostedMediaUrl(value, selfOrigins)) return Promise.resolve(value);
-    return mirrorMediaUrl(value, { uploadUrl, apiKey, timeoutMs, fetchImpl, fitRatioValue, selfOrigin });
+    return mirrorMediaUrl(value, { uploadUrl, apiKey, timeoutMs, fetchImpl, fitRatioValue, selfOrigin, pickUploadedUrl });
   };
   const mirror = (value) => (isSelfHostedMediaUrl(value, selfOrigins)
-    ? mirrorMediaUrl(value, { uploadUrl, apiKey, timeoutMs, fetchImpl, selfOrigin })
+    ? mirrorMediaUrl(value, { uploadUrl, apiKey, timeoutMs, fetchImpl, selfOrigin, pickUploadedUrl })
     : Promise.resolve(value));
   const next = { ...source };
   const tasks = [];

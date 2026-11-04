@@ -20,20 +20,23 @@ import path from 'node:path';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-kids-p207-runninghub-'));
+const PORT = 18994;
+const BASE = `http://127.0.0.1:${PORT}/openapi/v2`;
+// 自站素材镜像会"先 GET 源图再上传"，所以把站点 origin 指到本地 mock：
+// 测试里的 https://<SELF>/a.png 既算"我们自己的素材"，mock 也真能吐出字节。
+const SELF = `http://127.0.0.1:${PORT}`;
 process.env.PLATFORM_DB_PATH = path.join(temp, 'platform.db');
 process.env.PLATFORM_DATA_DIR = temp;
 process.env.AI_PROVIDER_SECRET_FILE = path.join(temp, 'secrets.json');
-process.env.PUBLIC_SITE_URL = 'https://aicyld.com';
+process.env.PUBLIC_SITE_URL = SELF;
 
 const { runningHubProvider } = await import('../apps/server/src/services/runningHubProvider.js');
 const { providerSelectionForModality } = await import('../apps/server/src/routes/aiGeneration.js');
 const { generationProviderInfo, getGenerationProvider, adaptOptionsToCandidate } = await import('../apps/server/src/services/generationProvider.js');
 const { RUNNINGHUB_FAMILIES, runningHubFamilyModality, runningHubModelCatalog } = await import('../apps/server/src/services/runningHubProvider.js');
-
-const PORT = 18994;
-const BASE = `http://127.0.0.1:${PORT}/openapi/v2`;
 const submissions = new Map();
 let seq = 0;
+let uploadSeq = 0;
 const state = { submitStatus: 200, queryStatus: 'SUCCESS' };
 
 const json = (res, status, payload) => {
@@ -47,6 +50,19 @@ const mock = http.createServer((req, res) => {
   req.on('end', () => {
     let body = {};
     try { body = JSON.parse(raw || '{}'); } catch { body = {}; }
+    // 自站素材（mock 充当"我们的站点"）：镜像会先 GET 它再上传，这里吐一点字节即可
+    if (req.method === 'GET') {
+      const ext = String(req.url || '').split('?')[0].split('.').pop().toLowerCase();
+      const type = ext === 'mp4' ? 'video/mp4' : ext === 'mp3' ? 'audio/mpeg' : 'image/png';
+      const bytes = ext === 'mp4' ? Buffer.from('mock-mp4-bytes') : ext === 'mp3' ? Buffer.from('mock-mp3-bytes') : Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+      res.writeHead(200, { 'content-type': type, 'content-length': bytes.length });
+      res.end(bytes);
+      return;
+    }
+    // 自站素材镜像：RunningHub 的素材暂存接口（真实响应是 data.download_url）
+    if (req.url === '/openapi/v2/media/upload/binary') {
+      return json(res, 200, { code: 0, msg: 'success', data: { type: 'image', download_url: `http://127.0.0.1:${PORT}/rh-uploaded/${++uploadSeq}.png` } });
+    }
     if (req.url === '/openapi/v2/query') {
       if (state.queryStatus === 'FAILED') return json(res, 200, { status: 'FAILED', errorCode: '1000', errorMessage: 'mock failed' });
       if (state.queryStatus === 'RUNNING') return json(res, 200, { status: 'RUNNING', results: null });
@@ -103,11 +119,12 @@ await check('图片·图生图：有参考 → /rhart-image-g-2.5/flare/image-to
   const provider = make('rhart-image-g-2.5');
   await provider.generate({
     modality: 'IMAGE', prompt: '改成夜景',
-    options: { aspectRatio: '1:1', resolution: '2k', referenceAssets: [{ type: 'IMAGE', url: 'https://aicyld.com/ref.png' }] },
+    options: { aspectRatio: '1:1', resolution: '2k', referenceAssets: [{ type: 'IMAGE', url: `${SELF}/ref.png` }] },
   });
   const sub = lastSubmission();
   assert.equal(sub.path, '/openapi/v2/rhart-image-g-2.5/flare/image-to-image');
-  assert.deepEqual(sub.body.imageUrls, ['https://aicyld.com/ref.png']);
+  // 自站素材先传到上游暂存接口，body 里是 RunningHub 自己的 download_url
+  assert.match(sub.body.imageUrls[0], /\/rh-uploaded\/\d+\.png$/);
 });
 
 await check('图片·备用 family：/rhart-image-g-2-official/*', async () => {
@@ -116,7 +133,7 @@ await check('图片·备用 family：/rhart-image-g-2-official/*', async () => {
   assert.equal(lastSubmission().path, '/openapi/v2/rhart-image-g-2-official/text-to-image');
   // 官方 family 强制 quality（low/medium/high），不给自己就 1007「没有返回 taskId」。
   assert.equal(lastSubmission().body.quality, 'high');
-  await provider.generate({ modality: 'IMAGE', prompt: 'x', options: { referenceAssets: [{ type: 'IMAGE', url: 'https://aicyld.com/r.png' }] } });
+  await provider.generate({ modality: 'IMAGE', prompt: 'x', options: { referenceAssets: [{ type: 'IMAGE', url: `${SELF}/r.png` }] } });
   assert.equal(lastSubmission().path, '/openapi/v2/rhart-image-g-2-official/image-to-image');
 });
 
@@ -127,9 +144,9 @@ await check('视频·主：seedance 路径 + 参考/时长/比例/generateAudio'
     options: {
       durationSeconds: 5, resolution: '720p', aspectRatio: '16:9', audio: true,
       referenceAssets: [
-        { type: 'IMAGE', url: 'https://aicyld.com/a.png' },
-        { type: 'VIDEO', url: 'https://aicyld.com/b.mp4' },
-        { type: 'AUDIO', url: 'https://aicyld.com/c.mp3' },
+        { type: 'IMAGE', url: `${SELF}/a.png` },
+        { type: 'VIDEO', url: `${SELF}/b.mp4` },
+        { type: 'AUDIO', url: `${SELF}/c.mp3` },
       ],
     },
   });
@@ -139,9 +156,9 @@ await check('视频·主：seedance 路径 + 参考/时长/比例/generateAudio'
   assert.equal(sub.body.resolution, '720p');
   assert.equal(sub.body.ratio, '16:9');
   assert.equal(sub.body.generateAudio, true);
-  assert.deepEqual(sub.body.imageUrls, ['https://aicyld.com/a.png']);
-  assert.deepEqual(sub.body.videoUrls, ['https://aicyld.com/b.mp4']);
-  assert.deepEqual(sub.body.audioUrls, ['https://aicyld.com/c.mp3']);
+  assert.match(sub.body.imageUrls[0], /\/rh-uploaded\/\d+\.png$/);
+  assert.match(sub.body.videoUrls[0], /\/rh-uploaded\/\d+\.png$/);
+  assert.match(sub.body.audioUrls[0], /\/rh-uploaded\/\d+\.png$/);
   assert.equal(result.assets[0].mimeType, 'video/mp4');
 });
 
@@ -149,7 +166,7 @@ await check('视频·备：hailuo 路径；不带 generateAudio', async () => {
   const provider = make('minimax/hailuo-h3');
   await provider.generate({
     modality: 'VIDEO', prompt: 'x',
-    options: { durationSeconds: 5, resolution: '2K', aspectRatio: 'auto', audio: true, referenceAssets: [{ type: 'IMAGE', url: 'https://aicyld.com/a.png' }] },
+    options: { durationSeconds: 5, resolution: '2K', aspectRatio: 'auto', audio: true, referenceAssets: [{ type: 'IMAGE', url: `${SELF}/a.png` }] },
   });
   const sub = lastSubmission();
   assert.equal(sub.path, '/openapi/v2/minimax/hailuo-h3/multimodal-to-video');
@@ -183,13 +200,11 @@ await check('音乐·无歌词 → isInstrumental=true 且不带 lyrics（空串
   assert.equal(sub.body.prompt, '轻快的儿童电子音乐');
 });
 
-await check('参考素材：相对地址补公网；data: 明确拒绝', async () => {
+await check('参考素材：外站 URL 原样发送；data: 明确拒绝', async () => {
   const provider = make('rhart-image-g-2.5');
-  await provider.generate({
-    modality: 'IMAGE', prompt: 'x',
-    options: { referenceAssets: [{ type: 'IMAGE', url: '/api/student/file-assets/f1/download' }] },
-  });
-  assert.deepEqual(lastSubmission().body.imageUrls, ['https://aicyld.com/api/student/file-assets/f1/download']);
+  const external = 'https://cdn.example.com/ref.png';
+  await provider.generate({ modality: 'IMAGE', prompt: 'x', options: { referenceAssets: [{ type: 'IMAGE', url: external }] } });
+  assert.deepEqual(lastSubmission().body.imageUrls, [external]);
   await assert.rejects(
     () => provider.generate({ modality: 'IMAGE', prompt: 'x', options: { referenceAssets: [{ type: 'IMAGE', url: 'data:image/png;base64,AAAA' }] } }),
     (error) => error.code === 'GENERATION_PROVIDER_CONFIG_INVALID' && /data:/.test(error.message),
@@ -270,11 +285,11 @@ await check('图片按生成方式拆 family：文生图渠道不接参考图、
   assert.equal(lastSubmission().path, '/openapi/v2/rhart-image-g-2.5/sunburst/text-to-image');
   // 同一条渠道被塞了参考图 → 当场报错，不发到别的路径（否则价格会记到另一条 API 上）
   await assert.rejects(
-    () => make('rhart-image-g-2.5-t2i').generate({ modality: 'IMAGE', prompt: 'x', options: { referenceAssets: [{ type: 'IMAGE', url: 'https://aicyld.com/r.png' }] } }),
+    () => make('rhart-image-g-2.5-t2i').generate({ modality: 'IMAGE', prompt: 'x', options: { referenceAssets: [{ type: 'IMAGE', url: `${SELF}/r.png` }] } }),
     (error) => error.code === 'GENERATION_PROVIDER_CONFIG_INVALID' && /图生图/.test(error.message),
   );
   // 图生图专用 family：有图 → 图生图路径；没图 → 报错（不回落文生图）
-  await make('rhart-image-g-2.5-i2i').generate({ modality: 'IMAGE', prompt: 'x', options: { referenceAssets: [{ type: 'IMAGE', url: 'https://aicyld.com/r.png' }] } });
+  await make('rhart-image-g-2.5-i2i').generate({ modality: 'IMAGE', prompt: 'x', options: { referenceAssets: [{ type: 'IMAGE', url: `${SELF}/r.png` }] } });
   assert.equal(lastSubmission().path, '/openapi/v2/rhart-image-g-2.5/flare/image-to-image');
   await assert.rejects(
     () => make('rhart-image-g-2.5-i2i').generate({ modality: 'IMAGE', prompt: 'x', options: {} }),
