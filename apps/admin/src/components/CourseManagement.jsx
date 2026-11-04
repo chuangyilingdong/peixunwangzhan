@@ -339,16 +339,16 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
   }
   // 素材的默认值（用户 2026-09-23 口径：建课时绝大多数情况都是这几样，别再让学生一个个手填）。
   //   · 提示词        → 标题「提示词（N）」（N = 这一组里已有几条提示词 + 1）
-  //   · 生成框体-生图 → 标题「图片框体」+ 模型 zhenzhen-image-g-v2.5-lowprice + 清晰度 1k
-  //   · 生成框体-生视频 → 标题「视频框体」+ 模型 MiniMax-H3 + 清晰度 480P + 时长 5 秒
+  //   · 生成框体-生图 → 标题「图片框体」+ 模型「使用渠道默认模型」+ 清晰度 1k
+  //   · 生成框体-生视频 → 标题「视频框体」+ 模型「使用渠道默认模型」+ 清晰度 480p + 时长 5 秒
   //                     + 生成音频「带音频」+ 音频怎么用「声音参考（只借音色）」
-  // ⚠️ 这里写的模型名与档位**必须落在渠道配置里那个模型真实的能力清单上**
-  //    （生产上 2.5 低价版 = 1k/2k/4k，MiniMax-H3 = 480P/768P、5/10/15 秒、audio:true）。
-  //    写渠道里没有的档位，下拉框会显示成空值，而且换模型时会被"新模型不支持就退回学生自选"清掉。
+  // ⚠️ 模型一律留空 = 渠道默认（2026-11-04 用户口径）：RunningHub 的 family 由渠道卡决定，
+  //    课时里再钉一个具体 ID 只会跟渠道配置漂移（切渠道/改价后对不上）。
+  //    清晰度/时长这些档位仍要落在**主渠道**声明的能力清单上（480p、5/10/15 秒、audio:true）。
   // ⚠️ aspectRatio 刻意**不设默认**（比例留给学生在课堂上挑：图/视频各有各的合适比例）。
   const BOX_DEFAULTS = {
-    IMAGE: { title: '图片框体', model: 'zhenzhen-image-g-v2.5-lowprice', resolution: '1k' },
-    VIDEO: { title: '视频框体', model: 'MiniMax-H3', resolution: '480P', durationSeconds: 5, audio: true, audioRole: 'VOICE_REFERENCE' },
+    IMAGE: { title: '图片框体', model: '', resolution: '1k' },
+    VIDEO: { title: '视频框体', model: '', resolution: '480p', durationSeconds: 5, audio: true, audioRole: 'VOICE_REFERENCE' },
     TEXT: { title: '文字框体', model: '' },
     MUSIC: { title: '音乐框体', model: '' },
   };
