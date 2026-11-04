@@ -63,6 +63,35 @@ const UNIT_PRICE_TIER_SUGGESTIONS = { IMAGE: ['1K', '2K', '4K'], VIDEO: ['480p',
 // 文本按 token 计（输入/输出两档），折算不出"单次成本"，所以文本行不显示毛利（不猜）。
 const PRIMARY_COST_FIELD = { IMAGE: 'perImageFen', VIDEO: 'perSecondFen', MUSIC: 'perCallFen' };
 
+// 只读价格摘要：把渠道上配的成本价翻成人话（单位：分）。
+function unitPriceLines(prices) {
+  if (!prices || typeof prices !== 'object') return [];
+  const value = (item) => (item === null || item === undefined ? '—' : item);
+  const tiers = (map) => (map && typeof map === 'object'
+    ? ` · 档位 ${Object.entries(map).map(([key, amount]) => `${key}=${amount}`).join(' / ')}`
+    : '');
+  const lines = [];
+  if (prices.TEXT) {
+    const price = prices.TEXT;
+    lines.push(`文本：输入 ${value(price.inputFenPer1MTokens)} · 输出 ${value(price.outputFenPer1MTokens)} · 缓存 ${value(price.cacheHitFenPer1MTokens)} 分/百万 token`);
+    if (price.timePricing) {
+      const peak = price.timePricing.peak || {};
+      const off = price.timePricing.offPeak || {};
+      lines.push(`分时：峰 ${value(peak.inputFenPer1MTokens)}/${value(peak.outputFenPer1MTokens)}/${value(peak.cacheHitFenPer1MTokens)} · 谷 ${value(off.inputFenPer1MTokens)}/${value(off.outputFenPer1MTokens)}/${value(off.cacheHitFenPer1MTokens)}（分/百万）`);
+    }
+  }
+  if (prices.IMAGE) {
+    lines.push(`图片：${value(prices.IMAGE.perImageFen)} 分/张${tiers(prices.IMAGE.byResolution)}`);
+  }
+  if (prices.VIDEO) {
+    lines.push(`视频：${value(prices.VIDEO.perSecondFen)} 分/秒${tiers(prices.VIDEO.byResolution)}${prices.VIDEO.audioExtraPerSecondFen ? ` · 音频 +${prices.VIDEO.audioExtraPerSecondFen}` : ''}`);
+  }
+  if (prices.MUSIC) {
+    lines.push(`音乐：${prices.MUSIC.perCallFen !== null && prices.MUSIC.perCallFen !== undefined ? `${prices.MUSIC.perCallFen} 分/次` : `${value(prices.MUSIC.perSecondFen)} 分/秒`}`);
+  }
+  return lines;
+}
+
 // 读回已声明的方式：既认新的多选数组，也认旧的单值 inputFrame（NONE/FIRST/LAST）。
 function inputModesOf(declared, modelId) {
   const value = declared?.inputModes ?? declared?.inputFrame;
@@ -663,6 +692,22 @@ export function AiCapabilityPanel({ api }) {
 
   return <>
     <form onSubmit={save}>
+      <details className="top-gap">
+        <summary><strong>当前成本价一览（只读）</strong> <span className="muted">与上游合同价 · 改价去 ① 渠道卡</span></summary>
+        <div className="table-wrap top-gap"><table>
+          <thead><tr><th>渠道</th><th>模型</th><th>成本价</th></tr></thead>
+          <tbody>{form.channels.map((channel) => {
+            const lines = unitPriceLines(channel.upstreamUnitPrices);
+            return <tr key={channel.id}>
+              <td><strong>{channel.name || channel.id}</strong></td>
+              <td>{channel.model || '—'}</td>
+              <td>{lines.length ? lines.map((line, index) => <div key={index}>{line}</div>) : <span className="muted">未配（成本记 UNKNOWN）</span>}</td>
+            </tr>;
+          })}</tbody>
+        </table></div>
+        <div className="muted">文本 分/百万 token · 图片 分/张 · 视频 分/秒 · 音乐 分/次；上游逐笔实报（REPORTED）优先，没有实报才按这里折算（COMPUTED）。</div>
+      </details>
+
       <Panel title="① 渠道（怎么连上游）">
         <Notice tone="warning">渠道只负责「连哪家上游」：名称 / 调用地址 / 可用模型 / 默认模型 + 密钥。
           <strong>成本价在本渠道卡里填</strong>，模型能力在 ② 里填。「测试连接」只探接口可达；
