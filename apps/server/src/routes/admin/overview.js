@@ -13,6 +13,7 @@ import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 import { getAiProviderPolicy } from '../billingConfig.js';
 import { getProviderApiKey } from '../../services/providerSecret.js';
+import { isRunningHubEndpoint, probeRunningHubAccount } from '../../services/runningHubAccount.js';
 import { AI_PROVIDER_API_KEY } from '../../config.js';
 import { resolveUnitPrice } from '../../services/upstreamCost.js';
 import { MEASURED_PRICE_RULES, measuredUnitPrices } from '../../services/measuredUnitPrices.js';
@@ -306,6 +307,27 @@ async function probeUpstreamWallet(channel) {
   // 没配 key 的渠道：照列（否则运维看不到「这条渠道为什么不在列表里」），标 skipped + 原因，
   // 且**绝不发请求** —— 没 key 可带，发过去只会换来一个 401，白暴露一次探测。
   if (!apiKey) return { ...base, endpointBase, skipped: true, reason: 'NO_API_KEY', ok: false, error: '该渠道未配置 API Key，已跳过（没有向上游发请求）' };
+
+  // RunningHub：官方 accountStatus（POST + remainMoney/currency），和 seedance 的
+  // GET /api/usage/wallet/ 不是一套。按域名分流，原有渠道行为不变。
+  if (isRunningHubEndpoint(rawEndpoint)) {
+    const result = await probeRunningHubAccount({ endpoint: rawEndpoint, apiKey });
+    return {
+      ...base,
+      endpointBase: (() => { try { return new URL(rawEndpoint).origin; } catch { return endpointBase; } })(),
+      walletPath: '/uc/openapi/accountStatus',
+      ok: Boolean(result.ok),
+      error: result.ok ? null : (result.error || '余额探测失败'),
+      amount: result.amount ?? null,
+      displayType: result.currency ?? null,
+      currencyLike: result.currencyLike ?? null,
+      usedAmount: null, quota: null, usedQuota: null, totalAvailable: null,
+      username: null, group: null,
+      remainCoins: result.remainCoins ?? null,
+      currentTaskCounts: result.currentTaskCounts ?? null,
+      apiType: result.apiType ?? null,
+    };
+  }
 
   const url = endpointBase + UPSTREAM_WALLET_PATH;
   const controller = new AbortController();

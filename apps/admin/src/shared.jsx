@@ -17,6 +17,7 @@ export function downloadCsv(filename, content) {
 export const navigation = [
   { heading: '平台工作台' },
   { to: '/dashboard', icon: '◈', label: '平台工作台', permission: 'ADMIN_ANALYTICS' },
+  { to: '/monitor', icon: '◉', label: '实时监控', permission: 'ADMIN_ANALYTICS' },
   { heading: '课包与课程' },
   { to: '/courses', icon: '▦', label: '课包与课程编排', permission: 'ADMIN_COURSES' },
   // 2026-09-18 一个页面一个名字（用户口径）：菜单 / 分组头 / 页面标题 / 路径统一成「AI 能力与价格」。

@@ -6,6 +6,7 @@ import { CourseSeriesDetailPage, CourseSeriesListPage } from './components/Cours
 import { ModelCompute } from './pages/ModelCompute.jsx';
 import { AdminPermissionGate, visibleNavigation } from './shared.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
+import { Monitor } from './pages/Monitor.jsx';
 import { Organizations, Authorizations } from './pages/Organizations.jsx';
 // P03（2026-09-18 按线框图对齐）：机构拆成「列表 / 详情 / 课包与授权次数 / 授权次数变更记录」四条路由，
 // 各有自己的地址（可深链、可刷新、可后退）—— 与 /courses、/courses/:seriesId 的做法一致。
@@ -42,6 +43,7 @@ export function App() {
   const page = (permission, element) => <AdminPermissionGate user={session.user} permission={permission}>{element}</AdminPermissionGate>;
   return <AdminShell product="灵动ai学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout} onChangePassword={() => navigate('/security')}><Routes>
     <Route path="/dashboard" element={page('ADMIN_ANALYTICS', <Dashboard api={api} />)} />
+    <Route path="/monitor" element={page('ADMIN_ANALYTICS', <Monitor api={api} user={session.user} />)} />
     <Route path="/organizations" element={page('ADMIN_ORGANIZATIONS', <Organizations api={api} />)} />
     <Route path="/leads" element={page('ADMIN_ORGANIZATIONS', <Leads api={api} />)} />
     <Route path="/organizations/:orgId" element={page('ADMIN_ORGANIZATIONS', <OrganizationDetail api={api} />)} />
