@@ -174,9 +174,9 @@ export function WorkSharePage() {
       {org?.name ? <>
         <div className="share-page__org">
           <p className="share-page__from"><Icon name="book" /> 学生来自：{org.name}</p>
-          {org.phone ? <a className="share-page__phone" href={`tel:${org.phone}`}>{org.phone}</a> : null}
+          {org.phone ? <a className="share-page__phone" href={`tel:${org.phone}`}><em>机构电话：</em>{org.phone}</a> : null}
         </div>
-        {org.address ? <p className="share-page__address">{org.address}</p> : null}
+        {org.address ? <p className="share-page__address"><em>机构地址：</em>{org.address}</p> : null}
       </> : null}
     </header>
 
