@@ -30,7 +30,7 @@ function openedPackageCount(item) {
 function newOrganizationForm() {
   return {
     name: '', shortName: '', region: '', notes: '', status: 'ACTIVE',
-    contactName: '', contactPhone: '',
+    contactName: '', contactPhone: '', contactAddress: '',
     // 图2 没画「签约信息 / 人数上限 / 管理员账号」，但服务端 POST /organizations 必需：
     // 管理员账号密码是硬校验（ORG_ADMIN_INPUT_REQUIRED），学生上限不给就是 0（等于开不出学生）。
     // 所以这几项收在「签约、人数上限与管理员账号」折叠区里，默认值与既有口径一致。
@@ -102,6 +102,7 @@ function CreateOrganizationDialog({ form, setForm, saving, error, onClose, onSub
         <label>机构简称 *<input value={form.shortName} onChange={(event) => setForm({ ...form, shortName: event.target.value })} required maxLength={50} placeholder="如：海淀魔法学院" />{errorText('shortName')}</label>
         <label>联系人 *<input value={form.contactName} onChange={(event) => setForm({ ...form, contactName: event.target.value })} required maxLength={200} />{errorText('contactName')}</label>
         <label>联系电话 *<input type="tel" value={form.contactPhone} onChange={(event) => setForm({ ...form, contactPhone: event.target.value })} required maxLength={200} placeholder="如：13800138000" />{errorText('contactPhone')}</label>
+        <label className="span-2">机构地址<input value={form.contactAddress} onChange={(event) => setForm({ ...form, contactAddress: event.target.value })} maxLength={500} placeholder="选填；会显示在作品分享页（可写长地址）" /></label>
       </div>
       <div>
         <span className="org-field-label">机构状态</span>
@@ -200,7 +201,7 @@ export function Organizations({ api }) {
         studentSeats: Number(form.studentSeats),
         // 联系人 / 电话仍在 contact 这个 JSON 里，键名照服务端 contactPayload 的白名单：
         // name / phone / email / contractNotes（图2 的「备注」就是 contractNotes）。
-        contact: { name: form.contactName.trim(), phone: form.contactPhone.trim(), contractNotes: form.notes.trim() },
+        contact: { name: form.contactName.trim(), phone: form.contactPhone.trim(), address: form.contactAddress.trim(), contractNotes: form.notes.trim() },
         adminLogin: form.adminLogin.trim(),
         adminDisplayName: form.adminDisplayName.trim(),
         adminPassword: form.adminPassword,

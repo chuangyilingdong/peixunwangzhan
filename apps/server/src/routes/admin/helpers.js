@@ -774,7 +774,7 @@ async function organizationRow(orgId) {
 function contactPayload(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw errors.badRequest('联系人必须是对象', 'INVALID_ORG_CONTACT');
   const result = {};
-  const limits = { name: 200, phone: 200, email: 200, contractNotes: 5000 };
+  const limits = { name: 200, phone: 200, email: 200, address: 500, contractNotes: 5000 };
   Object.entries(value).forEach(([key, item]) => {
     if (!Object.hasOwn(limits, key)) return;
     if (item === null || item === undefined || item === '') return;

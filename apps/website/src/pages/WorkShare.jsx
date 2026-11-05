@@ -171,7 +171,13 @@ export function WorkSharePage() {
     {/* 移动端分享页只保留一处品牌标识：扫码页不再渲染官网完整顶栏。 */}
     <header className="share-page__head">
       <Link className="share-page__brand" to="/" aria-label="返回灵动 AI 首页"><BrandLogo height={28} /></Link>
-      {org?.name ? <p className="share-page__from"><Icon name="book" /> 学生来自：{org.name}</p> : null}
+      {org?.name ? <>
+        <div className="share-page__org">
+          <p className="share-page__from"><Icon name="book" /> 学生来自：{org.name}</p>
+          {org.phone ? <a className="share-page__phone" href={`tel:${org.phone}`}>{org.phone}</a> : null}
+        </div>
+        {org.address ? <p className="share-page__address">{org.address}</p> : null}
+      </> : null}
     </header>
 
     <section className="share-card">

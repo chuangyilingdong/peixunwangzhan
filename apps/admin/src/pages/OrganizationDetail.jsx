@@ -222,6 +222,7 @@ export function OrganizationDetail({ api }) {
       studentSeats: organization.studentSeats,
       contactName: contact.name || '',
       contactPhone: contact.phone || '',
+      contactAddress: contact.address || '',
       contactEmail: contact.email || '',
       contractNotes: contact.contractNotes || '',
     });
@@ -241,7 +242,7 @@ export function OrganizationDetail({ api }) {
         contractExpiresAt: new Date(editForm.contractExpiresAt + 'T23:59:59.999Z').toISOString(),
         teacherSeats: Number(editForm.teacherSeats),
         studentSeats: Number(editForm.studentSeats),
-        contact: { name: editForm.contactName, phone: editForm.contactPhone, email: editForm.contactEmail, contractNotes: editForm.contractNotes },
+        contact: { name: editForm.contactName, phone: editForm.contactPhone, address: editForm.contactAddress, email: editForm.contactEmail, contractNotes: editForm.contractNotes },
       });
       setMessage({ tone: 'success', text: '机构资料已保存。' });
       detail.refresh();
@@ -335,6 +336,7 @@ export function OrganizationDetail({ api }) {
             <label>教师数量上限<input type="number" min={summary.teachers || 0} max="1000000" value={editForm.teacherSeats} onChange={(event) => setEditForm({ ...editForm, teacherSeats: event.target.value })} required /></label>
             <label>联系人<input value={editForm.contactName} onChange={(event) => setEditForm({ ...editForm, contactName: event.target.value })} /></label>
             <label>联系电话<input value={editForm.contactPhone} onChange={(event) => setEditForm({ ...editForm, contactPhone: event.target.value })} /><small className="muted">机构卡上显示的是脱敏号码，这里编辑的是明文。</small></label>
+            <label className="span-2">机构地址<input value={editForm.contactAddress} onChange={(event) => setEditForm({ ...editForm, contactAddress: event.target.value })} maxLength={500} placeholder="选填；会显示在作品分享页（可写长地址）" /></label>
             <label>联系邮箱<input value={editForm.contactEmail} onChange={(event) => setEditForm({ ...editForm, contactEmail: event.target.value })} /></label>
           </div>
           <label>签约备注<textarea rows={3} maxLength={5000} value={editForm.contractNotes} onChange={(event) => setEditForm({ ...editForm, contractNotes: event.target.value })} placeholder="填写签约服务、约定事项或合同备注" /></label>

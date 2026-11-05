@@ -375,7 +375,13 @@ export async function handlePublicCommunication(ctx) {
     if (!link) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
     const owner = await arow('SELECT id, display_name, login, avatar_asset_id, home_token FROM users WHERE id=? AND role=? AND deleted_at IS NULL', [link.student_id, 'STUDENT']);
     if (!owner) throw errors.notFound('分享链接不存在', 'PUBLIC_SHARE_LINK_NOT_FOUND');
-    const organization = await arow('SELECT name FROM organizations WHERE id=?', [link.org_id]);
+    const organization = await arow('SELECT name, contact FROM organizations WHERE id=?', [link.org_id]);
+    const orgContact = parseJson(organization?.contact, {}) || {};
+    const orgPublic = {
+      name: organization?.name || null,
+      phone: String(orgContact.phone || '').trim() || null,
+      address: String(orgContact.address || '').trim() || null,
+    };
     const base = `/api/public/share-links/${encodeURIComponent(link.code)}`;
     const mediaUrlFor = (fileId) => (fileId ? `${base}/media/${encodeURIComponent(fileId)}` : null);
     const homeToken = String(owner.home_token || '').trim();
@@ -398,7 +404,7 @@ export async function handlePublicCommunication(ctx) {
       return {
         code: link.code, createdAt: link.created_at, source: 'CANVAS',
         student: { name: publicCreatorName(owner), avatarUrl: avatarUrlOf(owner.avatar_asset_id) },
-        org: { name: organization?.name || null },
+        org: orgPublic,
         lessonTitle: work.lesson_title || null,
         homeUrl: homeToken ? `/u/${encodeURIComponent(homeToken)}` : null,
         work: { id: work.id, title: work.title || null, description: work.description || null },
@@ -458,7 +464,7 @@ export async function handlePublicCommunication(ctx) {
     return {
       code: link.code, createdAt: link.created_at, source: 'VIBECODING',
       student: { name: publicCreatorName(owner), avatarUrl: avatarUrlOf(owner.avatar_asset_id) },
-      org: { name: organization?.name || null },
+      org: orgPublic,
       lessonTitle: submission.lesson_title || null,
       homeUrl: homeToken ? `/u/${encodeURIComponent(homeToken)}` : null,
       work: { id: submission.id, title: submission.title || null, description: submission.description || null },
