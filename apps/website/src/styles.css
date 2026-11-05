@@ -1535,3 +1535,9 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 .canvas-work__body{flex:1;min-height:0;overflow:auto;padding:14px}
 /* 画布需要**确定高度**的容器（CanvasEditor 在无高度容器里会塌成 0），去掉详情页那条 margin */
 .canvas-work__canvas{flex:1;min-height:0;margin:0;position:relative;overflow:hidden}
+
+/* 扫码直接播放（/s/<code>/play）：全屏运行网页作品，不显示分享卡片 */
+.share-play{position:fixed;inset:0;z-index:9999;background:#0b0b12}
+.share-play .c-replay__stage,.share-play .c-replay__stage--fill,.share-play iframe{width:100%;height:100%;border:0}
+.share-play--state{display:flex;align-items:center;justify-content:center;gap:8px;color:#fff;font-size:14px}
+.share-play--state a{color:#b9a7ff;text-decoration:underline}

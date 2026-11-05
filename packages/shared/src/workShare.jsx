@@ -7,7 +7,7 @@
 // ⚠️ 发码的口径（幂等 / 件怎么定位 / 与作品广场解耦）在服务端 `services/workShare.js` 一份；
 //    这个组件只管"显示 + 调 createShare"，**不自己拼 pieceKey**（那是服务端算的）。
 // ⚠️ 目前**没有公众号** → 不做微信 JS-SDK，面板里给"复制链接 + 微信里点右上角 ···"的手动路径。
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 // 二维码：仓库里 vendored 的那份（MIT，Kazuhiko Arase）—— **零依赖**（服务器没有 npm，发布不该为它下载新包）。
 // 正确性：同一段文本与 npm 上成熟的 `qrcode` 生成结果**逐格比对一致**（33×33、0 处不同）后才投入使用。
 import qrcode from './vendor/qrcode-generator.mjs';
@@ -47,6 +47,11 @@ export const ALL_SHARE_PIECES_KEY = '__all__';
  */
 export function WorkSharePanel({ title, pieces = [], createShare, onClose }) {
   const [state, setState] = useState({ pieceKey: '', url: '', svg: '', busy: true, notice: '' });
+  // 2026-11-05 用户口径：特定场景扫码要**直接播放作品**（不显示分享页）。
+  // 默认关闭，正常分享码完全不变；勾选后只在链接末尾加 `/play`。
+  const [playMode, setPlayMode] = useState(false);
+  const qrUrl = state.url ? `${state.url}${playMode ? '/play' : ''}` : '';
+  const qrSvg = useMemo(() => (qrUrl ? qrSvgText(qrUrl) : ''), [qrUrl]);
 
   async function pick(pieceKey) {
     if (!pieceKey) return;
@@ -85,14 +90,15 @@ export function WorkSharePanel({ title, pieces = [], createShare, onClose }) {
         </select>
       </label> : null}
       {state.busy ? <p className="share-modal__hint">正在生成二维码…</p> : null}
-      {state.svg ? <div className="share-modal__qr" dangerouslySetInnerHTML={{ __html: state.svg }} /> : null}
+      <label className="share-modal__play"><input type="checkbox" checked={playMode} onChange={(event) => setPlayMode(event.target.checked)} /> 扫码直接播放作品（不显示分享页）</label>
+      {qrSvg ? <div className="share-modal__qr" dangerouslySetInnerHTML={{ __html: qrSvg }} /> : null}
       {state.notice ? <p className="share-modal__hint">{state.notice}</p> : null}
       {/* ⭐ 2026-10-03 用户口径：「"先看看分享页"删除，复制链接点击后**显示复制成功提示即可，
           不用显示具体的链接地址**」——链接那么长，贴在提示里既读不了也用不上（微信里还得手抄）。
           ⚠️ 失败时也别再把地址倒出来（用户原话：「实际这个操作根本不可能用」）——给一句能照做的。 */}
       {state.url ? <div className="share-modal__actions">
         <button type="button" className="button" onClick={async () => {
-          try { await navigator.clipboard.writeText(state.url); setState((old) => ({ ...old, notice: '链接已复制' })); }
+          try { await navigator.clipboard.writeText(qrUrl); setState((old) => ({ ...old, notice: '链接已复制' })); }
           catch { setState((old) => ({ ...old, notice: '复制失败，请长按二维码保存后发送' })); }
         }}>复制链接</button>
       </div> : null}

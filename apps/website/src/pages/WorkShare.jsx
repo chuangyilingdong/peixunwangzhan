@@ -53,6 +53,45 @@ function mediaFileName(piece, mimeType) {
   return `${base}.${ext}`;
 }
 
+/**
+ * 扫码直接播放（2026-11-05 用户口径：特定场景专用，不影响正常分享页）。
+ * 路由 `/s/:code/play`：同一枚分享码，直接全屏运行网页作品，不渲染学生/机构卡片。
+ * 找不到可直接播放的 HTML 件时，给一个回分享页的出口。
+ */
+export function WorkPlayPage() {
+  const { code } = useParams();
+  const [state, setState] = useState({ loading: true, data: null, error: '' });
+  useEffect(() => {
+    let live = true;
+    setState({ loading: true, data: null, error: '' });
+    api.get(`public/share-links/${encodeURIComponent(code)}`)
+      .then((payload) => { if (live) setState({ loading: false, data: payload || null, error: '' }); })
+      .catch((error) => { if (live) setState({ loading: false, data: null, error: error?.message || '分享链接不存在' }); });
+    return () => { live = false; };
+  }, [code]);
+  if (state.loading) return <div className="share-play share-play--state">正在打开作品…</div>;
+  if (state.error || !state.data) return <div className="share-play share-play--state">
+    {state.error || '分享链接不存在'}
+    <Link to={`/s/${code}`}>打开分享页</Link>
+  </div>;
+  const pieces = Array.isArray(state.data.pieces) && state.data.pieces.length
+    ? state.data.pieces
+    : (state.data.piece ? [state.data.piece] : []);
+  const playable = pieces.find((item) => item.render === 'HTML' && item.document) || null;
+  if (!playable) return <div className="share-play share-play--state">
+    这个分享里没有可直接播放的网页作品。
+    <Link to={`/s/${code}`}>打开分享页</Link>
+  </div>;
+  return <div className="share-play">
+    <ReplayPreview
+      html={buildPreviewDocument(playable.document.files, playable.document.entry, { worksLlm: playable.document.worksLlm })}
+      title={playable.name || '作品'}
+      chrome={false}
+      fill
+    />
+  </div>;
+}
+
 export function WorkSharePage() {
   const { code } = useParams();
   const [state, setState] = useState({ loading: true, data: null, error: '' });

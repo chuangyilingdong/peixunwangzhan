@@ -10,7 +10,7 @@ import { WorkDetailPage } from './pages/WorkDetail.jsx';
 // 学生个人主页（对外公开，路由 /u/:token）—— 用户口径 2026-09-27：「学生创建了账号应该就有个主页的专属链接」
 import { CreatorHomePage } from './pages/CreatorHome.jsx';
 // 作品分享页（/s/<分享码>）—— 学生主页侧发的码，与作品广场两条链路（2026-09-30）
-import { WorkSharePage } from './pages/WorkShare.jsx';
+import { WorkPlayPage, WorkSharePage } from './pages/WorkShare.jsx';
 import { CanvasPrepPage } from './pages/CanvasPrep.jsx';
 import { LanguageSwitcher } from './components/LanguageSwitcher.jsx';
 // 语言包（2026-10-01）：界面词 + 首页那份 CMS 文案的三种语言版本。加一种语言就是加一份 JSON。
@@ -2254,6 +2254,7 @@ export function App(){
         <Route path='/org' element={<Org/>}/>
         <Route path='/works' element={<Works/>}/>
         <Route path='/works/shared/:token' element={<WorkDetailPage api={publicApi}/>}/>
+        <Route path='/s/:code/play' element={<WorkPlayPage/>}/>
         <Route path='/s/:code' element={<WorkSharePage/>}/>
         <Route path='/works/:token' element={<WorkDetailPage api={publicApi}/>}/>
         {/* 学生个人主页（公开，不需要登录）：`/u/<home_token>`，一个学生一个链接（建号时生成）。
