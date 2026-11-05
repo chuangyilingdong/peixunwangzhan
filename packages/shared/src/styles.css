@@ -1595,8 +1595,6 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .share-modal__title { margin: 6px 0 12px; color: #4b3f72; font-size: 14px; }
 .share-modal__pick { display: flex; align-items: center; gap: 8px; justify-content: center; margin: 0 0 12px; color: #4b3f72; font-size: 14px; }
 .share-modal__pick select { border: 1px solid #ddd6f5; border-radius: 10px; padding: 6px 10px; font: inherit; max-width: 200px; }
-.share-modal__play { display: flex; align-items: center; gap: 6px; margin: 10px 0 0; font-size: 12px; color: #6b6180; }
-.share-modal__play input { width: 14px; height: 14px; }
 .share-modal__qr { display: flex; justify-content: center; margin: 10px 0; }
 .share-modal__qr svg { width: 200px; height: 200px; }
 .share-modal__hint { margin: 6px 0 0; color: #8a83a3; font-size: 13px; line-height: 1.6; }
