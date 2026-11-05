@@ -205,8 +205,10 @@ try {
     /units: useNow, source \}\);/.test(page)
     && /source="STUDENT_CENTER"/.test(page) && /source="STUDENT_DETAIL"/.test(page)
     && /STUDENT_CENTER: '学生授权中心'/.test(orgRoute) && /STUDENT_DETAIL: '学生授权详情'/.test(orgRoute));
-  check('⑥ 学生授权中心有「体验课包授权次数」列（含 已核销 / 剩 的拆分）',
-    /体验课包授权次数/.test(page) && /experienceGrantedUnits/.test(page) && /experienceRemainingUnits/.test(page));
+  // 2026-11-05 用户口径：不要「授权概览」，改成每个课包一行（授权 / 已用 / 剩余）。
+  check('⑥ 学生授权中心按课包列出 授权 / 已用 / 剩余（替代概览）',
+    /课包明细（授权 \/ 已用 \/ 剩余）/.test(page) && /grant-breakdown/.test(page)
+    && /series\.grantedUnits/.test(page) && /series\.consumedUnits/.test(page) && /series\.remainingUnits/.test(page));
   check('⑥ 机构名接进外壳并会渲染（orgName → .org-name），样式在共享样式表里',
     /<AppShell product="灵动ai学院" orgName=\{session\.organization\?\.name/.test(main)
     && /orgName = ''/.test(shell) && /className="org-name"/.test(shell) && /\.org-name\{/.test(styles));

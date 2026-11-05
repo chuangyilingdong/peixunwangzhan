@@ -112,24 +112,30 @@ function StudentGrantCenter({ api, onOpenStudent }) {
       {data.loading ? <Loading label="正在读取学生授权…" /> : data.error ? <ErrorState error={data.error} onRetry={data.refresh} /> : items.length ? <>
         <ListResultSummary total={data.data?.total} page={data.data?.page} totalPages={data.data?.totalPages} label="名学生" />
         <div className="table-wrap"><table>
-          <thead><tr><th>学生</th><th>登录账号</th><th>账号状态</th><th>已授权课包数</th><th>体验课包授权次数</th><th>最近授权时间</th><th>授权概览</th><th>操作</th></tr></thead>
+          <thead><tr><th>学生</th><th>登录账号</th><th>账号状态</th><th>已授权课包数</th><th>最近授权时间</th><th>课包明细（授权 / 已用 / 剩余）</th><th>操作</th></tr></thead>
           <tbody>{items.map((item) => <tr key={item.studentId}>
             <td><strong>{item.displayName || item.login}</strong></td>
             <td className="muted">{item.login}</td>
             <td><AccountBadge status={item.status} /></td>
             <td>{item.grantedCount}</td>
-            {/* ⭐ 2026-09-26 用户口径：体验课包可以重复授权给同一个账号，所以这里要看得见**授权次数**
-                （次数记在许可行上：授权 N 次 / 已核销 M 次 / 还剩 N−M 次）。没有体验包的学生显示「—」。 */}
-            <td>{item.experienceGrantedUnits
-              ? <><strong>{item.experienceGrantedUnits} 次</strong><div className="muted">已核销 {item.experienceConsumedUnits} · 剩 {item.experienceRemainingUnits}</div></>
-              : <span className="muted">—</span>}</td>
             <td>{item.lastGrantedAt ? formatDate(item.lastGrantedAt) : '—'}</td>
+            {/* 2026-11-05 用户口径：不要概览，要**每个课包**的 授权次数 / 已用 / 剩余。
+                体验课包按次数核销；普通课包按人授权一次、不按次数核销，所以已用/剩余显示「—」。 */}
             <td>{item.grantedSeries.length
-              ? <span className="muted">{item.grantedSeries.slice(0, 3).map((series) => `${series.title}${series.seriesType === 'EXPERIENCE' ? ` ×${series.grantedUnits}` : ''}`).join('、')}{item.grantedSeries.length > 3 ? ` 等 ${item.grantedSeries.length} 个` : ''}</span>
+              ? <table className="grant-breakdown">
+                <thead><tr><th>课包</th><th>授权</th><th>已用</th><th>剩余</th></tr></thead>
+                <tbody>{item.grantedSeries.map((series) => <tr key={series.seriesId}>
+                  <td>{series.title}{series.seriesType === 'EXPERIENCE' ? <em>体验</em> : null}</td>
+                  <td>{series.grantedUnits}</td>
+                  <td>{series.seriesType === 'EXPERIENCE' ? series.consumedUnits : '—'}</td>
+                  <td>{series.seriesType === 'EXPERIENCE' ? series.remainingUnits : '—'}</td>
+                </tr>)}</tbody>
+              </table>
               : <span className="muted">暂无课包</span>}</td>
             <td><button type="button" className="text-button" onClick={() => onOpenStudent(item.studentId)}>查看授权</button></td>
           </tr>)}</tbody>
         </table></div>
+        <p className="muted">课包明细：体验课包按次数核销（授权 / 已用 / 剩余）；普通课包按人授权一次、不按次数核销，已用和剩余显示「—」。</p>
         <Pagination page={data.data?.page} totalPages={data.data?.totalPages} onChange={setPage} disabled={data.loading} />
       </> : <Empty title="没有符合条件的学生" body="调整筛选条件，或先在「机构成员管理」里创建学生账号。" />}
     </Panel>
