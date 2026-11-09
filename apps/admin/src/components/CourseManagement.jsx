@@ -294,6 +294,13 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
     const config = classroomConfigFor(lesson, current);
     return { ...current, classroomConfig: { ...config, vibeCoding: { ...(config.vibeCoding || {}), ...patch } } };
   });
+  // 渠道换模型后，课时里可能残留旧模型名：下拉会显示「跟随默认」，但保存仍带着旧值 → 400。
+  // 打开编辑器时把不在当前渠道模型清单里的旧值清成空（跟随渠道默认），避免「什么都没改也保存失败」。
+  useEffect(() => {
+    const current = String(vibeCodingConfig.model || '');
+    if (!current || !providerPolicy) return;
+    if (!channelModels('TEXT').includes(current)) updateVibeCoding({ model: '' });
+  }, [providerPolicy, vibeCodingConfig.model]);
   // 列表按函数式更新（与 materialGroups 同一套写法），连续编辑不会互相覆盖
   const updatePresetPrompts = (mapper) => onChange((current) => {
     const config = classroomConfigFor(lesson, current);
@@ -478,7 +485,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
           : '只开画布：学生进来后在画布里创作；下面按需要开放生图 / 生视频 / 音乐能力。'}</p>
     </div>
     {offersVibe ? <section className="lesson-material-group-editor"><h3>VibeCoding 入口</h3><p className="muted">仅使用 AI 文字对话；图片、视频、音乐能力与画布素材属于画布入口。</p>
-      <label>文字模型<select value={vibeCodingConfig.model || ''} onChange={(event) => updateVibeCoding({ model: event.target.value })}><option value="">跟随文字渠道默认模型</option>{channelModels('TEXT').map((model) => <option key={model} value={model}>{modelOptionLabel(model)}</option>)}</select></label>
+      <label>文字模型<select value={channelModels('TEXT').includes(vibeCodingConfig.model || '') ? (vibeCodingConfig.model || '') : ''} onChange={(event) => updateVibeCoding({ model: event.target.value })}><option value="">跟随文字渠道默认模型</option>{channelModels('TEXT').map((model) => <option key={model} value={model}>{modelOptionLabel(model)}</option>)}</select></label>
       {/* 发送次数上限（2026-09-19 用户口径「可以选发送按钮可以按几次」）。
           ⚠️ 不填 = 不限次（现状一字不改）；填了就由**服务端**按「这个学生在这节课按了几次发送」拦，
           客户端改不掉（计数在服务端，见 services/vibecodingLessonSettings.js）。 */}
