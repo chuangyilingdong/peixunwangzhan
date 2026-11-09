@@ -344,6 +344,22 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
       return { snapshot: { ...snapshot, box: patcher(box) } };
     });
   }
+  // 与 VibeCoding 的文字模型同一条保护：渠道换模型后，框体里可能残留旧模型名。
+  // 下拉会显示「使用渠道默认模型」，但保存仍带着旧值 → 服务端报「XX 模型未启用」。
+  // 打开编排时把不在当前渠道清单里的框体模型清空（图片/视频/音乐都适用）。
+  useEffect(() => {
+    if (!providerPolicy) return;
+    groups.forEach((group, groupIndex) => {
+      (group.materials || []).forEach((material, materialIndex) => {
+        const box = material.snapshot?.box;
+        const model = String(box?.model || '');
+        if (!model) return;
+        const modality = String(box.modality || 'TEXT').toUpperCase();
+        if (channelModels(modality, box.inputMode).includes(model)) return;
+        patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, model: '' }));
+      });
+    });
+  }, [providerPolicy, groups]);
   // 素材的默认值（用户 2026-09-23 口径：建课时绝大多数情况都是这几样，别再让学生一个个手填）。
   //   · 提示词        → 标题「提示词（N）」（N = 这一组里已有几条提示词 + 1）
   //   · 生成框体-生图 → 标题「图片框体」+ 模型「使用渠道默认模型」+ 清晰度 1k
@@ -543,7 +559,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
                 {capabilities.includes(modality.toLowerCase()) ? null : <p className="muted">本课没有开放「{capabilityLabel}」能力，学生看不到这个框体；勾选上方能力后才会出现。</p>}
                 <div className="lesson-field-row">
                   <LessonField label="生成什么"><select value={modality} onChange={(event) => changeBoxModality(groupIndex, materialIndex, material.uid, event.target.value)}>{GENERATION_BOX_MODALITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></LessonField>
-                  <LessonField label="模型">{channelModels(modality, box.inputMode).length ? <select value={box.model || ''} onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)}><option value="">使用渠道默认模型</option>{channelModels(modality, box.inputMode).map((model) => <option key={model} value={model}>{modelOptionLabel(model)}</option>)}</select> : <input value={box.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)} />}</LessonField>
+                  <LessonField label="模型">{channelModels(modality, box.inputMode).length ? <select value={channelModels(modality, box.inputMode).includes(box.model || '') ? (box.model || '') : ''} onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)}><option value="">使用渠道默认模型</option>{channelModels(modality, box.inputMode).map((model) => <option key={model} value={model}>{modelOptionLabel(model)}</option>)}</select> : <input value={box.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)} />}</LessonField>
                   {modality === 'MUSIC' ? <LessonField label="生成模式"><select value={box.mode || 'LYRICS'} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, mode: event.target.value }))}>{MUSIC_MODE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></LessonField> : null}
                 </div>
                 {/* 生成方式：这节课的这个框体"要哪种"（文生/图生/首尾帧/全能参考、文生图/图生图）。
