@@ -280,6 +280,11 @@ CREATE TABLE IF NOT EXISTS course_series (
   --   ① 只能包含 1 节未归档课时；② 可以重复分给同一个学生、未使用的次数**可以预先累积**；
   --   ③ 每场课堂**正常结束且该学生有有效 AI 产出**时核销 1 次（无产出不扣、解散不扣）。
   series_type TEXT NOT NULL DEFAULT 'NORMAL' CHECK (series_type IN ('NORMAL','EXPERIENCE')),
+  -- 是否计入「普通课」次数池子（2026-11-10 用户口径）：
+  --   · 1 = 计入：S1/S2/S3 这类平台普通课，共用同一份次数，节数也算进「普通课（N 节）」；
+  --   · 0 = 不计入：成人/商家等独立课程，**不占 48 节、不进池子**，授权与核销落在自己的系列上。
+  -- 只有 series_type='NORMAL' 才有意义；体验课包恒按 0 处理（它本来就不进普通课池子）。
+  include_in_normal_pool INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
@@ -2355,6 +2360,9 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 // ⚠️ 老库这两条 ALTER 不能省：只改上面的 CREATE TABLE 的话，**已经在跑的库**永远拿不到这些列。
 try { db.exec("ALTER TABLE course_series ADD COLUMN series_type TEXT NOT NULL DEFAULT 'NORMAL'"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 普通课池子开关（2026-11-10 用户口径）：老库补列，默认 1（历史普通课都算进池子）。
+try { db.exec('ALTER TABLE course_series ADD COLUMN include_in_normal_pool INTEGER NOT NULL DEFAULT 1'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec("ALTER TABLE student_course_grants ADD COLUMN granted_units INTEGER NOT NULL DEFAULT 1"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec("ALTER TABLE student_course_grants ADD COLUMN consumed_units INTEGER NOT NULL DEFAULT 0"); }
@@ -3579,8 +3587,9 @@ for (const [table, columns] of [
   }
 }
 for (const table of ['license_purchase_batches', 'license_revenue_events', 'course_quota_changes']) {
+  // 只有「计入普通课池子」的系列归到 NORMAL/NORMAL；体验课与独立课程（成人/商家）都归 SERIES/自身。
   db.exec(`UPDATE ${table} SET
-      scope_type = CASE WHEN (SELECT s.series_type FROM course_series s WHERE s.id=${table}.series_id)='NORMAL' THEN 'NORMAL' ELSE 'SERIES' END,
-      scope_key = CASE WHEN (SELECT s.series_type FROM course_series s WHERE s.id=${table}.series_id)='NORMAL' THEN 'NORMAL' ELSE series_id END
+      scope_type = CASE WHEN EXISTS (SELECT 1 FROM course_series s WHERE s.id=${table}.series_id AND s.series_type='NORMAL' AND s.include_in_normal_pool<>0) THEN 'NORMAL' ELSE 'SERIES' END,
+      scope_key = CASE WHEN EXISTS (SELECT 1 FROM course_series s WHERE s.id=${table}.series_id AND s.series_type='NORMAL' AND s.include_in_normal_pool<>0) THEN 'NORMAL' ELSE series_id END
     WHERE scope_key IS NULL`);
 }

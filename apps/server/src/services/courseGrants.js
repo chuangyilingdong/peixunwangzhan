@@ -22,31 +22,54 @@ export const SERIES_TYPES = Object.freeze(['NORMAL', 'EXPERIENCE']);
 export const EXPERIENCE_SERIES_TYPE = 'EXPERIENCE';
 
 /**
- * 「普通课」池子的存储键 = **最早创建的普通课系列**（生产里是 S1）。
+ * 「普通课」池子的存储键 = **最早创建的、计入池子的普通课系列**（生产里是 S1）。
  *
  * 2026-11-10 用户口径：S1/S2/S3 不是三个可分别授权的东西，而是同一个普通课的 48 节课；
  * 平台给机构的次数、机构给学生的次数，都是这 48 节共用的**一个池子**。
  * 实现上不新增表：把最早的那个普通课系列当作池子的 `series_id`，S2/S3 只保留
  * 0 次数的“可上课”授权（让课程中心/建课堂仍能访问），授权与核销都落在池子上。
+ *
+ * 2026-11-10 第二次确认（48 节口径）：`include_in_normal_pool=0` 的普通课（成人/商家等）
+ * **不算进池子**，也不参与节数、授权下拉与访问授权；它们各自用自己的系列做次数账。
  */
 export async function normalPoolSeries() {
-  return await arow(`SELECT id, title, series_type FROM course_series
-    WHERE owner_type='PLATFORM' AND series_type='NORMAL'
+  return await arow(`SELECT id, title, series_type, include_in_normal_pool FROM course_series
+    WHERE owner_type='PLATFORM' AND series_type='NORMAL' AND include_in_normal_pool<>0
     ORDER BY created_at, sort, id LIMIT 1`);
 }
 
-/** 这门课的授权/核销该落在哪个系列上：普通课 → 池子系列；体验课 → 自己。 */
-export async function grantSeriesIdFor({ seriesId, seriesType }) {
+/** 计入普通课池子的系列 id（S1/S2/S3…，不含体验课与 include=0 的独立课程）。 */
+export async function normalPoolSeriesIds() {
+  const rows = await arows(`SELECT id FROM course_series
+    WHERE owner_type='PLATFORM' AND series_type='NORMAL' AND include_in_normal_pool<>0`, []);
+  return rows.map((row) => row.id);
+}
+
+/** 这个系列是否计入「普通课」次数池子（体验课、include=0 的普通课都不算）。 */
+export function inNormalCoursePool(series) {
+  if (seriesTypeOf(series) !== 'NORMAL') return false;
+  return Number(series?.include_in_normal_pool ?? 1) !== 0;
+}
+
+/** 这门课的授权/核销该落在哪个系列上：计入池子的普通课 → 池子系列；其余 → 自己。 */
+export async function grantSeriesIdFor({ seriesId, seriesType, includeInNormalPool }) {
   if (String(seriesType || '').toUpperCase() !== 'NORMAL') return seriesId;
+  let included = includeInNormalPool;
+  if (included === undefined || included === null) {
+    const row = await arow('SELECT include_in_normal_pool FROM course_series WHERE id=?', [seriesId]);
+    included = row?.include_in_normal_pool;
+  }
+  if (included !== undefined && included !== null && Number(included) === 0) return seriesId;
   const pool = await normalPoolSeries();
   return pool?.id || seriesId;
 }
 
-/** 普通课当前已发布的课时总数（S1+S2+S3…，不含体验课）。 */
+/** 普通课当前已发布的课时总数（S1+S2+S3…，不含体验课与 include=0 的独立课程）。 */
 export async function normalLessonCount() {
   const row = await arow(`SELECT COUNT(*) n FROM course_lessons lesson
     JOIN course_series series ON series.id=lesson.series_id
     WHERE series.owner_type='PLATFORM' AND series.series_type='NORMAL'
+      AND series.include_in_normal_pool<>0
       AND series.status='PUBLISHED' AND lesson.status='PUBLISHED'`);
   return Number(row?.n || 0);
 }

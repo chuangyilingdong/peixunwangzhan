@@ -13,7 +13,7 @@ import { errors, id, nowIso, q, row, rows, transaction, arow, arows, aq, atransa
 import { salePriceFenFor } from './computePool.js';
 import { sessionCostUsageByStudent, sessionCostCapState, studentCostCapFen } from './sessionCostCap.js';
 // 课包类型与次数账（2026-09-24 体验课包；2026-11-10 起普通课按"48 节一个池子"）
-import { activeGrantFor, consumeGrantUnit, grantBalanceByStudent, grantSeriesIdFor, grantUnitsOf, isExperienceSeries, normalPoolSeries } from './courseGrants.js';
+import { activeGrantFor, consumeGrantUnit, grantBalanceByStudent, grantSeriesIdFor, grantUnitsOf, inNormalCoursePool, isExperienceSeries, normalPoolSeries } from './courseGrants.js';
 
 /**
  * 谁可以**管理**这个课堂（开始 / 结束 / 解散 / 改名单 / 改名称）？
@@ -123,11 +123,13 @@ export async function sessionCandidates(session) {
       ORDER BY student.display_name, student.login`,
     [session.org_id],
   );
-  const series = await arow('SELECT id, series_type FROM course_series WHERE id=?', [session.series_id]);
+  const series = await arow('SELECT id, series_type, include_in_normal_pool FROM course_series WHERE id=?', [session.series_id]);
   const experience = isExperienceSeries(series);
-  // 普通课的次数在「普通课池子」那一行；体验课在自己的系列行
-  const grantSeriesId = experience ? session.series_id : ((await normalPoolSeries())?.id || session.series_id);
-  // 剩余次数一次取全：普通课读池子，体验课读自己的系列。
+  // 计入普通课池子的系列 → 读池子那一行；体验课 / 不计入的独立课程 → 读自己的系列
+  const grantSeriesId = inNormalCoursePool(series)
+    ? ((await normalPoolSeries())?.id || session.series_id)
+    : session.series_id;
+  // 剩余次数一次取全：普通课读池子，体验课/独立课程读自己的系列。
   const balanceByStudent = await grantBalanceByStudent({ orgId: session.org_id, seriesId: grantSeriesId });
   const granted = new Set(balanceByStudent.keys());
   const selectable = [];
@@ -232,11 +234,13 @@ async function candidateCostCap(session, studentId) {
 export async function settleSessionStudents({ sessionId, actorId }) {
   const session = await arow('SELECT * FROM class_sessions WHERE id=?', [sessionId]);
   if (!session || session.status !== 'ACTIVE') return { completed: 0, incomplete: 0, unitsConsumed: 0, consumedSkipped: [], experienceConsumed: 0 };
-  const series = session.series_id ? await arow('SELECT id, series_type FROM course_series WHERE id=?', [session.series_id]) : null;
+  const series = session.series_id ? await arow('SELECT id, series_type, include_in_normal_pool FROM course_series WHERE id=?', [session.series_id]) : null;
   const experience = isExperienceSeries(series);
   const seriesType = experience ? 'EXPERIENCE' : 'NORMAL';
-  // 普通课：次数从「普通课池子」扣；series_id 只记录这一节属于哪个系列
-  const grantSeriesId = experience ? session.series_id : ((await normalPoolSeries())?.id || session.series_id);
+  // 计入普通课池子的系列：次数从池子扣；体验课 / 不计入的独立课程：从自己的系列扣
+  const grantSeriesId = inNormalCoursePool(series)
+    ? ((await normalPoolSeries())?.id || session.series_id)
+    : session.series_id;
   const parts = await arows("SELECT * FROM session_students WHERE session_id=? AND status IN ('PENDING','ACTIVE')", [sessionId]);
   const now = nowIso();
   const summary = { completed: 0, incomplete: 0, unitsConsumed: 0, consumedSkipped: [], experienceConsumed: 0 };
@@ -271,9 +275,11 @@ export async function settleSessionStudents({ sessionId, actorId }) {
 /** 加学生（事务内）：把学生加进课堂名单；已结束/已解散的课堂不能加。 */
 export async function addSessionStudents({ session, studentIds, actorId }) {
   if (!['PENDING', 'ACTIVE'].includes(session.status)) throw errors.conflict('课堂已结束或已解散，不能再加学生', 'SESSION_NOT_OPEN');
-  const series = await arow('SELECT id, series_type FROM course_series WHERE id=?', [session.series_id]);
+  const series = await arow('SELECT id, series_type, include_in_normal_pool FROM course_series WHERE id=?', [session.series_id]);
   const experience = isExperienceSeries(series);
-  const grantSeriesId = experience ? session.series_id : ((await normalPoolSeries())?.id || session.series_id);
+  const grantSeriesId = inNormalCoursePool(series)
+    ? ((await normalPoolSeries())?.id || session.series_id)
+    : session.series_id;
   const now = nowIso();
   const added = [];
   const skipped = [];

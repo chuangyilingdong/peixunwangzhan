@@ -100,6 +100,8 @@ const emptyCourseForm = {
   difficultyLevel: '', ageRangeMin: '', ageRangeMax: '', tags: '', stockTotal: '', perStudentBudgetYuan: '',
   // 课包类型（2026-09-24）：NORMAL 普通 / EXPERIENCE 体验课包（只能 1 节课、可重复分、按有效产出核销）
   seriesType: 'NORMAL',
+  // 是否计入普通课节数/次数池子（2026-11-10）：普通课默认计入；成人/商家等独立课程取消勾选
+  includeInNormalPool: true,
 };
 
 // 生成框体是素材表里的一种素材（material_type=GENERATION_BOX），顺序跟着素材走；
@@ -743,6 +745,8 @@ function CourseCard({ course, onOpen, onStatus, onDelete, busy }) {
         <span>v{course.version}</span>
         {/* 2026-11-10：普通课包不再有"平台库存"概念，只对体验课包显示库存 */}
         {course.seriesType === 'EXPERIENCE' ? <span>库存 {course.stockTotal || 0} 次</span> : null}
+        {/* 2026-11-10：不计入普通课节数/池子的独立课程（成人/商家等）给一个显式标记，避免和 48 节混在一起 */}
+        {course.seriesType !== 'EXPERIENCE' && course.includeInNormalPool === false ? <span>不计入普通课</span> : null}
         {course.difficultyLevel ? <span>难度 {course.difficultyLevel}/5</span> : null}
         {course.ageRangeMin || course.ageRangeMax ? <span>{course.ageRangeMin ?? '?'}-{course.ageRangeMax ?? '?'} 岁</span> : null}
       </div>
@@ -855,6 +859,7 @@ function CourseDetail({ api, courseId, onBack }) {
       stockTotal: String(series.stockTotal ?? ''),
       perStudentBudgetYuan: series.perStudentBudgetFen == null ? '' : String(series.perStudentBudgetFen / 100),
       seriesType: series.seriesType === 'EXPERIENCE' ? 'EXPERIENCE' : 'NORMAL',
+      includeInNormalPool: series.includeInNormalPool !== false,
     });
   }, [series?.id]);
 
@@ -901,6 +906,8 @@ function CourseDetail({ api, courseId, onBack }) {
       body.tags = String(editForm.tags || '').split(',').map((t) => t.trim()).filter(Boolean);
       // 课包类型（2026-09-24）：改成体验课包时服务端会校验「未归档课时正好 1 节」
       if (editForm.seriesType) body.seriesType = editForm.seriesType;
+      // 是否计入普通课节数/次数池子（2026-11-10）：体验课恒 false，普通课按勾选
+      body.includeInNormalPool = editForm.seriesType === 'EXPERIENCE' ? false : editForm.includeInNormalPool !== false;
       await api.request(`admin/course-series/${courseId}`, { method: 'PUT', body });
       setMessage('课包资料已保存，需在版本发布中显式更新。');
       setSaveState({ tone: 'success', text: '已保存，尚未更新发布。' });
@@ -1048,6 +1055,11 @@ function CourseDetail({ api, courseId, onBack }) {
               </select>
               <small className="muted">{editForm.seriesType === 'EXPERIENCE' ? '只包含 1 节课；可重复分给同一学生、未用次数累积；每场有有效产出的课堂核销 1 次' : '普通课包：1 次 = 1 个课时次数（上 1 节扣 1 次）；可重复分给学生、未用次数累积；上过的课不能重复上'}</small>
             </label>
+            {editForm.seriesType !== 'EXPERIENCE' ? <label className="checkbox-label top-gap" style={{ gridColumn: '1 / -1' }}>
+              <input type="checkbox" checked={editForm.includeInNormalPool !== false} onChange={(event) => setEditForm({ ...editForm, includeInNormalPool: event.target.checked })} />
+              计入普通课节数（S1/S2/S3 共一个次数池子；成人/商家等独立课程取消勾选）
+              <small className="muted">取消勾选后：不占 48 节，不进普通课池子，授权与核销只落在本课包自己的系列上。课包上还有授权次数或学生许可时不能切换。</small>
+            </label> : null}
           </div>
           <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存课包资料'}</button>
           {saveState ? <Notice tone={saveState.tone}>{saveState.text}</Notice> : null}

@@ -1,4 +1,5 @@
 import { contractExpiryForOrg, errors, id, nowIso, q, row, rows, transaction, arow, aq, arows, atransaction } from '../lib.js';
+import { inNormalCoursePool } from './courseGrants.js';
 
 export const LICENSE_PAYMENT_STATUSES = new Set(['UNPAID', 'PARTIAL', 'PAID', 'REFUNDED']);
 
@@ -30,10 +31,10 @@ function purchaseSnapshot(batch) {
   };
 }
 
-/** 2026-11-10 普通课池子：许可三账的范围（普通课=NORMAL，体验课=SERIES/seriesId）。 */
+/** 2026-11-10 普通课池子：许可三账的范围（计入池子的普通课=NORMAL，体验课/独立课程=SERIES/seriesId）。 */
 async function scopeOfSeries(seriesId) {
-  const series = await arow('SELECT series_type FROM course_series WHERE id=?', [String(seriesId || '')]);
-  return String(series?.series_type || '').toUpperCase() === 'NORMAL'
+  const series = await arow('SELECT series_type, include_in_normal_pool FROM course_series WHERE id=?', [String(seriesId || '')]);
+  return inNormalCoursePool(series)
     ? { scopeType: 'NORMAL', scopeKey: 'NORMAL' }
     : { scopeType: 'SERIES', scopeKey: String(seriesId || '') };
 }

@@ -938,13 +938,14 @@ async function buildOrganizationDetail(orgId) {
   const account = await arow('SELECT * FROM org_billing_accounts WHERE org_id=?', [organization.id]);
   const admins = await orgAdminRows(organization.id);
   const packages = (await arows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC LIMIT 100', [organization.id])).map(normalizePackage);
-  const assignmentRows = await arows(`SELECT assignment.id, assignment.series_id, assignment.status, assignment.assigned_at, assignment.expires_at, assignment.quota_total, assignment.quota_used, series.title AS series_title, series.series_type
+  const assignmentRows = await arows(`SELECT assignment.id, assignment.series_id, assignment.status, assignment.assigned_at, assignment.expires_at, assignment.quota_total, assignment.quota_used, series.title AS series_title, series.series_type, series.include_in_normal_pool
     FROM course_assignments assignment JOIN course_series series ON series.id=assignment.series_id
     WHERE assignment.org_id=? ORDER BY assignment.assigned_at DESC LIMIT 100`, [organization.id]);
   const normalPool = await normalPoolSeries();
   const normalLessons = await normalLessonCount();
   const courseAssignments = assignmentRows
-    .filter((item) => String(item.series_type || '').toUpperCase() !== 'NORMAL')
+    // 计入普通课池子的 S1/S2/S3 合成一行；include=0 的独立课程（成人/商家）按自己的系列显示。
+    .filter((item) => !(String(item.series_type || '').toUpperCase() === 'NORMAL' && Number(item.include_in_normal_pool ?? 1) !== 0))
     .map((item) => ({
       id: item.id, seriesId: item.series_id, title: item.series_title, status: item.status, assignedAt: item.assigned_at, quotaTotal: Number(item.quota_total), quotaUsed: Number(item.quota_used), remaining: Math.max(0, item.quota_total - item.quota_used),
       expiresAt: item.expires_at || null, expired: Boolean(item.expires_at) && new Date(item.expires_at).getTime() <= Date.now(),

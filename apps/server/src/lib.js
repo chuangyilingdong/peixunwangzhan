@@ -1237,6 +1237,12 @@ export async function normalizeSeries(value, { includeLessons = false, orgId = n
     seriesType: ['NORMAL', 'EXPERIENCE'].includes(String(snapPick('seriesType', value.series_type) || '').toUpperCase())
       ? String(snapPick('seriesType', value.series_type)).toUpperCase()
       : 'NORMAL',
+    // 是否计入「普通课」次数池子（2026-11-10 用户口径）：普通课默认 1，成人/商家等独立课程为 0；
+    // 体验课包恒 false。⚠️ 这是**池子归属**的结构位（同 visibility），有意读**实时列**、不走快照：
+    // 改标记必须立刻影响节数与授权，不能等一次「更新发布」。类型也看实时值 —— 否则
+    // 「先改成普通课、还没发布」时表单会把刚勾上的开关显示回未勾选。
+    includeInNormalPool: String(value.series_type || '').toUpperCase() !== 'EXPERIENCE'
+      && Number(value.include_in_normal_pool ?? 1) !== 0,
     marketplaceStatus: value.marketplace_status,
     // 算力池：**每个学生在这个课包上的总预算**（分，5000 = 50 元）；留空 = 不限制、只记账。
     // ⚠️ 2026-09-18：这条注释原来说"闸门在应用侧（services/computePool.js）"——**那个池子闸门已退役**

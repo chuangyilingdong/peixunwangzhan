@@ -32,6 +32,7 @@
  *    也正因为如此，它只做「读一次变更后的实际值 + 插一条流水」，不改 course_assignments。
  */
 import { id, nowIso, q, row, arow, aq } from '../lib.js';
+import { inNormalCoursePool } from './courseGrants.js';
 
 /** 五个变更类型（表里有 CHECK 约束，这里是代码侧的同一份白名单）。 */
 export const COURSE_QUOTA_CHANGE_TYPES = Object.freeze([
@@ -144,8 +145,8 @@ export async function recordQuotaChange({
   if (skipWhenUnchanged && totalAfter === totalBefore && usedAfter === usedBefore) return null;
   const createdAt = nowIso();
   const changeId = id('quota_change');
-  const seriesRow = await arow('SELECT series_type FROM course_series WHERE id=?', [assignment.series_id]);
-  const normal = String(seriesRow?.series_type || '').toUpperCase() === 'NORMAL';
+  const seriesRow = await arow('SELECT series_type, include_in_normal_pool FROM course_series WHERE id=?', [assignment.series_id]);
+  const normal = Boolean(seriesRow && inNormalCoursePool(seriesRow));
   const scopeType = normal ? 'NORMAL' : 'SERIES';
   const scopeKey = normal ? 'NORMAL' : assignment.series_id;
   await aq(`INSERT INTO course_quota_changes(

@@ -15,7 +15,7 @@ import {
   sessionCandidates, sessionScope, sessionStudentCounts, sessionSubmissionSummary, settleSessionStudents,
 } from '../services/classroomSessions.js';
 // 课包类型 + 次数账（2026-09-24 体验课包；2026-11-10 起普通课包也按课时次数）
-import { grantBalanceByStudent, grantSeriesIdFor, grantUnitsOf, isExperienceSeries, lockGrantById, normalLessonCount, normalPoolSeries, seriesTypeOf, EXPERIENCE_SERIES_TYPE } from '../services/courseGrants.js';
+import { grantBalanceByStudent, grantSeriesIdFor, grantUnitsOf, inNormalCoursePool, isExperienceSeries, lockGrantById, normalLessonCount, normalPoolSeries, normalPoolSeriesIds, seriesTypeOf, EXPERIENCE_SERIES_TYPE } from '../services/courseGrants.js';
 import { computePoolSummary, salePriceFenSuccessSql } from '../services/computePool.js';
 import { appendLicenseGrantRevenue, appendLicenseReversal } from '../services/licenseLedger.js';
 import { autoSubmitSessionCanvasWorks } from '../services/sessionAutoSubmit.js';
@@ -811,10 +811,10 @@ export async function handleOrg(ctx) {
     const roster = await arows(`SELECT part.student_id, student.display_name, student.login, student.status account_status, student.expires_at
       FROM session_students part JOIN users student ON student.id=part.student_id
       WHERE part.session_id=? AND part.status='PENDING'`, [session.id]);
-    const seriesRow = await arow('SELECT id, series_type FROM course_series WHERE id=?', [session.series_id]);
+    const seriesRow = await arow('SELECT id, series_type, include_in_normal_pool FROM course_series WHERE id=?', [session.series_id]);
     const experience = isExperienceSeries(seriesRow);
-    // 普通课的次数在「普通课池子」那一行（最早的普通课系列）；体验课在自己的系列行
-    const grantSeriesId = await grantSeriesIdFor({ seriesId: session.series_id, seriesType: seriesTypeOf(seriesRow) });
+    // 普通课的次数在「普通课池子」那一行（最早的普通课系列）；体验课/独立课程在自己的系列行
+    const grantSeriesId = await grantSeriesIdFor({ seriesId: session.series_id, seriesType: seriesTypeOf(seriesRow), includeInNormalPool: seriesRow?.include_in_normal_pool });
     const balanceByStudent = await grantBalanceByStudent({ orgId: session.org_id, seriesId: grantSeriesId });
     const granted = new Set(balanceByStudent.keys());
     const ineligible = roster.filter((item) => item.account_status !== 'ACTIVE'
@@ -1576,14 +1576,16 @@ export async function handleOrg(ctx) {
         assignment.status assignment_status, assignment.assigned_at assignment_assigned_at
       FROM course_series series
       LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()}
-      WHERE series.status='PUBLISHED' AND series.series_type='EXPERIENCE' AND ${orgSeriesAccessSql()}
+      WHERE series.status='PUBLISHED'
+        AND (series.series_type='EXPERIENCE' OR (series.series_type='NORMAL' AND series.include_in_normal_pool=0))
+        AND ${orgSeriesAccessSql()}
       ORDER BY series.sort, series.title`, [currentOrgId, currentOrgId]);
-    // 普通课：S1/S2/S3… 共一个池子（存储键 = 最早的普通课系列）
+    // 普通课：S1/S2/S3… 共一个池子（存储键 = 最早创建的、计入池子的普通课系列）
     const pool = await normalPoolSeries();
     const poolId = pool?.id || '__NORMAL_POOL_MISSING__';
     const poolAssignment = pool ? await arow(`SELECT * FROM course_assignments WHERE series_id=? AND org_id=? AND ${assignmentActiveSql('course_assignments')}`, [pool.id, currentOrgId]) : null;
     const normalLessons = await normalLessonCount();
-    const normalSeriesIds = new Set((await arows("SELECT id FROM course_series WHERE owner_type='PLATFORM' AND series_type='NORMAL'", [])).map((item) => item.id));
+    const normalSeriesIds = new Set(await normalPoolSeriesIds());
     // 分给学生的许可（未撤销）：次数 + 已核销 + 去重人数
     // ⚠️ 次数按 **SUM(granted_units)** 算，不是 COUNT(*) —— 两种课包都允许重复分配累加，
     //    按行数会把它算少。已核销用 SUM(consumed_units)，学生侧"剩余"= granted − consumed。
@@ -1675,8 +1677,8 @@ export async function handleOrg(ctx) {
     if (requestedSeries) {
       if (requestedSeries.toUpperCase() === 'NORMAL') normalFilter = true;
       else {
-        const seriesRow = await arow('SELECT id, series_type FROM course_series WHERE id=?', [requestedSeries]);
-        if (seriesRow && seriesTypeOf(seriesRow) === 'NORMAL') normalFilter = true;
+        const seriesRow = await arow('SELECT id, series_type, include_in_normal_pool FROM course_series WHERE id=?', [requestedSeries]);
+        if (seriesRow && inNormalCoursePool(seriesRow)) normalFilter = true;
       }
     }
     if (normalFilter) {
@@ -1689,12 +1691,13 @@ export async function handleOrg(ctx) {
     const normalLessons = await normalLessonCount();
     const items = (await arows(`SELECT grant.id, grant.student_id, grant.series_id, grant.granted_at, grant.revoked_at, grant.revoke_reason,
         grant.granted_units, grant.consumed_units,
-        student.display_name student_name, student.login student_login, series.title series_title, series.series_type
+        student.display_name student_name, student.login student_login, series.title series_title, series.series_type,
+        series.include_in_normal_pool
       FROM student_course_grants AS \`grant\`
       JOIN users student ON student.id=grant.student_id
       JOIN course_series series ON series.id=grant.series_id
       WHERE ${where} ORDER BY grant.granted_at DESC LIMIT 500`, params)).map((item) => {
-      const normal = seriesTypeOf({ series_type: item.series_type }) === 'NORMAL';
+      const normal = inNormalCoursePool(item);
       return {
         id: item.id, studentId: item.student_id, studentName: item.student_name || null, studentLogin: item.student_login || null,
         seriesId: normal ? 'NORMAL' : item.series_id,
@@ -1725,9 +1728,10 @@ export async function handleOrg(ctx) {
     try {
       const result = await atransaction(async () => {
         // 普通课的授权/核销都落在「普通课池子」（最早的普通课系列）上；
-        // 请求里的 seriesId 可以是 'NORMAL'，也可以是任意普通课系列（如 S2），都解析到池子。
-        let series = await arow('SELECT id, series_type, status FROM course_series WHERE id=?', [seriesId]);
-        const requestedNormal = String(seriesId).toUpperCase() === 'NORMAL' || seriesTypeOf(series) === 'NORMAL';
+        // 请求里的 seriesId 可以是 'NORMAL'，也可以是任意**计入池子**的普通课系列（如 S2），都解析到池子。
+        // include_in_normal_pool=0 的独立课程（成人/商家）不被解析，授权落在它自己的系列上。
+        let series = await arow('SELECT id, series_type, status, include_in_normal_pool FROM course_series WHERE id=?', [seriesId]);
+        const requestedNormal = String(seriesId).toUpperCase() === 'NORMAL' || Boolean(series && inNormalCoursePool(series));
         if (requestedNormal) {
           const pool = await normalPoolSeries();
           if (!pool) throw errors.notFound('还没有普通课内容（S1/S2/S3 未发布）', 'NORMAL_POOL_EMPTY');
@@ -1841,13 +1845,13 @@ export async function handleOrg(ctx) {
         if (requestedUnits > units.remaining) throw errors.badRequest(`最多只能回收 ${units.remaining} 次（未使用余额）`, 'RECLAIM_EXCEEDS_REMAINING');
         // D3：学生还在课堂里就不能回收 —— 否则老师点结束时余额为 0，整个结束事务回滚。
         // 普通课的次数在池子上，学生可能正在上任意一个普通课系列（S1/S2/S3），要按整个普通课判断。
-        const grantSeriesRow = await arow('SELECT series_type FROM course_series WHERE id=?', [grant.series_id]);
-        const grantNormal = String(grantSeriesRow?.series_type || '').toUpperCase() === 'NORMAL';
+        const grantSeriesRow = await arow('SELECT series_type, include_in_normal_pool FROM course_series WHERE id=?', [grant.series_id]);
+        const grantNormal = Boolean(grantSeriesRow && inNormalCoursePool(grantSeriesRow));
         const live = grantNormal
           ? await arow(`SELECT session.id, session.title FROM session_students part
               JOIN class_sessions session ON session.id=part.session_id
               WHERE part.student_id=? AND part.status IN ('PENDING','ACTIVE') AND session.status IN ('PENDING','ACTIVE')
-                AND session.series_id IN (SELECT id FROM course_series WHERE series_type='NORMAL') LIMIT 1`,
+                AND session.series_id IN (SELECT id FROM course_series WHERE series_type='NORMAL' AND include_in_normal_pool<>0) LIMIT 1`,
             [grant.student_id])
           : await arow(`SELECT session.id, session.title FROM session_students part
               JOIN class_sessions session ON session.id=part.session_id
@@ -1976,13 +1980,13 @@ export async function handleOrg(ctx) {
     if (listRows.length) {
       const placeholders = listRows.map(() => '?').join(',');
       for (const item of await arows(`SELECT grant.student_id, series.id series_id, series.title, series.series_type,
-          grant.granted_units, grant.consumed_units
+          series.include_in_normal_pool, grant.granted_units, grant.consumed_units
         FROM student_course_grants AS \`grant\` JOIN course_series series ON series.id=grant.series_id
         WHERE grant.org_id=? AND grant.revoked_at IS NULL AND grant.student_id IN (${placeholders})
         ORDER BY grant.granted_at DESC`, [currentOrgId, ...listRows.map((item) => item.id)])) {
         if (!seriesByStudent.has(item.student_id)) seriesByStudent.set(item.student_id, []);
         const units = grantUnitsOf(item);
-        const normal = seriesTypeOf({ series_type: item.series_type }) === 'NORMAL';
+        const normal = inNormalCoursePool(item);
         const list = seriesByStudent.get(item.student_id);
         if (normal) {
           // 普通课 = 48 节一个池子：历史多行（S1/S2/S3）也合成一行给前端
@@ -2064,17 +2068,18 @@ export async function handleOrg(ctx) {
       WHERE part.student_id=? AND session.org_id=? AND session.status IN ('ACTIVE','ENDED')`,
       [studentId, currentOrgId])).map((item) => item.series_id));
     const normalLessons = await normalLessonCount();
-    const normalSeriesIds = new Set((await arows("SELECT id FROM course_series WHERE owner_type='PLATFORM' AND series_type='NORMAL'", [])).map((item) => item.id));
+    const normalSeriesIds = new Set(await normalPoolSeriesIds());
     const poolId = (await normalPoolSeries())?.id || '';
     const items = (await arows(`SELECT grant.id, grant.series_id, grant.granted_at, grant.revoked_at, grant.revoke_reason,
         grant.source_assignment_id, grant.granted_units, grant.consumed_units, series.title, series.version, series.series_type,
+        series.include_in_normal_pool,
         actor.display_name granted_by_name, actor.login granted_by_login
       FROM student_course_grants AS \`grant\`
       JOIN course_series series ON series.id=grant.series_id
       LEFT JOIN users actor ON actor.id=grant.granted_by
       WHERE grant.org_id=? AND grant.student_id=?
       ORDER BY grant.revoked_at IS NOT NULL, grant.granted_at DESC`, [currentOrgId, studentId])).map((item) => {
-      const normal = seriesTypeOf({ series_type: item.series_type }) === 'NORMAL';
+      const normal = inNormalCoursePool(item);
       // 普通课 = 一个池子：历史 S2/S3 的旧许可不再逐条展示，只展示池子那一行（撤销/有效都在它上面）
       if (normal && item.series_id !== poolId) return null;
       // 普通课：学习/进课堂的记录可能落在 S1/S2/S3 任意一个系列上，按整个普通课判断
@@ -2212,14 +2217,14 @@ export async function handleOrg(ctx) {
     const to = String(ctx.search.get('to') || '').trim();
     const allRows = await arows(`SELECT batch.id, batch.series_id, batch.purchase_type, batch.quantity, batch.payment_status,
         batch.order_no, batch.contract_no, batch.purchased_at,
-        series.title series_title, series.series_type series_type, actor.display_name actor_name,
+        series.title series_title, series.series_type series_type, series.include_in_normal_pool, actor.display_name actor_name,
         ROW_NUMBER() OVER (PARTITION BY batch.assignment_id, batch.purchase_type ORDER BY batch.purchased_at, batch.created_at, batch.id) seq
       FROM license_purchase_batches batch
       JOIN course_series series ON series.id=batch.series_id
       LEFT JOIN users actor ON actor.id=batch.purchased_by
       WHERE batch.org_id=? AND batch.status='ACTIVE'
       ORDER BY batch.purchased_at DESC, batch.id DESC`, [currentOrgId]);
-    const normalSeriesIds = new Set((await arows("SELECT id FROM course_series WHERE series_type='NORMAL'", [])).map((item) => item.id));
+    const normalSeriesIds = new Set(await normalPoolSeriesIds());
     const mapped = allRows.map((item) => {
       const businessType = item.purchase_type === 'LEGACY_OPENING_BALANCE'
         ? 'PLATFORM_ADJUSTMENT'
@@ -2229,7 +2234,7 @@ export async function handleOrg(ctx) {
         item.order_no ? `订单 ${item.order_no}` : null,
         item.contract_no ? `合同 ${item.contract_no}` : null,
       ].filter(Boolean).join(' · ');
-      const normal = String(item.series_type || '').toUpperCase() === 'NORMAL';
+      const normal = inNormalCoursePool(item);
       return {
         id: item.id, purchasedAt: item.purchased_at,
         seriesId: normal ? 'NORMAL' : item.series_id,
@@ -2316,8 +2321,10 @@ export async function handleOrg(ctx) {
     if (seriesIds.size) {
       const ids = [...seriesIds];
       const placeholders = ids.map(() => '?').join(',');
-      for (const item of await arows(`SELECT id, title, series_type FROM course_series WHERE id IN (${placeholders})`, ids)) seriesById.set(item.id, item);
+      for (const item of await arows(`SELECT id, title, series_type, include_in_normal_pool FROM course_series WHERE id IN (${placeholders})`, ids)) seriesById.set(item.id, item);
     }
+    // 只有「计入普通课池子」的系列在流水里合并成「普通课」；独立课程（成人/商家）显示自己的名字。
+    const normalOf = (series) => Boolean(series && inNormalCoursePool(series));
     const records = [];
     for (const log of logs) {
       const isGrant = log.action === 'ORG_COURSE_GRANT';
@@ -2345,8 +2352,8 @@ export async function handleOrg(ctx) {
           records.push({
             ...base, id: `${log.id}:${studentId}`,
             studentId, studentName: student?.display_name || null, studentLogin: student?.login || null,
-            seriesId: String(seriesById.get(log.target_id)?.series_type || '').toUpperCase() === 'NORMAL' ? 'NORMAL' : log.target_id,
-            seriesTitle: String(seriesById.get(log.target_id)?.series_type || '').toUpperCase() === 'NORMAL' ? '普通课' : (seriesById.get(log.target_id)?.title || null),
+            seriesId: normalOf(seriesById.get(log.target_id)) ? 'NORMAL' : log.target_id,
+            seriesTitle: normalOf(seriesById.get(log.target_id)) ? '普通课' : (seriesById.get(log.target_id)?.title || null),
           });
         }
       } else {
@@ -2355,8 +2362,8 @@ export async function handleOrg(ctx) {
         records.push({
           ...base, id: log.id,
           studentId: grant?.student_id || null, studentName: student?.display_name || null, studentLogin: student?.login || null,
-          seriesId: String(seriesById.get(grant?.series_id)?.series_type || '').toUpperCase() === 'NORMAL' ? 'NORMAL' : (grant?.series_id || null),
-          seriesTitle: grant ? (String(seriesById.get(grant.series_id)?.series_type || '').toUpperCase() === 'NORMAL' ? '普通课' : (seriesById.get(grant.series_id)?.title || null)) : null,
+          seriesId: normalOf(seriesById.get(grant?.series_id)) ? 'NORMAL' : (grant?.series_id || null),
+          seriesTitle: grant ? (normalOf(seriesById.get(grant.series_id)) ? '普通课' : (seriesById.get(grant.series_id)?.title || null)) : null,
         });
       }
     }

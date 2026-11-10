@@ -16,7 +16,7 @@ import { normalizeSubmission } from '../vibecoding.js';
 import { appendLicenseReversal, createLicensePurchaseBatch, licensePurchaseHistory, licensePurchaseHistoryByScope, normalizeLicensePurchaseInput, voidLicensePurchaseBatches } from '../../services/licenseLedger.js';
 import { COURSE_QUOTA_SOURCES, recordQuotaChange } from '../../services/courseQuotaLedger.js';
 // 体验课包（2026-09-24 用户口径）：类型 + 次数账（普通包行为一字不改）
-import { EXPERIENCE_SERIES_TYPE, grantUnitsOf, isExperienceSeries, lockGrantById, normalLessonCount, normalPoolSeries, normalizeSeriesType } from '../../services/courseGrants.js';
+import { EXPERIENCE_SERIES_TYPE, grantUnitsOf, inNormalCoursePool, isExperienceSeries, lockGrantById, normalLessonCount, normalPoolSeries, normalizeSeriesType } from '../../services/courseGrants.js';
 import {
   capturePublishedContent,
   ENROLLMENT_STATUSES,
@@ -127,11 +127,24 @@ function assignmentSnapshot(assignment) {
 async function resolveAuthorizationSeries(seriesId) {
   const requested = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesId]);
   const normal = String(seriesId).toUpperCase() === 'NORMAL'
-    || String(requested?.series_type || '').toUpperCase() === 'NORMAL';
+    || (requested && inNormalCoursePool(requested));
   if (!normal) return requested;
   const pool = await normalPoolSeries();
   if (!pool) throw errors.notFound('还没有普通课内容（S1/S2/S3 未发布）', 'NORMAL_POOL_EMPTY');
   return await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [pool.id]);
+}
+
+/**
+ * 把「计入普通课池子」的系列，补一条 0 次数的访问授权给所有已开通池子的机构。
+ * 用在：新建/编辑课包勾上「计入普通课」之后 —— 否则机构要等平台下次调次数才看得到它。
+ */
+async function ensureAccessForPoolOrgs({ actorId, now }) {
+  const pool = await normalPoolSeries();
+  if (!pool) return;
+  const orgs = await arows("SELECT DISTINCT org_id FROM course_assignments WHERE series_id=? AND status='ACTIVE'", [pool.id]);
+  for (const item of orgs) {
+    await ensureNormalAccessAssignments({ orgId: item.org_id, actorId, now, expiresAt: await contractExpiryForOrg(item.org_id) });
+  }
 }
 
 /**
@@ -140,7 +153,7 @@ async function resolveAuthorizationSeries(seriesId) {
  * 已有授权单不覆盖额度，只跟合同续期。
  */
 async function ensureNormalAccessAssignments({ orgId, actorId, now, expiresAt, skipSeriesId = null }) {
-  const list = await arows("SELECT id FROM course_series WHERE owner_type='PLATFORM' AND series_type='NORMAL'", []);
+  const list = await arows("SELECT id FROM course_series WHERE owner_type='PLATFORM' AND series_type='NORMAL' AND include_in_normal_pool<>0", []);
   for (const row of list) {
     if (row.id === skipSeriesId) continue;
     const existing = await arow('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [row.id, orgId]);
@@ -151,6 +164,14 @@ async function ensureNormalAccessAssignments({ orgId, actorId, now, expiresAt, s
       await aq("UPDATE course_assignments SET expires_at=? WHERE id=? AND status='ACTIVE'", [expiresAt, existing.id]);
     }
   }
+}
+
+/** 布尔开关（课包表单里的 checkbox）：兼容 true/false、1/0、"true"/"false"。 */
+function flagOn(value, fallback = true) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  return ['1', 'TRUE', 'ON', 'YES'].includes(String(value).trim().toUpperCase());
 }
 
 export async function handleCourses(ctx, part, method) {
@@ -209,6 +230,9 @@ export async function handleCourses(ctx, part, method) {
     if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(status)) throw errors.badRequest('课包状态无效', 'INVALID_COURSE_STATUS');
     // 课包类型（2026-09-24 用户口径）：独立字段，NORMAL 普通 / EXPERIENCE 体验课包
     const seriesType = normalizeSeriesType(body.seriesType);
+    // 是否计入「普通课」次数池子（2026-11-10 用户口径）：只有普通课包可选，默认计入；
+    // 体验课包恒不计入（它本来就不进 48 节的池子）。
+    const includeInNormalPool = seriesType !== EXPERIENCE_SERIES_TYPE && flagOn(body.includeInNormalPool, true);
     const lessons = body.lessons === undefined ? [] : body.lessons;
     if (!Array.isArray(lessons) || lessons.length > 200) throw errors.badRequest('课时列表无效', 'INVALID_LESSONS');
     // 体验课包只包含 1 节课 —— 但**建包这一步还没有课时编排**：平台端「新建课包」根本不带
@@ -243,7 +267,7 @@ export async function handleCourses(ctx, part, method) {
     const seriesDeliveryMode = normalizeDeliveryMode(body.deliveryMode);
     const createdLessonIds = [];
     await atransaction(async () => {
-      await aq('INSERT INTO course_series(id,title,description,cover_image_url,cover_asset_id,price_fen,estimated_credits_per_person,grade_range,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,delivery_mode,stock_total,per_student_budget_fen,series_type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, 'PLATFORM', null, visibility, initialVersion, integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), seriesDeliveryMode, stockTotal, perStudentBudgetFen, seriesType, now, now]);
+      await aq('INSERT INTO course_series(id,title,description,cover_image_url,cover_asset_id,price_fen,estimated_credits_per_person,grade_range,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,delivery_mode,stock_total,per_student_budget_fen,series_type,include_in_normal_pool,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, 'PLATFORM', null, visibility, initialVersion, integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), seriesDeliveryMode, stockTotal, perStudentBudgetFen, seriesType, includeInNormalPool ? 1 : 0, now, now]);
       for (const [index, lesson] of lessons.entries()) {
         if (lesson.deliveryModes !== undefined && (!Array.isArray(lesson.deliveryModes) || !lesson.deliveryModes.length || lesson.deliveryModes.some((mode) => !['CANVAS', 'VIBECODING'].includes(mode)))) throw errors.badRequest('请至少选择一种有效课堂类型', 'INVALID_DELIVERY_MODES');
         const lessonTitle = String(lesson?.title || '').trim();
@@ -268,6 +292,8 @@ export async function handleCourses(ctx, part, method) {
     // 初始版本也记一条：版本历史从「初始版本」开始，之后重复用过的版本号一律拒绝
     await aq('INSERT INTO course_series_versions(id,series_id,version,note,status,created_by,created_at,published_at) VALUES (?,?,?,?,?,?,?,?)',
       [id('seriesver'), seriesId, initialVersion, '初始版本', 'ARCHIVED', auth.user.id, now, null]);
+    // 计入普通课池子的新课包：给已有池子授权的机构补 0 次数访问授权（发布后即可见、可建课堂）。
+    if (includeInNormalPool) await ensureAccessForPoolOrgs({ actorId: auth.user.id, now });
     });
     await audit(ctx, 'COURSE_SERIES_CREATE', 'COURSE_SERIES', seriesId, null, { title, lessonCount: lessons.length });
     return await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [seriesId]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
@@ -387,9 +413,44 @@ export async function handleCourses(ctx, part, method) {
         throw errors.badRequest(`体验课包只能包含 1 节课（现在有 ${Number(liveLessons)} 节未归档课时）：请先把多余的课时归档`, 'EXPERIENCE_SERIES_LESSON_LIMIT');
       }
     }
-    await aq('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,estimated_credits_per_person=?,grade_range=?,stock_total=?,per_student_budget_fen=?,visibility=?,sort=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,delivery_mode=?,series_type=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, stockTotal, seriesPerStudentBudgetFen, visibility, sort, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, deliveryMode ?? series.delivery_mode, seriesType, nowIso(), series.id]);
+    // 是否计入「普通课」次数池子（2026-11-10 用户口径）：
+    //   · 体验课包恒不计入；
+    //   · 普通课包不传则沿用现值；从体验课改成普通课时默认计入（新普通课默认进 48 节池子）。
+    const wasExperience = String(series.series_type || '').toUpperCase() === EXPERIENCE_SERIES_TYPE;
+    const wasIncluded = !wasExperience && Number(series.include_in_normal_pool ?? 1) !== 0;
+    const includeInNormalPool = seriesType === EXPERIENCE_SERIES_TYPE
+      ? false
+      : (body.includeInNormalPool === undefined ? (wasExperience ? true : wasIncluded) : flagOn(body.includeInNormalPool, true));
+    if (wasIncluded !== includeInNormalPool) {
+      // 切换池子归属前必须没有「挂在这个系列上」的余额：否则这些次数会从界面上消失（账实不一致）。
+      const ownQuota = await arow('SELECT COALESCE(SUM(quota_total),0) total FROM course_assignments WHERE series_id=?', [series.id]);
+      const ownGrants = await acount('SELECT COUNT(*) n FROM student_course_grants WHERE series_id=? AND revoked_at IS NULL', [series.id]);
+      if (Number(ownQuota?.total || 0) > 0 || Number(ownGrants || 0) > 0) {
+        throw errors.conflict('这个课包上还有授权次数或学生许可，不能切换「计入普通课」：请先把授权次数清零、学生许可回收/撤销后再改', 'NORMAL_POOL_IN_USE');
+      }
+    }
+    if (!wasIncluded && includeInNormalPool) {
+      // 新加入的系列如果比当前池子更早，会顶替池子键 —— 旧池子的余额不能凭空失去归属。
+      const nextPool = await arow(`SELECT id FROM course_series
+        WHERE owner_type='PLATFORM' AND series_type='NORMAL' AND (include_in_normal_pool<>0 OR id=?)
+        ORDER BY created_at, sort, id LIMIT 1`, [series.id]);
+      const poolBefore = await normalPoolSeries();
+      if (poolBefore && nextPool && nextPool.id !== poolBefore.id) {
+        const poolQuota = await arow('SELECT COALESCE(SUM(quota_total),0) total FROM course_assignments WHERE series_id=?', [poolBefore.id]);
+        const poolGrants = await acount('SELECT COUNT(*) n FROM student_course_grants WHERE series_id=? AND revoked_at IS NULL', [poolBefore.id]);
+        if (Number(poolQuota?.total || 0) > 0 || Number(poolGrants || 0) > 0) {
+          throw errors.conflict('这个课包比当前普通课池子更早，计入后会改变池子归属；请先把池子的授权次数清零再改', 'NORMAL_POOL_KEY_CONFLICT');
+        }
+      }
+    }
+    await aq('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,estimated_credits_per_person=?,grade_range=?,stock_total=?,per_student_budget_fen=?,visibility=?,sort=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,delivery_mode=?,series_type=?,include_in_normal_pool=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, stockTotal, seriesPerStudentBudgetFen, visibility, sort, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, deliveryMode ?? series.delivery_mode, seriesType, includeInNormalPool ? 1 : 0, nowIso(), series.id]);
+    // 取消计入：这个系列不再作为普通课开放，删掉 0 次数访问授权（有次数的上面已经拦下）。
+    if (wasIncluded && !includeInNormalPool) {
+      await aq('DELETE FROM course_assignments WHERE series_id=? AND quota_total=0 AND quota_used=0', [series.id]);
+    }
+    if (!wasIncluded && includeInNormalPool) await ensureAccessForPoolOrgs({ actorId: auth.user.id, now: nowIso() });
     const after = await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [series.id]));
-    await audit(ctx, 'COURSE_SERIES_UPDATE', 'COURSE_SERIES', series.id, { difficultyLevel: before.difficultyLevel, ageRangeMin: before.ageRangeMin, ageRangeMax: before.ageRangeMax, tags: before.tags, seriesType: before.seriesType }, { difficultyLevel: difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, tags, seriesType });
+    await audit(ctx, 'COURSE_SERIES_UPDATE', 'COURSE_SERIES', series.id, { difficultyLevel: before.difficultyLevel, ageRangeMin: before.ageRangeMin, ageRangeMax: before.ageRangeMax, tags: before.tags, seriesType: before.seriesType, includeInNormalPool: before.includeInNormalPool }, { difficultyLevel: difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, tags, seriesType, includeInNormalPool });
     return await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
@@ -649,8 +710,8 @@ export async function handleCourses(ctx, part, method) {
           reason: '平台给机构开通课包', source: COURSE_QUOTA_SOURCES.ADMIN_ASSIGN,
         });
       }
-      // 普通课：池子开给机构后，S1/S2/S3 都要有 0 次数的访问授权（课程中心/建课堂用）
-      if (String(series.series_type || '').toUpperCase() === 'NORMAL') {
+      // 计入普通课池子的系列：池子开给机构后，S1/S2/S3 都要有 0 次数的访问授权（课程中心/建课堂用）
+      if (inNormalCoursePool(series)) {
         await ensureNormalAccessAssignments({ orgId: organizationId, actorId: auth.user.id, now, expiresAt, skipSeriesId: series.id });
       }
       return { assignment: assignmentSnapshot(await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch?.replayed) };
@@ -702,7 +763,7 @@ export async function handleCourses(ctx, part, method) {
           reason: '平台追加授权次数', source: COURSE_QUOTA_SOURCES.ADMIN_ASSIGN,
         });
       }
-      if (String(series.series_type || '').toUpperCase() === 'NORMAL') {
+      if (inNormalCoursePool(series)) {
         await ensureNormalAccessAssignments({ orgId: organizationId, actorId: auth.user.id, now, expiresAt: await contractExpiryForOrg(organizationId), skipSeriesId: series.id });
       }
       return { assignment: assignmentSnapshot(await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch.replayed) };
@@ -735,10 +796,18 @@ export async function handleCourses(ctx, part, method) {
         stockTracked: false, stockTotal: 0, reserved, available: null, allocations,
       });
     }
-    for (const series of allSeries.filter((item) => String(item.series_type || '').toUpperCase() === 'EXPERIENCE')) {
+    for (const series of allSeries.filter((item) => String(item.series_type || '').toUpperCase() === 'EXPERIENCE'
+      || (String(item.series_type || '').toUpperCase() === 'NORMAL' && Number(item.include_in_normal_pool ?? 1) === 0))) {
+      const experience = String(series.series_type || '').toUpperCase() === 'EXPERIENCE';
       const allocations = await amap((await arows('SELECT a.*,o.name org_name FROM course_assignments a JOIN organizations o ON o.id=a.org_id WHERE a.series_id=? ORDER BY a.assigned_at DESC', [series.id])), async (a) => ({ id: a.id, orgId: a.org_id, orgName: a.org_name, status: a.status, quotaTotal: Number(a.quota_total), quotaUsed: Number(a.quota_used), remaining: Math.max(0, a.quota_total-a.quota_used), expiresAt: a.expires_at, purchaseBatches: await licensePurchaseHistory(a.id) }));
       const reserved = allocations.reduce((n,a) => n + (a.status === 'ACTIVE' ? a.quotaTotal : a.quotaUsed), 0);
-      items.push({ id: series.id, title: series.title, seriesType: 'EXPERIENCE', stockTracked: true, stockTotal: Number(series.stock_total || 0), reserved, available: Math.max(0, Number(series.stock_total || 0)-reserved), allocations });
+      // 体验课用平台库存；不计入普通课的独立课程没有平台库存（2026-11-10 同普通课口径）。
+      items.push({
+        id: series.id, title: series.title, seriesType: experience ? 'EXPERIENCE' : 'NORMAL',
+        stockTracked: experience, stockTotal: experience ? Number(series.stock_total || 0) : 0,
+        reserved, available: experience ? Math.max(0, Number(series.stock_total || 0) - reserved) : null,
+        allocations,
+      });
     }
     return { items, organizations: await arows('SELECT id,name,status FROM organizations ORDER BY name,id') };
   }

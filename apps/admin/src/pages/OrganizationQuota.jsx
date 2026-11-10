@@ -291,14 +291,18 @@ export function OrganizationQuota({ api }) {
   const assignments = detail.data?.courseAssignments || [];
   const seriesItems = catalog.data?.items || [];
   // 2026-11-10：普通课是 S1/S2/S3 共一个池子 —— 开通/调次数只出一个「普通课（N 节）」选项，
-  // 体验课仍然逐个列。
+  // 体验课仍然逐个列；includeInNormalPool=false 的独立课程（成人/商家）不进这个选项。
   const normalOption = useMemo(() => {
-    const normalSeries = seriesItems.filter((item) => String(item.seriesType || 'NORMAL').toUpperCase() !== 'EXPERIENCE');
+    const normalSeries = seriesItems.filter((item) => String(item.seriesType || 'NORMAL').toUpperCase() !== 'EXPERIENCE' && item.includeInNormalPool !== false);
     if (!normalSeries.length) return null;
     const lessonCount = normalSeries.reduce((total, item) => total + Number(item.lessonCount || 0), 0);
     return { id: 'NORMAL', title: `普通课（${lessonCount} 节）`, seriesType: 'NORMAL', version: null, stockTotal: 0, lessonCount };
   }, [seriesItems]);
-  const authorizationOptions = useMemo(() => [normalOption, ...seriesItems.filter((item) => item.seriesType === 'EXPERIENCE')].filter(Boolean), [normalOption, seriesItems]);
+  // 不计入普通课节数/池子的独立课程（成人/商家等）：单独列，授权次数落在它自己的系列上。
+  const independentOptions = useMemo(() => seriesItems
+    .filter((item) => String(item.seriesType || 'NORMAL').toUpperCase() !== 'EXPERIENCE' && item.includeInNormalPool === false)
+    .map((item) => ({ ...item, version: null, stockTotal: 0 })), [seriesItems]);
+  const authorizationOptions = useMemo(() => [normalOption, ...independentOptions, ...seriesItems.filter((item) => item.seriesType === 'EXPERIENCE')].filter(Boolean), [normalOption, independentOptions, seriesItems]);
   const seriesById = useMemo(() => new Map(authorizationOptions.map((item) => [item.id, item])), [authorizationOptions]);
   const assignedIds = useMemo(() => new Set(assignments.map((item) => item.seriesId)), [assignments]);
   const adjustTarget = assignments.find((item) => item.seriesId === adjustSeriesId) || null;

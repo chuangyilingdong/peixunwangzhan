@@ -8,7 +8,7 @@ import { hashPassword, nextOrgCode } from '@platform/database';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
-import { normalPoolSeries } from '../../services/courseGrants.js';
+import { inNormalCoursePool, normalPoolSeries, normalPoolSeriesIds } from '../../services/courseGrants.js';
 import { getAiProviderPolicy } from '../billingConfig.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../../services/modelCapabilities.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
@@ -324,12 +324,13 @@ export async function handleOrganizations(ctx, part, method) {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const organization = await organizationRow(quotaAdjustMatch[1]);
     const requestedSeriesId = String(quotaAdjustMatch[2] || '').trim();
-    let series = await arow('SELECT id, title, series_type FROM course_series WHERE id=?', [requestedSeriesId]);
-    // 普通课：'NORMAL'（或任意普通课系列）都解析到普通课池子（最早的普通课系列）
-    if (String(requestedSeriesId).toUpperCase() === 'NORMAL' || String(series?.series_type || '').toUpperCase() === 'NORMAL') {
+    let series = await arow('SELECT id, title, series_type, include_in_normal_pool FROM course_series WHERE id=?', [requestedSeriesId]);
+    // 计入普通课池子的系列：'NORMAL'（或任意池内普通课系列）都解析到普通课池子；
+    // include_in_normal_pool=0 的独立课程（成人/商家）按自己的系列调次数。
+    if (String(requestedSeriesId).toUpperCase() === 'NORMAL' || Boolean(series && inNormalCoursePool(series))) {
       const pool = await normalPoolSeries();
       if (!pool) throw errors.notFound('还没有普通课内容', 'NORMAL_POOL_EMPTY');
-      series = await arow('SELECT id, title, series_type FROM course_series WHERE id=?', [pool.id]);
+      series = await arow('SELECT id, title, series_type, include_in_normal_pool FROM course_series WHERE id=?', [pool.id]);
     }
     if (!series) throw errors.notFound('课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const delta = integer(ctx.body?.delta, '调整值', { min: -100000000, max: 100000000, fallback: null });
@@ -399,11 +400,11 @@ export async function handleOrganizations(ctx, part, method) {
     const params = [organization.id];
     const seriesId = String(ctx.search.get('seriesId') || '').trim();
     if (seriesId) {
-      // 普通课 = S1/S2/S3 一个池子：'NORMAL'（或任意普通课系列）都查全部普通课系列的流水
-      const requested = await arow('SELECT id, series_type FROM course_series WHERE id=?', [seriesId]);
-      const normal = seriesId.toUpperCase() === 'NORMAL' || String(requested?.series_type || '').toUpperCase() === 'NORMAL';
+      // 普通课 = S1/S2/S3 一个池子：'NORMAL'（或任意**计入池子**的普通课系列）都查池子系列的流水
+      const requested = await arow('SELECT id, series_type, include_in_normal_pool FROM course_series WHERE id=?', [seriesId]);
+      const normal = seriesId.toUpperCase() === 'NORMAL' || Boolean(requested && inNormalCoursePool(requested));
       if (normal) {
-        const normalIds = (await arows("SELECT id FROM course_series WHERE series_type='NORMAL'", [])).map((item) => item.id);
+        const normalIds = await normalPoolSeriesIds();
         if (normalIds.length) {
           conditions.push(`change.series_id IN (${normalIds.map(() => '?').join(',')})`);
           params.push(...normalIds);
@@ -436,25 +437,25 @@ export async function handleOrganizations(ctx, part, method) {
     const where = ' WHERE ' + conditions.join(' AND ');
     const total = Number((await arow('SELECT COUNT(*) n FROM course_quota_changes AS `change`' + where, params))?.n || 0);
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
-    const items = (await arows(`SELECT \`change\`.*, series.title series_title, series.series_type series_type, actor.display_name actor_name, actor.login actor_login
+    const items = (await arows(`SELECT \`change\`.*, series.title series_title, series.series_type series_type, series.include_in_normal_pool, actor.display_name actor_name, actor.login actor_login
         FROM course_quota_changes AS \`change\`
         LEFT JOIN course_series series ON series.id=change.series_id
         LEFT JOIN users actor ON actor.id=change.actor_id
         ${where}
         ORDER BY change.created_at DESC, change.id DESC
         LIMIT ? OFFSET ?`, [...params, limit, offset])).map((item) => {
-      const normal = String(item.series_type || '').toUpperCase() === 'NORMAL';
+      const normal = inNormalCoursePool(item);
       return normalizeQuotaChange(normal ? { ...item, series_id: 'NORMAL', series_title: '普通课' } : item);
     });
     // 筛选项（不受上面筛选影响）：本机构有过变更的课包 + 五个变更类型，供图8 的下拉直接用。
-    // 普通课的多个系列合成一个「普通课」选项。
-    const rawOptions = await arows(`SELECT series.id, series.title, series.series_type, COUNT(*) n FROM course_quota_changes AS \`change\`
+    // 普通课的多个系列合成一个「普通课」选项；include=0 的独立课程显示自己的名字。
+    const rawOptions = await arows(`SELECT series.id, series.title, series.series_type, series.include_in_normal_pool, COUNT(*) n FROM course_quota_changes AS \`change\`
         JOIN course_series series ON series.id=change.series_id
-        WHERE change.org_id=? GROUP BY series.id, series.title, series.series_type ORDER BY series.title`, [organization.id]);
+        WHERE change.org_id=? GROUP BY series.id, series.title, series.series_type, series.include_in_normal_pool ORDER BY series.title`, [organization.id]);
     const seriesOptions = [];
     let normalChangeCount = 0;
     for (const item of rawOptions) {
-      if (String(item.series_type || '').toUpperCase() === 'NORMAL') { normalChangeCount += Number(item.n || 0); continue; }
+      if (inNormalCoursePool(item)) { normalChangeCount += Number(item.n || 0); continue; }
       seriesOptions.push({ id: item.id, title: item.title, changeCount: Number(item.n || 0) });
     }
     if (normalChangeCount) seriesOptions.unshift({ id: 'NORMAL', title: '普通课', changeCount: normalChangeCount });
