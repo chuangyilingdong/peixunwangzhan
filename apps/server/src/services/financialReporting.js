@@ -14,6 +14,7 @@
 //   supplierRowsComplete / unreconciledMinor 等），避免前端与守卫跟着改；但语义已变，见各处注释。
 import { errors, parseJson, row, rows, arows, arow, isMysql } from '../lib.js';
 import { getComputePricing } from './computePool.js';
+import { normalPoolSeriesIds } from './courseGrants.js';
 
 const CURRENCY = /^[A-Z]{3}$/;
 const text = (value) => String(value || '').trim();
@@ -90,12 +91,20 @@ export async function financialReportOptions() {
   const currencies = hasUpstreamCost && !licenseCurrencies.some((item) => item.id === PLATFORM_COST_CURRENCY)
     ? [...licenseCurrencies, { id: PLATFORM_COST_CURRENCY, name: PLATFORM_COST_CURRENCY }].sort((a, b) => String(a.id).localeCompare(String(b.id)))
     : licenseCurrencies;
+  // 2026-11-11：普通课 = S1/S2/S3 共一个池子，报表筛选要能选「普通课」看**整个池子**，
+  // 不能只按单个 S1/S2/S3 看（历史采购批次可能落在 S2/S3 上）。`normal` 标记给课堂/课时下拉用。
+  const poolIds = await normalPoolSeriesIds();
+  const poolSet = new Set(poolIds);
+  const sessions = (await arows('SELECT id,COALESCE(title,id) name,org_id orgId,series_id seriesId,lesson_id lessonId FROM class_sessions ORDER BY created_at DESC,id DESC'))
+    .map((item) => ({ ...item, normal: poolSet.has(item.seriesId) }));
+  const lessons = (await arows('SELECT id,title name,series_id seriesId FROM course_lessons ORDER BY title,id'))
+    .map((item) => ({ ...item, normal: poolSet.has(item.seriesId) }));
   return {
     organizations: await arows('SELECT id,name FROM organizations ORDER BY name,id'),
     students: await arows("SELECT id,display_name name,login,org_id orgId FROM users WHERE role='STUDENT' AND deleted_at IS NULL ORDER BY display_name,login"),
-    series: await arows('SELECT id,title name FROM course_series ORDER BY title,id'),
-    sessions: await arows('SELECT id,COALESCE(title,id) name,org_id orgId,series_id seriesId,lesson_id lessonId FROM class_sessions ORDER BY created_at DESC,id DESC'),
-    lessons: await arows('SELECT id,title name,series_id seriesId FROM course_lessons ORDER BY title,id'),
+    series: [{ id: 'NORMAL', name: '普通课' }, ...(await arows('SELECT id,title name FROM course_series ORDER BY title,id'))],
+    sessions,
+    lessons,
     models: await arows("SELECT DISTINCT model id,model name FROM compute_attempts WHERE model IS NOT NULL AND model<>'' ORDER BY model"),
     channels: await arows("SELECT DISTINCT COALESCE(actual_channel_id,channel_id) id,COALESCE(actual_channel_id,channel_id) name FROM compute_attempts WHERE COALESCE(actual_channel_id,channel_id) IS NOT NULL ORDER BY name"),
     currencies,
@@ -108,12 +117,24 @@ const CALL_FROM = `FROM compute_attempts attempt
   LEFT JOIN usage_records AS \`usage\` ON usage.id=attempt.internal_usage_record_id
   LEFT JOIN class_sessions session ON session.id=COALESCE(attempt.class_session_id,usage.class_session_id)`;
 
-function callScope(filters, range) {
+async function callScope(filters, range) {
   const conditions = ['attempt.created_at>=?', 'attempt.created_at<?'];
   const params = [range.since, range.until];
   add(conditions, params, text(filters.orgId), 'attempt.org_id=?');
   add(conditions, params, text(filters.studentId), 'attempt.user_id=?');
-  add(conditions, params, text(filters.seriesId), 'COALESCE(usage.series_id,session.series_id)=?');
+  const seriesId = text(filters.seriesId);
+  if (seriesId === 'NORMAL') {
+    // 普通课 = 池子里所有系列（S1/S2/S3…），不是某一个 series_id。
+    const poolIds = await normalPoolSeriesIds();
+    if (poolIds.length) {
+      conditions.push(`COALESCE(usage.series_id,session.series_id) IN (${poolIds.map(() => '?').join(',')})`);
+      params.push(...poolIds);
+    } else {
+      conditions.push('1=0');
+    }
+  } else {
+    add(conditions, params, seriesId, 'COALESCE(usage.series_id,session.series_id)=?');
+  }
   add(conditions, params, text(filters.sessionId), 'COALESCE(attempt.class_session_id,usage.class_session_id)=?');
   add(conditions, params, text(filters.lessonId), 'COALESCE(attempt.lesson_id,session.lesson_id)=?');
   add(conditions, params, text(filters.model), 'attempt.model=?');
@@ -127,7 +148,7 @@ export async function listFinancialCalls(filters = {}) {
   const range = rangeOf(filters);
   const page = pageNumber(filters.page, 1, 100000);
   const limit = pageNumber(filters.limit, 20, 100);
-  const scope = callScope(filters, range);
+  const scope = await callScope(filters, range);
   const where = scope.conditions.join(' AND ');
   const total = Number((await arow(`SELECT COUNT(DISTINCT attempt.id) n ${CALL_FROM} WHERE ${where}`, scope.params))?.n || 0);
   // ⚠️ 这里原来带 `GROUP BY attempt.id`，MySQL 的 only_full_group_by 会直接拒：
@@ -200,9 +221,17 @@ function merge(map, source, amountField, extras = []) {
 export async function financialReconciliationReport(filters = {}) {
   const range = rangeOf(filters);
   const orgId = text(filters.orgId); const studentId = text(filters.studentId); const seriesId = text(filters.seriesId);
+  // 2026-11-11：选择「普通课」时按**池子范围**汇总，而不是只筛某一个 series_id：
+  //   · 采购/收入按 scope_key='NORMAL'（含历史落在 S2/S3 的批次）；
+  //   · 上游成本按池子全部系列 id 过滤。
+  const normalPool = seriesId === 'NORMAL';
+  const poolIds = normalPool ? await normalPoolSeriesIds() : [];
   const purchaseWhere = ["batch.status='ACTIVE'", "batch.purchase_type='PURCHASE'", 'batch.purchased_at>=?', 'batch.purchased_at<?'];
   const purchaseParams = [range.since, range.until];
-  add(purchaseWhere, purchaseParams, orgId, 'batch.org_id=?'); add(purchaseWhere, purchaseParams, seriesId, 'batch.series_id=?'); add(purchaseWhere, purchaseParams, range.currency, 'batch.currency=?');
+  add(purchaseWhere, purchaseParams, orgId, 'batch.org_id=?');
+  if (normalPool) purchaseWhere.push("batch.scope_key='NORMAL'");
+  else add(purchaseWhere, purchaseParams, seriesId, 'batch.series_id=?');
+  add(purchaseWhere, purchaseParams, range.currency, 'batch.currency=?');
   const purchases = await arows(`SELECT batch.org_id orgId,organization.name organizationName,batch.currency,
       SUM(CASE WHEN batch.payment_status='PAID' THEN batch.amount_minor ELSE 0 END) amountMinor,
       SUM(CASE WHEN batch.payment_status='PAID' THEN 1 ELSE 0 END) paidPurchaseCount,
@@ -211,7 +240,10 @@ export async function financialReconciliationReport(filters = {}) {
     WHERE ${purchaseWhere.join(' AND ')} GROUP BY batch.org_id,batch.currency`, purchaseParams);
 
   const revenueWhere = ['event.occurred_at>=?', 'event.occurred_at<?']; const revenueParams = [range.since, range.until];
-  add(revenueWhere, revenueParams, orgId, 'event.org_id=?'); add(revenueWhere, revenueParams, seriesId, 'event.series_id=?'); add(revenueWhere, revenueParams, studentId, 'grant.student_id=?'); add(revenueWhere, revenueParams, range.currency, 'event.currency=?');
+  add(revenueWhere, revenueParams, orgId, 'event.org_id=?');
+  if (normalPool) revenueWhere.push("event.scope_key='NORMAL'");
+  else add(revenueWhere, revenueParams, seriesId, 'event.series_id=?');
+  add(revenueWhere, revenueParams, studentId, 'grant.student_id=?'); add(revenueWhere, revenueParams, range.currency, 'event.currency=?');
   const revenues = await arows(`SELECT event.org_id orgId,organization.name organizationName,event.currency,
       CASE WHEN SUM(CASE WHEN event.amount_minor IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(event.amount_minor) END amountMinor,
       SUM(event.quantity) recognizedQuantity,SUM(CASE WHEN event.amount_minor IS NULL THEN 1 ELSE 0 END) unknownRevenueEvents
@@ -227,7 +259,17 @@ export async function financialReconciliationReport(filters = {}) {
   // 选了非 CNY 的币种时这本账不参与：上游成本是按人民币分记账的，跨币种不可比，成本侧留 null。
   const costEnabled = !range.currency || range.currency === PLATFORM_COST_CURRENCY;
   const costWhere = ['attempt.created_at>=?', 'attempt.created_at<?']; const costParams = [range.since, range.until];
-  add(costWhere, costParams, orgId, 'attempt.org_id=?'); add(costWhere, costParams, studentId, 'attempt.user_id=?'); add(costWhere, costParams, seriesId, 'COALESCE(usage.series_id,session.series_id)=?');
+  add(costWhere, costParams, orgId, 'attempt.org_id=?'); add(costWhere, costParams, studentId, 'attempt.user_id=?');
+  if (normalPool) {
+    if (poolIds.length) {
+      costWhere.push(`COALESCE(usage.series_id,session.series_id) IN (${poolIds.map(() => '?').join(',')})`);
+      costParams.push(...poolIds);
+    } else {
+      costWhere.push('1=0');
+    }
+  } else {
+    add(costWhere, costParams, seriesId, 'COALESCE(usage.series_id,session.series_id)=?');
+  }
   const costs = !costEnabled ? [] : (await arows(`SELECT attempt.org_id orgId,organization.name organizationName,
       CASE WHEN SUM(CASE WHEN attempt.cost_source='UNKNOWN' OR attempt.upstream_cost_fen IS NULL THEN 0 ELSE 1 END)=0
         THEN NULL
@@ -342,7 +384,7 @@ function finalizeBucket(bucket) {
  */
 export async function financialCallSummary(filters = {}) {
   const range = rangeOf(filters);
-  const scope = callScope(filters, range);
+  const scope = await callScope(filters, range);
   const where = scope.conditions.join(' AND ');
   const saleColumn = await salePriceExpression();
   const raw = await arows(`SELECT attempt.id,attempt.modality,COALESCE(attempt.actual_channel_id,attempt.channel_id) channelId,

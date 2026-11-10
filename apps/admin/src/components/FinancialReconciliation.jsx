@@ -49,14 +49,17 @@ const safeCell = (value) => { let text = String(value ?? ''); if (/^[\s]*[=+@-]/
 const asQuery = (values) => new URLSearchParams(Object.entries(values).filter(([, value]) => value !== '' && value != null));
 
 function FilterBar({ options, filters, onChange, includeCurrency = false, marginOnly = false }) {
+  // 2026-11-11：选「普通课（NORMAL）」时，课堂/课时下拉要展开成池子里的全部系列。
+  const matchesSeries = (item) => !filters.seriesId
+    || (filters.seriesId === 'NORMAL' ? Boolean(item.normal) : item.seriesId === filters.seriesId);
   const selects = [
     ['orgId', '机构', options.organizations || []],
     ['studentId', '学生', (options.students || []).filter((item) => !filters.orgId || item.orgId === filters.orgId)],
     ['seriesId', '课包', options.series || []],
   ];
   if (!marginOnly) selects.push(
-    ['sessionId', '课堂', (options.sessions || []).filter((item) => (!filters.orgId || item.orgId === filters.orgId) && (!filters.seriesId || item.seriesId === filters.seriesId))],
-    ['lessonId', '课时', (options.lessons || []).filter((item) => !filters.seriesId || item.seriesId === filters.seriesId)],
+    ['sessionId', '课堂', (options.sessions || []).filter((item) => (!filters.orgId || item.orgId === filters.orgId) && matchesSeries(item))],
+    ['lessonId', '课时', (options.lessons || []).filter(matchesSeries)],
     ['model', '模型', options.models || []], ['channelId', '渠道', options.channels || []],
   );
   if (includeCurrency) selects.push(['currency', '币种', options.currencies || []]);

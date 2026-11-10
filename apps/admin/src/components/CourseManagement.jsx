@@ -1057,7 +1057,7 @@ function CourseDetail({ api, courseId, onBack }) {
             </label>
             {editForm.seriesType !== 'EXPERIENCE' ? <label className="checkbox-label top-gap" style={{ gridColumn: '1 / -1' }}>
               <input type="checkbox" checked={editForm.includeInNormalPool !== false} onChange={(event) => setEditForm({ ...editForm, includeInNormalPool: event.target.checked })} />
-              计入普通课节数（S1/S2/S3 共一个次数池子；成人/商家等独立课程取消勾选）
+              计入普通课节数（S1/S2/S3 共一个次数池子；不计入普通课的课包请取消勾选）
               <small className="muted">取消勾选后：不占 48 节，不进普通课池子，授权与核销只落在本课包自己的系列上。课包上还有授权次数或学生许可时不能切换。</small>
             </label> : null}
           </div>

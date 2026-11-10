@@ -49,7 +49,7 @@ export function CreateCourseModal({ api, onClose, onCreated }) {
         <label>课包类型<select value={form.seriesType} onChange={(event) => update({ seriesType: event.target.value })}><option value="NORMAL">普通课包</option><option value="EXPERIENCE">体验课包（可重复分给同一学生，每场有产出的课堂核销 1 次）</option></select></label>
         {/* 普通课节数口径（2026-11-10 用户口径）：只有 S1/S2/S3 算 48 节、共用一个次数池子；
             成人/商家等独立课程取消勾选，不计入节数、也不进池子。 */}
-        {form.seriesType !== 'EXPERIENCE' ? <label className="checkbox-label" style={{ gridColumn: '1 / -1' }}><input type="checkbox" checked={Boolean(form.includeInNormalPool)} onChange={(event) => update({ includeInNormalPool: event.target.checked })} />计入普通课节数（S1/S2/S3 共一个次数池子；成人/商家等独立课程请取消勾选）</label> : null}
+        {form.seriesType !== 'EXPERIENCE' ? <label className="checkbox-label" style={{ gridColumn: '1 / -1' }}><input type="checkbox" checked={Boolean(form.includeInNormalPool)} onChange={(event) => update({ includeInNormalPool: event.target.checked })} />计入普通课节数（S1/S2/S3 共一个次数池子；不计入普通课的课包请取消勾选）</label> : null}
         <label>难度（1–5）<input type="number" min="1" max="5" value={form.difficultyLevel} onChange={(event) => update({ difficultyLevel: event.target.value })} /></label>
       <label style={{ gridColumn: '1 / -1' }}>简介<textarea rows={3} maxLength={10000} value={form.description} onChange={(event) => update({ description: event.target.value })} /></label>
       {form.seriesType === 'EXPERIENCE' ? <p className="muted" style={{ gridColumn: '1 / -1' }}>体验课包：只包含 1 节课；同一个学生可以重复分配、未使用的次数会累积；每场课堂正常结束且有有效 AI 产出才核销 1 次（没产出不扣）。</p> : null}

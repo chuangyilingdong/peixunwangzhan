@@ -126,7 +126,7 @@ function StudentGrantCenter({ api, onOpenStudent }) {
               ? <table className="grant-breakdown">
                 <thead><tr><th>课包</th><th>授权</th><th>已用</th><th>剩余</th></tr></thead>
                 <tbody>{item.grantedSeries.map((series) => <tr key={series.seriesId}>
-                  <td>{series.title}{series.seriesType === 'EXPERIENCE' ? <em>体验</em> : null}</td>
+                  <td>{series.title}{series.seriesType === 'EXPERIENCE' ? <em>体验</em> : series.includeInNormalPool === false ? <em>不计入普通课</em> : null}</td>
                   <td>{series.grantedUnits}</td>
                   <td>{series.consumedUnits}</td>
                   <td>{series.remainingUnits}</td>
@@ -324,7 +324,7 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
         {activeItems.length ? <div className="table-wrap"><table>
           <thead><tr><th>课包</th><th>当前版本</th><th>授权</th><th>已用</th><th>剩余</th><th>授权时间</th><th>授权状态</th><th>操作</th></tr></thead>
           <tbody>{activeItems.map((item) => <tr key={item.id}>
-            <td><button type="button" className="text-button" onClick={() => setOpenGrantId(item.id)}>{item.seriesTitle || item.seriesId}</button></td>
+            <td><button type="button" className="text-button" onClick={() => setOpenGrantId(item.id)}>{item.seriesTitle || item.seriesId}</button>{item.seriesType !== 'EXPERIENCE' && item.includeInNormalPool === false ? <em>不计入普通课</em> : null}</td>
             <td>{item.version ? `v${item.version}` : '—'}</td>
             <td>{item.grantedUnits ?? 1} 次</td>
             <td>{item.consumedUnits ?? 0} 次</td>
@@ -685,7 +685,7 @@ export function SeriesOverview({ api }) {
                   {items.length ? <div className="table-wrap"><table>
                     <thead><tr><th>课包</th><th>当前版本</th><th>权益状态</th><th>总次数</th><th>已授权</th><th>剩余</th><th>开通时间</th><th>操作</th></tr></thead>
                     <tbody>{items.map((item) => <tr key={item.seriesId}>
-                      <td><strong>{item.title}</strong><div className="muted">机构已开通权益</div></td>
+                      <td><strong>{item.title}</strong>{item.seriesType !== 'EXPERIENCE' && item.includeInNormalPool === false ? <em>不计入普通课</em> : null}<div className="muted">机构已开通权益</div></td>
                       <td>{item.version ? `v${item.version}` : '—'}</td>
                       <td><EntitlementBadge status={item.assignmentStatus} /></td>
                       <td>{item.quotaTotal || '—'}</td>

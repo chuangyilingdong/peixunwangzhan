@@ -1571,7 +1571,7 @@ export async function handleOrg(ctx) {
     const since = new Date(Date.now() - days * 86400000).toISOString();
     const until = nowIso();
     const experienceSeries = await arows(`SELECT series.id, series.title, series.cover_image_url, series.sort, series.version,
-        series.difficulty_level, series.age_range_min, series.age_range_max, series.series_type,
+        series.difficulty_level, series.age_range_min, series.age_range_max, series.series_type, series.include_in_normal_pool,
         COALESCE(assignment.quota_total, 0) quota_total, COALESCE(assignment.quota_used, 0) quota_used,
         assignment.status assignment_status, assignment.assigned_at assignment_assigned_at
       FROM course_series series
@@ -1620,7 +1620,7 @@ export async function handleOrg(ctx) {
       const quotaUsed = Number(poolAssignment?.quota_used || 0);
       items.push({
         seriesId: 'NORMAL', title: `普通课（${normalLessons} 节）`, coverImageUrl: null,
-        seriesType: 'NORMAL', version: null,
+        seriesType: 'NORMAL', includeInNormalPool: true, version: null,
         assignmentStatus: poolAssignment?.status || null, assignedAt: poolAssignment?.assigned_at || null,
         difficultyLevel: null, ageRangeMin: null, ageRangeMax: null,
         quotaTotal, quotaUsed, remaining: Math.max(0, quotaTotal - quotaUsed),
@@ -1641,6 +1641,7 @@ export async function handleOrg(ctx) {
       items.push({
         seriesId: row0.id, title: row0.title, coverImageUrl: row0.cover_image_url || null,
         seriesType: seriesTypeOf({ series_type: row0.series_type }),
+        includeInNormalPool: inNormalCoursePool(row0),
         version: row0.version || null,
         assignmentStatus: row0.assignment_status || null,
         assignedAt: row0.assignment_assigned_at || null,
@@ -1705,6 +1706,7 @@ export async function handleOrg(ctx) {
         grantedAt: item.granted_at,
         revokedAt: item.revoked_at || null, revokeReason: item.revoke_reason || null,
         seriesType: seriesTypeOf({ series_type: item.series_type }),
+        includeInNormalPool: normal,
         grantedUnits: grantUnitsOf(item).granted, consumedUnits: grantUnitsOf(item).consumed, remainingUnits: grantUnitsOf(item).remaining,
       };
     });
@@ -1997,7 +1999,7 @@ export async function handleOrg(ctx) {
             existing.remainingUnits += units.remaining;
           } else {
             list.push({
-              seriesId: 'NORMAL', title: `普通课（${normalLessons} 节）`, seriesType: 'NORMAL',
+              seriesId: 'NORMAL', title: `普通课（${normalLessons} 节）`, seriesType: 'NORMAL', includeInNormalPool: true,
               grantedUnits: units.granted, consumedUnits: units.consumed, remainingUnits: units.remaining,
             });
           }
@@ -2005,6 +2007,7 @@ export async function handleOrg(ctx) {
           list.push({
             seriesId: item.series_id, title: item.title,
             seriesType: seriesTypeOf({ series_type: item.series_type }),
+            includeInNormalPool: inNormalCoursePool(item),
             grantedUnits: units.granted, consumedUnits: units.consumed, remainingUnits: units.remaining,
           });
         }
@@ -2106,6 +2109,7 @@ export async function handleOrg(ctx) {
         // 占用人次：2026-11-10 起两种课包都按次数 —— 普通课 1 次 = 1 个课时次数，
         // 体验课可在同一行里累积；quotaConsumed 与 grantedUnits 同值（保留老字段名兼容前端）。
         seriesType: seriesTypeOf({ series_type: item.series_type }),
+        includeInNormalPool: normal,
         quotaConsumed: grantUnitsOf(item).granted,
         grantedUnits: grantUnitsOf(item).granted,
         consumedUnits: grantUnitsOf(item).consumed,

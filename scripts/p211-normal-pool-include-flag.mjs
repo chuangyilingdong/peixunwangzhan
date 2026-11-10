@@ -97,6 +97,7 @@ try {
   const excludedTitle = 'P211 独立课程（不计节数）';
   let excludedId = '';
   let excludedLessonId = '';
+  let switchableId = '';
   {
     const created = await api('/api/admin/course-series', {
       method: 'POST', token: admin,
@@ -208,8 +209,7 @@ try {
       method: 'POST', token: admin,
       body: { title: 'P211 无余额可切换', description: 'P211 测试课程', coverImageUrl: 'https://example.com/p211.png', seriesType: 'NORMAL', includeInNormalPool: false, lessons: [lessonBody('无余额第 1 节')] },
     });
-    const switchableId = created.data?.id || '';
-    await api(`/api/admin/course-series/${switchableId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
+    switchableId = created.data?.id || '';    await api(`/api/admin/course-series/${switchableId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
     check('⑥ 无余额独立课程建包成功', Boolean(switchableId), JSON.stringify(created.error || {}).slice(0, 200));
 
     const before = await normalCount();
@@ -240,6 +240,34 @@ try {
     const normalized = await api(`/api/admin/course-series/${expId}/detail`, { token: admin }).catch(() => ({}));
     const series = normalized.data?.series || normalized.data;
     check('⑦ 接口返回 includeInNormalPool=false', series?.includeInNormalPool === false, JSON.stringify(series?.includeInNormalPool));
+  }
+
+  /* ⑧ 删除保护：有授权/许可/采购的课包不能删；没有的可以删 */
+  {
+    const delBlocked = await api(`/api/admin/course-series/${excludedId}`, { method: 'DELETE', token: admin });
+    check('⑧ 有课堂引用的课包不能删除', delBlocked.status === 400 && delBlocked.code === 'COURSE_SERIES_IN_USE', `${delBlocked.status} ${delBlocked.code}`);
+
+    // 只挂授权次数、没有课堂/作品的课包：必须由「余额保护」拦下（不然删课包会把授权单和许可一起带走）。
+    const balanceOnly = await api('/api/admin/course-series', {
+      method: 'POST', token: admin,
+      body: { title: 'P211 只有余额的课包', description: 'P211 测试课程', coverImageUrl: 'https://example.com/p211.png', seriesType: 'NORMAL', includeInNormalPool: false, lessons: [lessonBody('只有余额第 1 节')] },
+    });
+    const balanceOnlyId = balanceOnly.data?.id || '';
+    await api(`/api/admin/course-series/${balanceOnlyId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
+    await api(`/api/admin/course-series/${balanceOnlyId}/assignments`, { method: 'POST', token: admin, body: { orgId: seeded.orgId, quotaTotal: 1, ...purchase('balanceonly', 1) } });
+    const delBalance = await api(`/api/admin/course-series/${balanceOnlyId}`, { method: 'DELETE', token: admin });
+    check('⑧ 只有授权余额的课包不能删除 ★', delBalance.status === 400 && delBalance.code === 'COURSE_SERIES_HAS_BALANCE', `${delBalance.status} ${delBalance.code} ${JSON.stringify(delBalance.error || {})}`);
+
+    const delOk = await api(`/api/admin/course-series/${switchableId}`, { method: 'DELETE', token: admin });
+    check('⑧ 无余额/无许可的课包可以删除', delOk.status === 200, `${delOk.status} ${JSON.stringify(delOk.error || {})}`);
+  }
+
+  /* ⑨ 池子键锁定：没有余额也不能把池子键取消计入（防止池子漂移） */
+  {
+    await aq('UPDATE course_assignments SET quota_total=0, quota_used=0 WHERE series_id=?', [pool.id]);
+    await aq('UPDATE student_course_grants SET revoked_at=? WHERE series_id=? AND revoked_at IS NULL', [new Date().toISOString(), pool.id]);
+    const locked = await api(`/api/admin/course-series/${pool.id}`, { method: 'PUT', token: admin, body: { includeInNormalPool: false } });
+    check('⑨ 池子键不能取消计入（防止池子漂移）★', locked.status === 409 && locked.code === 'NORMAL_POOL_KEY_LOCKED', `${locked.status} ${locked.code} ${JSON.stringify(locked.error || {})}`);
   }
 
   console.log(JSON.stringify({ name: 'normal-pool-include-flag', pass: failures === 0, failures }, null, 2));

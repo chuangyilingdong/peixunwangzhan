@@ -301,7 +301,7 @@ export function OrganizationQuota({ api }) {
   // 不计入普通课节数/池子的独立课程（成人/商家等）：单独列，授权次数落在它自己的系列上。
   const independentOptions = useMemo(() => seriesItems
     .filter((item) => String(item.seriesType || 'NORMAL').toUpperCase() !== 'EXPERIENCE' && item.includeInNormalPool === false)
-    .map((item) => ({ ...item, version: null, stockTotal: 0 })), [seriesItems]);
+    .map((item) => ({ ...item, title: `${item.title}（不计入普通课）`, version: null, stockTotal: 0 })), [seriesItems]);
   const authorizationOptions = useMemo(() => [normalOption, ...independentOptions, ...seriesItems.filter((item) => item.seriesType === 'EXPERIENCE')].filter(Boolean), [normalOption, independentOptions, seriesItems]);
   const seriesById = useMemo(() => new Map(authorizationOptions.map((item) => [item.id, item])), [authorizationOptions]);
   const assignedIds = useMemo(() => new Set(assignments.map((item) => item.seriesId)), [assignments]);

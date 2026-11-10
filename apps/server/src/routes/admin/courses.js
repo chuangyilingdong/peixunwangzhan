@@ -429,6 +429,14 @@ export async function handleCourses(ctx, part, method) {
         throw errors.conflict('这个课包上还有授权次数或学生许可，不能切换「计入普通课」：请先把授权次数清零、学生许可回收/撤销后再改', 'NORMAL_POOL_IN_USE');
       }
     }
+    if (wasIncluded && !includeInNormalPool) {
+      // 池子键不能通过这个开关漂移：S1 一旦取消计入，池子会切到更晚的系列，历史余额归属会变。
+      const poolNow = await normalPoolSeries();
+      const pooledCount = await acount("SELECT COUNT(*) n FROM course_series WHERE owner_type='PLATFORM' AND series_type='NORMAL' AND include_in_normal_pool<>0");
+      if (poolNow?.id === series.id && Number(pooledCount) > 1) {
+        throw errors.conflict('它是当前普通课池子键（后面还有其它普通课系列），不能取消「计入普通课」；如需更换池子键，请走平台数据操作', 'NORMAL_POOL_KEY_LOCKED');
+      }
+    }
     if (!wasIncluded && includeInNormalPool) {
       // 新加入的系列如果比当前池子更早，会顶替池子键 —— 旧池子的余额不能凭空失去归属。
       const nextPool = await arow(`SELECT id FROM course_series
@@ -468,6 +476,27 @@ export async function handleCourses(ctx, part, method) {
     const blocked = refs.classes || refs.curriculumItems || refs.sessions || refs.works;
     if (blocked) {
       throw errors.badRequest(`该课包已被引用（班级 ${refs.classes} 处、课单 ${refs.curriculumItems} 处、课堂 ${refs.sessions} 场、作品 ${refs.works} 件），不能删除；请改用「下架」`, 'COURSE_SERIES_IN_USE');
+    }
+    // 2026-11-10：余额/账务保护。删除会级联删掉学生许可、并显式删掉机构授权单；
+    // 只要有授权次数、学生许可、采购/收入/变更流水，就不允许删（历史也保不住），引导去下架。
+    const balances = await arow(`SELECT
+      (SELECT COUNT(*) FROM course_assignments WHERE series_id=? AND (quota_total>0 OR quota_used>0)) assignments,
+      (SELECT COUNT(*) FROM student_course_grants WHERE series_id=?) grants,
+      (SELECT COUNT(*) FROM license_purchase_batches WHERE series_id=?) batches,
+      (SELECT COUNT(*) FROM license_revenue_events WHERE series_id=?) revenues,
+      (SELECT COUNT(*) FROM course_quota_changes WHERE series_id=?) quotaChanges`, [series.id, series.id, series.id, series.id, series.id]);
+    const pool = await normalPoolSeries();
+    const pooledCount = await acount("SELECT COUNT(*) n FROM course_series WHERE owner_type='PLATFORM' AND series_type='NORMAL' AND include_in_normal_pool<>0");
+    const poolKeyLocked = pool?.id === series.id && Number(pooledCount) > 1;
+    const blockedReasons = [];
+    if (Number(balances?.assignments || 0) > 0) blockedReasons.push(`机构授权次数 ${balances.assignments} 条`);
+    if (Number(balances?.grants || 0) > 0) blockedReasons.push(`学生许可 ${balances.grants} 条`);
+    if (Number(balances?.batches || 0) > 0) blockedReasons.push(`采购批次 ${balances.batches} 条`);
+    if (Number(balances?.revenues || 0) > 0) blockedReasons.push(`收入流水 ${balances.revenues} 条`);
+    if (Number(balances?.quotaChanges || 0) > 0) blockedReasons.push(`次数变更流水 ${balances.quotaChanges} 条`);
+    if (poolKeyLocked) blockedReasons.push('它是当前普通课池子键（后面还有其它普通课系列）');
+    if (blockedReasons.length) {
+      throw errors.badRequest(`该课包不能删除：${blockedReasons.join('、')}。请先清零/回收，或改用「下架」`, 'COURSE_SERIES_HAS_BALANCE');
     }
     const before = await platformSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true });
     await atransaction(async () => {

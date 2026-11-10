@@ -13,14 +13,14 @@ process.env.PLATFORM_DB_PATH = path.join(temp, 'platform.db');
 process.env.DEPLOYMENT_MODE = 'local-mock';
 
 const { q, aq } = await import('../apps/server/src/lib.js');
-const { financialCallSummary, financialReconciliationReport, listFinancialCalls } = await import('../apps/server/src/services/financialReporting.js');
+const { financialCallSummary, financialReconciliationReport, financialReportOptions, listFinancialCalls } = await import('../apps/server/src/services/financialReporting.js');
 // 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
 const { saveComputePricing } = await import('../apps/server/src/services/computePool.js');
 const { handleAdmin } = await import('../apps/server/src/routes/adminOrg.js');
 
 const now = new Date().toISOString();
 const later = new Date(Date.now() + 86400000).toISOString();
-for (const [id, name] of [['org-p88-known', 'P88 Known'], ['org-p88-unknown', 'P88 Unknown'], ['org-p88-partial', 'P88 Partial'], ['org-p88-disputed', 'P88 Disputed'], ['org-p88-usd', 'P88 USD'], ['org-p88-double', 'P88 Double Guard']]) {
+for (const [id, name] of [['org-p88-known', 'P88 Known'], ['org-p88-unknown', 'P88 Unknown'], ['org-p88-partial', 'P88 Partial'], ['org-p88-disputed', 'P88 Disputed'], ['org-p88-usd', 'P88 USD'], ['org-p88-double', 'P88 Double Guard'], ['org-p88-normal', 'P88 Normal Pool']]) {
   await aq('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', [id, name, 'ACTIVE', now, later, 0, now, now]);
 }
 const purchase = async (id, orgId, seriesId, amount, currency, payment) => await aq(`INSERT INTO license_purchase_batches(id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,idempotency_key,purchased_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, [id, `assignment-${id}`, orgId, seriesId, 'PURCHASE', 1, amount, currency, payment, 'ACTIVE', `key-${id}`, now, now]);
@@ -71,6 +71,25 @@ const multiCurrency = await financialReconciliationReport({ days: 1, orgId: 'org
 assert.deepEqual(new Set(multiCurrency.currencies), new Set(['CNY', 'USD']));
 assert.equal(multiCurrency.summary.currency, null);
 assert.equal(multiCurrency.summary.grossProfitMinor, null, 'multi-currency summary must not calculate margin');
+
+// —— 2026-11-11：普通课在报表里按 scope_key='NORMAL' 汇总（不是单个 series_id）——
+await aq(`INSERT INTO course_series(id,title,owner_type,visibility,version,sort,status,series_type,include_in_normal_pool,created_at,updated_at)
+  VALUES ('series-p88-normal','P88 普通课','PLATFORM','PUBLIC','1.0',1,'PUBLISHED','NORMAL',1,?,?)`, [now, now]);
+await aq(`INSERT INTO license_purchase_batches(id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,idempotency_key,purchased_at,created_at,scope_type,scope_key)
+  VALUES ('normal-purchase','assignment-normal','org-p88-normal','series-p88-normal','PURCHASE',1,900,'CNY','PAID','ACTIVE','key-normal-purchase',?,?,'NORMAL','NORMAL')`, [now, now]);
+await aq(`INSERT INTO license_revenue_events(id,assignment_id,org_id,series_id,grant_id,event_type,quantity,amount_minor,currency,idempotency_key,occurred_at,created_at,scope_type,scope_key)
+  VALUES ('normal-revenue','assignment-normal','org-p88-normal','series-p88-normal','grant-normal','GRANT',1,800,'CNY','event-normal',?,?,'NORMAL','NORMAL')`, [now, now]);
+await aq("INSERT INTO usage_records(id,org_id,user_id,modality,model,credits_charged,status,pricing_snapshot,cost_fen,series_id,compute_call_id,created_at) VALUES ('usage-p88-normal','org-p88-normal','student-normal','TEXT','p88-model',0,'SUCCESS','{}',0,'series-p88-normal','call-normal-cost',?)", [now]);
+await aq("INSERT INTO usage_records(id,org_id,user_id,modality,model,credits_charged,status,pricing_snapshot,cost_fen,series_id,compute_call_id,created_at) VALUES ('usage-p88-other','org-p88-normal','student-normal','TEXT','p88-model',0,'SUCCESS','{}',0,'series-p88-other','call-normal-other',?)", [now]);
+await attempt('normal-cost', 'request-normal-cost', 100, 'org-p88-normal', 'usage-p88-normal');
+await attempt('normal-other', 'request-normal-other', 50, 'org-p88-normal', 'usage-p88-other');
+const normalReport = await financialReconciliationReport({ days: 1, orgId: 'org-p88-normal', seriesId: 'NORMAL', currency: 'CNY' });
+assert.equal(normalReport.summary.cashReceivedMinor, 900, '普通课采购按 scope_key=NORMAL 汇总');
+assert.equal(normalReport.summary.recognizedRevenueMinor, 800, '普通课收入按 scope_key=NORMAL 汇总');
+assert.equal(normalReport.summary.settledCostMinor, 100, '普通课成本只算池子系列，不含其他系列');
+assert.equal(normalReport.summary.grossProfitMinor, 700, '普通课毛利 = 池子收入 − 池子成本');
+const reportOptions = await financialReportOptions();
+assert.ok(reportOptions.series.some((item) => item.id === 'NORMAL' && item.name === '普通课'), '报表筛选必须有「普通课」选项');
 
 // —— 调用账三档金额（对外售价 / 上游估算或报告 / 实际核销）与模态渠道汇总一致性 ——
 await saveComputePricing({ perCall: { TEXT: 7 } });
@@ -168,7 +187,8 @@ assert.equal(resolveUnitPrice({ unitPrices: uiUpstreamPrices, modelUnitPrices: n
 
 const billingAuth = { user: { id: 'billing-admin', login: 'billing-admin', role: 'SUPER_ADMIN', permissions: ['ADMIN_BILLING'] }, rawUser: { permissions: '["ADMIN_BILLING"]' } };
 const ctx = (auth) => ({ pathname: '/api/admin/financial-reporting/summary', method: 'GET', search: new URLSearchParams('days=1&currency=CNY'), body: {}, auth, req: { socket: { remoteAddress: '127.0.0.1' } } });
-assert.equal((await handleAdmin(ctx(billingAuth))).summary.cashReceivedMinor, 3500);
+// 全库口径：原有 3500 + P88 普通课（NORMAL scope）900 = 4400。
+assert.equal((await handleAdmin(ctx(billingAuth))).summary.cashReceivedMinor, 4400);
 assert.ok((await handleAdmin({ ...ctx(billingAuth), pathname: '/api/admin/financial-reporting/call-summary' })).totals.calls > 0, 'call-summary route must aggregate three-tier amounts');
 await assert.rejects(() => handleAdmin(ctx({ ...billingAuth, user: { ...billingAuth.user, permissions: ['ADMIN_CONTENT'] } })), (error) => error.code === 'PERMISSION_DENIED');
 await assert.rejects(() => handleAdmin(ctx({ ...billingAuth, user: { ...billingAuth.user, role: 'ORG_ADMIN' } })), (error) => error.code === 'FORBIDDEN' || error.status === 403);
