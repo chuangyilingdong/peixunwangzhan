@@ -26,10 +26,11 @@
 import { Link } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import {
-  Empty, ErrorState, ListResultSummary, Loading, MetricCard, PageHeader, Pagination,
+  Empty, ErrorState, ListResultSummary, Loading, MetricCard, Notice, PageHeader, Pagination,
   Panel, Status, formatDate, useData, useDebouncedValue, errorText,
 } from '@platform/shared';
 import { Modal } from './classroom/ui.jsx';
+import { ReclaimModal } from './StudentGrants.jsx';
 
 const DAYS_OPTIONS = [['1', '近 1 天'], ['7', '近 7 天'], ['30', '近 30 天'], ['90', '近 90 天']];
 const ACCOUNT_STATUS_OPTIONS = [['', '全部'], ['ACTIVE', '正常'], ['DISABLED', '已停用']];
@@ -288,6 +289,8 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
   const usage = useData(() => api.get(`org/students/${encodeURIComponent(studentId)}/course-usage`), [api, studentId]);
   const [openGrantId, setOpenGrantId] = useState('');
   const [adding, setAdding] = useState(false);
+  const [reclaimTarget, setReclaimTarget] = useState(null);
+  const [message, setMessage] = useState('');
   const student = data.data?.student;
   const summary = data.data?.summary || {};
   const items = data.data?.items || [];
@@ -300,6 +303,7 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
     <PageHeader eyebrow="002-04" title="学生授权详情"
       actions={<><button className="secondary-button" onClick={onBack}>← 返回学生授权中心</button><button className="primary-button" onClick={() => setAdding(true)}>授权次数</button></>} />
     {data.loading ? <Loading label="正在读取该学生的授权…" /> : data.error ? <ErrorState error={data.error} onRetry={data.refresh} /> : <>
+      {message ? <Notice tone="success">{message}</Notice> : null}
       <Panel title="学生">
         <div className="row-actions">
           <strong>{student?.displayName || student?.login || '—'}</strong>
@@ -318,7 +322,7 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
           <button className="secondary-button" type="button" onClick={() => setAdding(true)}>授权次数</button>
         </>}>
         {activeItems.length ? <div className="table-wrap"><table>
-          <thead><tr><th>课包</th><th>当前版本</th><th>授权</th><th>已用</th><th>剩余</th><th>授权时间</th><th>授权状态</th></tr></thead>
+          <thead><tr><th>课包</th><th>当前版本</th><th>授权</th><th>已用</th><th>剩余</th><th>授权时间</th><th>授权状态</th><th>操作</th></tr></thead>
           <tbody>{activeItems.map((item) => <tr key={item.id}>
             <td><button type="button" className="text-button" onClick={() => setOpenGrantId(item.id)}>{item.seriesTitle || item.seriesId}</button></td>
             <td>{item.version ? `v${item.version}` : '—'}</td>
@@ -327,6 +331,9 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
             <td><span className={(item.remainingUnits ?? 0) > 0 ? 'status success' : 'status warning'}>{item.remainingUnits ?? 0} 次</span></td>
             <td>{formatDate(item.grantedAt)}</td>
             <td><GrantStateBadge item={item} /></td>
+            <td>{item.seriesType !== 'EXPERIENCE' && (item.remainingUnits ?? 0) > 0
+              ? <button type="button" className="text-button" onClick={() => setReclaimTarget(item)}>回收</button>
+              : <span className="muted">—</span>}</td>
           </tr>)}</tbody>
         </table></div> : <Empty title="该学生还没有任何授权次数" body="点右上角「授权次数」为他开一笔；每分给一人用掉 1 次。" />}
       </Panel>
@@ -385,6 +392,9 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
 
     {adding && student ? <AddGrantModal api={api} source="STUDENT_DETAIL" student={{ ...student, studentId }}
       onClose={() => setAdding(false)} onDone={() => { setAdding(false); data.refresh(); }} /> : null}
+    {reclaimTarget ? <ReclaimModal api={api} grant={{ ...reclaimTarget, studentName: student?.displayName || student?.login }}
+      onClose={() => setReclaimTarget(null)}
+      onDone={(text) => { setReclaimTarget(null); setMessage(text); data.refresh(); }} /> : null}
   </>;
 }
 

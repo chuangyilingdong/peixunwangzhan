@@ -209,6 +209,11 @@ try {
   check('⑥ 学生授权中心按课包列出 授权 / 已用 / 剩余（替代概览）',
     /课包明细（授权 \/ 已用 \/ 剩余）/.test(page) && /grant-breakdown/.test(page)
     && /series\.grantedUnits/.test(page) && /series\.consumedUnits/.test(page) && /series\.remainingUnits/.test(page));
+  // 2026-11-10：回收入口必须出现在**当前可见的**学生授权详情页（旧 /grants 页也保留）。
+  check('⑥ 学生授权详情页有「回收」入口（普通课未使用次数）',
+    /setReclaimTarget\(item\)/.test(page) && /<ReclaimModal/.test(page)
+    && /item\.seriesType !== 'EXPERIENCE'/.test(page)
+    && /export function ReclaimModal/.test(read('apps/org/src/pages/StudentGrants.jsx')));
   check('⑥ 机构名接进外壳并会渲染（orgName → .org-name），样式在共享样式表里',
     /<AppShell product="灵动ai学院" orgName=\{session\.organization\?\.name/.test(main)
     && /orgName = ''/.test(shell) && /className="org-name"/.test(shell) && /\.org-name\{/.test(styles));

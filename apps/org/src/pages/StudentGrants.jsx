@@ -289,7 +289,7 @@ export function StudentGrants({ api }) {
  * 回收学生未使用的课时次数（2026-11-10 用户口径：普通课包可回收，可指定回收几次）。
  * 服务端会再校验：不能超过未使用余额、学生还在课堂里就拒绝、每退 1 次冲销 1 笔许可收入。
  */
-function ReclaimModal({ api, grant, onClose, onDone }) {
+export function ReclaimModal({ api, grant, onClose, onDone }) {
   const maxUnits = Number(grant?.remainingUnits || 0);
   const [units, setUnits] = useState(String(maxUnits));
   const [reason, setReason] = useState('');
