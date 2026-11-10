@@ -2065,6 +2065,7 @@ export async function handleOrg(ctx) {
       [studentId, currentOrgId])).map((item) => item.series_id));
     const normalLessons = await normalLessonCount();
     const normalSeriesIds = new Set((await arows("SELECT id FROM course_series WHERE owner_type='PLATFORM' AND series_type='NORMAL'", [])).map((item) => item.id));
+    const poolId = (await normalPoolSeries())?.id || '';
     const items = (await arows(`SELECT grant.id, grant.series_id, grant.granted_at, grant.revoked_at, grant.revoke_reason,
         grant.source_assignment_id, grant.granted_units, grant.consumed_units, series.title, series.version, series.series_type,
         actor.display_name granted_by_name, actor.login granted_by_login
@@ -2074,6 +2075,8 @@ export async function handleOrg(ctx) {
       WHERE grant.org_id=? AND grant.student_id=?
       ORDER BY grant.revoked_at IS NOT NULL, grant.granted_at DESC`, [currentOrgId, studentId])).map((item) => {
       const normal = seriesTypeOf({ series_type: item.series_type }) === 'NORMAL';
+      // 普通课 = 一个池子：历史 S2/S3 的旧许可不再逐条展示，只展示池子那一行（撤销/有效都在它上面）
+      if (normal && item.series_id !== poolId) return null;
       // 普通课：学习/进课堂的记录可能落在 S1/S2/S3 任意一个系列上，按整个普通课判断
       const learned = normal ? [...normalSeriesIds].some((id) => learnedSeries.has(id)) : learnedSeries.has(item.series_id);
       const entered = normal ? [...normalSeriesIds].some((id) => enteredSeries.has(id)) : enteredSeries.has(item.series_id);
@@ -2105,7 +2108,7 @@ export async function handleOrg(ctx) {
         sourceAssignmentId: item.source_assignment_id || null,
         sourceLabel: item.source_assignment_id ? '平台授予本机构的课包权益' : '历史数据（无授权单）',
       };
-    });
+    }).filter(Boolean);
     const activeItems = items.filter((item) => item.status === 'ACTIVE');
     return {
       student: { studentId: student.id, displayName: student.display_name, login: student.login, phone: student.phone || null, status: student.status },
