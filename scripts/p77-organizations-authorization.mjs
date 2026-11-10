@@ -29,11 +29,13 @@ const purchase=(key, quantity, paymentStatus='PAID')=>({amountMinor:quantity*100
 const assign=(body)=>admin('/course-series/p77/assignments','POST',body);
 await rejects(()=>assign({orgIds:[a.id,b.id],quotaTotal:2,...purchase('multi',2)}), 'INVALID_ORG_IDS');
 assert.equal((await arow("SELECT COUNT(*) n FROM course_assignments WHERE series_id='p77'")).n,0);
-await assign({orgIds:[a.id],quotaTotal:2,...purchase('initial',2)});
+await assign({orgIds:[a.id],quotaTotal:3,...purchase('initial',3)});
 await assign({orgIds:[a.id],validityDays:730});
-assert.equal((await arow("SELECT quota_total FROM course_assignments WHERE series_id='p77'")).quota_total,2);
+assert.equal((await arow("SELECT quota_total FROM course_assignments WHERE series_id='p77'")).quota_total,3);
 const grants = await Promise.all([org(a.id,'/course-grants','POST',{seriesId:'p77',studentIds:[students[0].id]}),org(a.id,'/course-grants','POST',{seriesId:'p77',studentIds:[students[0].id]})]);
-assert.equal(grants.reduce((n,g)=>n+g.granted,0),1);
+// 2026-11-10：普通课包按课时次数、可重复分配 —— 两个并发请求都要真正发出去（累加 2 次）
+assert.equal(grants.reduce((n,g)=>n+g.granted,0),2);
+assert.equal((await arow("SELECT granted_units FROM student_course_grants WHERE student_id=? AND series_id='p77'",[students[0].id])).granted_units,2);
 await org(a.id,'/course-grants','POST',{seriesId:'p77',studentIds:[students[1].id]});
 await rejects(()=>assign({orgIds:[a.id],quotaTotal:1}), 'COURSE_QUOTA_BELOW_USED');
 await rejects(()=>admin('/course-series/p77/stock','PUT',{stockTotal:1}), 'COURSE_STOCK_BELOW_RESERVED');

@@ -195,14 +195,14 @@ try {
     && !/\['grant', '为学生添加课包'\]/.test(page));
   check('⑥ 为谁添加 + 添加什么课包 + 确认（弹窗三步都在）',
     /① 为谁添加/.test(page) && /② 添加什么课包/.test(page) && /③ 确认/.test(page));
-  check('⑥ 次数输入是体验课包专属：普通课包固定 1 次（服务端对 units>1 会 400）',
+  check('⑥ 次数输入两种课包都有（2026-11-10 起普通包也按课时次数）',
     /const isExperience = picked\?\.seriesType === 'EXPERIENCE';/.test(page)
-    && /const useNow = isExperience \? units : 1;/.test(page)
-    && /isExperience \? <div className="row-actions">[\s\S]{0,700}units-input/.test(page));
+    && /const useNow = units;/.test(page)
+    && /<div className="row-actions">[\s\S]{0,700}units-input/.test(page));
   check('⑥ 次数上限 = 该课包剩余人次（服务端在事务里还会再算一次）',
     /const maxUnits = picked \? Math\.max\(1, Number\(picked\.remaining \|\| 1\)\) : 1;/.test(page));
   check('⑥ 提交带 units 与受限枚举 source；弹窗用的两个来源都在服务端白名单里',
-    /units: useNow, source \}\);/.test(page)
+    /units: useNow, source,/.test(page)
     && /source="STUDENT_CENTER"/.test(page) && /source="STUDENT_DETAIL"/.test(page)
     && /STUDENT_CENTER: '学生授权中心'/.test(orgRoute) && /STUDENT_DETAIL: '学生授权详情'/.test(orgRoute));
   // 2026-11-05 用户口径：不要「授权概览」，改成每个课包一行（授权 / 已用 / 剩余）。

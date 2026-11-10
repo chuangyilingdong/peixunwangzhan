@@ -299,18 +299,18 @@ try {
     await dissolveSession(seventh.data?.id);
   }
 
-  /* ⑩ 普通课包行为不变：重复授权跳过、次数账不动 */
+  /* ⑩ 普通课包（2026-11-10 起也按课时次数）：重复授权**累加**，次数账真实使用 */
   {
     const normalSeries = await createSeries('P140 普通课包', 'NORMAL', [lessonBody('第 1 节')]);
     const normalId = normalSeries.data?.id;
     await api(`/api/admin/course-series/${normalId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
-    await api(`/api/admin/course-series/${normalId}/assignments`, { method: 'POST', token: admin, body: { orgId: seeded.orgId, quotaTotal: 3, ...purchase('normal', 3) } });
+    await api(`/api/admin/course-series/${normalId}/assignments`, { method: 'POST', token: admin, body: { orgId: seeded.orgId, quotaTotal: 6, ...purchase('normal', 6) } });
     const first = await api('/api/org/course-grants', { method: 'POST', token: orgAdmin, body: { seriesId: normalId, studentIds: [seeded.studentId] } });
     const second = await api('/api/org/course-grants', { method: 'POST', token: orgAdmin, body: { seriesId: normalId, studentIds: [seeded.studentId] } });
     check('⑩ 普通课包：第一次 granted=1', first.data?.granted === 1, JSON.stringify(first.data || first.error).slice(0, 160));
-    check('⑩ 普通课包：**重复授权仍然跳过**（行为不变）★', second.data?.granted === 0 && second.data?.skipped === 1, JSON.stringify(second.data || second.error).slice(0, 160));
+    check('⑩ 普通课包：**重复授权累加**（granted=1，不再跳过）★', second.data?.granted === 1 && Number(second.data?.usedUnits) === 1, JSON.stringify(second.data || second.error).slice(0, 160));
     const row = await arow('SELECT granted_units, consumed_units FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [seeded.orgId, seeded.studentId, normalId]);
-    check('⑩ 普通课包的行没被加次数（granted_units 仍是 1）', Number(row?.granted_units) === 1 && Number(row?.consumed_units) === 0, JSON.stringify(row));
+    check('⑩ 普通课包的行按次累加（granted_units=2）', Number(row?.granted_units) === 2 && Number(row?.consumed_units) === 0, JSON.stringify(row));
     const seriesRow = await arow('SELECT series_type FROM course_series WHERE id=?', [normalId]);
     check('⑩ 普通课包类型默认 NORMAL', seriesRow?.series_type === 'NORMAL', JSON.stringify(seriesRow));
   }
@@ -340,15 +340,16 @@ try {
 
     const normalAssignment = await arow('SELECT series_id FROM course_assignments WHERE org_id=? AND quota_total>0 AND series_id<>? AND series_id<>? LIMIT 1', [seeded.orgId, experienceSeriesId, ownSeriesId]);
     const normal = await api('/api/org/course-grants', { method: 'POST', token: orgAdmin, body: { seriesId: normalAssignment?.series_id, studentIds: [seeded.studentId], units: 3 } });
-    check('④′ 普通课包传 units>1 被拒（UNITS_NOT_SUPPORTED，别变成静默只记 1 次）', normal.status === 400 && normal.error?.code === 'UNITS_NOT_SUPPORTED', JSON.stringify(normal.error || normal.data).slice(0, 200));
+    check('④′ 普通课包也能一次授权多次（2026-11-10 起 units 不再被拒）',
+      normal.status === 200 && normal.data?.granted === 1 && Number(normal.data?.usedUnits) === 3, JSON.stringify(normal.error || normal.data).slice(0, 200));
   }
 
   /* ④″ 前端契约（静态）：按次授权的入口与上限必须在界面上（真浏览器那一路由 p111 走机构端页面） */
   {
     const grantsPage = fs.readFileSync('apps/org/src/pages/StudentGrants.jsx', 'utf8');
     const listPage = fs.readFileSync('apps/org/src/pages/classroom/ClassroomList.jsx', 'utf8');
-    check('④″ 体验课包才有「每人授权次数」控件（普通课包不显示 —— 传 units>1 服务端会拒）',
-      /\{isExperience \? <div className="row-actions top-gap">[\s\S]{0,500}每人授权次数/.test(grantsPage));
+    check('④″ 两种课包都有「每人授权次数」控件（2026-11-10 起普通包也按次数）',
+      /每人授权次数：/.test(grantsPage));
     check('④″ 上限 = 剩余次数 ÷ 已选人数，超了就禁用并说明',
       /const maxUnits = remaining === null \? null : Math\.max\(1, Math\.floor\(remaining \/ Math\.max\(1, picked\.length\)\)\)/.test(grantsPage)
       && /const overLimit = remaining !== null && needed > remaining;/.test(grantsPage));

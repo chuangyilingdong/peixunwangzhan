@@ -741,7 +741,8 @@ function CourseCard({ course, onOpen, onStatus, onDelete, busy }) {
         <span>课时 <strong>{course.lessonCount}</strong></span>
         <span>{VISIBILITY_LABELS[course.visibility] || course.visibility}</span>
         <span>v{course.version}</span>
-        <span>库存 {course.stockTotal || 0} 次</span>
+        {/* 2026-11-10：普通课包不再有"平台库存"概念，只对体验课包显示库存 */}
+        {course.seriesType === 'EXPERIENCE' ? <span>库存 {course.stockTotal || 0} 次</span> : null}
         {course.difficultyLevel ? <span>难度 {course.difficultyLevel}/5</span> : null}
         {course.ageRangeMin || course.ageRangeMax ? <span>{course.ageRangeMin ?? '?'}-{course.ageRangeMax ?? '?'} 岁</span> : null}
       </div>
@@ -1045,7 +1046,7 @@ function CourseDetail({ api, courseId, onBack }) {
                 <option value="NORMAL">普通课包</option>
                 <option value="EXPERIENCE">体验课包</option>
               </select>
-              <small className="muted">{editForm.seriesType === 'EXPERIENCE' ? '只包含 1 节课；可重复分给同一学生、未用次数累积；每场有有效产出的课堂核销 1 次' : '授权即消耗一次次数，同一学生同一课包只授权一次'}</small>
+              <small className="muted">{editForm.seriesType === 'EXPERIENCE' ? '只包含 1 节课；可重复分给同一学生、未用次数累积；每场有有效产出的课堂核销 1 次' : '普通课包：1 次 = 1 个课时次数（上 1 节扣 1 次）；可重复分给学生、未用次数累积；上过的课不能重复上'}</small>
             </label>
           </div>
           <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存课包资料'}</button>

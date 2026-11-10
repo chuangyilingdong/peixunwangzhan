@@ -50,7 +50,8 @@ export const COURSE_QUOTA_SOURCES = Object.freeze({
   ADMIN_ASSIGN: 'ADMIN_COURSE_SERIES_ASSIGN',      // 平台给机构开通课包（含追加购买里新建授权单）
   ADMIN_ADJUST: 'ADMIN_COURSE_QUOTA_ADJUST',       // 平台调整某机构某课包的授权次数
   ORG_GRANT: 'ORG_COURSE_GRANT',                   // 机构把课包授权给学生
-  ADMIN_GRANT_REVOKE: 'ADMIN_COURSE_GRANT_REVOKE', // 平台撤销学生授权（返还 1 次）
+  ORG_GRANT_RECLAIM: 'ORG_COURSE_GRANT_RECLAIM',   // 机构回收学生未使用的课时次数（2026-11-10）
+  ADMIN_GRANT_REVOKE: 'ADMIN_COURSE_GRANT_REVOKE', // 平台撤销学生授权（返还未使用次数）
 });
 
 function integerOf(value) {

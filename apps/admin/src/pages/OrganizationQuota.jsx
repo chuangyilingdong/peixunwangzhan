@@ -104,7 +104,10 @@ function AddPackageDrawer({ api, orgId = '', options = [], assignedIds = new Set
           {picked ? <div className="table-wrap top-gap"><table><tbody>
             <tr><th>课包名称</th><td>{picked.title}</td></tr>
             <tr><th>版本</th><td>v{picked.version || '—'}（取该课包当前版本，不在这里改）</td></tr>
-            <tr><th>课包库存</th><td>总 {picked.stockTotal ?? '—'} 次（平台侧可授权出去的次数池；超了服务端会拒绝，报「课包可分配库存不足」）</td></tr>
+            {/* 2026-11-10：普通课包不再有"平台库存"概念（直接给机构开次数），只有体验课包显示库存 */}
+            {picked.seriesType === 'EXPERIENCE'
+              ? <tr><th>课包库存</th><td>总 {picked.stockTotal ?? '—'} 次（平台侧可授权出去的次数池；超了服务端会拒绝，报「课包可分配库存不足」）</td></tr>
+              : null}
           </tbody></table></div> : null}
         </section>
         <section className="drawer-section">

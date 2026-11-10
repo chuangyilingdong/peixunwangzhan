@@ -24,7 +24,7 @@
 //    也不展示「取消资格」那一层 —— 给机构看「取消资格」却不给取消，是误导。
 //    `p55` 断言的「机构侧撤销入口必须 404」就是这个口径，别去改它。
 import { Link } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Empty, ErrorState, ListResultSummary, Loading, MetricCard, PageHeader, Pagination,
   Panel, Status, formatDate, useData, useDebouncedValue, errorText,
@@ -120,22 +120,22 @@ function StudentGrantCenter({ api, onOpenStudent }) {
             <td>{item.grantedCount}</td>
             <td>{item.lastGrantedAt ? formatDate(item.lastGrantedAt) : '—'}</td>
             {/* 2026-11-05 用户口径：不要概览，要**每个课包**的 授权次数 / 已用 / 剩余。
-                体验课包按次数核销；普通课包按人授权一次、不按次数核销，所以已用/剩余显示「—」。 */}
+                2026-11-10：普通课包也按课时次数（上 1 节扣 1 次），所以两种课包都显示三列。 */}
             <td>{item.grantedSeries.length
               ? <table className="grant-breakdown">
                 <thead><tr><th>课包</th><th>授权</th><th>已用</th><th>剩余</th></tr></thead>
                 <tbody>{item.grantedSeries.map((series) => <tr key={series.seriesId}>
                   <td>{series.title}{series.seriesType === 'EXPERIENCE' ? <em>体验</em> : null}</td>
                   <td>{series.grantedUnits}</td>
-                  <td>{series.seriesType === 'EXPERIENCE' ? series.consumedUnits : '—'}</td>
-                  <td>{series.seriesType === 'EXPERIENCE' ? series.remainingUnits : '—'}</td>
+                  <td>{series.consumedUnits}</td>
+                  <td>{series.remainingUnits}</td>
                 </tr>)}</tbody>
               </table>
               : <span className="muted">暂无课包</span>}</td>
             <td><button type="button" className="text-button" onClick={() => onOpenStudent(item.studentId)}>查看授权</button></td>
           </tr>)}</tbody>
         </table></div>
-        <p className="muted">课包明细：体验课包按次数核销（授权 / 已用 / 剩余）；普通课包按人授权一次、不按次数核销，已用和剩余显示「—」。</p>
+        <p className="muted">课包明细：两种课包都按次数核销 —— 授权 / 已用 / 剩余；普通课包上 1 节扣 1 次，体验课包同一节课可反复上。</p>
         <Pagination page={data.data?.page} totalPages={data.data?.totalPages} onChange={setPage} disabled={data.loading} />
       </> : <Empty title="没有符合条件的学生" body="调整筛选条件，或先在「机构成员管理」里创建学生账号。" />}
     </Panel>
@@ -183,32 +183,32 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
   );
   const overview = useData(() => api.get('org/series-overview?days=30'), [api]);
   const studentId = pickedStudent?.studentId || pickedStudent?.id || '';
-  // 这名学生手上的许可：普通课包「每人只能一次」要靠它过滤，体验课包不看它
-  const held = useData(
-    () => (studentId ? api.get(`org/students/${encodeURIComponent(studentId)}/course-grants`) : Promise.resolve({ items: [] })),
-    [api, studentId],
-  );
   const [seriesId, setSeriesId] = useState('');
   const [units, setUnits] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const heldNormal = new Set((held.data?.items || [])
-    .filter((row) => row.status === 'ACTIVE' && row.seriesType !== 'EXPERIENCE')
-    .map((row) => row.seriesId));
+  const submitKeyRef = useRef({ signature: '', key: '' });
+  // 2026-11-10：普通课包也按课时次数，两种课包都允许重复分配（次数累加），
+  // 所以候选课包只按「机构已开通 + 剩余人次 > 0」筛，不再排除"该学生已持有"。
   const candidates = (overview.data?.items || []).filter((item) => item.assignmentStatus === 'ACTIVE'
-    && Number(item.remaining || 0) > 0 && !heldNormal.has(item.seriesId));
+    && Number(item.remaining || 0) > 0);
   const picked = candidates.find((item) => item.seriesId === seriesId) || null;
   const isExperience = picked?.seriesType === 'EXPERIENCE';
   const maxUnits = picked ? Math.max(1, Number(picked.remaining || 1)) : 1;
-  const useNow = isExperience ? units : 1;
+  const useNow = units;
   // 换人 / 换课包时把次数夹回本课包的上限，别把上一门课的数字带过去
   useEffect(() => { setUnits((value) => Math.min(Math.max(1, Number(value) || 1), maxUnits)); }, [maxUnits, seriesId]);
 
   async function submit() {
     if (!studentId || !picked) return;
     setBusy(true); setError('');
+    const signature = `${picked.seriesId}|${studentId}|${useNow}`;
+    if (submitKeyRef.current.signature !== signature) {
+      submitKeyRef.current = { signature, key: globalThis.crypto?.randomUUID?.() || `grant-${Date.now()}-${Math.random().toString(36).slice(2)}` };
+    }
     try {
-      await api.post('org/course-grants', { seriesId: picked.seriesId, studentIds: [studentId], units: useNow, source });
+      await api.post('org/course-grants', { seriesId: picked.seriesId, studentIds: [studentId], units: useNow, source, idempotencyKey: submitKeyRef.current.key });
+      submitKeyRef.current = { signature: '', key: '' };
       onDone();
     } catch (err) { setError(errorText(err)); } finally { setBusy(false); }
   }
@@ -255,10 +255,10 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
             <span className="status">{isExperience ? '体验课包' : '普通课包'}</span>
             <span className="muted">总人次 {picked.quotaTotal} · 已分配 {picked.quotaUsed} · 剩余 {picked.remaining}</span>
           </div> : null}
-        </> : <Empty title="没有可授权的课包" body="可能原因：该学生已持有这些课包的有效授权（体验课包可以重复授权），或课包剩余人次为 0。" />}
+        </> : <Empty title="没有可授权的课包" body="可能原因：课包剩余人次为 0，或平台还没给本机构开通。" />}
 
     {picked ? <><h3 className="top-gap">③ 确认</h3>
-      {isExperience ? <div className="row-actions">
+      <div className="row-actions">
         <span className="muted">授权次数：</span>
         <span className="ta-zoom">
           <button type="button" className="secondary-button" disabled={units <= 1} onClick={() => setUnits((value) => Math.max(1, value - 1))} aria-label="减少">−</button>
@@ -267,8 +267,8 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
           <button type="button" className="secondary-button" disabled={units >= maxUnits} onClick={() => setUnits((value) => Math.min(maxUnits, value + 1))} aria-label="增加">＋</button>
         </span>
         <span className="muted">次（本课包剩余 {picked.remaining} 次，最多 {maxUnits} 次）</span>
-      </div> : null}
-      <p className="muted">授权后：{picked.title}{isExperience ? ` 该学生 +${useNow} 次` : ' 一笔学习许可（待激活）'}，本课包剩 {Math.max(0, Number(picked.remaining || 0) - useNow)} 次。</p>
+      </div>
+      <p className="muted">授权后：{picked.title} 该学生 +{useNow} 次（{isExperience ? '体验课包，同一节课可反复上' : '普通课包，上 1 节扣 1 次、上过的课不能重复上'}），本课包剩 {Math.max(0, Number(picked.remaining || 0) - useNow)} 次。</p>
     </> : null}
   </Modal>;
 }
@@ -276,13 +276,16 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
  * 002-04 学生授权详情（2026-09-17 按线框图第 1 张重排）。两个抽屉：002-04A 添加课包 / 002-04B 单授权详情。
  *
  * 与线框图的**两处有意偏离**（都是按用户口径，别当成漏做）：
- *   ① 线框图 header 写「撤销授权进入 002-04C」、规则 4 写「取消后返还 1 人次」——
- *      用户已定：**机构端没有取消授权权限**，所以 002-04C 不做，也不展示撤销资格校验。
+ *   ① 线框图 header 写「撤销授权进入 002-04C」——机构端**没有"撤销授权"**（历史口径）；
+ *      2026-11-10 起普通课包多了「回收未使用次数」，但那是"退次数"不是"撤销许可"，
+ *      体验课包仍只能由平台兜底撤销。
  *   ② 规则 1 列了「已完成」这一态，但线框图**没给判定口径**（规则 2 只定义了待激活 / 学习中），
  *      所以服务端不产出 COMPLETED —— 要它得先定口径。
  */
 function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
   const data = useData(() => api.get(`org/students/${encodeURIComponent(studentId)}/course-grants`), [api, studentId]);
+  // 已上课程（2026-11-10 用户口径）：机构要能看到每个学生到底上了哪些具体的课。
+  const usage = useData(() => api.get(`org/students/${encodeURIComponent(studentId)}/course-usage`), [api, studentId]);
   const [openGrantId, setOpenGrantId] = useState('');
   const [adding, setAdding] = useState(false);
   const student = data.data?.student;
@@ -290,6 +293,8 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
   const items = data.data?.items || [];
   const activeItems = items.filter((item) => item.status === 'ACTIVE');
   const openGrant = items.find((item) => item.id === openGrantId) || null;
+  const usageSummary = usage.data?.summary || {};
+  const usageItems = usage.data?.items || [];
 
   return <>
     <PageHeader eyebrow="002-04" title="学生授权详情"
@@ -313,14 +318,38 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
           <button className="secondary-button" type="button" onClick={() => setAdding(true)}>添加课包</button>
         </>}>
         {activeItems.length ? <div className="table-wrap"><table>
-          <thead><tr><th>课包</th><th>当前版本</th><th>授权时间</th><th>授权状态</th></tr></thead>
+          <thead><tr><th>课包</th><th>当前版本</th><th>授权</th><th>已用</th><th>剩余</th><th>授权时间</th><th>授权状态</th></tr></thead>
           <tbody>{activeItems.map((item) => <tr key={item.id}>
             <td><button type="button" className="text-button" onClick={() => setOpenGrantId(item.id)}>{item.seriesTitle || item.seriesId}</button></td>
             <td>{item.version ? `v${item.version}` : '—'}</td>
+            <td>{item.grantedUnits ?? 1} 次</td>
+            <td>{item.consumedUnits ?? 0} 次</td>
+            <td><span className={(item.remainingUnits ?? 0) > 0 ? 'status success' : 'status warning'}>{item.remainingUnits ?? 0} 次</span></td>
             <td>{formatDate(item.grantedAt)}</td>
             <td><GrantStateBadge item={item} /></td>
           </tr>)}</tbody>
         </table></div> : <Empty title="该学生还没有任何课包授权" body="点右上角「添加课包」为他开一笔；每分给一人用掉 1 次。" />}
+      </Panel>
+
+      <Panel title={`已上课程（${usageSummary.total ?? 0} 场）`}
+        actions={<button type="button" className="secondary-button" onClick={() => usage.refresh()}>刷新</button>}>
+        {usage.loading ? <Loading label="正在读取已上课程…" /> : usage.error ? <ErrorState error={usage.error} onRetry={usage.refresh} /> : usageItems.length ? <>
+          <p className="muted">已完课 {usageSummary.completed ?? 0} 场（扣次 {usageSummary.consumed ?? 0} 次）· 未完课 {usageSummary.incomplete ?? 0} 场（不扣次）</p>
+          <div className="table-wrap"><table>
+            <thead><tr><th>课包</th><th>课时</th><th>课堂</th><th>老师</th><th>结束/完课时间</th><th>结果</th><th>扣次</th></tr></thead>
+            <tbody>{usageItems.map((item) => <tr key={item.id}>
+              <td>{item.seriesTitle || '—'}{item.seriesType === 'EXPERIENCE' ? <em>体验</em> : null}</td>
+              <td>{item.lessonTitle || '—'}</td>
+              <td>{item.sessionTitle || '—'}</td>
+              <td>{item.teacherName || '—'}</td>
+              <td>{item.completedAt ? formatDate(item.completedAt) : '—'}</td>
+              <td>{item.status === 'COMPLETED'
+                ? <span className="status success">已完课</span>
+                : <span className="status warning">未完课</span>}</td>
+              <td>{item.consumed ? '已扣 1 次' : <span className="muted">未扣</span>}</td>
+            </tr>)}</tbody>
+          </table></div>
+        </> : <Empty title="还没有上过课" body="这个学生还没有已结算的课堂记录。" />}
       </Panel>
 
 
@@ -460,7 +489,7 @@ function GrantRecords({ api, seriesOptions, initialSearch = '' }) {
   return <>
     <div className="metrics">
       <MetricCard label="本月授权" value={totals.grantedThisMonth ?? 0} hint="本月新增的学生课包授权" />
-      <MetricCard label="本月取消" value={totals.revokedThisMonth ?? 0} hint="本月由平台取消的授权" tone="orange" />
+      <MetricCard label="本月取消/回收" value={totals.revokedThisMonth ?? 0} hint="本月由平台取消或机构回收的授权" tone="orange" />
       <MetricCard label="今日授权" value={totals.grantedToday ?? 0} hint="今日新增授权" tone="teal" />
       <MetricCard label="记录总数" value={totals.total ?? 0} hint="累计授权操作记录（按学生拆分后）" tone="pink" />
     </div>
@@ -473,7 +502,7 @@ function GrantRecords({ api, seriesOptions, initialSearch = '' }) {
           {seriesOptions.map((series) => <option key={series.id} value={series.id}>{series.title}</option>)}
         </select></label>
         <label>操作类型<select value={draft.operationType} onChange={(event) => setDraft({ ...draft, operationType: event.target.value })}>
-          <option value="">全部</option><option value="GRANT">授权</option><option value="REVOKE">取消授权</option>
+          <option value="">全部</option><option value="GRANT">授权</option><option value="REVOKE">取消/回收</option>
         </select></label>
         <label>操作账号<select value={draft.actorId} onChange={(event) => setDraft({ ...draft, actorId: event.target.value })}>
           <option value="">全部</option>
@@ -499,7 +528,7 @@ function GrantRecords({ api, seriesOptions, initialSearch = '' }) {
             <td>{item.seriesTitle || '—'}</td>
             <td>{item.operationType === 'GRANT'
               ? <span className="status success">授权</span>
-              : <><span className="status warning">取消授权</span>{item.note ? <div className="muted">{item.note}</div> : null}</>}</td>
+              : <><span className="status warning">{item.operationLabel || '取消授权'}</span>{item.note ? <div className="muted">{item.note}</div> : null}</>}</td>
             <td><span className="status success">{item.resultLabel}</span></td>
             <td>{item.actorName}{item.actorScope === 'PLATFORM' ? <div className="muted">平台侧</div> : null}</td>
             <td className="muted">{item.sourceLabel}</td>

@@ -168,27 +168,31 @@ try {
   assert.ok(student.data?.id, `建学员失败: ${JSON.stringify(student.data || student.error).slice(0, 160)}`);
   const granted = await api('/api/org/course-grants', { method: 'POST', token: orgToken, body: { seriesId, studentIds: [student.data.id] } });
   check('⑤ 机构授权给学生成功（已授权次数 0 → 1）', granted.status === 200 && granted.data.granted === 1 && granted.data.quotaUsed === 1, JSON.stringify(granted.data).slice(0, 200));
-  const skipped = await api('/api/org/course-grants', { method: 'POST', token: orgToken, body: { seriesId, studentIds: [student.data.id] } });
-  check('⑤ 重复授权同一学生被跳过（不重复扣次数）', skipped.data.granted === 0 && skipped.data.skipped === 1, JSON.stringify(skipped.data).slice(0, 160));
+  // 2026-11-10：同一学生可以重复分配，次数累加 —— 再分 1 次，已用 1 → 2
+  const again = await api('/api/org/course-grants', { method: 'POST', token: orgToken, body: { seriesId, studentIds: [student.data.id] } });
+  check('⑤ 重复授权同一学生：**次数累加**（已用 1 → 2）', again.data.granted === 1 && again.data.quotaUsed === 2, JSON.stringify(again.data).slice(0, 160));
   {
     const list = await changes(`?seriesId=${seriesId}&changeType=GRANT_CONSUME`);
-    const row = (list.data.items || [])[0] || {};
-    check('⑤ 流水只有一笔 GRANT_CONSUME（6/0 → 6/1，变更值 −1）', list.data.total === 1 && row.changeType === 'GRANT_CONSUME' && row.quotaTotalBefore === 6 && row.quotaTotalAfter === 6 && row.quotaUsedBefore === 0 && row.quotaUsedAfter === 1 && row.delta === -1, JSON.stringify({ total: list.data.total, row }).slice(0, 300));
-    check('⑤ 授权消耗的操作人是机构管理员、来源是机构端', row.actorLogin === 'p86-admin-a' && row.source === 'ORG_COURSE_GRANT', JSON.stringify({ actorLogin: row.actorLogin, source: row.source }));
+    const rows = list.data.items || [];
+    check('⑤ 流水两笔 GRANT_CONSUME（6/0→6/1、6/1→6/2，各 −1）', list.data.total === 2
+      && rows[0]?.quotaTotalBefore === 6 && rows[0]?.quotaUsedBefore === 1 && rows[0]?.quotaUsedAfter === 2 && rows[0]?.delta === -1
+      && rows[1]?.quotaTotalBefore === 6 && rows[1]?.quotaUsedBefore === 0 && rows[1]?.quotaUsedAfter === 1 && rows[1]?.delta === -1,
+      JSON.stringify({ total: list.data.total, rows }).slice(0, 400));
+    check('⑤ 授权消耗的操作人是机构管理员、来源是机构端', rows[0]?.actorLogin === 'p86-admin-a' && rows[0]?.source === 'ORG_COURSE_GRANT', JSON.stringify({ actorLogin: rows[0]?.actorLogin, source: rows[0]?.source }));
   }
 
   // ── ④b 已授权次数是「调整后不得低于」的下界（409）────────────────────────────
   {
     const tooLow = await adjust({ delta: -6, reason: '想调到 0' });
-    check('④ 调整后低于已授权次数 → 409 且带上当前已授权次数', tooLow.status === 409 && tooLow.error?.code === 'COURSE_QUOTA_BELOW_USED' && String(tooLow.error?.message || '').includes('1'), `${tooLow.status} ${tooLow.error?.code} ${tooLow.error?.message}`);
-    const okFloor = await adjust({ delta: -5, reason: '调到刚好等于已授权次数' });
-    check('④ 调到刚好等于已授权次数（6→1，剩余 0）允许', okFloor.status === 200 && okFloor.data.quotaTotal === 1 && okFloor.data.remaining === 0, JSON.stringify(okFloor.data).slice(0, 200));
+    check('④ 调整后低于已授权次数 → 409 且带上当前已授权次数', tooLow.status === 409 && tooLow.error?.code === 'COURSE_QUOTA_BELOW_USED' && String(tooLow.error?.message || '').includes('2'), `${tooLow.status} ${tooLow.error?.code} ${tooLow.error?.message}`);
+    const okFloor = await adjust({ delta: -4, reason: '调到刚好等于已授权次数' });
+    check('④ 调到刚好等于已授权次数（6→2，剩余 0）允许', okFloor.status === 200 && okFloor.data.quotaTotal === 2 && okFloor.data.remaining === 0, JSON.stringify(okFloor.data).slice(0, 200));
     // 负数优先报「不能为负」（此时必然也低于已授权次数，两条都 409，先说更直白的那条）
     const negative = await adjust({ delta: -5, reason: '再减就成负数' });
     check('④ 调整后为负 → 409 COURSE_QUOTA_NEGATIVE', negative.status === 409 && negative.error?.code === 'COURSE_QUOTA_NEGATIVE', `${negative.status} ${negative.error?.code}`);
     // 还原到 6 次，方便后面撤销返还与筛选用例
-    const restore = await adjust({ delta: 5, reason: '守卫还原，调回 6 次' });
-    check('④ 调整 +5 还原到 6 次', restore.status === 200 && restore.data.quotaTotal === 6 && restore.data.quotaUsed === 1, JSON.stringify(restore.data).slice(0, 200));
+    const restore = await adjust({ delta: 4, reason: '守卫还原，调回 6 次' });
+    check('④ 调整 +4 还原到 6 次', restore.status === 200 && restore.data.quotaTotal === 6 && restore.data.quotaUsed === 2, JSON.stringify(restore.data).slice(0, 200));
   }
 
   // ── ⑥ 平台撤销学生授权 → GRANT_REFUND ──────────────────────────────────────
@@ -196,11 +200,11 @@ try {
   const grantId = (grantList.data.items || [])[0]?.id;
   assert.ok(grantId, '机构授权记录缺失');
   const revoked = await api(`/api/admin/course-grants/${grantId}/revoke`, { method: 'POST', token: admin, body: { reason: '机构误授权，平台兜底撤销' } });
-  check('⑥ 平台撤销成功且退回 1 次', revoked.status === 200 && revoked.data.quotaRefunded === true, JSON.stringify(revoked.data).slice(0, 160));
+  check('⑥ 平台撤销成功且按余额退回 2 次', revoked.status === 200 && revoked.data.quotaRefunded === true && revoked.data.refundedUnits === 2, JSON.stringify(revoked.data).slice(0, 160));
   {
     const list = await changes(`?seriesId=${seriesId}&changeType=GRANT_REFUND`);
     const row = (list.data.items || [])[0] || {};
-    check('⑥ 流水出现 GRANT_REFUND（6/1 → 6/0，变更值 +1）', list.data.total === 1 && row.changeType === 'GRANT_REFUND' && row.quotaUsedBefore === 1 && row.quotaUsedAfter === 0 && row.delta === 1, JSON.stringify({ total: list.data.total, row }).slice(0, 300));
+    check('⑥ 流水出现 GRANT_REFUND（6/2 → 6/0，变更值 +2）', list.data.total === 1 && row.changeType === 'GRANT_REFUND' && row.quotaUsedBefore === 2 && row.quotaUsedAfter === 0 && row.delta === 2, JSON.stringify({ total: list.data.total, row }).slice(0, 300));
     check('⑥ 撤销原因写进流水', row.reason === '机构误授权，平台兜底撤销', String(row.reason));
   }
   // 撤销后重新授权（同一条 grant 复活）只记一笔 GRANT_CONSUME

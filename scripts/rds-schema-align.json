@@ -529,6 +529,10 @@
   },
   "works.share_token": {
    "type": "varchar(255)"
+  },
+  "course_grant_requests.idempotency_key": {
+   "type": "varchar(255)",
+   "notNull": true
   }
  }
 }

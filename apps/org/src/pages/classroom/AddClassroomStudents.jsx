@@ -13,7 +13,7 @@ import { SESSION_STATE, StateBadge } from './states.jsx';
 const BLOCK_GROUPS = [
   { key: 'A', title: '已完成当前课堂对应课程', reasons: ['COMPLETED'], hint: '优先命中：同一节课上过一次就不再进候选池，可以上这个课包的其他课时。' },
   { key: 'B', title: '当前处于任意课堂的待上课 / 上课中', reasons: ['IN_OTHER_SESSION'], hint: '会被其他课堂占用，必须先结束或移除那一边。' },
-  { key: 'C', title: '不进入候选池', reasons: ['STUDENT_DISABLED', 'STUDENT_EXPIRED', 'NO_GRANT'], hint: '账号停用 / 到期，或没有这个课包的有效许可。' },
+  { key: 'C', title: '不进入候选池', reasons: ['STUDENT_DISABLED', 'STUDENT_EXPIRED', 'NO_GRANT', 'NO_UNITS', 'NO_EXPERIENCE_UNITS'], hint: '账号停用 / 到期、没有这个课包的有效许可，或次数已经用完。' },
 ];
 const groupOf = (reason) => BLOCK_GROUPS.find((group) => group.reasons.includes(reason)) || BLOCK_GROUPS[2];
 

@@ -12,8 +12,8 @@
 import { errors, id, nowIso, q, row, rows, transaction, arow, arows, aq, atransaction, amap } from '../lib.js';
 import { salePriceFenFor } from './computePool.js';
 import { sessionCostUsageByStudent, sessionCostCapState, studentCostCapFen } from './sessionCostCap.js';
-// 课包类型与体验次数账（2026-09-24 用户口径：体验课包可重复分、未用次数预先累积、按有效产出核销）
-import { activeGrantFor, consumeExperienceUnit, experienceBalanceByStudent, grantUnitsOf, isExperienceSeries } from './courseGrants.js';
+// 课包类型与次数账（2026-09-24 体验课包；2026-11-10 起普通课包也按课时次数）
+import { activeGrantFor, consumeGrantUnit, grantBalanceByStudent, grantUnitsOf, isExperienceSeries } from './courseGrants.js';
 
 /**
  * 谁可以**管理**这个课堂（开始 / 结束 / 解散 / 改名单 / 改名称）？
@@ -109,10 +109,11 @@ const SESSION_STATE_LABELS = { PENDING: '待上课', ACTIVE: '上课中', ENDED:
  *   · 已经完课过这节课 → 不可加（可以上同课包其他课时）；
  *   · 被移除过 → 算可加（移除即解锁）。
  *
- * ⭐ 体验课包（`series_type='EXPERIENCE'`，2026-09-24 用户口径）只改两条：
- *   · 「已经完课过这节课」**不拦** —— 体验课包的意义就是同一节课可以反复上；
- *   · 改看**剩余体验次数**：为 0 就说清楚（而不是含糊地报"没有许可"）。
- *   其余规则（没许可、账号停用/到期、被别的课堂占着、已在本课堂名单里）与普通课包完全一致。
+ * ⭐ 2026-11-10（普通课包改成"按课时次数"）之后，两种课包都看**剩余次数**：
+ *   · 普通课包：剩余 0 → 不可加（`NO_UNITS`）；「已经完课过这节课」**仍然拦**（同一节课不能重复上）。
+ *   · 体验课包：剩余 0 → 不可加（`NO_EXPERIENCE_UNITS`）；「已经完课过这节课」**不拦**
+ *     —— 体验课包的意义就是同一节课可以反复上。
+ *   其余规则（没许可、账号停用/到期、被别的课堂占着、已在本课堂名单里）两种类型完全一致。
  */
 export async function sessionCandidates(session) {
   const students = await arows(
@@ -124,8 +125,8 @@ export async function sessionCandidates(session) {
   );
   const series = await arow('SELECT id, series_type FROM course_series WHERE id=?', [session.series_id]);
   const experience = isExperienceSeries(series);
-  // 剩余体验次数一次取全（普通课包这份 Map 只当"有没有有效许可"的集合用，语义与原来那条查询一致）
-  const balanceByStudent = await experienceBalanceByStudent({ orgId: session.org_id, seriesId: session.series_id });
+  // 剩余次数一次取全：普通包与体验包都用它（体验包以前是"有没有许可"的集合）。
+  const balanceByStudent = await grantBalanceByStudent({ orgId: session.org_id, seriesId: session.series_id });
   const granted = new Set(balanceByStudent.keys());
   const selectable = [];
   const blocked = [];
@@ -149,7 +150,9 @@ export async function sessionCandidates(session) {
     if (student.status !== 'ACTIVE') { blocked.push({ ...base, reason: 'STUDENT_DISABLED', reasonText: '学生账号已停用' }); continue; }
     if (student.expires_at && Date.parse(student.expires_at) <= Date.now()) { blocked.push({ ...base, reason: 'STUDENT_EXPIRED', reasonText: '学生账号已到期' }); continue; }
     if (!granted.has(student.id)) { blocked.push({ ...base, reason: 'NO_GRANT', reasonText: '没有这个课包的许可（到「学生许可」分给 ta）' }); continue; }
-    const remainingUnits = experience ? (balanceByStudent.get(student.id) || 0) : null;
+    // 剩余次数：体验包先看余额（原口径不变）；普通包在「同课时已完课」之后再看，
+    // 这样"这节课上过了"仍然优先报出来（老师更关心这个），余额为 0 时在文案里补一句。
+    const remainingUnits = balanceByStudent.get(student.id) || 0;
     if (experience && remainingUnits <= 0) {
       blocked.push({ ...base, reason: 'NO_EXPERIENCE_UNITS', remainingUnits: 0, reasonText: '体验次数已经用完了（到「学生许可」再给 ta 分一次就能继续上）' });
       continue;
@@ -164,19 +167,23 @@ export async function sessionCandidates(session) {
       continue;
     }
     // ⭐ 体验课包**故意跳过**「同课时已完课」这条拦截：同一节课可以再上一次，
-    //    能不能上由剩余体验次数说了算（上面那条）。普通课包一个字没动。
+    //    能不能上由剩余体验次数说了算（上面那条）。普通课包仍然拦（同一节课不能重复上）。
     if (!experience) {
       const completed = await completedParticipationFor({ studentId: student.id, lessonId: session.lesson_id });
       if (completed) {
         blocked.push({
           ...base, reason: 'COMPLETED',
-          reasonText: `这节课已经完课了（${completed.session_title || '课堂'}${completed.completed_at ? ` · ${String(completed.completed_at).slice(0, 10)}` : ''}）——可以上这个课包的其他课时`,
+          reasonText: `这节课已经完课了（${completed.session_title || '课堂'}${completed.completed_at ? ` · ${String(completed.completed_at).slice(0, 10)}` : ''}）——可以上这个课包的其他课时${remainingUnits <= 0 ? '；另外，这个学生的课时次数也已经用完' : ''}`,
           session: { id: completed.session_id, title: completed.session_title || null, status: 'COMPLETED', teacherName: completed.teacher_name || null },
         });
         continue;
       }
+      if (remainingUnits <= 0) {
+        blocked.push({ ...base, reason: 'NO_UNITS', remainingUnits: 0, reasonText: '课时次数已经用完了（到「学生许可」再给 ta 分一次就能继续上）' });
+        continue;
+      }
     }
-    selectable.push(experience ? { ...base, remainingUnits } : base);
+    selectable.push({ ...base, remainingUnits });
   }
   return { selectable, blocked, alreadyIn };
 }
@@ -213,21 +220,22 @@ async function candidateCostCap(session, studentId) {
  * 结束课堂时结算学生状态：这节课花过算力 → 已完课，否则 → 未完课。
  * 幂等：只结算还在 PENDING/ACTIVE 的行；已结算的行不动（重复点「结束」不会重算）。
  *
- * ⭐ 体验课包（2026-09-24 用户口径）：判定成 `COMPLETED`（= **有真实非 mock 的成功调用**，
- * 也就是"这一场有有效 AI 产出"）之后**核销 1 次**。所以：
+ * ⭐ 次数核销（2026-09-24 体验课包；2026-11-10 起普通课包同规则）：
+ * 判定成 `COMPLETED`（= **有真实非 mock 的成功调用**，也就是"这一场有有效 AI 产出"）之后**核销 1 次**。所以：
  *   · 无产出 → 结算成 INCOMPLETE → **不扣**；
  *   · 课堂被**解散**（DISSOLVED）走的是另一条分支，根本不进这里 → 不扣；
  *   · 重复点「结束」/ 重试 / 并发 → 结算幂等 + 核销走唯一索引 → 只扣一次；
- *   · 余额不足 → `consumeExperienceUnit` 抛错，调用方的结束事务整体回滚（宁可结束失败，也不能账实不一致）。
+ *   · 余额不足 → `consumeGrantUnit` 抛错，调用方的结束事务整体回滚（宁可结束失败，也不能账实不一致）。
  */
 export async function settleSessionStudents({ sessionId, actorId }) {
   const session = await arow('SELECT * FROM class_sessions WHERE id=?', [sessionId]);
-  if (!session || session.status !== 'ACTIVE') return { completed: 0, incomplete: 0, experienceConsumed: 0, experienceSkipped: [] };
+  if (!session || session.status !== 'ACTIVE') return { completed: 0, incomplete: 0, unitsConsumed: 0, consumedSkipped: [], experienceConsumed: 0 };
   const series = session.series_id ? await arow('SELECT id, series_type FROM course_series WHERE id=?', [session.series_id]) : null;
   const experience = isExperienceSeries(series);
+  const seriesType = experience ? 'EXPERIENCE' : 'NORMAL';
   const parts = await arows("SELECT * FROM session_students WHERE session_id=? AND status IN ('PENDING','ACTIVE')", [sessionId]);
   const now = nowIso();
-  const summary = { completed: 0, incomplete: 0, experienceConsumed: 0, experienceSkipped: [] };
+  const summary = { completed: 0, incomplete: 0, unitsConsumed: 0, consumedSkipped: [], experienceConsumed: 0 };
   for (const part of parts) {
     const costFen = await lessonCostFenFor({ studentId: part.student_id, sessionId });
     const used = await arow("SELECT id FROM usage_records WHERE class_session_id=? AND user_id=? AND org_id=? AND status='SUCCESS' AND UPPER(model) NOT LIKE '%MOCK%' AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.provider'), '')) NOT LIKE '%MOCK%' AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.mode'), '')) NOT LIKE '%MOCK%' LIMIT 1", [sessionId, part.student_id, part.org_id]);
@@ -237,13 +245,16 @@ export async function settleSessionStudents({ sessionId, actorId }) {
       [status, now, costFen, now, part.id]);
     if (status === 'COMPLETED') {
       summary.completed += 1;
-      if (experience) {
-        const result = await consumeExperienceUnit({
-          orgId: part.org_id, studentId: part.student_id, seriesId: session.series_id,
-          lessonId: part.lesson_id || session.lesson_id, sessionId, actorId,
-        });
-        if (result.consumed) summary.experienceConsumed += 1;
-        else summary.experienceSkipped.push({ studentId: part.student_id, reason: result.reason });
+      // 两种课包都按次数核销（普通包：上 1 节扣 1 次；体验包：同一节课可反复上、每次扣 1 次）
+      const result = await consumeGrantUnit({
+        orgId: part.org_id, studentId: part.student_id, seriesId: session.series_id,
+        lessonId: part.lesson_id || session.lesson_id, sessionId, actorId, seriesType,
+      });
+      if (result.consumed) {
+        summary.unitsConsumed += 1;
+        if (experience) summary.experienceConsumed += 1;
+      } else {
+        summary.consumedSkipped.push({ studentId: part.student_id, reason: result.reason });
       }
     } else {
       summary.incomplete += 1;
@@ -271,14 +282,16 @@ export async function addSessionStudents({ session, studentIds, actorId }) {
       if (own) { skipped.push({ studentId, reason: 'ALREADY_IN' }); continue; }
       const grant = await activeGrantFor({ orgId: session.org_id, studentId, seriesId: session.series_id });
       if (!grant) { skipped.push({ studentId, reason: 'NO_GRANT' }); continue; }
-      // 体验课包：余额为 0 就加不进来（与候选人名单同一口径、同一个判据）
-      if (experience && grantUnitsOf(grant).remaining <= 0) { skipped.push({ studentId, reason: 'NO_EXPERIENCE_UNITS' }); continue; }
+      const remainingUnits = grantUnitsOf(grant).remaining;
+      // 体验包：余额为 0 就加不进来（原口径，先于占用判断）
+      if (experience && remainingUnits <= 0) { skipped.push({ studentId, reason: 'NO_EXPERIENCE_UNITS' }); continue; }
       const occupied = await activeParticipationFor({ studentId, excludeSessionId: session.id });
       if (occupied) { skipped.push({ studentId, reason: 'IN_OTHER_SESSION' }); continue; }
-      // 体验课包不拦「同课时已完课」（同一节课可以再上）；普通课包保持原样
+      // 体验课包不拦「同课时已完课」（同一节课可以再上）；普通课包保持原样（先报 COMPLETED，再看余额）
       if (!experience) {
         const completed = await completedParticipationFor({ studentId, lessonId: session.lesson_id, excludeSessionId: session.id });
         if (completed) { skipped.push({ studentId, reason: 'COMPLETED' }); continue; }
+        if (remainingUnits <= 0) { skipped.push({ studentId, reason: 'NO_UNITS' }); continue; }
       }
       // 被移除过的话：复用那行并复活（保留历史痕迹：清掉移除信息、重新标记 added_at）
       const removed = await arow("SELECT * FROM session_students WHERE session_id=? AND student_id=? AND status='REMOVED'", [session.id, studentId]);

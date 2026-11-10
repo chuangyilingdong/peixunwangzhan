@@ -1960,8 +1960,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS student_course_grants (
   revoked_at TEXT,
   revoked_by TEXT,
   revoke_reason TEXT,
-  -- 体验课包（series_type='EXPERIENCE'）的**次数账**：同一个学生可以重复分配、未用的次数预先累积。
-  -- 普通课包不看这两列（授权即扣 1 次配额，重复授权跳过），默认值让老行与普通包语义保持不变。
+  -- 课包的**次数账**（2026-11-10 起普通课包也按次数）：
+  --   · 体验课包（series_type='EXPERIENCE'）：同一个学生可以重复分配、未用的次数预先累积；
+  --   · 普通课包（series_type='NORMAL'）：1 次 = 1 个**课时次数**，上 1 节扣 1 次，可重复分配累加。
+  -- 两种类型都靠 granted_units / consumed_units 记账；老行默认 1 / 0 语义不变。
   granted_units INTEGER NOT NULL DEFAULT 1,
   consumed_units INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (series_id) REFERENCES course_series(id) ON DELETE CASCADE
@@ -1987,6 +1989,26 @@ db.exec(`CREATE TABLE IF NOT EXISTS student_course_grant_consumptions (
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_grant_consumptions_unique ON student_course_grant_consumptions(grant_id, session_id, student_id)');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_grant_consumptions_session ON student_course_grant_consumptions(session_id, student_id)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_grant_consumptions_grant ON student_course_grant_consumptions(grant_id, consumed_at DESC)');
+
+// 授权 / 回收请求的**幂等登记**（2026-11-10 普通课包改成"按课时次数"）。
+//
+// 为什么需要它：次数改成可累加之后，「同一个请求发两次」= 真扣两次次数。
+// 体验课包从 2026-09-24 起就有这个风险，普通课包用量大得多，所以把幂等做成显式契约：
+//   机构端每次提交带 `idempotencyKey`（同一机构 + 同一 kind + 同一 key 只处理一次）。
+//   第一次：插一行 PENDING → 处理 → 改成 DONE + 存响应体；重复请求直接回放那一份响应。
+//   ⚠️ 登记行在**主事务之外**插入：MySQL 下两个并发同 key 请求会在唯一索引上排队，
+//      后到的那个读到 DONE 直接回放，不会两边都发次数。
+db.exec(`CREATE TABLE IF NOT EXISTS course_grant_requests (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('GRANT','RECLAIM')),
+  idempotency_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','DONE')),
+  result TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)`);
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_course_grant_requests_unique ON course_grant_requests(org_id, kind, idempotency_key)');
 
 // 课包许可三账：购买批次、收入事件、收入到购买批次的 FIFO 分摊。
 // 财务账只保留业务对象 ID 快照，不做级联外键，避免上游对象删除时抹掉历史。

@@ -329,13 +329,14 @@ export function Authorizations({ api }) {
         <label>课包<SearchSelect ariaLabel="搜索课包" value={seriesId} onChange={(value) => { setSeriesId(value); setMessage(''); }} options={inventory.data?.items || []} placeholder="选择已发布课包" searchPlaceholder="搜索课包名称" /></label>
         <label>机构<SearchSelect ariaLabel="搜索机构" value={orgId} onChange={(value) => { setOrgId(value); setMessage(''); }} options={organizations.data?.items || []} placeholder="选择一家机构" searchPlaceholder="搜索机构名称" /></label>
       </div></Panel>
-      {selected ? <Panel title={`${selected.title} · 库存`}><div className="split">
+      {selected && selected.stockTracked !== false ? <Panel title={`${selected.title} · 库存`}><div className="split">
         <div className="metrics"><MetricCard label="库存总次数" value={selected.stockTotal} /><MetricCard label="已分配或消耗" value={selected.reserved} /><MetricCard label="可分配库存" value={selected.available} /></div>
         <form onSubmit={saveStock}><label>调整库存总次数<input type="number" min={selected.reserved} max="100000000" required value={stock} onChange={(event) => setStock(event.target.value)} /></label><button className="secondary-button" disabled={busy || Number(stock) === selected.stockTotal}>调整库存</button></form>
-      </div></Panel> : null}
+      </div></Panel> : selected ? <Notice tone="info">普通课包已取消「平台库存」：直接给机构设置授权次数即可（入口在下方机构课包页）。</Notice> : null}
       {selected && selectedOrg ? <>
         <div className="metrics">
-          <MetricCard label="库存" value={selected.stockTotal} hint={`可分配 ${selected.available}`} />
+          {/* 2026-11-10：普通课包没有平台库存（stockTracked=false），这一格不显示 */}
+          {selected.stockTracked !== false ? <MetricCard label="库存" value={selected.stockTotal} hint={`可分配 ${selected.available}`} /> : null}
           <MetricCard label="当前总次数" value={assignment?.quotaTotal || 0} hint={assignment ? '该机构现有授权' : '尚未授权'} />
           <MetricCard label="已分配" value={assignment?.quotaUsed || 0} hint="已发放给学生" />
           <MetricCard label="剩余" value={assignment?.remaining || 0} hint="机构仍可分配" />

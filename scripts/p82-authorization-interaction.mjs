@@ -28,12 +28,12 @@ assert.equal(compatible.assignedCount, 1);
 const beforeAppend = await arow("SELECT * FROM course_assignments WHERE series_id='p77' AND org_id=?", [orgA.id]);
 const appendPurchase = { amountMinor: 12345, currency: 'CNY', paymentStatus: 'PAID', orderNo: 'P82-O-1', contractNo: 'P82-C-1', idempotencyKey: 'p82-append-1' };
 const appended = await admin('/course-series/p77/assignments/append', 'POST', { orgId: orgA.id, additionalQuota: 1, ...appendPurchase });
-assert.equal(appended.assignment.quotaTotal, 3);
-assert.equal(appended.assignment.quotaUsed, 2);
+assert.equal(appended.assignment.quotaTotal, 4);
+assert.equal(appended.assignment.quotaUsed, 3);
 assert.equal(appended.assignment.remaining, 1);
 assert.equal(appended.assignment.expiresAt, beforeAppend.expires_at);
 const replayed = await admin('/course-series/p77/assignments/append', 'POST', { orgId: orgA.id, additionalQuota: 1, ...appendPurchase });
-assert.equal(replayed.assignment.quotaTotal, 3);
+assert.equal(replayed.assignment.quotaTotal, 4);
 assert.equal((await arow("SELECT COUNT(*) n FROM license_purchase_batches WHERE idempotency_key='p82-append-1'")).n, 1);
 
 // ① 授权的到期时间 = 该机构的**合同到期日**（2026-09-16 口径，平台不再单独填有效期）
@@ -75,7 +75,7 @@ void validityAudit;
 assert.equal(appendAudit.org_id, orgA.id);
 assert.deepEqual(
   [JSON.parse(appendAudit.before_data).quotaTotal, JSON.parse(appendAudit.after_data).quotaTotal],
-  [2, 3],
+  [3, 4],
 );
 assert.equal(JSON.parse(appendAudit.after_data).additionalQuota, 1);
 // 有效期调整已不再是平台动作 → 这条审计不该再产生（它只在旧接口里写）
@@ -89,7 +89,7 @@ assert.ok(originalGrant?.id);
 const grantRevoke = await admin(`/course-grants/${originalGrant.id}/revoke`, 'POST', { reason: 'P82 撤销重授权回归' });
 assert.equal(grantRevoke.quotaRefunded, true);
 const afterGrantRevoke = await arow("SELECT * FROM course_assignments WHERE series_id='p77' AND org_id=?", [orgA.id]);
-assert.equal(afterGrantRevoke.quota_used, 1);
+assert.equal(afterGrantRevoke.quota_used, 2);
 await admin('/course-series/p77/assignments/revoke', 'POST', { orgId: orgA.id });
 const afterAssignmentRevoke = await arow("SELECT * FROM course_assignments WHERE series_id='p77' AND org_id=?", [orgA.id]);
 assert.equal(afterAssignmentRevoke.status, 'REVOKED');
@@ -99,8 +99,8 @@ assert.ok((await arow("SELECT COUNT(*) n FROM license_revenue_events WHERE assig
 
 const reauthorizePurchase = { seriesId: 'p77', orgId: orgA.id, additionalQuota: 1, amountMinor: 2222, currency: 'CNY', paymentStatus: 'PAID', orderNo: 'P82-REAUTH-O', contractNo: 'P82-REAUTH-C', idempotencyKey: 'p82-reauthorize' };
 const reauthorized = await admin('/license-purchases/append', 'POST', reauthorizePurchase);
-assert.equal(reauthorized.assignment.quotaTotal, 2);
-assert.equal(reauthorized.assignment.quotaUsed, 1);
+assert.equal(reauthorized.assignment.quotaTotal, 3);
+assert.equal(reauthorized.assignment.quotaUsed, 2);
 assert.equal(reauthorized.assignment.remaining, 1);
 const newBatch = await arow("SELECT * FROM license_purchase_batches WHERE idempotency_key='p82-reauthorize'");
 assert.equal(newBatch.status, 'ACTIVE');
@@ -117,6 +117,8 @@ const activeNet = Number((await arow(`SELECT COALESCE(SUM(batch.quantity),0)-COA
   FROM license_purchase_batches batch WHERE batch.assignment_id=? AND batch.status='ACTIVE'`, [afterAssignmentRevoke.id])).remaining);
 const finalAssignment = await arow('SELECT * FROM course_assignments WHERE id=?', [afterAssignmentRevoke.id]);
 assert.equal(activeNet, finalAssignment.quota_total - finalAssignment.quota_used);
+// originalGrant 是 student1 的那条（student0 在 p77 被移到机构 B，join 不上）：
+// 初次授权 1 笔 GRANT + 撤销按余额退 1 笔 REVERSAL + 重新授权 1 笔 GRANT。合计 2 笔 GRANT。
 assert.equal((await arows("SELECT * FROM license_revenue_events WHERE grant_id=? AND event_type='GRANT'", [originalGrant.id])).length, 2);
 
 const authorizationPage = fs.readFileSync(new URL('../apps/admin/src/pages/Organizations.jsx', import.meta.url), 'utf8');

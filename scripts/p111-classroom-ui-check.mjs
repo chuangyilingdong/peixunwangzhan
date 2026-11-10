@@ -944,20 +944,16 @@ try {
   const candidateTexts = (await grantDialog.locator('select option').allInnerTexts())
     .map((text) => text.trim()).filter((text) => text && !text.startsWith('选择课包'));
   if (!candidateTexts.length) problems.push('添加课包：候选课包是空的 —— 夹具里有可授权课包，候选池不该是空的');
-  if (grantedSeriesTitle && candidateTexts.some((text) => text.includes(grantedSeriesTitle))) {
-    problems.push(`添加课包：候选里出现了该学生已持有的课包「${grantedSeriesTitle}」—— 候选规则没生效（候选：${candidateTexts.join('、')}）`);
-  }
+  // 2026-11-10：普通课包也按次数、可以重复分给同一学生（次数累加），
+  // 所以"该学生已持有的课包"**允许**出现在候选里（这是加次数的正常路径），不再判为问题。
   if (candidateTexts.length) {
     const firstOption = grantDialog.locator('select option').filter({ hasText: candidateTexts[0] }).first();
     await grantDialog.locator('select').first().selectOption(await firstOption.getAttribute('value'));
     await orgPage.waitForTimeout(400);
     await orgExpect('添加课包 · 确认那一步', ['③ 确认', '确认授权', '取消']);
-    // 次数输入是**体验课包专属**：选项文案里带「体验课包」的才有，普通课包不该有
-    // （服务端对普通课包 units>1 直接 400，界面上给个输入框等于骗用户）。
-    const isTrial = candidateTexts[0].includes('体验课包');
+    // 2026-11-10：普通课包也按课时次数 —— 两种课包都要有「授权次数」输入。
     const unitsInput = await grantDialog.locator('input.units-input').count();
-    if (isTrial && !unitsInput) problems.push(`添加课包：体验课包（${candidateTexts[0]}）没有「授权次数」输入 —— 用户口径是体验课包要填次数`);
-    if (!isTrial && unitsInput) problems.push(`添加课包：普通课包（${candidateTexts[0]}）出现了「授权次数」输入 —— 次数只属于体验课包`);
+    if (!unitsInput) problems.push(`添加课包：${candidateTexts[0]} 没有「授权次数」输入 —— 目前两种课包都按次数发`);
     if (await grantDialog.getByRole('button', { name: /取消授权|取消资格|撤销授权/ }).count()) {
       problems.push('添加课包：弹窗里出现了取消类按钮（机构端没有取消权限）');
     }
@@ -1123,13 +1119,13 @@ try {
   await orgExpect('勾选学生', [
     '② 勾选要授权的学生', '③ 本次授权',
     '本页可授权', '全选本页可授权', '清空选择', '已选',
-    '选', '学生', '登录账号', '手机号', '授权情况', '已授权',
+    '选', '学生', '登录账号', '手机号', '可用次数', '已授权',
     '本次将用掉', '授权后本课包剩',
   ]);
-  // 「已授权」那一行必须真的显示出来（夹具特意留了一个不撤销的授权）：
-  // 既要有徽标，也要出现在表头计数里 —— 不然这一屏就只剩「可授权」一种行，分支没验过。
-  if (!(await orgPage.locator('.student-pick-row', { hasText: '已授权' }).count())) {
-    problems.push('勾选学生：没有任何一行显示「已授权」—— 夹具留了一个有效授权，这一行必须出现');
+  // 夹具特意留了一个不撤销的授权：这一行必须显示「可用 N 次」（2026-11-10 起普通包也按次数），
+  // 既要有徽标，也要出现在表头计数里 —— 不然这一屏就只剩「还没有次数」一种行，分支没验过。
+  if (!(await orgPage.locator('.student-pick-row', { hasText: '可用' }).count())) {
+    problems.push('勾选学生：没有任何一行显示「可用 N 次」—— 夹具留了一个有效授权，这一行必须出现');
   }
   await orgExpect('已授权计数', ['已授权 1 人']);
   // 布局硬指标：复选框必须**紧挨**姓名（同一行、横向离得近）—— 老版本它飘在名字右边几百像素外，

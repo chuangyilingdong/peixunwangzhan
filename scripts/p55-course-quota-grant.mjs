@@ -1,11 +1,13 @@
 /**
- * P55 课包「次数」授权链路守卫（2026-09-12，平台侧重做梳理 P2）。
+ * P55 课包「次数」授权链路守卫（2026-09-12 建立；2026-11-10 按新口径重写）。
  *
- * 用户的规则（4.3 最终版）：
- *   ① 平台给机构授权时带**次数**，受课包**库存**约束；
- *   ② 机构把课包分给一个学生 = 用掉 1 次；同一学生同一课包**只能一次**；
- *   ③ **机构侧不可撤销**（次数已消耗不可逆），平台留**兜底撤销**；
- *   ④ 兜底撤销时：该学生还没提交过该课包任何一节课的作品 → 退回 1 次；已经上过 → 不退。
+ * 2026-11-10 用户口径（普通课包改成"按课时次数"）：
+ *   ① 平台给机构授权时带**次数**；**普通课包不再受平台库存约束**（stock_total 只对体验课包生效）；
+ *   ② 机构把次数分给学生：1 次 = 1 个课时次数；同一学生可以重复分、次数累加；
+ *   ③ 机构可以**回收**学生未使用的次数（可指定回收几次），退回机构总次数；
+ *   ④ 平台兜底撤销：按**未消费余额**退（与体验课包同一口径）。
+ *
+ * 体验课包的独立回归见 p140；本脚本只钉普通课包的次数账。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -49,10 +51,10 @@ try {
   check('机构下有可授权的学员', students.length >= 1, `学员数 ${students.length}`);
   const [first, second] = students;
 
-  // 建课包（库存 3 次）并发布
+  // 建课包（平台库存故意只写 1 次：普通课包**不校验**库存，开 6 次也应该成功）并发布
   const created = await api('/api/admin/course-series', {
     method: 'POST', token: admin,
-    body: { title: 'P55 次数课包', description: '次数授权回归课包', coverImageUrl: 'https://example.com/p55-cover.png', visibility: 'ALL_ORGS', stockTotal: 3, lessons: [{ title: '第1课', status: 'PUBLISHED', capabilities: ['text'], deliveryModes: ['CANVAS'] }] },
+    body: { title: 'P55 次数课包', description: '次数授权回归课包', coverImageUrl: 'https://example.com/p55-cover.png', visibility: 'ALL_ORGS', stockTotal: 1, lessons: [{ title: '第1课', status: 'PUBLISHED', capabilities: ['text'], deliveryModes: ['CANVAS'] }] },
   });
   assert.equal(created.status, 200, `建课包失败: ${JSON.stringify(created.data).slice(0, 160)}`);
   const seriesId = created.data.id;
@@ -61,44 +63,64 @@ try {
   assert.equal(published.status, 200, `发布夹具失败: ${JSON.stringify(published.error)}`);
 
   const purchase = (suffix, quantity, amountMinor = quantity * 10000) => ({ amountMinor, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P55-O-${suffix}`, contractNo: 'P55-C-1', idempotencyKey: `p55-${suffix}` });
+  const quotaOf = async () => ((await api(`/api/admin/course-series/${seriesId}/detail`, { token: admin })).data.assignedOrgs || [])[0] || {};
 
-  // ① 授权次数不能超过库存
-  const over = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [org.organization.id], validityDays: 365, quotaTotal: 5, ...purchase('over', 5) } });
-  check('① 授权次数超过库存被拒', over.status === 409 && over.error?.code === 'COURSE_QUOTA_EXCEEDS_STOCK', `${over.status} ${over.error?.code} ${over.error?.message || ''}`);
+  // ① 普通课包不再受平台库存约束（stock_total=1，开 6 次必须成功）
+  const assigned = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [org.organization.id], validityDays: 365, quotaTotal: 6, ...purchase('initial', 6) } });
+  check('① 普通课包开 6 次不受 stock_total 约束（平台库存概念已取消）', assigned.status === 200 && assigned.data.quotaTotal === 6, `${assigned.status} ${JSON.stringify(assigned.error || assigned.data).slice(0, 160)}`);
+  const assignedOrg = await quotaOf();
+  check('① 详情里能看到授权次数与已用次数', assignedOrg.quotaTotal === 6 && assignedOrg.quotaUsed === 0, JSON.stringify(assignedOrg).slice(0, 140));
 
-  const assigned = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [org.organization.id], validityDays: 365, quotaTotal: 1, ...purchase('initial', 1) } });
-  check('① 授权 1 次成功', assigned.status === 200 && assigned.data.quotaTotal === 1, JSON.stringify(assigned.data).slice(0, 140));
-  const detail = await api(`/api/admin/course-series/${seriesId}/detail`, { token: admin });
-  const assignedOrg = (detail.data.assignedOrgs || [])[0] || {};
-  check('① 详情里能看到授权次数与已用次数', assignedOrg.quotaTotal === 1 && assignedOrg.quotaUsed === 0, JSON.stringify(assignedOrg).slice(0, 140));
+  // ② 机构分给学生：一次可发多次；同一学生重复分配 = 次数累加
+  const grant1 = await api('/api/org/course-grants', { method: 'POST', token: org.token, body: { seriesId, studentIds: [first.id], units: 3 } });
+  check('② 一次发 3 次（quotaUsed=3）', grant1.status === 200 && grant1.data.granted === 1 && grant1.data.quotaUsed === 3, JSON.stringify(grant1.data || grant1.error).slice(0, 160));
+  const grantAgain = await api('/api/org/course-grants', { method: 'POST', token: org.token, body: { seriesId, studentIds: [first.id], units: 1 } });
+  check('② 同一学生再分 1 次：**累加**（quotaUsed=4）', grantAgain.status === 200 && grantAgain.data.granted === 1 && grantAgain.data.quotaUsed === 4, JSON.stringify(grantAgain.data || grantAgain.error).slice(0, 160));
+  const list = await api(`/api/org/course-grants?seriesId=${seriesId}`, { token: org.token });
+  const grantRow = (list.data.items || []).find((item) => item.studentId === first.id) || {};
+  check('② 列表带次数账（授权 4 / 已用 0 / 可用 4）', Number(grantRow.grantedUnits) === 4 && Number(grantRow.consumedUnits) === 0 && Number(grantRow.remainingUnits) === 4, JSON.stringify(grantRow).slice(0, 200));
+  const grantId = grantRow.id;
 
-  // ② 机构分给学生：用掉 1 次；同一学生再来一次不重复扣
-  const grant1 = await api('/api/org/course-grants', { method: 'POST', token: org.token, body: { seriesId, studentIds: [first.id] } });
-  check('② 机构把课包分给学生成功（用掉 1 次）', grant1.status === 200 && grant1.data.granted === 1 && grant1.data.quotaUsed === 1, JSON.stringify(grant1.data).slice(0, 140));
-  const grantAgain = await api('/api/org/course-grants', { method: 'POST', token: org.token, body: { seriesId, studentIds: [first.id] } });
-  check('② 同一学生同一课包不会重复授权（跳过且不扣次数）', grantAgain.status === 200 && grantAgain.data.granted === 0 && grantAgain.data.skipped === 1, JSON.stringify(grantAgain.data).slice(0, 140));
+  const secondGrant = second
+    ? await api('/api/org/course-grants', { method: 'POST', token: org.token, body: { seriesId, studentIds: [second.id], units: 2 } })
+    : null;
+  check('② 第二个学生还能分 2 次（合计用满 6）', !second || (secondGrant.status === 200 && secondGrant.data.quotaUsed === 6), second ? `${secondGrant.status} ${JSON.stringify(secondGrant.error || secondGrant.data).slice(0, 120)}` : '（机构只有一个学员，跳过）');
   const exhausted = second
-    ? await api('/api/org/course-grants', { method: 'POST', token: org.token, body: { seriesId, studentIds: [second.id] } })
+    ? await api('/api/org/course-grants', { method: 'POST', token: org.token, body: { seriesId, studentIds: [second.id], units: 1 } })
     : null;
   check('② 次数用尽后不能再分给学生', !second || (exhausted.status === 409 && exhausted.error?.code === 'COURSE_QUOTA_EXHAUSTED'), second ? `${exhausted.status} ${exhausted.error?.code}` : '（机构只有一个学员，跳过）');
 
-  const list = await api(`/api/org/course-grants?seriesId=${seriesId}`, { token: org.token });
-  check('② 机构能看到已分发的许可列表', (list.data.items || []).length === 1 && list.data.items[0].studentId === first.id, JSON.stringify(list.data).slice(0, 160));
-  const grantId = list.data.items[0].id;
+  // ③ 机构回收：可指定次数；只能回收未使用余额；全回收后标记已回收、可再授权复活
+  const reclaim1 = await api(`/api/org/course-grants/${grantId}/reclaim`, { method: 'POST', token: org.token, body: { units: 1, reason: '学生转班，退 1 次' } });
+  if (reclaim1.status >= 500) console.error(serverLog.slice(-4000));
+  check('③ 机构可回收 1 次（指定次数）', reclaim1.status === 200 && reclaim1.data.reclaimedUnits === 1 && reclaim1.data.remainingUnits === 3, JSON.stringify(reclaim1.data || reclaim1.error).slice(0, 200));
+  const afterReclaim1 = await quotaOf();
+  check('③ 回收后机构已用次数 6 → 5', afterReclaim1.quotaUsed === 5, JSON.stringify(afterReclaim1).slice(0, 140));
 
-  // ③ 机构侧没有撤销入口（不可逆），平台有
-  const orgRevoke = await api(`/api/org/course-grants/${grantId}/revoke`, { method: 'POST', token: org.token, body: { reason: '试试' } });
-  check('③ 机构侧撤销入口不存在（404）', orgRevoke.status === 404, `${orgRevoke.status}`);
+  const overReclaim = await api(`/api/org/course-grants/${grantId}/reclaim`, { method: 'POST', token: org.token, body: { units: 99, reason: '多退' } });
+  check('③ 回收不能超过未使用余额', overReclaim.status === 400 && overReclaim.error?.code === 'RECLAIM_EXCEEDS_REMAINING', `${overReclaim.status} ${overReclaim.error?.code}`);
 
-  // ④ 平台兜底撤销：学生还没上过课 → 退回 1 次
-  const revoke = await api(`/api/admin/course-grants/${grantId}/revoke`, { method: 'POST', token: admin, body: { reason: '机构误授权，平台兜底撤销' } });
-  check('④ 平台撤销成功且退回 1 次', revoke.status === 200 && revoke.data.quotaRefunded === true, JSON.stringify(revoke.data).slice(0, 140));
-  const afterRevoke = await api(`/api/admin/course-series/${seriesId}/detail`, { token: admin });
-  check('④ 撤销后授权已用次数回到 0', ((afterRevoke.data.assignedOrgs || [])[0] || {}).quotaUsed === 0, JSON.stringify((afterRevoke.data.assignedOrgs || [])[0]).slice(0, 120));
-  const regrant = await api('/api/org/course-grants', { method: 'POST', token: org.token, body: { seriesId, studentIds: [first.id] } });
-  check('④ 退回的次数能再次分给学生', regrant.status === 200 && regrant.data.granted === 1 && regrant.data.quotaUsed === 1, JSON.stringify(regrant.data).slice(0, 140));
+  const reclaimRest = await api(`/api/org/course-grants/${grantId}/reclaim`, { method: 'POST', token: org.token, body: { units: 3, reason: '全部收回' } });
+  check('③ 回收剩余 3 次后整条许可标记已回收', reclaimRest.status === 200 && reclaimRest.data.fullyReclaimed === true && reclaimRest.data.remainingUnits === 0, JSON.stringify(reclaimRest.data || reclaimRest.error).slice(0, 200));
+  const afterReclaimAll = await quotaOf();
+  check('③ 全部回收后机构已用次数 5 → 2（另一个学生仍占 2 次）', afterReclaimAll.quotaUsed === 2, JSON.stringify(afterReclaimAll).slice(0, 140));
 
-  console.log(JSON.stringify({ name: 'course-quota-grant', pass: failures === 0, seriesId, failures }, null, 2));
+  const regrant = await api('/api/org/course-grants', { method: 'POST', token: org.token, body: { seriesId, studentIds: [first.id], units: 1 } });
+  check('③ 回收后可以再分给同一学生（复活同一行）', regrant.status === 200 && regrant.data.quotaUsed === 3, JSON.stringify(regrant.data || regrant.error).slice(0, 160));
+
+  // ④ 平台兜底撤销：按**未消费余额**退（不再是"没交作品退 1 次"）
+  const revoke = await api(`/api/admin/course-grants/${grantId}/revoke`, { method: 'POST', token: admin, body: { reason: '平台兜底撤销' } });
+  check('④ 平台撤销按未消费余额退 1 次', revoke.status === 200 && revoke.data.refundedUnits === 1 && revoke.data.quotaRefunded === true, JSON.stringify(revoke.data || revoke.error).slice(0, 160));
+  const afterRevoke = await quotaOf();
+  check('④ 撤销后机构已用次数回到 2', afterRevoke.quotaUsed === 2, JSON.stringify(afterRevoke).slice(0, 140));
+
+  // ⑤ 库存流水（库存账的唯一审计线）：消耗 6 次、返还 4+1=5 次
+  const changes = await api(`/api/admin/organizations/${org.organization.id}/course-quota-changes?seriesId=${seriesId}&limit=100`, { token: admin });
+  const changeItems = changes.data?.items || [];
+  const countType = (type) => changeItems.filter((item) => item.changeType === type).length;
+  check('⑤ 流水记下了 GRANT_CONSUME / GRANT_REFUND', countType('GRANT_CONSUME') >= 3 && countType('GRANT_REFUND') >= 2, JSON.stringify({ total: changeItems.length, consume: countType('GRANT_CONSUME'), refund: countType('GRANT_REFUND') }));
+
+  console.log(JSON.stringify({ name: 'course-quota-grant', pass: failures === 0, seriesId, lessonId, failures }, null, 2));
 } catch (error) {
   console.error(serverLog);
   throw error;

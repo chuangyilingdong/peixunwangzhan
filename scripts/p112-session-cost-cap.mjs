@@ -76,7 +76,10 @@ const seeded = {};
 {
    
   const student = await arow("SELECT id, org_id FROM users WHERE login='student-2'");
-  const grant = await arow('SELECT series_id FROM student_course_grants WHERE student_id=? AND revoked_at IS NULL', [student.id]);
+  const grant = await arow('SELECT id, series_id FROM student_course_grants WHERE student_id=? AND revoked_at IS NULL', [student.id]);
+  // 2026-11-10：普通课包改成"1 次 = 1 个课时次数"，这个脚本要连上好几节课，
+  // 先把这名学生的可用次数补足（本脚本验的是算力观测，不是授权账）。
+  await aq('UPDATE student_course_grants SET granted_units=50 WHERE id=?', [grant.id]);
   const lessons = await arows("SELECT id FROM course_lessons WHERE series_id=? AND status='PUBLISHED' ORDER BY sort", [grant.series_id]);
   assert.ok(lessons.length >= 2, '种子课包至少要有两节已发布课时才能同时验「配了观测上限」与「留空」');
   seeded.studentId = student.id; seeded.orgId = student.org_id; seeded.seriesId = grant.series_id;

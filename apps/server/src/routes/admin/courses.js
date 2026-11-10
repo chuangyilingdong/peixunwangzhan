@@ -594,8 +594,13 @@ export async function handleCourses(ctx, part, method) {
       const assignmentId = existing?.id || id('assign');
       const batch = purchase ? await createLicensePurchaseBatch({ assignmentId, orgId: organizationId, seriesId: series.id, actorId: auth.user.id, purchasedAt: now, ...purchase }) : null;
       if (!batch?.replayed) {
-        const reserved = Number((await arow("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id])).n);
-        if (reserved + delta > Number(currentSeries.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
+        // 2026-11-10 用户口径：**普通课包没有"平台库存"这个概念了** —— 平台直接给机构开次数，
+        // 不再受 course_series.stock_total 约束。体验课包保持原样（库存仍生效）。
+        const stockTracked = String(currentSeries.series_type || 'NORMAL').toUpperCase() !== 'NORMAL';
+        if (stockTracked) {
+          const reserved = Number((await arow("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id])).n);
+          if (reserved + delta > Number(currentSeries.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
+        }
         if (existing) {
           await assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
           await aq("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=?,quota_total=? WHERE id=?", [auth.user.id, now, expiresAt, quotaTotal, existing.id]);
@@ -636,8 +641,12 @@ export async function handleCourses(ctx, part, method) {
       const assignmentId = existing?.id || id('assign');
       const batch = await createLicensePurchaseBatch({ assignmentId, orgId: organizationId, seriesId: series.id, actorId: auth.user.id, purchasedAt: now, ...purchase });
       if (!batch.replayed) {
-        const reserved = Number((await arow("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id])).n);
-        if (reserved + additionalQuota > Number(series.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
+        // 同 assign：普通课包不校验平台库存（2026-11-10）
+        const stockTracked = String(series.series_type || 'NORMAL').toUpperCase() !== 'NORMAL';
+        if (stockTracked) {
+          const reserved = Number((await arow("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id])).n);
+          if (reserved + additionalQuota > Number(series.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
+        }
         if (existing) {
           await assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
           const baseQuota = Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used);
@@ -670,7 +679,10 @@ export async function handleCourses(ctx, part, method) {
     const items = await amap((await arows("SELECT * FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' ORDER BY title")), async (series) => {
       const allocations = await amap((await arows('SELECT a.*,o.name org_name FROM course_assignments a JOIN organizations o ON o.id=a.org_id WHERE a.series_id=? ORDER BY a.assigned_at DESC', [series.id])), async (a) => ({ id: a.id, orgId: a.org_id, orgName: a.org_name, status: a.status, quotaTotal: Number(a.quota_total), quotaUsed: Number(a.quota_used), remaining: Math.max(0, a.quota_total-a.quota_used), expiresAt: a.expires_at, purchaseBatches: await licensePurchaseHistory(a.id) }));
       const reserved = allocations.reduce((n,a) => n + (a.status === 'ACTIVE' ? a.quotaTotal : a.quotaUsed), 0);
-      return { id: series.id, title: series.title, stockTotal: Number(series.stock_total || 0), reserved, available: Math.max(0, Number(series.stock_total || 0)-reserved), allocations };
+      // 2026-11-10：普通课包不再有"平台库存"概念（stockTracked=false），前端据此隐藏库存列；
+      // 体验课包保持原样。
+      const stockTracked = String(series.series_type || 'NORMAL').toUpperCase() !== 'NORMAL';
+      return { id: series.id, title: series.title, stockTracked, stockTotal: Number(series.stock_total || 0), reserved, available: stockTracked ? Math.max(0, Number(series.stock_total || 0)-reserved) : null, allocations };
     });
     return { items, organizations: await arows('SELECT id,name,status FROM organizations ORDER BY name,id') };
   }
@@ -689,11 +701,12 @@ export async function handleCourses(ctx, part, method) {
     return { stockTotal };
   }
 
-  // 平台兜底撤销：机构侧不可撤销（次数已消耗不可逆），出问题时由平台处理并写审计。
-  // 次数退回规则：
-  //   · 普通课包（原口径，一字不改）：该学生还没提交过该课包任何一节课的作品 → 退回 1 次；已经上过 → 不退。
-  //   · 体验课包（2026-09-24 用户口径）：按**未消费余额**退 —— 退回 = 已授权 − 已核销，
-  //     已经核销掉的历史**一个字不动**（它们确实发生过，见 services/courseGrants.js 的核销明细）。
+  // 平台兜底撤销（2026-11-10 起普通包与体验包**同一口径**）：
+  //   退回 = 已授权 − 已核销（未消费余额）；已经核销掉的历史**一个字不动**
+  //   （它们确实发生过，见 services/courseGrants.js 的核销明细）。
+  //   · 体验课包：机构侧没有回收入口，撤销只能走这里（2026-09-24 口径不变）。
+  //   · 普通课包：机构侧已有「回收次数」（orgAdmin 的 /course-grants/:id/reclaim）；
+  //     这里保留给平台处理异常/纠纷，规则与机构回收一致（按余额退、每退 1 次冲销 1 笔收入）。
   const grantRevokeMatch = part.match(/^\/course-grants\/([^/]+)\/revoke$/);
   if (grantRevokeMatch && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
@@ -702,55 +715,17 @@ export async function handleCourses(ctx, part, method) {
     if (grant.revoked_at) throw errors.conflict('这次授权已经撤销过了', 'COURSE_GRANT_ALREADY_REVOKED');
     const reason = nonEmptyString(ctx.body?.reason, '撤销原因', { max: 500 });
     const seriesOfGrant = await arow('SELECT id, series_type FROM course_series WHERE id=?', [grant.series_id]);
-    if (isExperienceSeries(seriesOfGrant)) {
-      const units = grantUnitsOf(grant);
-      const refundUnits = units.remaining;
-      const revokedAt = nowIso();
-      await atransaction(async () => {
-        // 只把"还能用"的次数收回：granted_units 归到已核销数上（consumed_units 保持不动 → 历史留痕）
-        await aq('UPDATE student_course_grants SET revoked_at=?,revoked_by=?,revoke_reason=?,granted_units=? WHERE id=?',
-          [revokedAt, auth.user.id, reason, units.consumed, grant.id]);
-        if (refundUnits > 0 && grant.source_assignment_id) {
-          const assignmentBefore = await arow('SELECT quota_total, quota_used FROM course_assignments WHERE id=?', [grant.source_assignment_id]);
-          await aq(`UPDATE course_assignments SET quota_used=${SQL_MAX}(quota_used-?,0) WHERE id=?`, [refundUnits, grant.source_assignment_id]);
-          if (assignmentBefore && Number(assignmentBefore.quota_used || 0) > 0) {
-            await recordQuotaChange({
-              orgId: grant.org_id, seriesId: grant.series_id, assignmentId: grant.source_assignment_id,
-              changeType: 'GRANT_REFUND',
-              quotaTotalBefore: Number(assignmentBefore.quota_total || 0),
-              quotaUsedBefore: Number(assignmentBefore.quota_used || 0),
-              actorId: auth.user.id, actorRole: auth.user.role,
-              reason, source: COURSE_QUOTA_SOURCES.ADMIN_GRANT_REVOKE,
-            });
-          }
-          // 每退 1 人次冲销 1 笔许可收入（FIFO 分摊与收到的那几笔一一对应）
-          for (let index = 0; index < refundUnits; index += 1) {
-            await appendLicenseReversal({ grantId: grant.id, actorId: auth.user.id, occurredAt: revokedAt, idempotencyKey: `license-reversal:${grant.id}:${revokedAt}:u${index}` });
-          }
-        }
-      });
-      await audit(ctx, 'COURSE_GRANT_REVOKE', 'STUDENT_COURSE_GRANT', grant.id, { revokedAt: null, grantedUnits: units.granted, consumedUnits: units.consumed },
-        { revokedAt, reason, refundedUnits: refundUnits, consumedUnits: units.consumed, seriesType: 'EXPERIENCE' }, { orgId: grant.org_id });
-      return { id: grant.id, revokedAt, quotaRefunded: refundUnits > 0, refundedUnits: refundUnits, consumedUnits: units.consumed, seriesType: 'EXPERIENCE' };
-    }
-    const submitted = Number((await arow(
-      `SELECT
-         (SELECT COUNT(*) FROM works work JOIN course_lessons lesson ON lesson.id=work.course_lesson_id
-           WHERE lesson.series_id=? AND work.student_id=?) +
-         (SELECT COUNT(*) FROM vibecoding_submissions submission JOIN course_lessons lesson ON lesson.id=submission.lesson_id
-           WHERE lesson.series_id=? AND submission.student_id=?) AS n`,
-      [grant.series_id, grant.student_id, grant.series_id, grant.student_id],
-    ))?.n || 0);
-    const now = nowIso();
+    const seriesType = isExperienceSeries(seriesOfGrant) ? 'EXPERIENCE' : 'NORMAL';
+    const units = grantUnitsOf(grant);
+    const refundUnits = units.remaining;
+    const revokedAt = nowIso();
     await atransaction(async () => {
-      await aq('UPDATE student_course_grants SET revoked_at=?,revoked_by=?,revoke_reason=? WHERE id=?', [now, auth.user.id, reason, grant.id]);
-      if (!submitted && grant.source_assignment_id) {
-        // 授权次数变更流水（P03-04 写入点⑤ 授权取消返还）：退回 1 次就是 quota_used −1，
-        // 必须在同一个事务里记 —— 先把「退回前」的已授权次数读出来（MAX(quota_used-1,0) 在
-        // quota_used 已经是 0 时不会真的变，那种情况就不写这笔流水，免得记出一条 0 变动）。
+      // 只把"还能用"的次数收回：granted_units 归到已核销数上（consumed_units 保持不动 → 历史留痕）
+      await aq('UPDATE student_course_grants SET revoked_at=?,revoked_by=?,revoke_reason=?,granted_units=? WHERE id=?',
+        [revokedAt, auth.user.id, reason, units.consumed, grant.id]);
+      if (refundUnits > 0 && grant.source_assignment_id) {
         const assignmentBefore = await arow('SELECT quota_total, quota_used FROM course_assignments WHERE id=?', [grant.source_assignment_id]);
-        // MySQL 的 MAX 是**聚合**函数（只吃一个参数），两参标量要写 GREATEST —— 见 shared.js 的 SQL_MAX
-        await aq(`UPDATE course_assignments SET quota_used=${SQL_MAX}(quota_used-1,0) WHERE id=?`, [grant.source_assignment_id]);
+        await aq(`UPDATE course_assignments SET quota_used=${SQL_MAX}(quota_used-?,0) WHERE id=?`, [refundUnits, grant.source_assignment_id]);
         if (assignmentBefore && Number(assignmentBefore.quota_used || 0) > 0) {
           await recordQuotaChange({
             orgId: grant.org_id, seriesId: grant.series_id, assignmentId: grant.source_assignment_id,
@@ -761,12 +736,20 @@ export async function handleCourses(ctx, part, method) {
             reason, source: COURSE_QUOTA_SOURCES.ADMIN_GRANT_REVOKE,
           });
         }
-        const recognized = await arow("SELECT id FROM license_revenue_events WHERE grant_id=? AND event_type='GRANT' AND NOT EXISTS (SELECT 1 FROM license_revenue_events reversal WHERE reversal.reversal_of_event_id=license_revenue_events.id)", [grant.id]);
-        if (recognized) await appendLicenseReversal({ grantId: grant.id, actorId: auth.user.id, occurredAt: now, idempotencyKey: `license-reversal:${grant.id}:${grant.granted_at}` });
+        // 每退 1 人次冲销 1 笔许可收入（FIFO 分摊与收到的那几笔一一对应）。
+        // 历史数据可能缺 GRANT 事件（老库/手工数据）—— 找不到就停，不让撤销因此失败。
+        for (let index = 0; index < refundUnits; index += 1) {
+          const recognized = await arow(`SELECT event.id FROM license_revenue_events event
+            LEFT JOIN license_revenue_events reversal ON reversal.reversal_of_event_id=event.id
+            WHERE event.grant_id=? AND event.event_type='GRANT' AND reversal.id IS NULL LIMIT 1`, [grant.id]);
+          if (!recognized) break;
+          await appendLicenseReversal({ grantId: grant.id, actorId: auth.user.id, occurredAt: revokedAt, idempotencyKey: `license-reversal:${grant.id}:${revokedAt}:u${index}` });
+        }
       }
     });
-    await audit(ctx, 'COURSE_GRANT_REVOKE', 'STUDENT_COURSE_GRANT', grant.id, { revokedAt: null }, { revokedAt: now, reason, quotaRefunded: !submitted }, { orgId: grant.org_id });
-    return { id: grant.id, revokedAt: now, quotaRefunded: !submitted, submittedLessonCount: submitted };
+    await audit(ctx, 'COURSE_GRANT_REVOKE', 'STUDENT_COURSE_GRANT', grant.id, { revokedAt: null, grantedUnits: units.granted, consumedUnits: units.consumed },
+      { revokedAt, reason, refundedUnits: refundUnits, consumedUnits: units.consumed, seriesType }, { orgId: grant.org_id });
+    return { id: grant.id, revokedAt, quotaRefunded: refundUnits > 0, refundedUnits: refundUnits, consumedUnits: units.consumed, seriesType };
   }
 
   // P5-M01: Marketplace management endpoints

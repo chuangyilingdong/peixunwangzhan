@@ -1,4 +1,4 @@
-import { audit, clearAuthCookies, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, arows, arow, aq, acount, atransaction, amap, likeKeyword, likeEscapeClause } from '../lib.js';
+import { audit, clearAuthCookies, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, arows, arow, aq, acount, atransaction, amap, likeKeyword, likeEscapeClause, SQL_MAX } from '../lib.js';
 import { normalizeLesson, canvasMediaFrom } from '../lib.js';
 import { missingLocalAssets, normalizeSubmission, parseSnapshotArtifacts, shareableArtifactNames, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
 // ⭐ 2026-09-30：作品分享码（与学生端**同一份实现** —— 件的定位与幂等口径两处各写一套，迟早只在一半上生效）
@@ -14,10 +14,10 @@ import {
   addSessionStudents, assertSessionManager, canManageSession, sessionRuntimeDetail, removeSessionStudent,
   sessionCandidates, sessionScope, sessionStudentCounts, sessionSubmissionSummary, settleSessionStudents,
 } from '../services/classroomSessions.js';
-// 体验课包（2026-09-24 用户口径）：课包类型 + 次数账（剩余次数、按有效产出核销）
-import { experienceBalanceByStudent, grantUnitsOf, isExperienceSeries, seriesTypeOf, EXPERIENCE_SERIES_TYPE } from '../services/courseGrants.js';
+// 课包类型 + 次数账（2026-09-24 体验课包；2026-11-10 起普通课包也按课时次数）
+import { grantBalanceByStudent, grantUnitsOf, isExperienceSeries, seriesTypeOf, EXPERIENCE_SERIES_TYPE } from '../services/courseGrants.js';
 import { computePoolSummary, salePriceFenSuccessSql } from '../services/computePool.js';
-import { appendLicenseGrantRevenue } from '../services/licenseLedger.js';
+import { appendLicenseGrantRevenue, appendLicenseReversal } from '../services/licenseLedger.js';
 import { autoSubmitSessionCanvasWorks } from '../services/sessionAutoSubmit.js';
 import { COURSE_QUOTA_SOURCES, recordQuotaChange } from '../services/courseQuotaLedger.js';
 
@@ -138,6 +138,60 @@ const GRANT_SOURCE_LABELS = {
   ADD_GRANT_DRAWER: '学生授权详情（添加课包）',
   GRANT_PAGE: '为学生添加课包',
 };
+
+/**
+ * 授权 / 回收请求的幂等登记（2026-11-10：普通课包改成"按课时次数"之后加的）。
+ *
+ * 为什么必须有：次数改成可累加之后，「同一个请求发两次」= **真扣两次次数**。
+ * 机构端每次提交带一个 `idempotencyKey`；同一机构 + 同一 kind + 同一 key 只处理一次：
+ *   · 第一次：插一行 PENDING → 处理 → 改成 DONE + 存响应体；
+ *   · 重复请求：直接回放那一份响应（`replayed`），不再动任何账；
+ *   · 上一次还在处理中：409 `GRANT_REQUEST_IN_PROGRESS`；
+ *   · 进程崩在中间留下的 PENDING 超过 60 秒：允许接管，避免一条占位行永久堵死这个 key。
+ *
+ * ⚠️ 登记行在**主事务之外**写：MySQL 下两个并发同 key 请求会在唯一索引上排队，
+ *    后到的那个读到 DONE 直接回放 —— 这正是"只发一次"的关键。
+ */
+function normalizeGrantRequestKey(value) {
+  const key = String(value || '').trim();
+  if (!key) return '';
+  if (key.length > 200) throw errors.badRequest('幂等键不能超过 200 个字符', 'INVALID_IDEMPOTENCY_KEY');
+  return key;
+}
+
+async function claimGrantRequest({ orgId: requestOrgId, kind, idempotencyKey }) {
+  const key = normalizeGrantRequestKey(idempotencyKey);
+  if (!key) return { token: null, replayed: null };
+  const requestId = id('grantreq');
+  const now = nowIso();
+  try {
+    await aq('INSERT INTO course_grant_requests(id,org_id,kind,idempotency_key,status,result,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',
+      [requestId, requestOrgId, kind, key, 'PENDING', null, now, now]);
+    return { token: requestId, replayed: null };
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    const existing = await arow('SELECT * FROM course_grant_requests WHERE org_id=? AND kind=? AND idempotency_key=?', [requestOrgId, kind, key]);
+    if (existing?.status === 'DONE' && existing.result) {
+      return { token: null, replayed: parseJson(existing.result, null) };
+    }
+    const updatedAt = Date.parse(existing?.updated_at || existing?.created_at || '');
+    const stale = !Number.isFinite(updatedAt) || Date.now() - updatedAt > 60_000;
+    if (!stale) throw errors.conflict('同一份授权请求正在处理中，请稍候再试', 'GRANT_REQUEST_IN_PROGRESS');
+    const took = await aq("UPDATE course_grant_requests SET created_at=?,updated_at=? WHERE id=? AND status='PENDING' AND updated_at=?", [now, now, existing.id, existing.updated_at]);
+    if (!Number(took?.changes)) throw errors.conflict('同一份授权请求正在处理中，请稍候再试', 'GRANT_REQUEST_IN_PROGRESS');
+    return { token: existing.id, replayed: null };
+  }
+}
+
+async function finishGrantRequest(token, result) {
+  if (!token) return;
+  await aq("UPDATE course_grant_requests SET status='DONE', result=?, updated_at=? WHERE id=?", [json(result ?? {}), nowIso(), token]);
+}
+
+async function abortGrantRequest(token) {
+  if (!token) return;
+  try { await aq('DELETE FROM course_grant_requests WHERE id=?', [token]); } catch { /* 清理失败不能掩盖原始错误 */ }
+}
 
 export async function handleOrg(ctx) {
   const { pathname, method } = ctx;
@@ -288,7 +342,7 @@ export async function handleOrg(ctx) {
   if (auth.user.role === 'TEACHER' && (/^\/users(?:\/|$)/.test(part) || part === '/course-grants' || part === '/series-overview'
     // 2026-09-17：002-03 / 002-04 / 002-06 这三个新入口与库存、授权同一权限面 ——
     // 教师只能看自己课堂，看不到机构的人次账与学生授权明细。
-    || part === '/student-grants-summary' || part === '/license-batches' || part === '/student-grant-records' || /^\/students\/[^/]+\/course-grants$/.test(part))) throw errors.forbidden('仅机构管理员可管理学生及授权', 'ORG_ADMIN_REQUIRED');
+    || part === '/student-grants-summary' || part === '/license-batches' || part === '/student-grant-records' || /^\/students\/[^/]+\/course-grants$/.test(part) || /^\/students\/[^/]+\/course-usage$/.test(part))) throw errors.forbidden('仅机构管理员可管理学生及授权', 'ORG_ADMIN_REQUIRED');
   if (part === '/users' && method === 'GET') {
     const role = ctx.search.get('role');
     // 教师需要读取本机构学生名册，才能履行“将学生加入班级”的职责；不开放教师名册和机构成员管理权限。
@@ -758,12 +812,12 @@ export async function handleOrg(ctx) {
       WHERE part.session_id=? AND part.status='PENDING'`, [session.id]);
     const seriesRow = await arow('SELECT id, series_type FROM course_series WHERE id=?', [session.series_id]);
     const experience = isExperienceSeries(seriesRow);
-    const balanceByStudent = await experienceBalanceByStudent({ orgId: session.org_id, seriesId: session.series_id });
+    const balanceByStudent = await grantBalanceByStudent({ orgId: session.org_id, seriesId: session.series_id });
     const granted = new Set(balanceByStudent.keys());
     const ineligible = roster.filter((item) => item.account_status !== 'ACTIVE'
       || (item.expires_at && Date.parse(item.expires_at) <= Date.now()) || !granted.has(item.student_id)
-      // 体验课包：次数用完的学生**开始上课前**就该拦下来（否则结束结算时才会失败，老师更被动）
-      || (experience && (balanceByStudent.get(item.student_id) || 0) <= 0));
+      // 两种课包：次数用完的学生**开始上课前**就该拦下来（否则结束结算时才会失败，老师更被动）
+      || (balanceByStudent.get(item.student_id) || 0) <= 0);
     return [
       statusCheck,
       check('TEACHER_READY', '教师账号可正常教学', teacherUsable && !teacherBusy,
@@ -777,7 +831,7 @@ export async function handleOrg(ctx) {
       check('STUDENTS_ELIGIBLE', `${roster.length} 名学生资格仍有效`, roster.length > 0 && ineligible.length === 0,
         ineligible.length
           ? `${ineligible.length} 名已失效：${ineligible.slice(0, 3).map((item) => item.display_name || item.login).join('、')}${ineligible.length > 3 ? ' 等' : ''}`
-          : (experience ? '账号 / 课包许可 / 体验次数均通过' : '账号 / 课包许可均通过')),
+          : (experience ? '账号 / 课包许可 / 体验次数均通过' : '账号 / 课包许可 / 剩余次数均通过')),
     ];
   };
   const sessionInOrg = async (id, { manage = true } = {}) => {
@@ -1521,12 +1575,13 @@ export async function handleOrg(ctx) {
       LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()}
       WHERE series.status='PUBLISHED' AND ${orgSeriesAccessSql()}
       ORDER BY series.sort, series.title`, [currentOrgId, currentOrgId]);
-    // 分给学生的许可（未撤销）：人次 + 去重人数
-    // ⚠️ 人次按 **SUM(granted_units)** 算，不是 COUNT(*) —— 体验课包的次数记在**同一行**上
-    //    （可重复分给同一学生、未用次数预先累积），按行数会把它算少。普通课包每行恒为 1，值不变。
-    const grantBySeries = new Map((await arows(`SELECT series_id, COALESCE(SUM(granted_units),0) granted, COUNT(DISTINCT student_id) students
+    // 分给学生的许可（未撤销）：次数 + 已核销 + 去重人数
+    // ⚠️ 次数按 **SUM(granted_units)** 算，不是 COUNT(*) —— 两种课包都允许重复分配累加，
+    //    按行数会把它算少。已核销用 SUM(consumed_units)，学生侧"剩余"= granted − consumed。
+    const grantBySeries = new Map((await arows(`SELECT series_id, COALESCE(SUM(granted_units),0) granted,
+        COALESCE(SUM(consumed_units),0) consumed, COUNT(DISTINCT student_id) students
       FROM student_course_grants WHERE org_id=? AND revoked_at IS NULL GROUP BY series_id`, [currentOrgId]))
-      .map((item) => [item.series_id, { grantedCount: Number(item.granted || 0), grantedStudents: Number(item.students || 0) }]));
+      .map((item) => [item.series_id, { grantedCount: Number(item.granted || 0), consumedCount: Number(item.consumed || 0), grantedStudents: Number(item.students || 0) }]));
     // 课堂：存量（待上课/上课中）
     const liveBySeries = new Map((await arows(`SELECT lesson.series_id series_id, session.status status, COUNT(*) n
       FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id
@@ -1542,7 +1597,7 @@ export async function handleOrg(ctx) {
       GROUP BY lesson.series_id, session.status`, [currentOrgId, since, until]))
       .map((item) => [`${item.series_id}:${item.status}`, { n: Number(item.n || 0), teachers: Number(item.teachers || 0) }]));
     const items = series.map((row0) => {
-      const grant = grantBySeries.get(row0.id) || { grantedCount: 0, grantedStudents: 0 };
+      const grant = grantBySeries.get(row0.id) || { grantedCount: 0, consumedCount: 0, grantedStudents: 0 };
       const ended = doneBySeries.get(`${row0.id}:ENDED`) || { n: 0, teachers: 0 };
       const dissolved = doneBySeries.get(`${row0.id}:DISSOLVED`) || { n: 0, teachers: 0 };
       const quotaTotal = Number(row0.quota_total || 0);
@@ -1563,6 +1618,10 @@ export async function handleOrg(ctx) {
         ageRangeMax: row0.age_range_max ?? null,
         quotaTotal, quotaUsed, remaining: Math.max(0, quotaTotal - quotaUsed),
         grantedCount: grant.grantedCount, grantedStudents: grant.grantedStudents,
+        // 学生侧次数账（2026-11-10）：授权 / 已核销 / 剩余 —— 普通包与体验包都算
+        studentGrantedUnits: grant.grantedCount,
+        studentConsumedUnits: grant.consumedCount,
+        studentRemainingUnits: Math.max(0, grant.grantedCount - grant.consumedCount),
         pendingSessions: liveBySeries.get(`${row0.id}:PENDING`) || 0,
         activeSessions: liveBySeries.get(`${row0.id}:ACTIVE`) || 0,
         endedSessions: ended.n, dissolvedSessions: dissolved.n,
@@ -1611,91 +1670,67 @@ export async function handleOrg(ctx) {
     const requested = Array.isArray(ctx.body?.studentIds) ? ctx.body.studentIds : [];
     const studentIds = [...new Set(requested.map((value) => String(value || '').trim()).filter(Boolean))];
     if (!studentIds.length || studentIds.length > 200) throw errors.badRequest('请选择 1-200 名学生', 'INVALID_STUDENT_IDS');
-    return await atransaction(async () => {
-    if (!await arow("SELECT id FROM course_series WHERE id=? AND status='PUBLISHED'", [seriesId])) throw errors.forbidden('课包未发布', 'COURSE_NOT_PUBLISHED');
-    // 课包类型决定"重复分配"的语义：普通课包重复授权跳过，体验课包累加次数（见下面 already/fresh）
-    const series = await arow('SELECT id, series_type FROM course_series WHERE id=?', [seriesId]);
-    const experience = isExperienceSeries(series);
-    const assignment = await arow("SELECT * FROM course_assignments WHERE series_id=? AND org_id=? AND status='ACTIVE' AND (expires_at IS NULL OR expires_at > ?)", [seriesId, currentOrgId, nowIso()]);
-    if (!assignment) throw errors.forbidden('该课包未授权给当前机构', 'COURSE_NOT_AUTHORIZED');
-    const placeholders = studentIds.map(() => '?').join(',');
-    const students = await arows(`SELECT id, display_name, login FROM users WHERE id IN (${placeholders}) AND org_id=? AND role='STUDENT' AND deleted_at IS NULL`, [...studentIds, currentOrgId]);
-    if (students.length !== studentIds.length) throw errors.badRequest('存在不属于本机构的学生', 'STUDENT_NOT_FOUND');
-    // 已授权过的跳过（不重复扣次数）：同一机构 + 同一学生 + 同一课包只允许一条有效记录
-    // ⭐ 体验课包例外（2026-09-24 用户口径）：**同一个体验课包可以重复分给同一个学生**，
-    //    未使用的次数**预先累积** —— 每次分配都算一次（同一行 `granted_units` +1），不跳过。
-    const already = experience
-      ? new Set()
-      : new Set((await arows(`SELECT student_id FROM student_course_grants WHERE org_id=? AND series_id=? AND revoked_at IS NULL AND student_id IN (${placeholders})`, [currentOrgId, seriesId, ...studentIds])).map((item) => item.student_id));
-    const fresh = studentIds.filter((studentId) => !already.has(studentId));
-    // ⭐ 每人授权次数（2026-09-26 用户口径：「体验课机构为学生授权，一次只能授权 1 次，要多次的话
-    //    就只能一直点击『授权』——这里添加自定义数量的功能（数字不可超过机构当前课包实际库存数量，
-    //    添加过程中需要实际检测这一限制）」）。
-    //    · 只有**体验课包**能按次累加（同一个学生重复分配、次数累计，见上面 2026-09-24 的口径）；
-    //    · 普通课包每个学生只能授权 1 次（重复授权本来就跳过），传 units>1 直接拒 ——
-    //      别让它变成"看起来授权了 3 次、其实只记了 1 次"的静默无效；
-    //    · 上限按**这次真会扣掉的次数**算：本次新增授权数 × 每人次数 ≤ 课包剩余次数。
-    //      这条检查在事务里、拿到的是**刚读出来的** quota_used，所以是"实际检测"而不是前端算的账。
+    // 每人授权次数（2026-09-26 体验课包先加；2026-11-10 普通课包也按课时次数，两种类型都收 units）。
+    // 上限按「人数 × 每人次数 ≤ 课包剩余次数」在事务里用**刚读出来的** quota_used 实算。
     const units = integer(ctx.body?.units, '每人授权次数', { min: 1, max: 1000, fallback: 1 });
-    if (units > 1 && !experience) throw errors.badRequest('普通课包每个学生只能授权 1 次；按次累加只适用于体验课包', 'UNITS_NOT_SUPPORTED');
-    const quotaTotal = Number(assignment.quota_total || 0);
-    const quotaUsed = Number(assignment.quota_used || 0);
-    const needed = fresh.length * units;
-    if (fresh.length && (quotaTotal <= 0 || quotaUsed + needed > quotaTotal)) {
-      const remaining = Math.max(0, quotaTotal - quotaUsed);
-      throw errors.conflict(`可用次数不足：课包共 ${quotaTotal} 次，已用 ${quotaUsed} 次、剩 ${remaining} 次；本次需要 ${needed} 次（${fresh.length} 人 × 每人 ${units} 次）`, 'COURSE_QUOTA_EXHAUSTED');
-    }
-    const now = nowIso();
-    // ⚠️ 并发同一个学生时，两个请求都"查不到 → 一起插"，输的那个会撞唯一索引。
-    //    撞了必须按"这个学生已经授权过"处理（跳过本次）—— 与"重复授权跳过"是同一件事，
-    //    不能把整个请求打成 500（p77/p82 在 MySQL 上就是这么红的：SQLite 侧全局写锁替我们兜住了）。
-    const raced = [];
-      for (const studentId of fresh) {
-        const existing = await arow('SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [currentOrgId, studentId, seriesId]);
-        let grantId;
-        let unitSeq = 1;
-        if (existing) {
-          // 主键维持稳定；每次重发由新的 granted_at 形成一代新事件，旧代必须已经完整冲销。
-          grantId = existing.id;
-          if (experience) {
-            // 体验课包：次数**累加在同一行**（唯一索引与历史都保住），撤销过就顺手复活。
-            // 不走下面那条「上一代必须已冲销」的检查：每一次分配都是独立的一次次数确认收入，
-            // 各自带自己的幂等键（见下面 appendLicenseGrantRevenue 的 key）。
+    // 幂等：同一机构 + 同一 key 只处理一次（次数可累加之后，重试两次就是真扣两次）
+    const claim = await claimGrantRequest({ orgId: currentOrgId, kind: 'GRANT', idempotencyKey: ctx.body?.idempotencyKey });
+    if (claim.replayed) return claim.replayed;
+    try {
+      const result = await atransaction(async () => {
+        const series = await arow('SELECT id, series_type, status FROM course_series WHERE id=?', [seriesId]);
+        if (!series || series.status !== 'PUBLISHED') throw errors.forbidden('课包未发布', 'COURSE_NOT_PUBLISHED');
+        const experience = isExperienceSeries(series);
+        const assignment = await arow("SELECT * FROM course_assignments WHERE series_id=? AND org_id=? AND status='ACTIVE' AND (expires_at IS NULL OR expires_at > ?)", [seriesId, currentOrgId, nowIso()]);
+        if (!assignment) throw errors.forbidden('该课包未授权给当前机构', 'COURSE_NOT_AUTHORIZED');
+        const placeholders = studentIds.map(() => '?').join(',');
+        const students = await arows(`SELECT id FROM users WHERE id IN (${placeholders}) AND org_id=? AND role='STUDENT' AND deleted_at IS NULL`, [...studentIds, currentOrgId]);
+        if (students.length !== studentIds.length) throw errors.badRequest('存在不属于本机构的学生', 'STUDENT_NOT_FOUND');
+        const quotaTotal = Number(assignment.quota_total || 0);
+        const quotaUsed = Number(assignment.quota_used || 0);
+        const needed = studentIds.length * units;
+        if (quotaTotal <= 0 || quotaUsed + needed > quotaTotal) {
+          const remaining = Math.max(0, quotaTotal - quotaUsed);
+          throw errors.conflict(`可用次数不足：课包共 ${quotaTotal} 次，已用 ${quotaUsed} 次、剩 ${remaining} 次；本次需要 ${needed} 次（${studentIds.length} 人 × 每人 ${units} 次）`, 'COURSE_QUOTA_EXHAUSTED');
+        }
+        const now = nowIso();
+        for (const studentId of studentIds) {
+          const existing = await arow('SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [currentOrgId, studentId, seriesId]);
+          let grantId;
+          let unitSeq;
+          if (existing) {
+            // 次数**累加在同一行**（唯一索引与历史都保住），撤销过就顺手复活。
+            // 普通包与体验包同一条路径：每次分配都是独立的一次次数确认收入（各自带幂等键）。
+            grantId = existing.id;
             await aq('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL,granted_at=?,granted_by=?,source_assignment_id=?,granted_units=granted_units+? WHERE id=?',
               [now, auth.user.id, assignment.id, units, grantId]);
-            unitSeq = Number((await arow('SELECT granted_units FROM student_course_grants WHERE id=?', [grantId]))?.granted_units || 1);
+            unitSeq = Number((await arow('SELECT granted_units FROM student_course_grants WHERE id=?', [grantId]))?.granted_units || units);
           } else {
-            const unreversed = await arow(`SELECT event.id FROM license_revenue_events event
-              LEFT JOIN license_revenue_events reversal ON reversal.reversal_of_event_id=event.id
-              WHERE event.grant_id=? AND event.event_type='GRANT' AND reversal.id IS NULL LIMIT 1`, [grantId]);
-            if (unreversed) throw errors.conflict('上一次许可收入尚未冲销，不能重新授权', 'LICENSE_GRANT_REVERSAL_REQUIRED');
-            await aq('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL,granted_at=?,granted_by=?,source_assignment_id=? WHERE id=?', [now, auth.user.id, assignment.id, grantId]);
+            grantId = id('coursegrant');
+            try {
+              await aq('INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at,granted_units,consumed_units) VALUES (?,?,?,?,?,?,?,?,?)', [grantId, currentOrgId, studentId, seriesId, assignment.id, auth.user.id, now, units, 0]);
+              unitSeq = units;
+            } catch (error) {
+              if (!isUniqueViolation(error)) throw error;
+              // 并发：另一个请求刚插进去。**不能跳过**（跳过 = 这次授权丢了、机构额度也没扣），
+              // 改成在同一行上继续累加 —— `granted_units=granted_units+?` 在两种驱动下都是原子写。
+              const racedRow = await arow('SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [currentOrgId, studentId, seriesId]);
+              if (!racedRow) throw error;
+              grantId = racedRow.id;
+              await aq('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL,granted_at=?,granted_by=?,source_assignment_id=?,granted_units=granted_units+? WHERE id=?',
+                [now, auth.user.id, assignment.id, units, grantId]);
+              unitSeq = Number((await arow('SELECT granted_units FROM student_course_grants WHERE id=?', [grantId]))?.granted_units || units);
+            }
           }
-        } else {
-          grantId = id('coursegrant');
-          try {
-            await aq('INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at,granted_units,consumed_units) VALUES (?,?,?,?,?,?,?,?,?)', [grantId, currentOrgId, studentId, seriesId, assignment.id, auth.user.id, now, units, 0]);
-          } catch (error) {
-            if (!isUniqueViolation(error)) throw error;
-            raced.push(studentId);
-            continue;
+          // 每次分配 = 一笔独立收入确认：一人 units 次就记 units 笔（幂等键带 u<seq>）。
+          // unitSeq 是累加后的总序号，所以从 unitSeq-units+1 一路记到 unitSeq。
+          for (let step = 0; step < units; step += 1) {
+            const seq = unitSeq - units + 1 + step;
+            await appendLicenseGrantRevenue({ assignmentId: assignment.id, orgId: currentOrgId, seriesId, grantId, actorId: auth.user.id, occurredAt: now, idempotencyKey: `license-grant:${grantId}:${now}:u${seq}` });
           }
         }
-        // 每次分配 = 一笔独立收入确认：一人 units 次就记 units 笔（幂等键带 u<seq>），
-        // 体验课包的 unitSeq 是累加后的总序号，所以从 unitSeq-units+1 一路记到 unitSeq。
-        for (let step = 0; step < units; step += 1) {
-          const seq = experience ? unitSeq - units + 1 + step : 1;
-          await appendLicenseGrantRevenue({ assignmentId: assignment.id, orgId: currentOrgId, seriesId, grantId, actorId: auth.user.id, occurredAt: now, idempotencyKey: experience ? `license-grant:${grantId}:${now}:u${seq}` : `license-grant:${grantId}:${now}` });
-        }
-      };
-      // 授权次数变更流水（P03-04 写入点④ 授权消耗）：只有真的扣了次数才记一笔
-      // ——「同一学生同一课包重复授权被跳过」「撤销后重新授权（同一 grant 复活）」两条路径
-      //   都以 `fresh`（= 本次真正新增的授权数）为准，所以不会记成两笔、也不会漏记。
-      // 体验课包的重复分配同样是"真的扣了次数"（每次 +1 人次），所以照样记这一笔。
-      // 与 quota_used 的更新在**同一个事务**里（本函数上面就是 atransaction(async () => {...})）。
-      const grantedNow = fresh.length - raced.length;
-      const usedNow = grantedNow * units; // 体验课包：一人可能占多次
-      if (usedNow) {
+        // 授权次数变更流水（P03-04 写入点④ 授权消耗）：两种类型每次分配都算"真的扣了次数"。
+        const usedNow = studentIds.length * units;
         await aq('UPDATE course_assignments SET quota_used=quota_used+? WHERE id=?', [usedNow, assignment.id]);
         await recordQuotaChange({
           orgId: currentOrgId, seriesId, assignmentId: assignment.id,
@@ -1703,10 +1738,101 @@ export async function handleOrg(ctx) {
           actorId: auth.user.id, actorRole: auth.user.role,
           reason: '', source: COURSE_QUOTA_SOURCES.ORG_GRANT,
         });
-      }
-    await audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds: fresh.filter((studentId) => !raced.includes(studentId)), skipped: studentIds.length - grantedNow, racedCount: raced.length, source: grantSource, seriesType: seriesTypeOf(series) }, { orgId: currentOrgId });
-    return { granted: grantedNow, skipped: studentIds.length - grantedNow, units, usedUnits: usedNow, quotaTotal, quotaUsed: quotaUsed + usedNow, remaining: Math.max(0, quotaTotal - (quotaUsed + usedNow)), seriesType: seriesTypeOf(series) };
-    });
+        await audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds, units, source: grantSource, seriesType: seriesTypeOf(series) }, { orgId: currentOrgId });
+        return { granted: studentIds.length, skipped: 0, units, usedUnits: usedNow, quotaTotal, quotaUsed: quotaUsed + usedNow, remaining: Math.max(0, quotaTotal - (quotaUsed + usedNow)), seriesType: seriesTypeOf(series) };
+      });
+      // ⚠️ 落幂等结果**不能**和业务事务共用同一个 try：结果写入失败时如果走 catch，
+      //    会把幂等行删掉 → 客户端重试就会**再发一次次数/再退一次**。所以事务失败才删行；这里失败只记日志。
+      try { await finishGrantRequest(claim.token, result); } catch (error) { console.warn(`[course-grant] 幂等结果写入失败: ${error?.message || error}`); }
+      return result;
+    } catch (error) {
+      await abortGrantRequest(claim.token);
+      throw error;
+    }
+  }
+
+  /**
+   * 机构回收学生**未使用**的课时次数（2026-11-10 用户口径：
+   * 「机构端可以回收没有使用完次数的学生的次数，到机构端的总次数里面」）。
+   *
+   * 口径：
+   *   · 只对**普通课包**开放（体验课包保持"平台兜底撤销"，用户明确不动体验包）；
+   *   · 只能回收 `granted_units − consumed_units` 的部分，已核销的历史一个字不动；
+   *   · 可指定回收次数（1..剩余），默认回收全部剩余；
+   *   · 学生还在待上课/上课中的课堂里 → **拒绝**（否则课结束时可能余额为 0，结束事务会回滚，老师被卡死）；
+   *   · 每退 1 次：机构 `quota_used −1`、写 `GRANT_REFUND` 流水、冲销 1 笔许可收入（与平台撤销同一套）。
+   */
+  const grantReclaimMatch = part.match(/^\/course-grants\/([^/]+)\/reclaim$/);
+  if (grantReclaimMatch && method === 'POST') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可以回收学生课时次数', 'ORG_ADMIN_REQUIRED');
+    const reason = nonEmptyString(ctx.body?.reason, '回收原因', { max: 500 });
+    const claim = await claimGrantRequest({ orgId: currentOrgId, kind: 'RECLAIM', idempotencyKey: ctx.body?.idempotencyKey });
+    if (claim.replayed) return claim.replayed;
+    try {
+      const result = await atransaction(async () => {
+        const grant = await arow('SELECT * FROM student_course_grants WHERE id=? AND org_id=?', [grantReclaimMatch[1], currentOrgId]);
+        if (!grant) throw errors.notFound('授权记录不存在', 'COURSE_GRANT_NOT_FOUND');
+        const series = await arow('SELECT id, series_type, title FROM course_series WHERE id=?', [grant.series_id]);
+        if (!series) throw errors.notFound('课包不存在', 'COURSE_SERIES_NOT_FOUND');
+        if (isExperienceSeries(series)) throw errors.badRequest('体验课包不支持机构回收（请走平台兜底撤销）', 'RECLAIM_NOT_SUPPORTED');
+        if (grant.revoked_at) throw errors.conflict('这次授权已经回收/撤销过了', 'COURSE_GRANT_ALREADY_REVOKED');
+        const units = grantUnitsOf(grant);
+        const requestedUnits = ctx.body?.units === undefined || ctx.body?.units === null || ctx.body?.units === ''
+          ? units.remaining
+          : integer(ctx.body?.units, '回收次数', { min: 1, max: 1000 });
+        if (units.remaining <= 0) throw errors.conflict('这个学生没有可回收的次数（已全部核销）', 'COURSE_GRANT_NO_REMAINING');
+        if (requestedUnits > units.remaining) throw errors.badRequest(`最多只能回收 ${units.remaining} 次（未使用余额）`, 'RECLAIM_EXCEEDS_REMAINING');
+        // D3：学生还在课堂里就不能回收 —— 否则老师点结束时余额为 0，整个结束事务回滚。
+        const live = await arow(`SELECT session.id, session.title FROM session_students part
+          JOIN class_sessions session ON session.id=part.session_id
+          WHERE part.student_id=? AND session.series_id=? AND part.status IN ('PENDING','ACTIVE') AND session.status IN ('PENDING','ACTIVE') LIMIT 1`,
+        [grant.student_id, grant.series_id]);
+        if (live) throw errors.conflict(`这个学生还在课堂「${live.title || '未命名课堂'}」里，先结束/解散或把他移出课堂再回收`, 'STUDENT_IN_LIVE_SESSION');
+        const now = nowIso();
+        const remainingAfter = units.remaining - requestedUnits;
+        const fullyReclaimed = remainingAfter <= 0;
+        // granted_units 扣掉回收量；全回收时顺手标记 revoked（学生手上不再有这个课包）。
+        // ⚠️ **不动 granted_at**：它是"最近一次授权时间"，回收不是授权（列表排序/统计都看它）。
+        await aq('UPDATE student_course_grants SET granted_units=granted_units-?, revoked_at=?, revoked_by=?, revoke_reason=? WHERE id=?',
+          [requestedUnits, fullyReclaimed ? now : null, fullyReclaimed ? auth.user.id : null, fullyReclaimed ? reason : null, grant.id]);
+        if (grant.source_assignment_id) {
+          const assignmentBefore = await arow('SELECT quota_total, quota_used FROM course_assignments WHERE id=?', [grant.source_assignment_id]);
+          await aq(`UPDATE course_assignments SET quota_used=${SQL_MAX}(quota_used-?,0) WHERE id=?`, [requestedUnits, grant.source_assignment_id]);
+          if (assignmentBefore && Number(assignmentBefore.quota_used || 0) > 0) {
+            await recordQuotaChange({
+              orgId: currentOrgId, seriesId: grant.series_id, assignmentId: grant.source_assignment_id,
+              changeType: 'GRANT_REFUND',
+              quotaTotalBefore: Number(assignmentBefore.quota_total || 0),
+              quotaUsedBefore: Number(assignmentBefore.quota_used || 0),
+              actorId: auth.user.id, actorRole: auth.user.role,
+              reason, source: COURSE_QUOTA_SOURCES.ORG_GRANT_RECLAIM,
+            });
+          }
+          // 每退 1 次冲销 1 笔许可收入（只冲"还没冲销过"的那几笔；历史数据缺事件时跳过，不让回收失败）
+          for (let index = 0; index < requestedUnits; index += 1) {
+            const recognized = await arow(`SELECT event.id FROM license_revenue_events event
+              LEFT JOIN license_revenue_events reversal ON reversal.reversal_of_event_id=event.id
+              WHERE event.grant_id=? AND event.event_type='GRANT' AND reversal.id IS NULL LIMIT 1`, [grant.id]);
+            if (!recognized) break;
+            await appendLicenseReversal({ grantId: grant.id, actorId: auth.user.id, occurredAt: now, idempotencyKey: `license-reversal:${grant.id}:${now}:reclaim:u${index}` });
+          }
+        }
+        await audit(ctx, 'ORG_COURSE_GRANT_RECLAIM', 'STUDENT_COURSE_GRANT', grant.id, { grantedUnits: units.granted, consumedUnits: units.consumed }, { reclaimedUnits: requestedUnits, remainingUnits: remainingAfter, fullyReclaimed, reason, seriesTitle: series.title }, { orgId: currentOrgId });
+        return {
+          id: grant.id, reclaimedUnits: requestedUnits, remainingUnits: remainingAfter,
+          consumedUnits: units.consumed, fullyReclaimed,
+          quotaTotal: Number((await arow('SELECT quota_total FROM course_assignments WHERE id=?', [grant.source_assignment_id]))?.quota_total || 0),
+          quotaUsed: Number((await arow('SELECT quota_used FROM course_assignments WHERE id=?', [grant.source_assignment_id]))?.quota_used || 0),
+        };
+      });
+      // ⚠️ 落幂等结果**不能**和业务事务共用同一个 try：结果写入失败时如果走 catch，
+      //    会把幂等行删掉 → 客户端重试就会**再发一次次数/再退一次**。所以事务失败才删行；这里失败只记日志。
+      try { await finishGrantRequest(claim.token, result); } catch (error) { console.warn(`[course-grant] 幂等结果写入失败: ${error?.message || error}`); }
+      return result;
+    } catch (error) {
+      await abortGrantRequest(claim.token);
+      throw error;
+    }
   }
 
   /**
@@ -1878,8 +2004,8 @@ export async function handleOrg(ctx) {
         revokedAt: item.revoked_at || null, revokeReason: item.revoke_reason || null,
         learned, enteredClass: entered,
         grantedByName: item.granted_by_name || null, grantedByLogin: item.granted_by_login || null,
-        // 占用人次：普通课包授给一名学生就是 1 次（平台口径），不是估算出来的。
-        // 体验课包是**同一行里累积的次数**：占用人次 = 累计授权次数，另给「还剩几次」。
+        // 占用人次：2026-11-10 起两种课包都按次数 —— 普通包 1 次 = 1 个课时次数，
+        // 体验包可在同一行里累积；quotaConsumed 与 grantedUnits 同值（保留老字段名兼容前端）。
         seriesType: seriesTypeOf({ series_type: item.series_type }),
         quotaConsumed: grantUnitsOf(item).granted,
         grantedUnits: grantUnitsOf(item).granted,
@@ -1900,6 +2026,73 @@ export async function handleOrg(ctx) {
         revokedCount: items.length - activeItems.length,
       },
       items, total: items.length,
+    };
+  }
+
+  /**
+   * 学生「已上课程」明细（2026-11-10 用户口径：机构要能看到每个学生到底上了哪些具体的课）。
+   *
+   * 数据源 = `session_students`（课堂名单）+ `class_sessions` + `course_lessons`：
+   *   · `COMPLETED` = 有有效 AI 产出（完课），**扣了 1 次**（`consumed=true`）；
+   *   · `INCOMPLETE` = 上过但没产出，**不扣次数**，可以再上一次；
+   *   · 体验课包同一节课可以有多行（反复上），普通课包同一节课只可能有一行 COMPLETED。
+   * 只返回已结算的行（COMPLETED/INCOMPLETE），不把"待上课 / 上课中"混进来。
+   */
+  const studentUsageMatch = part.match(/^\/students\/([^/]+)\/course-usage$/);
+  if (studentUsageMatch && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学生已上课程', 'ORG_ADMIN_REQUIRED');
+    const studentId = studentUsageMatch[1];
+    const student = await arow("SELECT id, login, display_name, phone, status FROM users WHERE id=? AND org_id=? AND role='STUDENT' AND deleted_at IS NULL", [studentId, currentOrgId]);
+    if (!student) throw errors.notFound('学生不存在或不属于本机构', 'STUDENT_NOT_FOUND');
+    const seriesFilter = String(ctx.search.get('seriesId') || '').trim();
+    const params = [studentId, currentOrgId];
+    let where = "part.status IN ('COMPLETED','INCOMPLETE')";
+    if (seriesFilter) { where += ' AND session.series_id=?'; params.push(seriesFilter); }
+    const items = (await arows(`SELECT part.id, part.status, part.completed_at,
+        COALESCE(part.lesson_id, session.lesson_id) lesson_id,
+        part.session_id, session.title session_title, session.status session_status, session.ended_at,
+        session.series_id,
+        COALESCE(lesson.published_title, lesson.title) lesson_title,
+        series.title series_title, series.series_type,
+        teacher.display_name teacher_name,
+        (SELECT COUNT(*) FROM student_course_grant_consumptions c WHERE c.session_id=part.session_id AND c.student_id=part.student_id) consumed_count
+      FROM session_students part
+      JOIN class_sessions session ON session.id=part.session_id
+      LEFT JOIN course_lessons lesson ON lesson.id=COALESCE(part.lesson_id, session.lesson_id)
+      LEFT JOIN course_series series ON series.id=session.series_id
+      LEFT JOIN users teacher ON teacher.id=session.teacher_id
+      WHERE part.student_id=? AND part.org_id=? AND ${where}
+      ORDER BY COALESCE(part.completed_at, session.ended_at, part.added_at) DESC
+      LIMIT 500`, params)).map((item) => ({
+      id: item.id, status: item.status,
+      statusLabel: item.status === 'COMPLETED' ? '已完课' : '未完课',
+      completedAt: item.completed_at || item.ended_at || null,
+      sessionId: item.session_id, sessionTitle: item.session_title || null,
+      sessionStatus: item.session_status,
+      seriesId: item.series_id || null, seriesTitle: item.series_title || null,
+      seriesType: seriesTypeOf({ series_type: item.series_type }),
+      lessonId: item.lesson_id || null, lessonTitle: item.lesson_title || null,
+      teacherName: item.teacher_name || null,
+      consumed: Number(item.consumed_count || 0) > 0,
+    }));
+    const bySeries = new Map();
+    for (const item of items) {
+      const key = item.seriesId || '';
+      const bucket = bySeries.get(key) || { seriesId: item.seriesId, seriesTitle: item.seriesTitle, seriesType: item.seriesType, completed: 0, incomplete: 0, consumed: 0 };
+      if (item.status === 'COMPLETED') bucket.completed += 1; else bucket.incomplete += 1;
+      if (item.consumed) bucket.consumed += 1;
+      bySeries.set(key, bucket);
+    }
+    return {
+      student: { studentId: student.id, displayName: student.display_name, login: student.login, phone: student.phone || null, status: student.status },
+      summary: {
+        total: items.length,
+        completed: items.filter((item) => item.status === 'COMPLETED').length,
+        incomplete: items.filter((item) => item.status === 'INCOMPLETE').length,
+        consumed: items.filter((item) => item.consumed).length,
+      },
+      series: [...bySeries.values()],
+      items,
     };
   }
 
@@ -1987,7 +2180,7 @@ export async function handleOrg(ctx) {
         actor.display_name actor_name, actor.login actor_login
       FROM audit_logs log
       LEFT JOIN users actor ON actor.id=log.actor_id
-      WHERE log.org_id=? AND log.action IN ('ORG_COURSE_GRANT','COURSE_GRANT_REVOKE')
+      WHERE log.org_id=? AND log.action IN ('ORG_COURSE_GRANT','COURSE_GRANT_REVOKE','ORG_COURSE_GRANT_RECLAIM')
       ORDER BY log.created_at DESC, log.id DESC
       LIMIT 2000`, [currentOrgId]);
     // 批量把名字查出来（逐条查库会 N+1）
@@ -2026,20 +2219,23 @@ export async function handleOrg(ctx) {
     const records = [];
     for (const log of logs) {
       const isGrant = log.action === 'ORG_COURSE_GRANT';
+      const isReclaim = log.action === 'ORG_COURSE_GRANT_RECLAIM';
       const after = parseJson(log.after_data, {}) || {};
-      // 授权：操作账号 = 发起授权的机构账号；取消：平台侧账号
+      // 授权：操作账号 = 发起授权的机构账号；取消/回收：取消是平台侧账号，回收是机构侧账号
       const base = {
         occurredAt: log.created_at,
         operationType: isGrant ? 'GRANT' : 'REVOKE',
-        operationLabel: isGrant ? '授权' : '取消授权',
+        operationLabel: isGrant ? '授权' : (isReclaim ? '机构回收' : '取消授权'),
         // 能进审计的就只有成功的（失败的没落库）—— 这不是"全部成功"，是"只看得见成功"
         result: 'SUCCESS', resultLabel: '成功',
         actorId: log.actor_id || null,
-        actorName: log.actor_name || log.actor_login || (isGrant ? '机构账号' : '平台账号'),
-        actorScope: isGrant ? 'ORG' : 'PLATFORM',
-        source: isGrant ? (after.source || 'ORG_UNKNOWN') : 'PLATFORM',
-        sourceLabel: isGrant ? (GRANT_SOURCE_LABELS[after.source] || '机构端授权（旧记录无来源）') : '平台撤销',
-        note: isGrant ? null : (after.reason || null),
+        actorName: log.actor_name || log.actor_login || (isGrant || isReclaim ? '机构账号' : '平台账号'),
+        actorScope: isGrant || isReclaim ? 'ORG' : 'PLATFORM',
+        source: isGrant ? (after.source || 'ORG_UNKNOWN') : (isReclaim ? 'ORG_RECLAIM' : 'PLATFORM'),
+        sourceLabel: isGrant ? (GRANT_SOURCE_LABELS[after.source] || '机构端授权（旧记录无来源）') : (isReclaim ? '机构回收' : '平台撤销'),
+        note: isGrant ? null : (isReclaim
+          ? `回收 ${Number(after.reclaimedUnits || 0)} 次${after.reason ? `：${after.reason}` : ''}`
+          : (after.reason || null)),
       };
       if (isGrant) {
         for (const studentId of (Array.isArray(after.studentIds) ? after.studentIds : [])) {
