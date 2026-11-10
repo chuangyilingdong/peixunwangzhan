@@ -15,7 +15,7 @@ import {
   sessionCandidates, sessionScope, sessionStudentCounts, sessionSubmissionSummary, settleSessionStudents,
 } from '../services/classroomSessions.js';
 // 课包类型 + 次数账（2026-09-24 体验课包；2026-11-10 起普通课包也按课时次数）
-import { grantBalanceByStudent, grantUnitsOf, isExperienceSeries, seriesTypeOf, EXPERIENCE_SERIES_TYPE } from '../services/courseGrants.js';
+import { grantBalanceByStudent, grantUnitsOf, isExperienceSeries, lockGrantById, seriesTypeOf, EXPERIENCE_SERIES_TYPE } from '../services/courseGrants.js';
 import { computePoolSummary, salePriceFenSuccessSql } from '../services/computePool.js';
 import { appendLicenseGrantRevenue, appendLicenseReversal } from '../services/licenseLedger.js';
 import { autoSubmitSessionCanvasWorks } from '../services/sessionAutoSubmit.js';
@@ -148,6 +148,7 @@ const GRANT_SOURCE_LABELS = {
  *   · 重复请求：直接回放那一份响应（`replayed`），不再动任何账；
  *   · 上一次还在处理中：409 `GRANT_REQUEST_IN_PROGRESS`；
  *   · 进程崩在中间留下的 PENDING 超过 60 秒：允许接管，避免一条占位行永久堵死这个 key。
+ *     （DONE 与业务写在**同一个事务**里，所以 PENDING 一定意味着业务没提交，接管不会重复发放。）
  *
  * ⚠️ 登记行在**主事务之外**写：MySQL 下两个并发同 key 请求会在唯一索引上排队，
  *    后到的那个读到 DONE 直接回放 —— 这正是"只发一次"的关键。
@@ -1739,11 +1740,12 @@ export async function handleOrg(ctx) {
           reason: '', source: COURSE_QUOTA_SOURCES.ORG_GRANT,
         });
         await audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds, units, source: grantSource, seriesType: seriesTypeOf(series) }, { orgId: currentOrgId });
-        return { granted: studentIds.length, skipped: 0, units, usedUnits: usedNow, quotaTotal, quotaUsed: quotaUsed + usedNow, remaining: Math.max(0, quotaTotal - (quotaUsed + usedNow)), seriesType: seriesTypeOf(series) };
+        const result = { granted: studentIds.length, skipped: 0, units, usedUnits: usedNow, quotaTotal, quotaUsed: quotaUsed + usedNow, remaining: Math.max(0, quotaTotal - (quotaUsed + usedNow)), seriesType: seriesTypeOf(series) };
+        // 幂等结果与业务写在**同一个事务**里：要么都提交、要么都回滚。
+        // 这样一条 PENDING 的登记行一定意味着"业务没提交"，60 秒后接管不会重复发次数。
+        await finishGrantRequest(claim.token, result);
+        return result;
       });
-      // ⚠️ 落幂等结果**不能**和业务事务共用同一个 try：结果写入失败时如果走 catch，
-      //    会把幂等行删掉 → 客户端重试就会**再发一次次数/再退一次**。所以事务失败才删行；这里失败只记日志。
-      try { await finishGrantRequest(claim.token, result); } catch (error) { console.warn(`[course-grant] 幂等结果写入失败: ${error?.message || error}`); }
       return result;
     } catch (error) {
       await abortGrantRequest(claim.token);
@@ -1770,8 +1772,9 @@ export async function handleOrg(ctx) {
     if (claim.replayed) return claim.replayed;
     try {
       const result = await atransaction(async () => {
-        const grant = await arow('SELECT * FROM student_course_grants WHERE id=? AND org_id=?', [grantReclaimMatch[1], currentOrgId]);
-        if (!grant) throw errors.notFound('授权记录不存在', 'COURSE_GRANT_NOT_FOUND');
+        // 锁行重算：回收可能和课堂结束（核销）同时发生，按旧快照会多退 1 次。
+        const grant = await lockGrantById(grantReclaimMatch[1]);
+        if (!grant || grant.org_id !== currentOrgId) throw errors.notFound('授权记录不存在', 'COURSE_GRANT_NOT_FOUND');
         const series = await arow('SELECT id, series_type, title FROM course_series WHERE id=?', [grant.series_id]);
         if (!series) throw errors.notFound('课包不存在', 'COURSE_SERIES_NOT_FOUND');
         if (isExperienceSeries(series)) throw errors.badRequest('体验课包不支持机构回收（请走平台兜底撤销）', 'RECLAIM_NOT_SUPPORTED');
@@ -1818,16 +1821,16 @@ export async function handleOrg(ctx) {
           }
         }
         await audit(ctx, 'ORG_COURSE_GRANT_RECLAIM', 'STUDENT_COURSE_GRANT', grant.id, { grantedUnits: units.granted, consumedUnits: units.consumed }, { reclaimedUnits: requestedUnits, remainingUnits: remainingAfter, fullyReclaimed, reason, seriesTitle: series.title }, { orgId: currentOrgId });
-        return {
+        const result = {
           id: grant.id, reclaimedUnits: requestedUnits, remainingUnits: remainingAfter,
           consumedUnits: units.consumed, fullyReclaimed,
           quotaTotal: Number((await arow('SELECT quota_total FROM course_assignments WHERE id=?', [grant.source_assignment_id]))?.quota_total || 0),
           quotaUsed: Number((await arow('SELECT quota_used FROM course_assignments WHERE id=?', [grant.source_assignment_id]))?.quota_used || 0),
         };
+        // 幂等结果与业务同事务：回滚时登记行由外层 abort 清掉，提交时结果一定已落库。
+        await finishGrantRequest(claim.token, result);
+        return result;
       });
-      // ⚠️ 落幂等结果**不能**和业务事务共用同一个 try：结果写入失败时如果走 catch，
-      //    会把幂等行删掉 → 客户端重试就会**再发一次次数/再退一次**。所以事务失败才删行；这里失败只记日志。
-      try { await finishGrantRequest(claim.token, result); } catch (error) { console.warn(`[course-grant] 幂等结果写入失败: ${error?.message || error}`); }
       return result;
     } catch (error) {
       await abortGrantRequest(claim.token);

@@ -16,7 +16,7 @@ import { normalizeSubmission } from '../vibecoding.js';
 import { appendLicenseReversal, createLicensePurchaseBatch, licensePurchaseHistory, normalizeLicensePurchaseInput, voidLicensePurchaseBatches } from '../../services/licenseLedger.js';
 import { COURSE_QUOTA_SOURCES, recordQuotaChange } from '../../services/courseQuotaLedger.js';
 // 体验课包（2026-09-24 用户口径）：类型 + 次数账（普通包行为一字不改）
-import { EXPERIENCE_SERIES_TYPE, grantUnitsOf, isExperienceSeries, normalizeSeriesType } from '../../services/courseGrants.js';
+import { EXPERIENCE_SERIES_TYPE, grantUnitsOf, isExperienceSeries, lockGrantById, normalizeSeriesType } from '../../services/courseGrants.js';
 import {
   capturePublishedContent,
   ENROLLMENT_STATUSES,
@@ -716,19 +716,25 @@ export async function handleCourses(ctx, part, method) {
     const reason = nonEmptyString(ctx.body?.reason, '撤销原因', { max: 500 });
     const seriesOfGrant = await arow('SELECT id, series_type FROM course_series WHERE id=?', [grant.series_id]);
     const seriesType = isExperienceSeries(seriesOfGrant) ? 'EXPERIENCE' : 'NORMAL';
-    const units = grantUnitsOf(grant);
-    const refundUnits = units.remaining;
-    const revokedAt = nowIso();
+    let result = null;
     await atransaction(async () => {
+      // ⚠️ 必须在事务里**锁行重算**：平台撤销可能和课堂结束（核销）同时发生，
+      //    用事务外读到的旧快照会多退 1 次（MySQL 行锁下两者串行）。
+      const locked = await lockGrantById(grant.id);
+      if (!locked) throw errors.notFound('授权记录不存在', 'COURSE_GRANT_NOT_FOUND');
+      if (locked.revoked_at) throw errors.conflict('这次授权已经撤销过了', 'COURSE_GRANT_ALREADY_REVOKED');
+      const units = grantUnitsOf(locked);
+      const refundUnits = units.remaining;
+      const revokedAt = nowIso();
       // 只把"还能用"的次数收回：granted_units 归到已核销数上（consumed_units 保持不动 → 历史留痕）
       await aq('UPDATE student_course_grants SET revoked_at=?,revoked_by=?,revoke_reason=?,granted_units=? WHERE id=?',
-        [revokedAt, auth.user.id, reason, units.consumed, grant.id]);
-      if (refundUnits > 0 && grant.source_assignment_id) {
-        const assignmentBefore = await arow('SELECT quota_total, quota_used FROM course_assignments WHERE id=?', [grant.source_assignment_id]);
-        await aq(`UPDATE course_assignments SET quota_used=${SQL_MAX}(quota_used-?,0) WHERE id=?`, [refundUnits, grant.source_assignment_id]);
+        [revokedAt, auth.user.id, reason, units.consumed, locked.id]);
+      if (refundUnits > 0 && locked.source_assignment_id) {
+        const assignmentBefore = await arow('SELECT quota_total, quota_used FROM course_assignments WHERE id=?', [locked.source_assignment_id]);
+        await aq(`UPDATE course_assignments SET quota_used=${SQL_MAX}(quota_used-?,0) WHERE id=?`, [refundUnits, locked.source_assignment_id]);
         if (assignmentBefore && Number(assignmentBefore.quota_used || 0) > 0) {
           await recordQuotaChange({
-            orgId: grant.org_id, seriesId: grant.series_id, assignmentId: grant.source_assignment_id,
+            orgId: locked.org_id, seriesId: locked.series_id, assignmentId: locked.source_assignment_id,
             changeType: 'GRANT_REFUND',
             quotaTotalBefore: Number(assignmentBefore.quota_total || 0),
             quotaUsedBefore: Number(assignmentBefore.quota_used || 0),
@@ -741,15 +747,16 @@ export async function handleCourses(ctx, part, method) {
         for (let index = 0; index < refundUnits; index += 1) {
           const recognized = await arow(`SELECT event.id FROM license_revenue_events event
             LEFT JOIN license_revenue_events reversal ON reversal.reversal_of_event_id=event.id
-            WHERE event.grant_id=? AND event.event_type='GRANT' AND reversal.id IS NULL LIMIT 1`, [grant.id]);
+            WHERE event.grant_id=? AND event.event_type='GRANT' AND reversal.id IS NULL LIMIT 1`, [locked.id]);
           if (!recognized) break;
-          await appendLicenseReversal({ grantId: grant.id, actorId: auth.user.id, occurredAt: revokedAt, idempotencyKey: `license-reversal:${grant.id}:${revokedAt}:u${index}` });
+          await appendLicenseReversal({ grantId: locked.id, actorId: auth.user.id, occurredAt: revokedAt, idempotencyKey: `license-reversal:${locked.id}:${revokedAt}:u${index}` });
         }
       }
+      result = { id: locked.id, revokedAt, quotaRefunded: refundUnits > 0, refundedUnits: refundUnits, consumedUnits: units.consumed, seriesType, grantedUnits: units.granted, orgId: locked.org_id };
     });
-    await audit(ctx, 'COURSE_GRANT_REVOKE', 'STUDENT_COURSE_GRANT', grant.id, { revokedAt: null, grantedUnits: units.granted, consumedUnits: units.consumed },
-      { revokedAt, reason, refundedUnits: refundUnits, consumedUnits: units.consumed, seriesType }, { orgId: grant.org_id });
-    return { id: grant.id, revokedAt, quotaRefunded: refundUnits > 0, refundedUnits: refundUnits, consumedUnits: units.consumed, seriesType };
+    await audit(ctx, 'COURSE_GRANT_REVOKE', 'STUDENT_COURSE_GRANT', grant.id, { revokedAt: null, grantedUnits: result.grantedUnits, consumedUnits: result.consumedUnits },
+      { revokedAt: result.revokedAt, reason, refundedUnits: result.refundedUnits, consumedUnits: result.consumedUnits, seriesType }, { orgId: result.orgId });
+    return { id: result.id, revokedAt: result.revokedAt, quotaRefunded: result.quotaRefunded, refundedUnits: result.refundedUnits, consumedUnits: result.consumedUnits, seriesType };
   }
 
   // P5-M01: Marketplace management endpoints

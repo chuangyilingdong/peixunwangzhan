@@ -84,6 +84,11 @@ const FAST = [
   // 这条走真 HTTP：空画布能不能提交、提交后还能不能存/能不能生成、重复提交幂等、
   // 课堂结束立刻收口 —— 只看源码或只调处理函数都验不出来。
   'scripts/p139-canvas-incremental-submit.mjs',
+  // 2026-11-10 加：课包次数账是核心计费链路，三条守卫都进精选 ——
+  // 普通包按课时次数全链路（授权/核销/回收/已上课程）、库存与撤销流水、体验包回归。
+  'scripts/p210-normal-course-unit-flow.mjs',
+  'scripts/p55-course-quota-grant.mjs',
+  'scripts/p140-experience-course-package.mjs',
   // 2026-10-25 加：采集助手「自己作品」→ 数据复盘（新表 upsert、/reports 合并、洞察样本）。
   'scripts/p149-junshi-published-works.mjs',
   // 2026-10-25 加：视频工作台复刻分镜原帧（真传视频、真跑 ffmpeg、写回每镜）。

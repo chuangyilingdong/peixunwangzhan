@@ -16,10 +16,13 @@
 // 为什么普通包以前不是"按次数扣"：旧口径是「授权即消耗一次配额」（一个学生名额可以上完
 // 48 节课），2026-11-10 用户明确改成"按课时次数"，所以现在两种类型都走这套次数账。
 
-import { errors, id, nowIso, arow, arows, aq } from '../lib.js';
+import { errors, id, nowIso, arow, arows, aq, isMysql } from '../lib.js';
 
 export const SERIES_TYPES = Object.freeze(['NORMAL', 'EXPERIENCE']);
 export const EXPERIENCE_SERIES_TYPE = 'EXPERIENCE';
+// MySQL 下对许可行加行锁：核销 / 回收 / 平台撤销会并发改同一行，没有 FOR UPDATE 时
+// 三个事务各自按旧快照算余额，可能出现「退多了 1 次」或「扣了但已退款」。SQLite 是全局写锁，不需要。
+const FOR_UPDATE = isMysql ? ' FOR UPDATE' : '';
 
 /** 课包类型（认不出来的值一律当普通课包 —— 老数据/脏数据不该被当成体验包）。 */
 export function seriesTypeOf(series) {
@@ -59,6 +62,22 @@ export async function activeGrantFor({ orgId, studentId, seriesId }) {
 }
 
 /**
+ * 同 `activeGrantFor`，但在 MySQL 下加 `FOR UPDATE` 行锁。
+ * **必须在事务里调用**；核销 / 回收 / 平台撤销都先锁这一行再算余额，避免并发下按旧快照退多/扣错。
+ */
+export async function lockActiveGrantFor({ orgId, studentId, seriesId }) {
+  return await arow(
+    `SELECT * FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=? AND revoked_at IS NULL${FOR_UPDATE}`,
+    [orgId, studentId, seriesId],
+  ) || null;
+}
+
+/** 按 grant id 锁行（回收 / 平台撤销用；调用方自己校验 org / 权限）。 */
+export async function lockGrantById(grantId) {
+  return await arow(`SELECT * FROM student_course_grants WHERE id=?${FOR_UPDATE}`, [grantId]) || null;
+}
+
+/**
  * 一次取全「这个课包下每个学生的剩余次数」—— 候选人列表/加学生都用它，
  * 免得在循环里逐个学生打一次库。
  * （原名 `experienceBalanceByStudent`；2026-11-10 起普通课包也按次数，故改成通用名。）
@@ -89,7 +108,8 @@ export const experienceBalanceByStudent = grantBalanceByStudent;
  * 普通课包与体验课包共用这一个函数；错误码按类型区分，方便前端给出不同的补救提示。
  */
 export async function consumeGrantUnit({ orgId, studentId, seriesId, lessonId = null, sessionId, actorId = null, seriesType = 'NORMAL' }) {
-  const grant = await activeGrantFor({ orgId, studentId, seriesId });
+  // 锁行再算余额：MySQL 下与回收/平台撤销串行化（SQLite 全局写锁本来就串行）
+  const grant = await lockActiveGrantFor({ orgId, studentId, seriesId });
   if (!grant) return { consumed: false, reason: 'GRANT_REVOKED' };
   const existing = await arow(
     'SELECT id FROM student_course_grant_consumptions WHERE grant_id=? AND session_id=? AND student_id=?',
