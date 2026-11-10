@@ -5,8 +5,8 @@
 // 它们是**同一个信息面的三个视角**，所以放在一个页面用页签切换，而不是三个互不相干的路由：
 //   · 课包库存（002-01 / 002-02）—— 从**课包**看「分给了谁」
 //   · 学生授权中心（002-03 / 002-04 / 002-04B）—— 从**学生**看「拿到了哪些课包」
-//   · 采购与开通记录（002-06）—— 看「这些人次是从哪来的」
-// ⚠️ 2026-09-26 用户口径：页签只留**只读视角**。「为学生添加课包」原来是第 5 个页签（跳到录入页），
+//   · 采购与开通记录（002-06）—— 看「这些次数是从哪来的」
+// ⚠️ 2026-09-26 用户口径：页签只留**只读视角**。「给学生授权次数」原来是第 5 个页签（跳到录入页），
 //    现在改成「添加课包」**弹窗**（AddGrantModal）—— 写操作不再和只读视角混在一排；
 //    批量给多人授权仍走 /grants 那一页，入口收在弹窗里。
 //
@@ -39,10 +39,10 @@ const BUSINESS_TYPE_OPTIONS = [['', '全部'], ['FIRST_OPENING', '初次开通']
 const SOURCE_LABELS = { ORDER: '订单', CONTRACT: '合同', PLATFORM: '平台开通' };
 const SOURCE_OPTIONS = [['', '全部'], ['ORDER', '订单'], ['CONTRACT', '合同'], ['PLATFORM', '平台开通']];
 const TAB_META = {
-  overview: { eyebrow: '002-01', title: '机构课包库存', description: '查看机构当前拥有的课包权益、人次库存及使用情况' },
-  students: { eyebrow: '002-03', title: '学生授权中心', description: '按学生看授权：谁已经有课包、谁还没有；点开可看单个学生的授权明细' },
-  records: { eyebrow: '002-05', title: '学生授权记录', description: '记录学生课包授权与取消授权的操作历史（只看得见成功的操作）' },
-  batches: { eyebrow: '002-06', title: '采购 / 增购 / 开通记录', description: '本机构的人次是从哪来的：初次开通、增购与平台调整' },
+  overview: { eyebrow: '002-01', title: '机构课包与次数', description: '查看机构当前拥有的课包、可用次数及使用情况' },
+  students: { eyebrow: '002-03', title: '学生授权中心', description: '按学生看授权次数：谁已经有次数、谁还没有；点开可看单个学生的授权明细' },
+  records: { eyebrow: '002-05', title: '学生授权记录', description: '记录学生次数授权与回收/取消的操作历史（只看得见成功的操作）' },
+  batches: { eyebrow: '002-06', title: '采购 / 增购 / 开通记录', description: '本机构的次数是从哪来的：初次开通、增购与平台调整' },
 };
 
 /** 权益状态：有效 / 已禁用（平台撤销授权）—— 只有这两态，没有「待激活」。 */
@@ -86,8 +86,8 @@ function StudentGrantCenter({ api, onOpenStudent }) {
   return <>
     <div className="metrics">
       <MetricCard label="学生总数" value={totals.students ?? '—'} hint="本机构在册学生账号" />
-      <MetricCard label="已有课包学生" value={totals.withGrants ?? '—'} hint="至少有一条有效授权" tone="teal" />
-      <MetricCard label="暂无课包学生" value={totals.withoutGrants ?? '—'} hint="还没有任何有效授权" tone="orange" />
+      <MetricCard label="已有次数学生" value={totals.withGrants ?? '—'} hint="至少有一条有效授权" tone="teal" />
+      <MetricCard label="暂无次数学生" value={totals.withoutGrants ?? '—'} hint="还没有任何有效授权" tone="orange" />
       <MetricCard label="本月新增授权" value={totals.grantedThisMonth ?? '—'} hint="本月发生过的授权次数" tone="pink" />
     </div>
 
@@ -103,7 +103,7 @@ function StudentGrantCenter({ api, onOpenStudent }) {
         <div className="row-actions">
           <button className="primary-button" disabled={data.loading}>查询</button>
           <button className="secondary-button" type="button" disabled={data.loading} onClick={() => { setDraft({ search: '', status: '', grantState: '' }); setApplied({ search: '', status: '', grantState: '' }); setPage(1); }}>重置</button>
-          <button className="secondary-button" type="button" onClick={() => setAdding(true)}>添加课包</button>
+          <button className="secondary-button" type="button" onClick={() => setAdding(true)}>授权次数</button>
         </div>
       </form>
     </Panel>
@@ -153,13 +153,13 @@ function GrantStateBadge({ item }) {
 }
 
 /**
- * 「添加课包」弹窗（2026-09-26 用户口径，取代原来的 002-04A 抽屉 +「为学生添加课包」页签）：
+ * 「添加课包」弹窗（2026-09-26 用户口径，取代原来的 002-04A 抽屉 +「给学生授权次数」页签）：
  *   · **不跳转**：从学生授权中心（列表）或某学生的授权详情里直接弹窗，三步 —— 为谁添加 → 添加什么课包 → 确认；
- *   · **体验课包要填次数**（可以重复分给同一个学生、次数累加；上限 = 该课包剩余人次）；
+ *   · **体验课包要填次数**（可以重复分给同一个学生、次数累加；上限 = 该课包剩余次数）；
  *   · **普通课包不给次数输入**（每人只能授权一次），点确认即可 —— 服务端对 units>1 会 400
  *     （UNITS_NOT_SUPPORTED，见 p140 ④′），所以这里固定按 1 次提交。
  *
- * 候选课包规则（沿用 002-04A 线框图右栏）：机构已开通 + 剩余人次 > 0 + 该学生当前没有这一课包的**有效**授权。
+ * 候选课包规则（沿用 002-04A 线框图右栏）：机构已开通 + 剩余次数 > 0 + 该学生当前没有这一课包的**有效**授权。
  *   ⚠️ 线框图那条写的是「剩余人次 ≥ 0」，紧接着又说「剩余人次 = 0 的课包不展示」—— 按后者实现
  *      （平台口径：余额必须大于零才能分配，零次不代表不限）。
  *   ⚠️ 体验课包**不参与**「已授权就不再出现」的过滤 —— 重复分配就是它的正常用法。
@@ -189,7 +189,7 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
   const [error, setError] = useState('');
   const submitKeyRef = useRef({ signature: '', key: '' });
   // 2026-11-10：普通课包也按课时次数，两种课包都允许重复分配（次数累加），
-  // 所以候选课包只按「机构已开通 + 剩余人次 > 0」筛，不再排除"该学生已持有"。
+  // 所以候选课包只按「机构已开通 + 剩余次数 > 0」筛，不再排除"该学生已持有"。
   const candidates = (overview.data?.items || []).filter((item) => item.assignmentStatus === 'ACTIVE'
     && Number(item.remaining || 0) > 0);
   const picked = candidates.find((item) => item.seriesId === seriesId) || null;
@@ -213,7 +213,7 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
     } catch (err) { setError(errorText(err)); } finally { setBusy(false); }
   }
 
-  return <Modal title="添加课包"
+  return <Modal title="授权次数"
     onClose={onClose} busy={busy} error={error}
     footer={<>
       <button className="primary-button" disabled={busy || !studentId || !picked} onClick={submit}>
@@ -221,10 +221,10 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
       </button>
       <button className="secondary-button" type="button" onClick={onClose}>取消</button>
       {/* 批量那条路没删（一次给很多学生分课包还是它合适），只是不再占一个页签 */}
-      <Link className="text-button" to="/grants" onClick={onClose}>批量添加课包（一次多名学生）</Link>
+      <Link className="text-button" to="/grants" onClick={onClose}>批量授权次数（一次多名学生）</Link>
     </>}
   >
-    <h3>① 为谁添加</h3>
+    <h3>① 为谁授权</h3>
     {studentId ? <div className="row-actions">
       <strong>{pickedStudent.displayName || pickedStudent.login}</strong>
       <span className="muted">{pickedStudent.login}</span>
@@ -241,7 +241,7 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
         </div> : <Empty title="没有匹配的学生" body="换个关键字，或先在「机构成员管理」里创建学生账号。" />}
     </>}
 
-    <h3 className="top-gap">② 添加什么课包</h3>
+    <h3 className="top-gap">② 选择课包（授权次数）</h3>
     {!studentId ? <p className="muted">先选学生。</p> : overview.loading ? <Loading label="正在读取可授权课包…" />
       : overview.error ? <ErrorState error={overview.error} onRetry={overview.refresh} />
         : candidates.length ? <>
@@ -253,9 +253,9 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
           </select></label>
           {picked ? <div className="row-actions">
             <span className="status">{isExperience ? '体验课包' : '普通课包'}</span>
-            <span className="muted">总人次 {picked.quotaTotal} · 已分配 {picked.quotaUsed} · 剩余 {picked.remaining}</span>
+            <span className="muted">总次数 {picked.quotaTotal} · 已分配 {picked.quotaUsed} · 剩余 {picked.remaining}</span>
           </div> : null}
-        </> : <Empty title="没有可授权的课包" body="可能原因：课包剩余人次为 0，或平台还没给本机构开通。" />}
+        </> : <Empty title="没有可授权的课包" body="可能原因：课包剩余次数为 0，或平台还没给本机构开通。" />}
 
     {picked ? <><h3 className="top-gap">③ 确认</h3>
       <div className="row-actions">
@@ -298,7 +298,7 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
 
   return <>
     <PageHeader eyebrow="002-04" title="学生授权详情"
-      actions={<><button className="secondary-button" onClick={onBack}>← 返回学生授权中心</button><button className="primary-button" onClick={() => setAdding(true)}>添加课包</button></>} />
+      actions={<><button className="secondary-button" onClick={onBack}>← 返回学生授权中心</button><button className="primary-button" onClick={() => setAdding(true)}>授权次数</button></>} />
     {data.loading ? <Loading label="正在读取该学生的授权…" /> : data.error ? <ErrorState error={data.error} onRetry={data.refresh} /> : <>
       <Panel title="学生">
         <div className="row-actions">
@@ -315,7 +315,7 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
       <Panel title={`当前课包授权（当前未取消授权：${activeItems.length} 条）`}
         actions={<>
           <button className="secondary-button" type="button" onClick={() => onOpenRecords?.(student?.displayName || student?.login || '')}>授权记录</button>
-          <button className="secondary-button" type="button" onClick={() => setAdding(true)}>添加课包</button>
+          <button className="secondary-button" type="button" onClick={() => setAdding(true)}>授权次数</button>
         </>}>
         {activeItems.length ? <div className="table-wrap"><table>
           <thead><tr><th>课包</th><th>当前版本</th><th>授权</th><th>已用</th><th>剩余</th><th>授权时间</th><th>授权状态</th></tr></thead>
@@ -328,7 +328,7 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
             <td>{formatDate(item.grantedAt)}</td>
             <td><GrantStateBadge item={item} /></td>
           </tr>)}</tbody>
-        </table></div> : <Empty title="该学生还没有任何课包授权" body="点右上角「添加课包」为他开一笔；每分给一人用掉 1 次。" />}
+        </table></div> : <Empty title="该学生还没有任何授权次数" body="点右上角「授权次数」为他开一笔；每分给一人用掉 1 次。" />}
       </Panel>
 
       <Panel title={`已上课程（${usageSummary.total ?? 0} 场）`}
@@ -371,7 +371,7 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
             <p>授权时间：{formatDate(openGrant.grantedAt)}</p>
             <p>操作账号：{openGrant.grantedByName || openGrant.grantedByLogin || '—'}</p>
             <p>来源：{openGrant.sourceLabel}</p>
-            <p>占用人次：{openGrant.quotaConsumed} 次</p>
+            <p>占用次数：{openGrant.quotaConsumed} 次</p>
             <p>授权状态：<GrantStateBadge item={openGrant} /></p>
           </section>
           <section className="drawer-section">
@@ -389,7 +389,7 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
 }
 
 /**
- * 002-06 采购 / 增购 / 开通记录：机构能看到的「人次是从哪来的」。
+ * 002-06 采购 / 增购 / 开通记录：机构能看到的「次数是从哪来的」。
  * 三分类是服务端按批次序号推出来的（库里没有这个分类列），别在前端再算一遍。
  */
 function LicenseBatches({ api, seriesOptions }) {
@@ -411,10 +411,10 @@ function LicenseBatches({ api, seriesOptions }) {
 
   return <>
     <div className="metrics">
-      <MetricCard label="业务记录" value={totals.total ?? 0} hint={`共 ${totals.quantity ?? 0} 人次`} />
+      <MetricCard label="业务记录" value={totals.total ?? 0} hint={`共 ${totals.quantity ?? 0} 次`} />
       <MetricCard label="初次开通" value={totals.firstOpening ?? 0} hint="该授权单的第一条采购" tone="teal" />
       <MetricCard label="增购" value={totals.additional ?? 0} hint="同一授权单里的后续采购" tone="orange" />
-      <MetricCard label="平台调整" value={totals.platformAdjustment ?? 0} hint="平台开通时结转的期初人次" tone="pink" />
+      <MetricCard label="平台调整" value={totals.platformAdjustment ?? 0} hint="平台开通时结转的期初次数" tone="pink" />
     </div>
 
     <Panel title="筛选">
@@ -442,7 +442,7 @@ function LicenseBatches({ api, seriesOptions }) {
       {data.loading ? <Loading label="正在读取采购与开通记录…" /> : data.error ? <ErrorState error={data.error} onRetry={data.refresh} /> : items.length ? <>
         <ListResultSummary total={data.data?.total} page={data.data?.page} totalPages={data.data?.totalPages} label="条记录" />
         <div className="table-wrap"><table>
-          <thead><tr><th>业务时间</th><th>课包</th><th>业务类型</th><th>人次数量</th><th>业务来源</th><th>经办</th><th>备注</th></tr></thead>
+          <thead><tr><th>业务时间</th><th>课包</th><th>业务类型</th><th>次数</th><th>业务来源</th><th>经办</th><th>备注</th></tr></thead>
           <tbody>{items.map((item) => <tr key={item.id}>
             <td>{formatDate(item.purchasedAt)}</td>
             <td><strong>{item.seriesTitle || item.seriesId}</strong></td>
@@ -586,9 +586,9 @@ export function SeriesOverview({ api }) {
   const meta = TAB_META[tab];
   return <>
     <nav className="tabs" aria-label="课包与学生授权视图">
-      {/* ⚠️ 2026-09-26 用户口径：原来是 5 个页签，最后那个「为学生添加课包」（写操作）是**跳转**到一个
+      {/* ⚠️ 2026-09-26 用户口径：原来是 5 个页签，最后那个「给学生授权次数」（写操作）是**跳转**到一个
           录入页，跟其余 4 个只读视角混在一起 —— 现在改成「添加课包」弹窗，页签回到 4 个只读视角。 */}
-      {[['overview', '课包库存'], ['students', '学生授权中心'], ['records', '学生授权记录'], ['batches', '采购与开通记录']]
+      {[['overview', '课包与次数'], ['students', '学生授权中心'], ['records', '学生授权记录'], ['batches', '采购与开通记录']]
         .map(([key, label]) => <button key={key} type="button" className={'tab' + (tab === key && !drilling ? ' is-active' : '')} onClick={() => goTab(key)}>{label}</button>)}
     </nav>
 
@@ -616,7 +616,7 @@ export function SeriesOverview({ api }) {
         </div>
       </Panel>
       <div className="metrics">
-        <MetricCard label="总人次" value={current?.quotaTotal ?? 0} hint="平台授予 · 只读" />
+        <MetricCard label="总次数" value={current?.quotaTotal ?? 0} hint="平台授予 · 只读" />
         <MetricCard label="已授权" value={current?.quotaUsed ?? 0} hint="已分配给学生的" tone="teal" />
         <MetricCard label="剩余" value={current?.remaining ?? 0} hint="当前可分配库存" tone="orange" />
       </div>
@@ -650,7 +650,7 @@ export function SeriesOverview({ api }) {
               {overview.loading ? <Loading label="正在读取课包库存…" /> : overview.error ? <ErrorState error={overview.error} onRetry={overview.refresh} /> : <>
                 <div className="metrics">
                   <MetricCard label="已开通课包数" value={totals.seriesCount ?? 0} hint={`当前有效课包 ${allItems.filter((item) => item.assignmentStatus === 'ACTIVE').length} 个`} />
-                  <MetricCard label="总人次" value={totals.quotaTotal ?? 0} hint="平台累计授予" tone="teal" />
+                  <MetricCard label="总次数" value={totals.quotaTotal ?? 0} hint="平台累计授予" tone="teal" />
                   <MetricCard label="已授权" value={totals.quotaUsed ?? 0} hint="已分配给学生的" tone="orange" />
                   <MetricCard label="剩余" value={totals.remaining ?? 0} hint="当前可分配库存" tone="pink" />
                 </div>
@@ -673,7 +673,7 @@ export function SeriesOverview({ api }) {
 
                 <Panel title="课包库存">
                   {items.length ? <div className="table-wrap"><table>
-                    <thead><tr><th>课包</th><th>当前版本</th><th>权益状态</th><th>总人次</th><th>已授权</th><th>剩余</th><th>开通时间</th><th>操作</th></tr></thead>
+                    <thead><tr><th>课包</th><th>当前版本</th><th>权益状态</th><th>总次数</th><th>已授权</th><th>剩余</th><th>开通时间</th><th>操作</th></tr></thead>
                     <tbody>{items.map((item) => <tr key={item.seriesId}>
                       <td><strong>{item.title}</strong><div className="muted">机构已开通权益</div></td>
                       <td>{item.version ? `v${item.version}` : '—'}</td>
@@ -690,8 +690,8 @@ export function SeriesOverview({ api }) {
                 <Panel title="常用入口">
                   <div className="row-actions">
                     <button className="secondary-button" type="button" onClick={() => goTab('students')}>学生授权中心<div className="muted">按学生看授权</div></button>
-                    <button className="secondary-button" type="button" onClick={() => goTab('batches')}>采购与开通记录<div className="muted">人次从哪来</div></button>
-                    <button className="secondary-button" type="button" onClick={() => setAdding(true)}>为学生添加课包<div className="muted">弹窗分发人次</div></button>
+                    <button className="secondary-button" type="button" onClick={() => goTab('batches')}>采购与开通记录<div className="muted">次数从哪来</div></button>
+                    <button className="secondary-button" type="button" onClick={() => setAdding(true)}>给学生授权次数<div className="muted">弹窗分配次数</div></button>
                     <Link className="secondary-button" to="/courses">课程备课<div className="muted">课包 / 课程 / 教学资料</div></Link>
                     <Link className="secondary-button" to="/members">机构成员管理<div className="muted">学生 / 教师 / 账号</div></Link>
                   </div>

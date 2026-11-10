@@ -24,16 +24,17 @@ export const navigation = [
   // 「AI 网关」这个词随算力网关（new-api）UI 一起下线 —— 生产未启用，留着只会让人以为要配。
   { heading: 'AI 能力与价格' },
   { to: '/compute/config', icon: '⚡', label: 'AI 能力与价格', permission: 'ADMIN_BILLING' },
-  { heading: '机构与课包人次' },
+  { heading: '机构与课包次数' },
   // ⭐ 2026-10-03 用户口径：这一项的名字改成「创建机构与授权」（原「机构与课包人次」）——
   //    点开它就是「建机构 + 给这家机构配课包与授权次数」，名字直接说事。
   //    按本文件的老口径（2026-09-18「一个页面一个名字」）菜单/页面标题/面包屑一起改；
-  //    分组头保留「机构与课包人次」：它下面还挂着商机、授权与人次流水、平台用户三项，
+  //    分组头保留「机构与课包次数」：它下面还挂着商机、授权与次数流水、平台用户三项，
   //    是**分组**的名字，不是这一页的名字。
+  //    2026-11-10：普通课包改成按课时次数后，全站把「人次」统一成「次数」。
   { to: '/organizations', icon: '♙', label: '创建机构与授权', permission: 'ADMIN_ORGANIZATIONS' },
   // 官网「联系我们」表单的提交收件箱（2026-09-18：此前只有接口没有页面，提交没人看得见）
   { to: '/leads', icon: '☎', label: '联系我们（商机）', permission: 'ADMIN_ORGANIZATIONS' },
-  { to: '/authorizations', icon: '▦', label: '授权与人次流水', permission: 'ADMIN_BILLING' },
+  { to: '/authorizations', icon: '▦', label: '授权与次数流水', permission: 'ADMIN_BILLING' },
   { to: '/users', icon: '◉', label: '平台用户', permission: 'ADMIN_ORGANIZATIONS' },
   { heading: '用量与成本' },
   { to: '/compute/usage', icon: '◌', label: '用量与成本', permission: 'ADMIN_BILLING' },

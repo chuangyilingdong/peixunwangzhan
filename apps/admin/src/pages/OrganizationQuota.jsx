@@ -90,7 +90,7 @@ function AddPackageDrawer({ api, orgId = '', options = [], assignedIds = new Set
   return <div className="drawer-overlay" onClick={busy ? undefined : onClose}>
     <div className="drawer-panel" onClick={(event) => event.stopPropagation()}>
       <header className="drawer-head">
-        <div><span className="eyebrow">P03-03 · 机构课包与授权次数</span><h2>添加课包</h2><span className="muted">为所选机构开启该课包，配置完成后该机构即可使用</span></div>
+        <div><span className="eyebrow">P03-03 · 机构课包与授权次数</span><h2>开通课包</h2><span className="muted">为所选机构开启该课包，配置完成后该机构即可使用</span></div>
         <button type="button" className="drawer-close" onClick={onClose} disabled={busy} aria-label="关闭">×</button>
       </header>
       <div className="drawer-body">
@@ -145,7 +145,7 @@ function AddPackageDrawer({ api, orgId = '', options = [], assignedIds = new Set
       <footer className="drawer-foot">
         {blockReason ? <span className="drawer-foot-reason">{blockReason}</span> : null}
         <button type="button" className="secondary-button" disabled={busy} onClick={onClose}>取消</button>
-        <button type="button" className="primary-button" disabled={busy || !picked || !quotaValid || !purchaseValid} onClick={submit}>{busy ? '开通中…' : '确认添加'}</button>
+        <button type="button" className="primary-button" disabled={busy || !picked || !quotaValid || !purchaseValid} onClick={submit}>{busy ? '开通中…' : '确认开通'}</button>
       </footer>
     </div>
   </div>;
@@ -295,12 +295,12 @@ export function OrganizationQuota({ api }) {
   if (!orgId) return <Panel title="机构课包与授权次数"><Empty title="缺少机构标识" body="请从机构列表点「查看详情」，再用「授权次数」入口进入本页。" /></Panel>;
 
   return <>
-    <PageHeader eyebrow="平台教务 · 创建机构与授权" title="机构课包与授权次数"  actions={<><button className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(orgId)}`)}>← 返回机构详情</button><Link className="secondary-button" to={`/authorizations?orgId=${encodeURIComponent(orgId)}`}>前往授权与人次流水</Link></>} />
+    <PageHeader eyebrow="平台教务 · 创建机构与授权" title="机构课包与授权次数"  actions={<><button className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(orgId)}`)}>← 返回机构详情</button><Link className="secondary-button" to={`/authorizations?orgId=${encodeURIComponent(orgId)}`}>前往授权与次数流水</Link></>} />
     {message ? <Notice tone={message.tone}>{message.text}</Notice> : null}
     {detail.loading ? <Loading label="正在读取机构课包…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : !detail.data ? <Panel title="机构课包与授权次数"><Empty title="没有找到该机构" body="机构可能已被删除，或链接里的机构标识不正确。" /></Panel> : <>
       <OrganizationCard organization={organization} meta={<p className="muted">共 {assignments.length} 个课包，其中有效 {assignments.filter((item) => item.status === 'ACTIVE').length} 个。</p>} />
       <Panel title={`共 ${assignments.length} 个课包`} actions={<div className="row-actions">
-        <button type="button" className="primary-button" onClick={() => { setMessage(null); setShowAddDrawer(true); }}>添加课包</button>
+        <button type="button" className="primary-button" onClick={() => { setMessage(null); setShowAddDrawer(true); }}>开通课包</button>
         <button type="button" className="secondary-button" onClick={() => { detail.refresh(); catalog.refresh(); }}>刷新</button>
       </div>}>
         {catalog.error ? <Notice tone="warning">课包目录读取失败（{catalog.error.message}），「当前版本 / 课包编码」暂时显示为「—」，不影响列表本身。</Notice> : null}
@@ -329,8 +329,8 @@ export function OrganizationQuota({ api }) {
               </tr>;
             })}</tbody>
           </table></div>
-          <p className="muted">「已授权次数」= 机构已经分给学生（或学生已消耗）的授权次数；「剩余授权次数」= 总授权次数 − 已授权次数。调整记录见每行的「查看变更记录」。</p>
-        </> : <Empty title="该机构还没有开通任何课包" body="点右上角「添加课包」为它开通第一个课包并设置初始授权次数。" />}
+          <p className="muted">「已授权次数」= 机构已经分给学生的次数（学生核销不回补）；「剩余授权次数」= 总授权次数 − 已授权次数。调整记录见每行的「查看变更记录」。</p>
+        </> : <Empty title="该机构还没有开通任何课包" body="点右上角「开通课包」为它开通第一个课包并设置初始授权次数。" />}
       </Panel>
     </>}
     {showAddDrawer ? <AddPackageDrawer api={api} orgId={orgId} options={seriesItems} assignedIds={assignedIds}

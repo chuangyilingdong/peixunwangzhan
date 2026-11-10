@@ -186,15 +186,15 @@ try {
   const styles = read('packages/shared/src/styles.css');
   const orgRoute = read('apps/server/src/routes/orgAdmin.js');
 
-  check('⑥ 「添加课包」是**弹窗**（AddGrantModal + 共享 Modal 外壳），不再是页签/跳转页',
+  check('⑥ 「授权次数」是**弹窗**（AddGrantModal + 共享 Modal 外壳），不再是页签/跳转页',
     /function AddGrantModal\(/.test(page)
     && /import \{ Modal \} from '\.\/classroom\/ui\.jsx';/.test(page)
-    && /<Modal title="添加课包"/.test(page));
+    && /<Modal title="授权次数"/.test(page));
   check('⑥ 页签只剩四个只读视角（「为学生添加课包」不再占页签）',
-    /\[\['overview', '课包库存'\], \['students', '学生授权中心'\], \['records', '学生授权记录'\], \['batches', '采购与开通记录'\]\]/.test(page)
+    /\[\['overview', '课包与次数'\], \['students', '学生授权中心'\], \['records', '学生授权记录'\], \['batches', '采购与开通记录'\]\]/.test(page)
     && !/\['grant', '为学生添加课包'\]/.test(page));
   check('⑥ 为谁添加 + 添加什么课包 + 确认（弹窗三步都在）',
-    /① 为谁添加/.test(page) && /② 添加什么课包/.test(page) && /③ 确认/.test(page));
+    /① 为谁授权/.test(page) && /② 选择课包（授权次数）/.test(page) && /③ 确认/.test(page));
   check('⑥ 次数输入两种课包都有（2026-11-10 起普通包也按课时次数）',
     /const isExperience = picked\?\.seriesType === 'EXPERIENCE';/.test(page)
     && /const useNow = units;/.test(page)

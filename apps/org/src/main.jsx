@@ -19,7 +19,7 @@ const navigation = [
   // ⭐ 2026-09-25 用户口径：「课程中心藏得很深，应该放在左侧菜单栏里，文案改成：课程备课」。
   //    原来机构管理员只能从工作台那张卡片点进去（老师端侧栏里叫「教学课程库」）——两处文案都统一成「课程备课」。
   { to: '/courses', icon: '◇', label: '课程备课' },
-  { to: '/series-overview', icon: '◇', label: '课包库存与学生授权', adminOnly: true },
+  { to: '/series-overview', icon: '◇', label: '课包与次数 / 学生授权', adminOnly: true },
   { to: '/classrooms', icon: '▦', label: '机构课堂总览' },
   { to: '/members', icon: '♙', label: '机构成员管理', adminOnly: true },
   { to: '/works', icon: '✦', label: '学生学习结果与作品' },
@@ -146,7 +146,7 @@ function TeacherDashboard({ api }) {
 
 function Dashboard({ api }) {
   const { loading, error, data, refresh } = useData(() => api.get('org/overview'), [api]);
-  // 2026-09-13（用户要求）：首页按「课包」看家底 —— 每个课包多少人次、多少学生、多少老师、多少课堂。
+  // 2026-09-13（用户要求）：首页按「课包」看家底 —— 每个课包多少次数、多少学生、多少老师、多少课堂。
   // ⚠️ 必须和其它 hook 一起放在提前 return 之前（放到 return 之后会变成条件 hook，切页时 React 会崩）。
   const seriesBox = useData(() => data?.scope?.role === 'ORG_ADMIN' ? api.get('org/series-overview?days=30') : Promise.resolve({ items: [], totals: {} }), [api, data?.scope?.role]);
   if (loading) return <Loading />;
@@ -172,7 +172,7 @@ function Dashboard({ api }) {
       <Panel title="需要关注">
         <div className="card-list">
           <Notice tone={data.attention?.exhaustedSeries ? 'warning' : 'success'}>
-            <strong>课包剩余人次不足</strong> · {data.attention?.exhaustedSeries ?? 0} 个课包
+            <strong>课包剩余次数不足</strong> · {data.attention?.exhaustedSeries ?? 0} 个课包
           </Notice>
           <Notice tone={data.attention?.restrictedAccounts ? 'warning' : 'success'}>
             <strong>受限账号</strong> · {data.attention?.restrictedAccounts ?? 0} 个账号
@@ -202,7 +202,7 @@ function Dashboard({ api }) {
           <tbody>{seriesItems.map((item) => <tr key={item.seriesId}>
             <td><strong>{item.title}</strong></td>
             <td>{item.quotaUsed} / {item.quotaTotal}<div className="muted">剩 {item.remaining} 次</div></td>
-            <td>{item.grantedStudents}<div className="muted">{item.grantedCount} 人次</div></td>
+            <td>{item.grantedStudents}<div className="muted">{item.grantedCount} 次</div></td>
             <td>{item.pendingSessions} / <strong>{item.activeSessions}</strong></td>
             <td>{item.teacherCount}</td>
           </tr>)}</tbody>
@@ -276,7 +276,7 @@ function Members({ api, user }) {
       actions={<div className="row-actions">{isAdmin ? <button className="primary-button" onClick={() => { setMessage(''); setCreateOpen(true); }}>创建账号</button> : null}<button className="secondary-button" onClick={members.refresh}>刷新</button></div>}
     />
     {/* B3（2026-09-13）：机构端有三套容易混的东西，这里把边界一次说清（界面上的「我该去哪」） */}
-    <p className="muted">这里管的是<strong>账号本身</strong>（角色、启停）。学生的<strong>席位与有效期</strong>在「学生开通」，<strong>课包分给谁</strong>在「课包库存与学生授权 → 学生授权中心」（那里点「添加课包」直接弹窗分配）。学生看不到课包时，先确认后两处。</p>
+    <p className="muted">这里管的是<strong>账号本身</strong>（角色、启停）。学生的<strong>席位与有效期</strong>在「学生开通」，<strong>次数授权给谁</strong>在「课包与次数 → 学生授权中心」（那里点「授权次数」直接弹窗分配）。学生看不到课包时，先确认后两处。</p>
     {message && <Notice tone="success">{message}</Notice>}
     {/* 「创建账号」= 按钮 + 弹窗（用户 2026-09-21 口径）。字段顺序也按用户口径：
         角色 → **姓名**（按角色叫「学生姓名 / 老师姓名」）→ **登录账号** → **登录密码**（两者挨着）→ 手机号。 */}

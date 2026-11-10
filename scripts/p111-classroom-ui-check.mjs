@@ -837,9 +837,9 @@ try {
   // ── 002-01：库存列表 + **四个只读页签**（写操作「添加课包」不再占页签 —— 2026-09-26 用户口径改弹窗）
   await orgPage.goto(`${base}/series-overview`, { waitUntil: 'domcontentloaded' });
   await orgSettle();
-  await orgExpect('002-01 库存列表', ['机构课包库存', '课包库存', '学生授权中心', '采购与开通记录', '为学生添加课包']);
+  await orgExpect('002-01 库存列表', ['机构课包与次数', '课包与次数', '学生授权中心', '采购与开通记录', '给学生授权次数']);
   const tabLabels = (await orgPage.locator('.tabs .tab').allInnerTexts()).map((text) => text.trim());
-  for (const label of ['课包库存', '学生授权中心', '学生授权记录', '采购与开通记录']) {
+  for (const label of ['课包与次数', '学生授权中心', '学生授权记录', '采购与开通记录']) {
     if (!tabLabels.includes(label)) problems.push(`002-01：页签「${label}」不见了（现有页签：${tabLabels.join('、')}）`);
   }
   if (tabLabels.some((label) => label.includes('添加课包'))) {
@@ -855,20 +855,20 @@ try {
   await orgShot('20-org-series-overview');
 
   // ── 002-03 学生授权中心：4 张卡必须**按真实数据算**
-  // 夹具里正好 5 名学生有许可（grantedIds），所以「已有课包学生」必须等于 5。
+  // 夹具里正好 5 名学生有许可（grantedIds），所以「已有次数学生」必须等于 5。
   await orgPage.locator('.tab', { hasText: '学生授权中心' }).click();
   await orgSettle();
   await orgExpect('002-03 学生授权中心', [
-    '学生总数', '已有课包学生', '暂无课包学生', '本月新增授权',
+    '学生总数', '已有次数学生', '暂无次数学生', '本月新增授权',
     '账号状态', '授权情况', '查看授权',
     '学生', '登录账号', '已授权课包数', '最近授权时间',
     // 2026-11-05 用户口径：不要概览，按课包列出 授权 / 已用 / 剩余
     '课包明细', '已用', '剩余',
   ]);
   const totalStudents = await cardValue('学生总数');
-  const withGrants = await cardValue('已有课包学生');
-  const withoutGrants = await cardValue('暂无课包学生');
-  if (withGrants !== grantedIds.length) problems.push(`002-03：「已有课包学生」期望 ${grantedIds.length}（夹具里正好这么多人有许可），实际 ${withGrants} —— 卡片像是写死的`);
+  const withGrants = await cardValue('已有次数学生');
+  const withoutGrants = await cardValue('暂无次数学生');
+  if (withGrants !== grantedIds.length) problems.push(`002-03：「已有次数学生」期望 ${grantedIds.length}（夹具里正好这么多人有许可），实际 ${withGrants} —— 卡片像是写死的`);
   if (typeof totalStudents === 'number' && withGrants + withoutGrants !== totalStudents) problems.push(`002-03：卡片算术对不上（总数 ${totalStudents} ≠ 已有 ${withGrants} + 暂无 ${withoutGrants}）`);
   await orgShot('21-org-student-grant-center');
 
@@ -876,10 +876,10 @@ try {
   //    与 002-04 那条（学生固定）不同：这条路要先在弹窗里**选学生**（服务端搜索 + 350ms 防抖），
   //    再按这名学生拉候选课包（普通课包要排除他已持有的、体验课包不排除）。
   //    ⚠️ 只打开 / 选人 / 选包 / 关掉，**绝不点确认授权** —— 那会写库，把 002-03 / 002-06 的数字改掉。
-  await orgPage.getByRole('button', { name: '添加课包', exact: true }).first().click();
+  await orgPage.getByRole('button', { name: '授权次数', exact: true }).first().click();
   await orgPage.waitForTimeout(600);
-  const listDialog = orgPage.locator('dialog.classroom-dialog', { hasText: '添加课包' }).first();
-  await orgExpect('添加课包弹窗（从列表进）', ['① 为谁添加', '搜索学生', '先选学生', '取消']);
+  const listDialog = orgPage.locator('dialog.classroom-dialog', { hasText: '授权次数' }).first();
+  await orgExpect('添加课包弹窗（从列表进）', ['① 为谁授权', '搜索学生', '先选学生', '取消']);
   const studentButtons = listDialog.locator('.card-list button');
   const studentOptionCount = await studentButtons.count();
   if (!studentOptionCount) problems.push('添加课包（从列表进）：弹窗里一个可选学生都没有 —— 夹具里有学生，候选名单不该是空的');
@@ -933,10 +933,10 @@ try {
   // ── 「添加课包」弹窗（2026-09-26 用户口径：原来的 002-04A 抽屉改成弹窗；从学生详情进来时学生是固定的）。
   // ⚠️ 只打开 + 选课包 + 关掉，**绝不点「确认授权」** —— 那会写库，把后面 002-03 / 002-06 的数字改掉。
   // ⚠️ 必须 exact —— getByRole 的 name 默认是**子串**匹配，否则会命中「为学生添加课包」那个按钮。
-  await orgPage.getByRole('button', { name: '添加课包', exact: true }).first().click();
+  await orgPage.getByRole('button', { name: '授权次数', exact: true }).first().click();
   await orgPage.waitForTimeout(700);
-  await orgExpect('添加课包弹窗', ['添加课包', '① 为谁添加', '② 添加什么课包']);
-  const grantDialog = orgPage.locator('dialog.classroom-dialog', { hasText: '添加课包' }).first();
+  await orgExpect('添加课包弹窗', ['授权次数', '① 为谁授权', '② 选择课包（授权次数）']);
+  const grantDialog = orgPage.locator('dialog.classroom-dialog', { hasText: '授权次数' }).first();
   if (!(await grantDialog.count())) problems.push('添加课包：没有弹出对话框 —— 用户 2026-09-26 口径是**弹窗**，不是跳转到录入页');
   if (!(await grantDialog.innerText()).includes(grantedName)) {
     problems.push(`添加课包：弹窗里没带出当前学生「${grantedName}」—— 从学生详情进来时学生该是固定的`);
@@ -966,7 +966,7 @@ try {
   // ── 002-04B 单授权详情抽屉（入口是行内的课包名按钮）
   await orgPage.locator('table tbody tr').first().getByRole('button').first().click();
   await orgPage.waitForTimeout(600);
-  await orgExpect('002-04B 单授权详情', ['单授权详情', '授权对象', '授权信息', '操作账号', '来源', '占用人次', '授权状态', '正式学习记录', '关闭']);
+  await orgExpect('002-04B 单授权详情', ['单授权详情', '授权对象', '授权信息', '操作账号', '来源', '占用次数', '授权状态', '正式学习记录', '关闭']);
   if (await orgPage.locator('.drawer-panel').getByRole('button', { name: /取消授权|取消资格|撤销授权/ }).count()) {
     problems.push('002-04B：抽屉里出现了取消类按钮 —— 机构端没有取消权限（用户口径）');
   }
@@ -1006,7 +1006,7 @@ try {
   if (await noGrantRow.count()) {
     await noGrantRow.getByRole('button', { name: '查看授权' }).click();
     await orgSettle();
-    await orgExpect('002-04 暂无课包的详情', ['该学生还没有任何课包授权']);
+    await orgExpect('002-04 暂无课包的详情', ['该学生还没有任何授权次数']);
     await orgShot('24-org-student-grant-empty');
   } else {
     problems.push('002-03：「授权情况 = 暂无课包」筛选后一行都没有 —— 夹具里应有 2 名没课包的学生');
@@ -1020,7 +1020,7 @@ try {
   await orgSettle();
   await orgExpect('002-06 采购与开通记录', [
     '采购 / 增购 / 开通记录', '业务记录', '初次开通', '增购', '平台调整',
-    '业务时间', '业务类型', '人次数量', '业务来源', '经办', '备注',
+    '业务时间', '业务类型', '次数', '业务来源', '经办', '备注',
   ]);
   const firstOpening = await cardValue('初次开通');
   const additional = await cardValue('增购');
@@ -1045,7 +1045,7 @@ try {
   await orgShot('25-org-license-batches');
   // ── 002-05 学生授权记录：这里**故意走一次真实授权**（不是只读夹具）——
   // 顺便把这一版新加的「来源」端到端验掉：机构授权时带 source，审计里要能原样读回来。
-  // ⚠️ 放在最后：它会多产生一条授权，若跑在前面会把 002-03 的「已有课包学生」等数字改掉。
+  // ⚠️ 放在最后：它会多产生一条授权，若跑在前面会把 002-03 的「已有次数学生」等数字改掉。
   const orgToken = (await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } })).data?.token;
   assert.ok(orgToken, 'fixture: org-admin 登录失败（002-05 需要它来造一条真实授权记录）');
   const noGrantStudent = students[5];   // 孙雨桐：前面「暂无课包」筛选里用的就是这类学生
@@ -1113,7 +1113,7 @@ try {
   //    所以这里**直接按路由打开**，继续守这一屏的布局与逻辑。
   await orgPage.goto(`${base}/grants`, { waitUntil: 'domcontentloaded' });
   await orgSettle();
-  await orgExpect('批量添加课包（选课包前）', ['① 选课包', '课包', '可用次数']);
+  await orgExpect('批量授权次数（选课包前）', ['① 选课包', '课包', '可用次数']);
   await orgPage.locator('.form-grid select').first().selectOption('series-ui-materials');
   await orgSettle();
   await orgExpect('勾选学生', [

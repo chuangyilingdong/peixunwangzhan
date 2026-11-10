@@ -67,7 +67,7 @@ console.log('P77 passed: explicit credentials, organization capacity, teacher de
   if (!(loginAt >= 0 && passwordAt >= 0 && displayAt >= 0)) problems.push('找不到管理员三格（登录名/密码/姓名）');
   else if (!(loginAt < passwordAt && passwordAt < displayAt)) problems.push('「机构管理员登录名」与「管理员初始密码」没有挨在一起（2026-10-03 用户口径：这两格要相邻）');
   // ③ 列表行的「授权课包」按钮直达本机构的课包与授权次数页
-  if (!/授权课包/.test(page)) problems.push('机构列表行没有「授权课包」按钮（用户 2026-10-03 口径）');
+  if (!/开通\/调次数/.test(page)) problems.push('机构列表行没有「开通/调次数」按钮（2026-11-10 口径）');
   if (!/organizations\/\$\{encodeURIComponent\(item\.id\)\}\/quota/.test(page)) problems.push('「授权课包」按钮没有跳到 /organizations/<id>/quota（机构课包与授权次数）');
   // ⭐ 2026-10-03 用户口径：「图1的菜单栏名字改成：创建机构与授权」——
   //    按本文件的老口径（2026-09-18「一个页面一个名字」），菜单 / 页面标题一起改。

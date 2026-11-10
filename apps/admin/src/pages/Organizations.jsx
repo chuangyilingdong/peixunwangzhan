@@ -226,8 +226,8 @@ export function Organizations({ api }) {
   return <>
     <PageHeader eyebrow="平台教务" title="创建机构与授权"  actions={<><button className="secondary-button" disabled={exporting} onClick={exportOrganizations}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={() => { organizations.refresh(); setMessage(null); }}>刷新</button></>} />
     {showCreateDialog ? <CreateOrganizationDialog form={form} setForm={setForm} saving={saving} error={dialogError} onClose={() => setShowCreateDialog(false)} onSubmit={create} /> : null}
-    <Notice tone="info">先选机构 → 再配置课包与授权次数（总授权次数 / 已授权次数 / 剩余授权次数）：列表里<b>「授权课包」直达</b>本机构的课包与授权次数，「查看详情」进机构详情。</Notice>
-    {message ? <Notice tone={message.tone}>{message.text}{createdId ? <> 下一步：<Link to={`/organizations/${encodeURIComponent(createdId)}/quota`}>去授权课包</Link> · <Link to={`/organizations/${encodeURIComponent(createdId)}`}>查看机构详情</Link></> : null}</Notice> : null}
+    <Notice tone="info">先选机构 → 再配置课包与授权次数（总授权次数 / 已授权次数 / 剩余授权次数）：列表里<b>「开通/调次数」直达</b>本机构的课包与授权次数，「查看详情」进机构详情。</Notice>
+    {message ? <Notice tone={message.tone}>{message.text}{createdId ? <> 下一步：<Link to={`/organizations/${encodeURIComponent(createdId)}/quota`}>去开通/调次数</Link> · <Link to={`/organizations/${encodeURIComponent(createdId)}`}>查看机构详情</Link></> : null}</Notice> : null}
     <Panel title="机构列表">
       <form className="filter-form" onSubmit={submitFilters}>
         <label>机构名称<input value={draft.search} placeholder="机构名称 / 机构 ID" onChange={(event) => setDraft({ ...draft, search: event.target.value })} /></label>
@@ -263,7 +263,7 @@ export function Organizations({ api }) {
               {/* ⭐ 2026-10-03（用户口径）：「创建完机构，在图2位置多个按钮，授权课包。跳转到图3页面」——
                   列表里**直达**该机构的「课包与授权次数」页（原来要先点进机构详情、再找「授权次数」入口，
                   多两步；详情页那个入口保留，两条路都能到）。 */}
-              <button type="button" className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(item.id)}/quota`)}>授权课包</button>
+              <button type="button" className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(item.id)}/quota`)}>开通/调次数</button>
             </div></td>
           </tr>)}</tbody>
         </table></div>
@@ -321,18 +321,23 @@ export function Authorizations({ api }) {
   //   （`/organizations/:orgId/quota`，机构采购与平台调整在同一个抽屉里二选一）。
   //   本页保留**课包视角**：库存总次数（平台自己的池子）+ 各机构已分到多少，只读。）
   return <>
-    <PageHeader title="授权管理"  />
+    <PageHeader title="授权与次数流水"  />
     {confirmation}
     {message && <Notice tone="success">{message}</Notice>}
     {inventory.loading || organizations.loading ? <Loading /> : inventory.error ? <ErrorState error={inventory.error} onRetry={inventory.refresh} /> : organizations.error ? <ErrorState error={organizations.error} onRetry={organizations.refresh} /> : <>
-      <Panel title="选择授权对象"><div className="form-grid">
+      <Panel title="按课包 / 机构查看"><div className="form-grid">
         <label>课包<SearchSelect ariaLabel="搜索课包" value={seriesId} onChange={(value) => { setSeriesId(value); setMessage(''); }} options={inventory.data?.items || []} placeholder="选择已发布课包" searchPlaceholder="搜索课包名称" /></label>
         <label>机构<SearchSelect ariaLabel="搜索机构" value={orgId} onChange={(value) => { setOrgId(value); setMessage(''); }} options={organizations.data?.items || []} placeholder="选择一家机构" searchPlaceholder="搜索机构名称" /></label>
       </div></Panel>
       {selected && selected.stockTracked !== false ? <Panel title={`${selected.title} · 库存`}><div className="split">
         <div className="metrics"><MetricCard label="库存总次数" value={selected.stockTotal} /><MetricCard label="已分配或消耗" value={selected.reserved} /><MetricCard label="可分配库存" value={selected.available} /></div>
         <form onSubmit={saveStock}><label>调整库存总次数<input type="number" min={selected.reserved} max="100000000" required value={stock} onChange={(event) => setStock(event.target.value)} /></label><button className="secondary-button" disabled={busy || Number(stock) === selected.stockTotal}>调整库存</button></form>
-      </div></Panel> : selected ? <Notice tone="info">普通课包已取消「平台库存」：直接给机构设置授权次数即可（入口在下方机构课包页）。</Notice> : null}
+      </div></Panel> : selected ? <Notice tone="info">
+        普通课包已取消「平台库存」：直接给机构设置授权次数即可。
+        {selectedOrg
+          ? <> <Link to={`/organizations/${encodeURIComponent(orgId)}/quota`}>去「{selectedOrg.name}」的开通/调次数页 →</Link></>
+          : '先选择一家机构，再到机构页开通/调次数。'}
+      </Notice> : null}
       {selected && selectedOrg ? <>
         <div className="metrics">
           {/* 2026-11-10：普通课包没有平台库存（stockTracked=false），这一格不显示 */}
@@ -346,12 +351,14 @@ export function Authorizations({ api }) {
           {/* ⭐ 2026-09-27（合并重复入口）：「追加次数」表单已**整体搬去机构页** —— 用户口径
               「很多重复的逻辑和操作。梳理下能合并就合并」。这里改成指路 + 只读说明：
               本页是**课包视角**（库存总次数 + 各机构分到多少），给机构开通/追加/调整在机构页那一个抽屉里。 */}
-          <Panel title="给这家机构加次数">
-            <p className="muted">加次数现在只有<strong>一个入口</strong>：进这家机构的「机构课包与授权次数」页——
+          <Panel title="去机构页开通/调次数">
+            <p className="muted">开通/调次数现在只有<strong>一个入口</strong>：进这家机构的「机构课包与授权次数」页——
               那里能看到它的全部课包与次数台账；<strong>增加</strong>要记一笔采购与收款（成交额 / 收款状态），
               <strong>减少</strong>只改次数、不动财务账。</p>
-            <p className="muted">这一页负责的是<strong>课包自己的库存池</strong>（上面那个「调整库存总次数」）与各机构已分到多少。</p>
-            <Link className="primary-button" to={`/organizations/${encodeURIComponent(orgId)}/quota`}>去「{selectedOrg.name}」的机构页加次数 →</Link>
+            <p className="muted">{selected.stockTracked !== false
+              ? '这一页同时负责体验课包自己的库存池（上面「调整库存总次数」）与各机构已分到多少。'
+              : '普通课包没有平台库存池；这一页只做课包视角的对账，开通/调次数请走机构页。'}</p>
+            <Link className="primary-button" to={`/organizations/${encodeURIComponent(orgId)}/quota`}>去「{selectedOrg.name}」的开通/调次数页 →</Link>
           </Panel>
           <Panel title="授权有效期"><div className="card-list">
             <p className="muted">授权有效期<strong>不需要在这里填</strong>：它自动跟随该机构的<strong>合同到期日</strong>
@@ -362,9 +369,9 @@ export function Authorizations({ api }) {
           </div></Panel>
         </div>
         {assignment?.purchaseBatches?.length ? <Panel title="购买批次历史"><div className="table-wrap"><table><thead><tr><th>购买时间</th><th>次数</th><th>实际成交总额</th><th>收款状态</th><th>订单号</th><th>合同号</th><th>已确认次数</th></tr></thead><tbody>{assignment.purchaseBatches.map((batch) => <tr key={batch.id}><td>{formatDate(batch.purchasedAt)}</td><td>{batch.quantity}</td><td>{batch.amountMinor == null || !batch.currency ? '未知（历史导入）' : `${(batch.amountMinor / 100).toFixed(2)} ${batch.currency}`}</td><td>{batch.paymentStatus === 'UNKNOWN' ? '未知' : <Status value={batch.paymentStatus} />}</td><td>{batch.orderNo || '未知'}</td><td>{batch.contractNo || '未知'}</td><td>{batch.recognizedQuantity}</td></tr>)}</tbody></table></div></Panel> : null}
-        {!assignment ? <Notice tone="info">该机构尚未获得此课包。先追加正数次数即可创建授权；有效期自动跟随该机构的合同到期日。</Notice> : null}
+        {!assignment ? <Notice tone="info">该机构尚未开通此课包。{selectedOrg ? <> <Link to={`/organizations/${encodeURIComponent(orgId)}/quota`}>去「{selectedOrg.name}」的开通/调次数页 →</Link></> : '去机构页给它开通次数即可。'} 有效期自动跟随该机构的合同到期日。</Notice> : null}
       </> : <Empty title="选择课包和机构查看授权" body="普通授权流程一次只操作一家机构。" />}
-      {selected ? <Panel title="该课包机构授权明细">{selected.allocations.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>状态</th><th>购买次数</th><th>已分配</th><th>余额</th><th>到期时间</th></tr></thead><tbody>{selected.allocations.map((item) => <tr key={item.id}><td>{item.orgName}</td><td><Status value={item.status} /></td><td>{item.quotaTotal}</td><td>{item.quotaUsed}</td><td>{item.remaining}</td><td>{formatDate(item.expiresAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无机构授权" />}</Panel> : null}
+      {selected ? <Panel title="该课包的机构授权次数">{selected.allocations.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>状态</th><th>总授权次数</th><th>已分配</th><th>剩余次数</th><th>到期时间</th></tr></thead><tbody>{selected.allocations.map((item) => <tr key={item.id}><td>{item.orgName}</td><td><Status value={item.status} /></td><td>{item.quotaTotal}</td><td>{item.quotaUsed}</td><td>{item.remaining}</td><td>{formatDate(item.expiresAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无机构授权" />}</Panel> : null}
     </>}
   </>;
 }

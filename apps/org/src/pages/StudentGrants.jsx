@@ -94,7 +94,7 @@ export function StudentGrants({ api }) {
       : current.filter((item) => item.id !== student.id)));
   }
   // 「全选」只作用于**当前这一页**（与服务端分页一致）：在几百人的名册上做跨页全选是个陷阱。
-  // 而且最多只选到剩余人次 —— 让用户在点之前就看到结果，而不是提交后被顶回来。
+  // 而且最多只选到剩余次数 —— 让用户在点之前就看到结果，而不是提交后被顶回来。
   function selectCurrentPage() {
     const addable = addableOnPage.filter((student) => !pickedIds.has(student.id));
     if (!addable.length) return;
@@ -103,7 +103,7 @@ export function StudentGrants({ api }) {
       if (addable.length > room) {
         setPicked((current) => [...current, ...addable.slice(0, room).map(toPicked)]);
         setHint(room
-          ? `这一页还能选的人比剩余人次多：已按上限只选了 ${room} 人（剩余 ${remaining} 次）。要授权更多请先让平台增购次数。`
+          ? `这一页还能选的人比剩余次数多：已按上限只选了 ${room} 人（剩余 ${remaining} 次）。要授权更多请先让平台增购次数。`
           : `本课包剩余 ${remaining} 次已经用完，无法再选。要授权更多请先让平台增购次数。`);
         return;
       }
@@ -140,7 +140,7 @@ export function StudentGrants({ api }) {
   return <>
     <PageHeader
       eyebrow="学生授权"
-      title="批量添加课包"
+      title="批量授权次数"
       description={isExperience
         ? '体验课包：每分给一名学生用掉 1 次；同一个学生可以再分、次数会累加（同一节课可反复上，正常结束且有有效产出才核销 1 次）。'
         : '普通课包：1 次 = 1 个课时次数（上 1 节扣 1 次）；同一个学生可以再分、次数会累加（上过的课不能重复上）。'}
@@ -167,7 +167,7 @@ export function StudentGrants({ api }) {
         </div>
         {!items.length ? <Notice tone="info">当前机构还没有被平台授权的课包，请先在「课程备课」里查看，或联系平台授权。</Notice> : null}
         {noQuota ? <Notice tone="warning">
-          这个课包当前**可授权次数为 0**：平台还没有给本机构分配人次，所以现在不能授权。
+          这个课包当前**可授权次数为 0**：平台还没有给本机构分配次数，所以现在不能授权。
         </Notice> : null}
       </>}
     </Panel>
@@ -229,7 +229,7 @@ export function StudentGrants({ api }) {
         <span className="muted">本次将用掉 <strong>{needed}</strong> 次{picked.length && units > 1 ? `（${picked.length} 人 × 每人 ${units} 次）` : ''}</span>
         <span className="muted">·</span>
         <span className={overLimit ? 'status danger' : 'muted'}>
-          {overLimit ? `剩余人次不足：本课包只剩 ${remaining} 次，本次需要 ${needed} 次` : `授权后本课包剩 ${remaining === null ? '—' : Math.max(0, remaining - needed)} 次`}
+          {overLimit ? `剩余次数不足：本课包只剩 ${remaining} 次，本次需要 ${needed} 次` : `授权后本课包剩 ${remaining === null ? '—' : Math.max(0, remaining - needed)} 次`}
         </span>
       </div>
       {/* 跨页选择要看得见：把勾了谁原样列出来（翻页之后也不丢）；每人多次时把 ×N 标出来 */}
