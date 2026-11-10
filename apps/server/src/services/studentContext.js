@@ -11,7 +11,7 @@ import {
   orgSeriesAccessSql,
   publishedLessonVisibilitySql, arows, arow, amap, likeKeyword, likeEscapeClause,
 } from '../lib.js';
-import { grantSeriesIdFor, normalPoolSeries } from './courseGrants.js';
+import { grantSeriesIdFor, inNormalCoursePool, normalPoolSeries, normalPoolSeriesIds } from './courseGrants.js';
 // 画布还能不能编辑（DRAFT / SUBMITTED 都算开着）—— 与前端同一份口径，见 packages/shared/src/canvasOutput.js
 import { isCanvasEditableProjectStatus } from '../../../../packages/shared/src/canvasOutput.js';
 
@@ -156,11 +156,21 @@ export async function getStudentActiveSessions(user) {
  * 把接口改崩过两次，见交接说明第 59 条）。
  */
 async function grantedSeriesIds(userId, orgId) {
-  return new Set((await arows(
-    `SELECT series_id FROM student_course_grants
-      WHERE org_id = ? AND student_id = ? AND revoked_at IS NULL`,
+  const grants = await arows(
+    `SELECT grant.series_id, series.series_type, series.include_in_normal_pool
+       FROM student_course_grants AS \`grant\`
+       JOIN course_series series ON series.id=grant.series_id
+      WHERE grant.org_id=? AND grant.student_id=? AND grant.revoked_at IS NULL`,
     [orgId, userId],
-  )).map((item) => item.series_id));
+  );
+  const granted = new Set(grants.map((item) => item.series_id));
+  // 2026-11-10：普通课是 S1/S2/S3 共一个池子，许可只记在池子系列（S1）上。
+  // 学生端「我的课程」要能看到池子里的**全部系列**（3 张卡）——否则 S2/S3 的课
+  // 虽然老师能建课堂、余额也够，学生在网页上却没有入口点进去。
+  if (grants.some((item) => inNormalCoursePool(item))) {
+    for (const id of await normalPoolSeriesIds()) granted.add(id);
+  }
+  return granted;
 }
 
 /**

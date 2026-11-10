@@ -84,7 +84,8 @@ try {
   for (let i = 0; i < 100; i += 1) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* 等服务起来 */ } await sleep(100); }
   const admin = (await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } })).data?.token;
   const orgAdmin = (await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } })).data?.token;
-  assert.ok(admin && orgAdmin, '登录失败');
+  const studentToken = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data?.token;
+  assert.ok(admin && orgAdmin && studentToken, '登录失败');
 
   const pool = await arow(`SELECT id FROM course_series
     WHERE owner_type='PLATFORM' AND series_type='NORMAL' AND include_in_normal_pool<>0
@@ -134,6 +135,12 @@ try {
     check('② 不计入池子的系列**没有**访问授权 ★', !excludedAccess, JSON.stringify(excludedAccess));
     const batch = await arow('SELECT scope_type, scope_key FROM license_purchase_batches WHERE org_id=? AND series_id=? ORDER BY created_at DESC LIMIT 1', [seeded.orgId, pool.id]);
     check('② 池子采购批次 scope=NORMAL', batch?.scope_type === 'NORMAL' && batch?.scope_key === 'NORMAL', JSON.stringify(batch));
+
+    // 学生端：许可记在池子系列上，但「我的课程」要展开成池子里的**全部系列**（S1/S2/S3 各一张卡）。
+    const dashboard = await api('/api/student/dashboard', { token: studentToken });
+    const studentCourses = dashboard.data?.classroomCourses || [];
+    check('② 学生端能看到池子系列 S1 的卡', studentCourses.some((item) => item.id === pool.id), JSON.stringify(studentCourses.map((item) => ({ id: item.id, title: item.title, hasGrant: item.hasGrant }))).slice(0, 400));
+    check('② 学生端也能看到池子里的新系列（S2 卡，无单独学生许可）★', studentCourses.some((item) => item.id === includedId && item.hasGrant === true), JSON.stringify(studentCourses.map((item) => ({ id: item.id, title: item.title, hasGrant: item.hasGrant }))).slice(0, 400));
   }
 
   /* ③ 独立课程可以单独授权：次数落在自己系列上，不占普通课池子 */
