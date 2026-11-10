@@ -3564,3 +3564,23 @@ if (seriesDdl.includes("'ASSIGNED_ORGS'")) {
 //    所以它每次启动都抛 `no such column: snapshot` 并被 catch 吞掉，**一次都没生效过**。
 //    读取侧已经做了归一化（normalizeSeriesVisibility：ALL_ORGS/ASSIGNED_ORGS → PUBLIC），
 //    数据面不受影响，所以直接删掉这条死语句。
+
+// ── 2026-11-10 普通课池子：许可三账/库存流水加「范围」字段（用户口径 3A）──────────────
+// 普通课（S1/S2/S3 共 48 节）的采购批次/收入/库存流水统一标 scope_type='NORMAL'、scope_key='NORMAL'；
+// 体验课保持 scope_type='SERIES'、scope_key=系列 id。报表按 scope 汇总即可把普通课合成一条。
+for (const [table, columns] of [
+  ['license_purchase_batches', ["scope_type TEXT NOT NULL DEFAULT 'SERIES'", 'scope_key TEXT']],
+  ['license_revenue_events', ["scope_type TEXT NOT NULL DEFAULT 'SERIES'", 'scope_key TEXT']],
+  ['course_quota_changes', ["scope_type TEXT NOT NULL DEFAULT 'SERIES'", 'scope_key TEXT']],
+]) {
+  for (const column of columns) {
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`); }
+    catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+  }
+}
+for (const table of ['license_purchase_batches', 'license_revenue_events', 'course_quota_changes']) {
+  db.exec(`UPDATE ${table} SET
+      scope_type = CASE WHEN (SELECT s.series_type FROM course_series s WHERE s.id=${table}.series_id)='NORMAL' THEN 'NORMAL' ELSE 'SERIES' END,
+      scope_key = CASE WHEN (SELECT s.series_type FROM course_series s WHERE s.id=${table}.series_id)='NORMAL' THEN 'NORMAL' ELSE series_id END
+    WHERE scope_key IS NULL`);
+}

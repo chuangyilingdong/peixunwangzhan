@@ -11,6 +11,7 @@ import {
   orgSeriesAccessSql,
   publishedLessonVisibilitySql, arows, arow, amap, likeKeyword, likeEscapeClause,
 } from '../lib.js';
+import { grantSeriesIdFor, normalPoolSeries } from './courseGrants.js';
 // 画布还能不能编辑（DRAFT / SUBMITTED 都算开着）—— 与前端同一份口径，见 packages/shared/src/canvasOutput.js
 import { isCanvasEditableProjectStatus } from '../../../../packages/shared/src/canvasOutput.js';
 
@@ -297,7 +298,9 @@ export async function getStudentCourseDetail(user, seriesId) {
        AND ${orgCourseAccessSql()}`,
     [orgId, seriesId, orgId],
   );
-  if (!series || !await studentHasGrant(studentIdentity(user).id, orgId, seriesId)) throw errors.notFound('课包不存在或不可访问', 'COURSE_SERIES_NOT_FOUND');
+  // 普通课的次数在「普通课池子」那一行（S1/S2/S3 共用），不是在课时所属的系列上
+  const grantSeriesId = await grantSeriesIdFor({ seriesId, seriesType: series?.series_type });
+  if (!series || !await studentHasGrant(studentIdentity(user).id, orgId, grantSeriesId)) throw errors.notFound('课包不存在或不可访问', 'COURSE_SERIES_NOT_FOUND');
   const detail = await normalizeSeries(series, { orgId, includeLessons: true, asPublished: true });
   detail.lessons = (detail.lessons || []).filter((lesson) => lesson.status === 'PUBLISHED');
   return detail;
@@ -342,7 +345,9 @@ export async function resolveStudentLessonContext(user, courseLessonId, preferre
     [orgId, lesson.series_id, orgId],
   );
   if (!series || !orgAccess) throw errors.forbidden('这个课包还没有授权给本机构', 'COURSE_NOT_ASSIGNED');
-  if (!await studentHasGrant(userId, orgId, lesson.series_id)) {
+  // 普通课的次数在「普通课池子」那一行（S1/S2/S3 共用），不是在课时所属的系列上
+  const grantSeriesId = await grantSeriesIdFor({ seriesId: lesson.series_id, seriesType: series?.series_type });
+  if (!await studentHasGrant(userId, orgId, grantSeriesId)) {
     throw errors.forbidden('这个课包还没有分给你：请老师先把课包分给你，你才能上这节课。', 'COURSE_GRANT_REQUIRED');
   }
 

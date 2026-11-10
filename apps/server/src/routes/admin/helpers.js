@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 // 体验课包（2026-09-24 用户口径）：课包类型判定（发布校验里的「只能 1 节课」用它）
-import { isExperienceSeries } from '../../services/courseGrants.js';
+import { isExperienceSeries, normalLessonCount, normalPoolSeries } from '../../services/courseGrants.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
 import { salePriceFenSuccessSql } from '../../services/computePool.js';
 import { normalizeSubmission } from '../vibecoding.js';
@@ -938,14 +938,28 @@ async function buildOrganizationDetail(orgId) {
   const account = await arow('SELECT * FROM org_billing_accounts WHERE org_id=?', [organization.id]);
   const admins = await orgAdminRows(organization.id);
   const packages = (await arows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC LIMIT 100', [organization.id])).map(normalizePackage);
-  const courseAssignments = (await arows(`SELECT assignment.id, assignment.series_id, assignment.status, assignment.assigned_at, assignment.expires_at, assignment.quota_total, assignment.quota_used, series.title AS series_title
+  const assignmentRows = await arows(`SELECT assignment.id, assignment.series_id, assignment.status, assignment.assigned_at, assignment.expires_at, assignment.quota_total, assignment.quota_used, series.title AS series_title, series.series_type
     FROM course_assignments assignment JOIN course_series series ON series.id=assignment.series_id
-    WHERE assignment.org_id=? ORDER BY assignment.assigned_at DESC LIMIT 100`, [organization.id])).map((item) => {
-    return {
+    WHERE assignment.org_id=? ORDER BY assignment.assigned_at DESC LIMIT 100`, [organization.id]);
+  const normalPool = await normalPoolSeries();
+  const normalLessons = await normalLessonCount();
+  const courseAssignments = assignmentRows
+    .filter((item) => String(item.series_type || '').toUpperCase() !== 'NORMAL')
+    .map((item) => ({
       id: item.id, seriesId: item.series_id, title: item.series_title, status: item.status, assignedAt: item.assigned_at, quotaTotal: Number(item.quota_total), quotaUsed: Number(item.quota_used), remaining: Math.max(0, item.quota_total - item.quota_used),
       expiresAt: item.expires_at || null, expired: Boolean(item.expires_at) && new Date(item.expires_at).getTime() <= Date.now(),
-    };
-  });
+    }));
+  // 普通课：S1/S2/S3 共一个池子，机构详情里只给一行
+  if (normalPool) {
+    const poolRow = assignmentRows.find((item) => item.series_id === normalPool.id);
+    if (poolRow) {
+      courseAssignments.unshift({
+        id: poolRow.id, seriesId: 'NORMAL', title: `普通课（${normalLessons} 节）`, status: poolRow.status, assignedAt: poolRow.assigned_at,
+        quotaTotal: Number(poolRow.quota_total), quotaUsed: Number(poolRow.quota_used), remaining: Math.max(0, poolRow.quota_total - poolRow.quota_used),
+        expiresAt: poolRow.expires_at || null, expired: Boolean(poolRow.expires_at) && new Date(poolRow.expires_at).getTime() <= Date.now(),
+      });
+    }
+  }
   const summary = {
     teachers: await acount("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='TEACHER' AND deleted_at IS NULL", [organization.id]),
     students: await acount("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL", [organization.id]),

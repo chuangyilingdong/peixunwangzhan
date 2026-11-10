@@ -21,7 +21,9 @@ const PAGE_SIZE = 20;
 const toPicked = (student) => ({ id: student.id, name: student.displayName || student.login });
 
 export function StudentGrants({ api }) {
-  const courses = useData(() => api.get('org/course-series?limit=100'), [api]);
+  // 2026-11-10：普通课 = S1/S2/S3 共一个池子，授权下拉只出「普通课（N 节）」+ 体验课；
+  // series-overview 正好按这个口径返回（不再用逐系列的 course-series）。
+  const courses = useData(() => api.get('org/series-overview?days=30'), [api]);
   const [studentPage, setStudentPage] = useState(1);
   const [studentSearch, setStudentSearch] = useState('');
   const students = useData(
@@ -50,10 +52,8 @@ export function StudentGrants({ api }) {
   // 机构对所有课包的授权次数都从这里拿（列表接口已经带上 quotaTotal/quotaUsed）
   const quotaOf = useMemo(() => {
     const map = new Map();
-    for (const series of items) {
-      const assignment = (series.assignments || []).find((row) => Number(row.quotaTotal || 0) > 0)
-        || (series.assignments || []).find((row) => row.quotaTotal !== undefined);
-      if (assignment) map.set(series.id, assignment);
+    for (const item of items) {
+      map.set(item.seriesId, { quotaTotal: item.quotaTotal, quotaUsed: item.quotaUsed, remaining: item.remaining });
     }
     return map;
   }, [items]);
@@ -76,7 +76,7 @@ export function StudentGrants({ api }) {
   const activeStudentIds = new Set((grants.data?.items || []).filter((row) => !row.revokedAt).map((row) => row.studentId));
   // 体验课包（2026-09-24 用户口径）：**可以重复分给同一个学生**、未使用的次数**预先累积** ——
   // 所以「已授权」不再等于"不能再选"，改看这名学生手上还剩几次。
-  const selectedSeries = items.find((series) => series.id === seriesId) || null;
+  const selectedSeries = items.find((item) => item.seriesId === seriesId) || null;
   const isExperience = selectedSeries?.seriesType === 'EXPERIENCE';
   const remainingByStudent = new Map((grants.data?.items || [])
     .filter((row) => !row.revokedAt)
@@ -153,11 +153,11 @@ export function StudentGrants({ api }) {
           <label>课包
             <select value={seriesId} onChange={(event) => { setSeriesId(event.target.value); setPicked([]); setHint(''); }}>
               <option value="">选择课包</option>
-              {items.map((series) => {
-                const assignment = quotaOf.get(series.id);
+              {items.map((item) => {
+                const assignment = quotaOf.get(item.seriesId);
                 const left = assignment && Number(assignment.quotaTotal || 0) > 0
                   ? `剩 ${Math.max(0, Number(assignment.quotaTotal) - Number(assignment.quotaUsed || 0))} 次` : '无可用次数';
-                return <option key={series.id} value={series.id}>{series.title}（{left}）</option>;
+                return <option key={item.seriesId} value={item.seriesId}>{item.title}（{left}）</option>;
               })}
             </select>
           </label>

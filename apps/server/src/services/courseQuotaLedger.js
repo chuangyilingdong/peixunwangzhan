@@ -144,15 +144,19 @@ export async function recordQuotaChange({
   if (skipWhenUnchanged && totalAfter === totalBefore && usedAfter === usedBefore) return null;
   const createdAt = nowIso();
   const changeId = id('quota_change');
+  const seriesRow = await arow('SELECT series_type FROM course_series WHERE id=?', [assignment.series_id]);
+  const normal = String(seriesRow?.series_type || '').toUpperCase() === 'NORMAL';
+  const scopeType = normal ? 'NORMAL' : 'SERIES';
+  const scopeKey = normal ? 'NORMAL' : assignment.series_id;
   await aq(`INSERT INTO course_quota_changes(
       id,org_id,series_id,assignment_id,change_type,delta,
       quota_total_before,quota_total_after,quota_used_before,quota_used_after,
-      actor_id,actor_role,reason,source,created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
+      actor_id,actor_role,reason,source,created_at,scope_type,scope_key)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
     changeId, assignment.org_id, assignment.series_id, assignment.id, resolved, delta,
     totalBefore, totalAfter, usedBefore, usedAfter,
     actorId || null, actorRole || null, String(reason || '').trim(), String(source || ''),
-    createdAt,
+    createdAt, scopeType, scopeKey,
   ]);
   return normalizeQuotaChange(await arow('SELECT * FROM course_quota_changes WHERE id=?', [changeId]));
 }

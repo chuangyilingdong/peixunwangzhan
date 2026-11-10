@@ -155,16 +155,16 @@ try {
     check('④ 普通课包不动体验包那两格（仍 5 / 5）',
       Number(mine?.experienceGrantedUnits) === 5 && Number(mine?.experienceRemainingUnits) === 5,
       `授权 ${mine?.experienceGrantedUnits} / 剩 ${mine?.experienceRemainingUnits}`);
-    const normalRow = (mine?.grantedSeries || []).find((row) => row.seriesId === normalId);
-    check('④ 普通课包在明细里是 NORMAL 且 grantedUnits=1（前端不显示 ×N）',
-      normalRow?.seriesType === 'NORMAL' && Number(normalRow?.grantedUnits) === 1, JSON.stringify(normalRow || {}));
+    const normalRow = (mine?.grantedSeries || []).find((row) => row.seriesId === 'NORMAL');
+    check('④ 普通课在明细里是 NORMAL 且带次数（2026-11-10 起普通课是 48 节一个池子）',
+      normalRow?.seriesType === 'NORMAL' && Number(normalRow?.grantedUnits) >= 1, JSON.stringify(normalRow || {}));
   }
 
   /* ⑤ 弹窗靠这个字段决定「要不要填次数」：series-overview 必须给出课包类型 */
   {
     const overview = await api('/api/org/series-overview?days=30', { token: orgAdmin });
     const exp = (overview.data?.items || []).find((item) => item.seriesId === experienceId);
-    const normal = (overview.data?.items || []).find((item) => item.seriesId === normalId);
+    const normal = (overview.data?.items || []).find((item) => item.seriesId === 'NORMAL');
     check('⑤ 库存接口带 seriesType（体验包 EXPERIENCE / 普通包 NORMAL）',
       exp?.seriesType === 'EXPERIENCE' && normal?.seriesType === 'NORMAL', `exp=${exp?.seriesType} normal=${normal?.seriesType}`);
     // 体验包 6 次已分掉 5 → 剩 1（弹窗里次数输入的上限就是它）

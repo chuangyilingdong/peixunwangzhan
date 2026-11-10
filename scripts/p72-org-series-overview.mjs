@@ -84,17 +84,18 @@ try {
   const overview = await api('/api/org/series-overview?days=30', { token: admin });
   check('① 概览接口可用', overview.status === 200 && Array.isArray(overview.data?.items), JSON.stringify(overview).slice(0, 200));
   const courseList = await api('/api/org/course-series?limit=100', { token: admin });
-  const expectedSeries = (courseList.data?.items || []).map((item) => item.id).sort();
+  // 普通课在概览里合成一个 'NORMAL'（S1/S2/S3 一个池子）
+  const expectedSeries = [...new Set((courseList.data?.items || []).map((item) => String(item.seriesType || '').toUpperCase() === 'NORMAL' ? 'NORMAL' : item.id))].sort();
   const gotSeries = (overview.data?.items || []).map((item) => item.seriesId).sort();
   check('① 课包范围与「课程中心」完全一致（不串机构、不漏）', JSON.stringify(expectedSeries) === JSON.stringify(gotSeries), JSON.stringify({ expectedSeries, gotSeries }));
-  const row = (overview.data?.items || []).find((item) => item.seriesId === series.id);
+  const row = (overview.data?.items || []).find((item) => item.seriesId === 'NORMAL' || item.seriesId === series.id);
   check('① 目标课包在列表里', Boolean(row), JSON.stringify(overview.data?.items || []).slice(0, 200));
   check('① 可授权次数读的是授权单上的 quota_total（5）', Number(row?.quotaTotal) === 5, JSON.stringify(row));
 
   /* ② 分配 2 个学员后：已分配 2、剩余 3、明细 2 条（三处同源） */
   const granted = await api('/api/org/course-grants', { method: 'POST', token: admin, body: { seriesId: series.id, studentIds: students.slice(0, 2).map((item) => item.id) } });
   check('② 分配 2 名学员成功', granted.status === 200 && Number(granted.data?.granted) === 2, JSON.stringify(granted).slice(0, 200));
-  const after = (await api('/api/org/series-overview?days=30', { token: admin })).data.items.find((item) => item.seriesId === series.id);
+  const after = (await api('/api/org/series-overview?days=30', { token: admin })).data.items.find((item) => item.seriesId === 'NORMAL' || item.seriesId === series.id);
   check('② 已分配次数 = 2（跟着授权单的 quota_used 走）', Number(after?.quotaUsed) === 2, JSON.stringify(after));
   check('② 剩余 = 可授权 − 已分配 = 3', Number(after?.remaining) === 3, JSON.stringify({ total: after?.quotaTotal, used: after?.quotaUsed, remaining: after?.remaining }));
   check('② 已分配学员数 = 2、人次 = 2', Number(after?.grantedStudents) === 2 && Number(after?.grantedCount) === 2, JSON.stringify(after));

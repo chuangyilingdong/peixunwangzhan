@@ -40,19 +40,23 @@ export async function ensureClassroom(dbPath) {
   if (!ready) return created;
 
   const grants = await arows(
-    `SELECT g.student_id, g.org_id, g.series_id
+    `SELECT g.student_id, g.org_id, g.series_id, series.series_type
        FROM student_course_grants g
        JOIN users student ON student.id = g.student_id AND student.deleted_at IS NULL
+       JOIN course_series series ON series.id = g.series_id
       WHERE g.revoked_at IS NULL`,
     [],
   );
   if (!grants.length) return created;
   const now = new Date().toISOString();
   for (const grant of grants) {
-    const lessons = await arows(
-      "SELECT id, title, delivery_mode FROM course_lessons WHERE series_id=? AND status='PUBLISHED'",
-      [grant.series_id],
-    );
+    const normal = String(grant.series_type || '').toUpperCase() === 'NORMAL';
+    const lessons = normal
+      ? await arows(`SELECT lesson.id, lesson.title, lesson.delivery_mode, lesson.series_id
+          FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id
+          WHERE series.owner_type='PLATFORM' AND series.series_type='NORMAL'
+            AND series.status='PUBLISHED' AND lesson.status='PUBLISHED'`)
+      : await arows("SELECT id, title, delivery_mode, series_id FROM course_lessons WHERE series_id=? AND status='PUBLISHED'", [grant.series_id]);
     if (!lessons.length) continue;
     const teacherId = (await teacherOf(grant.org_id)) || grant.student_id;
     const classmates = grants.filter((item) => item.series_id === grant.series_id).map((item) => item.student_id);
@@ -65,7 +69,7 @@ export async function ensureClassroom(dbPath) {
           "INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode," +
           "allow_text,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,started_by,started_at,created_at,updated_at) " +
           "VALUES (?,?,?,?,?,?, 'ACTIVE', ?, ?,?,?,?,?,?, ?, ?, ?, ?)",
-          [sessionId, (lesson.title || '课时') + ' · 守卫夹具课堂', grant.org_id, grant.series_id, lesson.id,
+          [sessionId, (lesson.title || '课时') + ' · 守卫夹具课堂', grant.org_id, lesson.series_id || grant.series_id, lesson.id,
             teacherId, lesson.delivery_mode || 'CANVAS',
             caps.text, caps.image, caps.music, caps.video, caps.podcast, caps.dubbing,
             teacherId, now, now, now],
@@ -77,7 +81,7 @@ export async function ensureClassroom(dbPath) {
         await aq(
           "INSERT OR IGNORE INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) " +
           "VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)",
-          ['sstudent_fixture_' + session.id + '_' + studentId, session.id, studentId, grant.org_id, lesson.id, grant.series_id, teacherId, now, now],
+          ['sstudent_fixture_' + session.id + '_' + studentId, session.id, studentId, grant.org_id, lesson.id, lesson.series_id || grant.series_id, teacherId, now, now],
         );
       }
     }
@@ -97,9 +101,10 @@ export async function switchClassroom(dbPath, { deliveryMode = 'VIBECODING', req
   const switched = [];
   // ⚠️ 要覆盖**所有**有许可的课包：只取第一个的话，守卫遍历到的其它课包课时仍然进不去
   const grants = await arows(
-    `SELECT g.student_id, g.org_id, g.series_id
+    `SELECT g.student_id, g.org_id, g.series_id, series.series_type
        FROM student_course_grants g
        JOIN users student ON student.id = g.student_id AND student.deleted_at IS NULL
+       JOIN course_series series ON series.id = g.series_id
       WHERE g.revoked_at IS NULL`,
     [],
   );
@@ -109,10 +114,13 @@ export async function switchClassroom(dbPath, { deliveryMode = 'VIBECODING', req
     // ⚠️ 只切**支持 VibeCoding** 的课时（默认）：把只开画布的课时也切成 VibeCoding 课堂，
     // 会让「画布课时走 VibeCoding 应被拒」这类断言失效（p16 就是这么被我搞红的）。
     // 需要切**回**画布（守卫要先后走两条链、或走的是画布链路）时传 `requireSupports:false`。
-    const lessons = (await arows(
-      "SELECT id, title, delivery_mode, delivery_modes FROM course_lessons WHERE series_id=? AND status='PUBLISHED'",
-      [grant.series_id],
-    )).filter((lesson) => {
+    const normal = String(grant.series_type || '').toUpperCase() === 'NORMAL';
+    const lessons = (normal
+      ? await arows(`SELECT lesson.id, lesson.title, lesson.delivery_mode, lesson.delivery_modes, lesson.series_id
+          FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id
+          WHERE series.owner_type='PLATFORM' AND series.series_type='NORMAL'
+            AND series.status='PUBLISHED' AND lesson.status='PUBLISHED'`)
+      : await arows("SELECT id, title, delivery_mode, delivery_modes, series_id FROM course_lessons WHERE series_id=? AND status='PUBLISHED'", [grant.series_id])).filter((lesson) => {
       if (!requireSupports) return true;
       const modes = Array.isArray(lesson.delivery_modes)
         ? lesson.delivery_modes
@@ -136,7 +144,7 @@ export async function switchClassroom(dbPath, { deliveryMode = 'VIBECODING', req
         "INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode," +
         "allow_text,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,started_by,started_at,created_at,updated_at) " +
         "VALUES (?,?,?,?,?,?, 'ACTIVE', ?, ?,?,?,?,?,?, ?, ?, ?, ?)",
-        [sessionId, (lesson.title || '课时') + ' · ' + deliveryMode + ' 夹具课堂', grant.org_id, grant.series_id,
+        [sessionId, (lesson.title || '课时') + ' · ' + deliveryMode + ' 夹具课堂', grant.org_id, lesson.series_id || grant.series_id,
           lesson.id, teacherId, deliveryMode,
           caps.text, caps.image, caps.music, caps.video, caps.podcast, caps.dubbing,
           teacherId, now, now, now],

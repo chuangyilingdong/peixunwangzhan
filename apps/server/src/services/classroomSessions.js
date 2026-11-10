@@ -12,8 +12,8 @@
 import { errors, id, nowIso, q, row, rows, transaction, arow, arows, aq, atransaction, amap } from '../lib.js';
 import { salePriceFenFor } from './computePool.js';
 import { sessionCostUsageByStudent, sessionCostCapState, studentCostCapFen } from './sessionCostCap.js';
-// 课包类型与次数账（2026-09-24 体验课包；2026-11-10 起普通课包也按课时次数）
-import { activeGrantFor, consumeGrantUnit, grantBalanceByStudent, grantUnitsOf, isExperienceSeries } from './courseGrants.js';
+// 课包类型与次数账（2026-09-24 体验课包；2026-11-10 起普通课按"48 节一个池子"）
+import { activeGrantFor, consumeGrantUnit, grantBalanceByStudent, grantSeriesIdFor, grantUnitsOf, isExperienceSeries, normalPoolSeries } from './courseGrants.js';
 
 /**
  * 谁可以**管理**这个课堂（开始 / 结束 / 解散 / 改名单 / 改名称）？
@@ -125,8 +125,10 @@ export async function sessionCandidates(session) {
   );
   const series = await arow('SELECT id, series_type FROM course_series WHERE id=?', [session.series_id]);
   const experience = isExperienceSeries(series);
-  // 剩余次数一次取全：普通包与体验包都用它（体验包以前是"有没有许可"的集合）。
-  const balanceByStudent = await grantBalanceByStudent({ orgId: session.org_id, seriesId: session.series_id });
+  // 普通课的次数在「普通课池子」那一行；体验课在自己的系列行
+  const grantSeriesId = experience ? session.series_id : ((await normalPoolSeries())?.id || session.series_id);
+  // 剩余次数一次取全：普通课读池子，体验课读自己的系列。
+  const balanceByStudent = await grantBalanceByStudent({ orgId: session.org_id, seriesId: grantSeriesId });
   const granted = new Set(balanceByStudent.keys());
   const selectable = [];
   const blocked = [];
@@ -233,6 +235,8 @@ export async function settleSessionStudents({ sessionId, actorId }) {
   const series = session.series_id ? await arow('SELECT id, series_type FROM course_series WHERE id=?', [session.series_id]) : null;
   const experience = isExperienceSeries(series);
   const seriesType = experience ? 'EXPERIENCE' : 'NORMAL';
+  // 普通课：次数从「普通课池子」扣；series_id 只记录这一节属于哪个系列
+  const grantSeriesId = experience ? session.series_id : ((await normalPoolSeries())?.id || session.series_id);
   const parts = await arows("SELECT * FROM session_students WHERE session_id=? AND status IN ('PENDING','ACTIVE')", [sessionId]);
   const now = nowIso();
   const summary = { completed: 0, incomplete: 0, unitsConsumed: 0, consumedSkipped: [], experienceConsumed: 0 };
@@ -248,7 +252,7 @@ export async function settleSessionStudents({ sessionId, actorId }) {
       // 两种课包都按次数核销（普通包：上 1 节扣 1 次；体验包：同一节课可反复上、每次扣 1 次）
       const result = await consumeGrantUnit({
         orgId: part.org_id, studentId: part.student_id, seriesId: session.series_id,
-        lessonId: part.lesson_id || session.lesson_id, sessionId, actorId, seriesType,
+        grantSeriesId, lessonId: part.lesson_id || session.lesson_id, sessionId, actorId, seriesType,
       });
       if (result.consumed) {
         summary.unitsConsumed += 1;
@@ -269,6 +273,7 @@ export async function addSessionStudents({ session, studentIds, actorId }) {
   if (!['PENDING', 'ACTIVE'].includes(session.status)) throw errors.conflict('课堂已结束或已解散，不能再加学生', 'SESSION_NOT_OPEN');
   const series = await arow('SELECT id, series_type FROM course_series WHERE id=?', [session.series_id]);
   const experience = isExperienceSeries(series);
+  const grantSeriesId = experience ? session.series_id : ((await normalPoolSeries())?.id || session.series_id);
   const now = nowIso();
   const added = [];
   const skipped = [];
@@ -280,7 +285,7 @@ export async function addSessionStudents({ session, studentIds, actorId }) {
       if (student.expires_at && Date.parse(student.expires_at) <= Date.now()) { skipped.push({ studentId, reason: 'STUDENT_EXPIRED' }); continue; }
       const own = await arow("SELECT * FROM session_students WHERE session_id=? AND student_id=? AND status<>'REMOVED'", [session.id, studentId]);
       if (own) { skipped.push({ studentId, reason: 'ALREADY_IN' }); continue; }
-      const grant = await activeGrantFor({ orgId: session.org_id, studentId, seriesId: session.series_id });
+      const grant = await activeGrantFor({ orgId: session.org_id, studentId, seriesId: grantSeriesId });
       if (!grant) { skipped.push({ studentId, reason: 'NO_GRANT' }); continue; }
       const remainingUnits = grantUnitsOf(grant).remaining;
       // 体验包：余额为 0 就加不进来（原口径，先于占用判断）

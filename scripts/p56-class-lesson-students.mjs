@@ -52,7 +52,10 @@ try {
   const org = (await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } })).data;
   const students = (await api('/api/org/users?role=STUDENT', { token: org.token })).data.items || [];
   assert.ok(admin && org?.token && students.length, '登录或学员缺失');
-  const [first, second] = students;
+  // 2026-11-10：普通课是一个池子，seed 学生自带池子许可；这里新建两个**没有许可**的学生来验门禁
+  const mkStudent = async (login, displayName) => (await api('/api/org/users', { method: 'POST', token: org.token, body: { role: 'STUDENT', login, displayName, password: 'study123' } })).data;
+  const first = await mkStudent('p56-student-a', 'P56 学员A');
+  const second = await mkStudent('p56-student-b', 'P56 学员B');
 
   const created = await api('/api/admin/course-series', { method: 'POST', token: admin, body: { title: 'P56 排课课包', description: '排课候选与完课门禁', coverImageUrl: 'https://example.com/guard-cover.png', visibility: 'ALL_ORGS', stockTotal: 10, lessons: [{ title: '第1课', status: 'PUBLISHED', capabilities: ['text'], deliveryModes: ['CANVAS'] }] } });
   const seriesId = created.data.id; const lessonId = created.data.lessons[0].id;

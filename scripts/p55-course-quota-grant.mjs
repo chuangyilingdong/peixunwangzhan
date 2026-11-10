@@ -18,6 +18,9 @@ import { spawn } from 'node:child_process';
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p55-course-quota-'));
 const dbPath = path.join(temp, 'platform.db');
+// 本进程（读 seed 池子/重置）也必须用同一个临时库，否则会去改仓库里的 data/platform.db
+process.env.PLATFORM_DATA_DIR = temp;
+process.env.PLATFORM_DB_PATH = dbPath;
 const baseEnv = { ...process.env, PLATFORM_DATA_DIR: process.env.PLATFORM_DATA_DIR || temp, PLATFORM_DB_PATH: process.env.PLATFORM_DB_PATH || dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -32,6 +35,7 @@ const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`
 
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
+const { aq, arow } = await import('../packages/database/src/store.js');
 const port = 18910;
 const server = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env: { ...baseEnv, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });
 let serverLog = '';
@@ -50,6 +54,10 @@ try {
   const students = (await api('/api/org/users?role=STUDENT', { token: org.token })).data.items || [];
   check('机构下有可授权的学员', students.length >= 1, `学员数 ${students.length}`);
   const [first, second] = students;
+  // 普通课 = 最早的普通课系列一个池子；先把 seed 自带的池子额度/许可清掉，测试从 0 开始
+  const poolId = (await arow("SELECT id FROM course_series WHERE owner_type='PLATFORM' AND series_type='NORMAL' ORDER BY created_at, id LIMIT 1"))?.id || '';
+  await aq('UPDATE course_assignments SET quota_total=0, quota_used=0 WHERE series_id=? AND org_id=?', [poolId, org.organization.id]);
+  await aq('DELETE FROM student_course_grants WHERE series_id=? AND org_id=?', [poolId, org.organization.id]);
 
   // 建课包（平台库存故意只写 1 次：普通课包**不校验**库存，开 6 次也应该成功）并发布
   const created = await api('/api/admin/course-series', {
@@ -63,7 +71,10 @@ try {
   assert.equal(published.status, 200, `发布夹具失败: ${JSON.stringify(published.error)}`);
 
   const purchase = (suffix, quantity, amountMinor = quantity * 10000) => ({ amountMinor, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P55-O-${suffix}`, contractNo: 'P55-C-1', idempotencyKey: `p55-${suffix}` });
-  const quotaOf = async () => ((await api(`/api/admin/course-series/${seriesId}/detail`, { token: admin })).data.assignedOrgs || [])[0] || {};
+  const quotaOf = async () => {
+    const row = await arow('SELECT quota_total, quota_used FROM course_assignments WHERE series_id=? AND org_id=?', [poolId, org.organization.id]);
+    return { quotaTotal: Number(row?.quota_total || 0), quotaUsed: Number(row?.quota_used || 0) };
+  };
 
   // ① 普通课包不再受平台库存约束（stock_total=1，开 6 次必须成功）
   const assigned = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [org.organization.id], validityDays: 365, quotaTotal: 6, ...purchase('initial', 6) } });

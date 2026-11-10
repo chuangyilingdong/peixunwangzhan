@@ -20,6 +20,36 @@ import { errors, id, nowIso, arow, arows, aq, isMysql } from '../lib.js';
 
 export const SERIES_TYPES = Object.freeze(['NORMAL', 'EXPERIENCE']);
 export const EXPERIENCE_SERIES_TYPE = 'EXPERIENCE';
+
+/**
+ * 「普通课」池子的存储键 = **最早创建的普通课系列**（生产里是 S1）。
+ *
+ * 2026-11-10 用户口径：S1/S2/S3 不是三个可分别授权的东西，而是同一个普通课的 48 节课；
+ * 平台给机构的次数、机构给学生的次数，都是这 48 节共用的**一个池子**。
+ * 实现上不新增表：把最早的那个普通课系列当作池子的 `series_id`，S2/S3 只保留
+ * 0 次数的“可上课”授权（让课程中心/建课堂仍能访问），授权与核销都落在池子上。
+ */
+export async function normalPoolSeries() {
+  return await arow(`SELECT id, title, series_type FROM course_series
+    WHERE owner_type='PLATFORM' AND series_type='NORMAL'
+    ORDER BY created_at, sort, id LIMIT 1`);
+}
+
+/** 这门课的授权/核销该落在哪个系列上：普通课 → 池子系列；体验课 → 自己。 */
+export async function grantSeriesIdFor({ seriesId, seriesType }) {
+  if (String(seriesType || '').toUpperCase() !== 'NORMAL') return seriesId;
+  const pool = await normalPoolSeries();
+  return pool?.id || seriesId;
+}
+
+/** 普通课当前已发布的课时总数（S1+S2+S3…，不含体验课）。 */
+export async function normalLessonCount() {
+  const row = await arow(`SELECT COUNT(*) n FROM course_lessons lesson
+    JOIN course_series series ON series.id=lesson.series_id
+    WHERE series.owner_type='PLATFORM' AND series.series_type='NORMAL'
+      AND series.status='PUBLISHED' AND lesson.status='PUBLISHED'`);
+  return Number(row?.n || 0);
+}
 // MySQL 下对许可行加行锁：核销 / 回收 / 平台撤销会并发改同一行，没有 FOR UPDATE 时
 // 三个事务各自按旧快照算余额，可能出现「退多了 1 次」或「扣了但已退款」。SQLite 是全局写锁，不需要。
 const FOR_UPDATE = isMysql ? ' FOR UPDATE' : '';
@@ -107,9 +137,11 @@ export const experienceBalanceByStudent = grantBalanceByStudent;
  *
  * 普通课包与体验课包共用这一个函数；错误码按类型区分，方便前端给出不同的补救提示。
  */
-export async function consumeGrantUnit({ orgId, studentId, seriesId, lessonId = null, sessionId, actorId = null, seriesType = 'NORMAL' }) {
+export async function consumeGrantUnit({ orgId, studentId, seriesId, grantSeriesId = null, lessonId = null, sessionId, actorId = null, seriesType = 'NORMAL' }) {
+  // 普通课的次数落在「普通课池子」那一行上（seriesId 只用来记录"这一节属于哪个系列"）。
+  const grantSeries = grantSeriesId || seriesId;
   // 锁行再算余额：MySQL 下与回收/平台撤销串行化（SQLite 全局写锁本来就串行）
-  const grant = await lockActiveGrantFor({ orgId, studentId, seriesId });
+  const grant = await lockActiveGrantFor({ orgId, studentId, seriesId: grantSeries });
   if (!grant) return { consumed: false, reason: 'GRANT_REVOKED' };
   const existing = await arow(
     'SELECT id FROM student_course_grant_consumptions WHERE grant_id=? AND session_id=? AND student_id=?',

@@ -73,13 +73,14 @@ async function api(pathname, { method = 'GET', token, body } = {}) {
 }
 
 let seriesId = '';
+let poolId = '';
 const lessonIds = [];
-const grantOf = async () => arow('SELECT * FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [seeded.orgId, seeded.studentId, seriesId]);
+const grantOf = async () => arow('SELECT * FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [seeded.orgId, seeded.studentId, poolId]);
 const balanceOf = async () => {
   const grant = await grantOf();
   return Number(grant?.granted_units || 0) - Number(grant?.consumed_units || 0);
 };
-const quotaOf = async () => (await arow('SELECT quota_total, quota_used FROM course_assignments WHERE series_id=? AND org_id=?', [seriesId, seeded.orgId])) || {};
+const quotaOf = async () => (await arow('SELECT quota_total, quota_used FROM course_assignments WHERE series_id=? AND org_id=?', [poolId, seeded.orgId])) || {};
 
 try {
   for (let i = 0; i < 100; i += 1) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* 等服务起来 */ } await sleep(100); }
@@ -105,6 +106,11 @@ try {
     for (const lesson of created.data?.lessons || []) lessonIds.push(lesson.id);
     const published = await api(`/api/admin/course-series/${seriesId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
     check('① 发布成功', published.status === 200, JSON.stringify(published.error || {}).slice(0, 200));
+    // 普通课池子 = 最早的普通课系列；先把 seed 自带的池子额度/许可清掉，测试从 0 开始
+    const pool = await arow("SELECT id FROM course_series WHERE owner_type='PLATFORM' AND series_type='NORMAL' ORDER BY created_at, id LIMIT 1");
+    poolId = pool?.id || '';
+    await aq('UPDATE course_assignments SET quota_total=0, quota_used=0 WHERE series_id=? AND org_id=?', [poolId, seeded.orgId]);
+    await aq('DELETE FROM student_course_grants WHERE series_id=? AND org_id=?', [poolId, seeded.orgId]);
     const assigned = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgId: seeded.orgId, quotaTotal: 10, ...purchase('initial', 10) } });
     check('① stock_total=0 仍能给机构开 10 次（普通包不再校验平台库存）★', assigned.status === 200 && assigned.data?.quotaTotal === 10, JSON.stringify(assigned.error || assigned.data).slice(0, 200));
   }

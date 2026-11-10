@@ -81,6 +81,8 @@ const balanceOf = async () => {
   const grant = await arow('SELECT granted_units, consumed_units FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [seeded.orgId, seeded.studentId, experienceSeriesId]);
   return Number(grant?.granted_units || 0) - Number(grant?.consumed_units || 0);
 };
+const normalPool = await arow("SELECT id FROM course_series WHERE owner_type='PLATFORM' AND series_type='NORMAL' ORDER BY created_at, id LIMIT 1");
+const normalPoolId = normalPool?.id || '';
 const consumptionsOf = async () => Number((await arow('SELECT COUNT(*) n FROM student_course_grant_consumptions WHERE series_id=? AND student_id=?', [experienceSeriesId, seeded.studentId]))?.n || 0);
 
 try {
@@ -304,12 +306,15 @@ try {
     const normalSeries = await createSeries('P140 普通课包', 'NORMAL', [lessonBody('第 1 节')]);
     const normalId = normalSeries.data?.id;
     await api(`/api/admin/course-series/${normalId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
+    // 普通课 = 最早的普通课系列一个池子：先清掉 seed 池子，测试从 0 开始
+    await aq('UPDATE course_assignments SET quota_total=0, quota_used=0 WHERE series_id=? AND org_id=?', [normalPoolId, seeded.orgId]);
+    await aq('DELETE FROM student_course_grants WHERE series_id=? AND org_id=?', [normalPoolId, seeded.orgId]);
     await api(`/api/admin/course-series/${normalId}/assignments`, { method: 'POST', token: admin, body: { orgId: seeded.orgId, quotaTotal: 6, ...purchase('normal', 6) } });
     const first = await api('/api/org/course-grants', { method: 'POST', token: orgAdmin, body: { seriesId: normalId, studentIds: [seeded.studentId] } });
     const second = await api('/api/org/course-grants', { method: 'POST', token: orgAdmin, body: { seriesId: normalId, studentIds: [seeded.studentId] } });
     check('⑩ 普通课包：第一次 granted=1', first.data?.granted === 1, JSON.stringify(first.data || first.error).slice(0, 160));
     check('⑩ 普通课包：**重复授权累加**（granted=1，不再跳过）★', second.data?.granted === 1 && Number(second.data?.usedUnits) === 1, JSON.stringify(second.data || second.error).slice(0, 160));
-    const row = await arow('SELECT granted_units, consumed_units FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [seeded.orgId, seeded.studentId, normalId]);
+    const row = await arow('SELECT granted_units, consumed_units FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [seeded.orgId, seeded.studentId, normalPoolId]);
     check('⑩ 普通课包的行按次累加（granted_units=2）', Number(row?.granted_units) === 2 && Number(row?.consumed_units) === 0, JSON.stringify(row));
     const seriesRow = await arow('SELECT series_type FROM course_series WHERE id=?', [normalId]);
     check('⑩ 普通课包类型默认 NORMAL', seriesRow?.series_type === 'NORMAL', JSON.stringify(seriesRow));

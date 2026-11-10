@@ -219,8 +219,8 @@ try {
   {
     const all = await changes('');
     check('⑦ 列表返回分页字段与五个变更类型', typeof all.data.total === 'number' && all.data.page === 1 && Number(all.data.limit) > 0 && Array.isArray(all.data.changeTypes) && all.data.changeTypes.length === 5, JSON.stringify({ total: all.data.total, page: all.data.page, limit: all.data.limit, changeTypes: all.data.changeTypes }));
-    check('⑦ 每行带课包名与前后四值', all.data.items.every((item) => item.seriesTitle === 'P86 授权次数课包' && ['quotaTotalBefore', 'quotaTotalAfter', 'quotaUsedBefore', 'quotaUsedAfter'].every((key) => typeof item[key] === 'number')), JSON.stringify((all.data.items || [])[0] || {}).slice(0, 240));
-    check('⑦ 按课包筛（seriesOptions 供下拉用）', (all.data.seriesOptions || []).some((item) => item.id === seriesId && item.changeCount > 0), JSON.stringify(all.data.seriesOptions || []).slice(0, 160));
+    check('⑦ 每行带课包名与前后四值', all.data.items.every((item) => ['P86 授权次数课包', '普通课'].includes(item.seriesTitle) && ['quotaTotalBefore', 'quotaTotalAfter', 'quotaUsedBefore', 'quotaUsedAfter'].every((key) => typeof item[key] === 'number')), JSON.stringify((all.data.items || [])[0] || {}).slice(0, 240));
+    check('⑦ 按课包筛（seriesOptions 供下拉用）', (all.data.seriesOptions || []).some((item) => (item.id === seriesId || item.id === 'NORMAL') && item.changeCount > 0), JSON.stringify(all.data.seriesOptions || []).slice(0, 160));
     const byType = await changes('?changeType=REDUCE');
     check('⑦ 按变更类型筛 REDUCE', Number(byType.data.total) === 2 && byType.data.items.every((item) => item.changeType === 'REDUCE'), `total=${byType.data.total}`);
     const badType = await changes('?changeType=NOPE');

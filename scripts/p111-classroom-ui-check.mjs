@@ -1036,7 +1036,7 @@ try {
   }
   // 分类必须**落在正确的行上**：按备注里的订单号 / 期初文案定位那一行，再断言它的「业务类型」。
   // 只断言「三个数字都 > 0」是不够的 —— 数字对、行错也是错的。
-  for (const [noteText, expectedType] of [['P111-ORDER-1', '初次开通'], ['P111-CONTRACT-2', '增购'], ['期初人次', '平台调整']]) {
+  for (const [noteText, expectedType] of [['P111-ORDER-1', '初次开通'], ['P111-CONTRACT-2', '增购'], ['期初次数', '平台调整']]) {
     const row = orgPage.locator('table tbody tr', { hasText: noteText });
     if (!(await row.count())) { problems.push(`002-06：表里找不到备注含「${noteText}」的那一行`); continue; }
     const text = await row.first().innerText();
@@ -1068,7 +1068,7 @@ try {
   } else {
     const text = await recordRow.first().innerText();
     // 「来源」是本版新加的字段（老记录没有），这里必须显示成 学生授权中心 才算真的记下来了
-    for (const needle of ['P111 教学素材课包', '授权', '成功', '学生授权中心']) {
+    for (const needle of ['普通课', '授权', '成功', '学生授权中心']) {
       if (!text.includes(needle)) problems.push(`002-05：记录行里缺「${needle}」（实际：${text.replace(/\n/g, ' | ')}）`);
     }
   }
@@ -1114,7 +1114,8 @@ try {
   await orgPage.goto(`${base}/grants`, { waitUntil: 'domcontentloaded' });
   await orgSettle();
   await orgExpect('批量授权次数（选课包前）', ['① 选课包', '课包', '可用次数']);
-  await orgPage.locator('.form-grid select').first().selectOption('series-ui-materials');
+  // 2026-11-10：普通课 = S1/S2/S3 一个池子，授权下拉只剩 'NORMAL'（+体验课）
+  await orgPage.locator('.form-grid select').first().selectOption('NORMAL');
   await orgSettle();
   await orgExpect('勾选学生', [
     '② 勾选要授权的学生', '③ 本次授权',
@@ -1127,7 +1128,9 @@ try {
   if (!(await orgPage.locator('.student-pick-row', { hasText: '可用' }).count())) {
     problems.push('勾选学生：没有任何一行显示「可用 N 次」—— 夹具留了一个有效授权，这一行必须出现');
   }
-  await orgExpect('已授权计数', ['已授权 1 人']);
+  // 普通课是一个池子，seed 学生也可能已有次数；只要面板明确给出「已授权 N 人」即可（不再钉死 1）
+  const grantPanelText = await orgPage.locator('.panel').filter({ hasText: '② 勾选要授权的学生' }).first().innerText();
+  if (!/已授权 \d+ 人/.test(grantPanelText)) problems.push('勾选学生：面板上没有「已授权 N 人」计数');
   // 布局硬指标：复选框必须**紧挨**姓名（同一行、横向离得近）—— 老版本它飘在名字右边几百像素外，
   // 这一条就是防它回归的（光断言表格存在，把复选框塞到最后一个单元格里也照样过）。
   const pickGeometry = await orgPage.evaluate(() => {

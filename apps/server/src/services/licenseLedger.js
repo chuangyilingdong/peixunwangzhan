@@ -30,6 +30,14 @@ function purchaseSnapshot(batch) {
   };
 }
 
+/** 2026-11-10 普通课池子：许可三账的范围（普通课=NORMAL，体验课=SERIES/seriesId）。 */
+async function scopeOfSeries(seriesId) {
+  const series = await arow('SELECT series_type FROM course_series WHERE id=?', [String(seriesId || '')]);
+  return String(series?.series_type || '').toUpperCase() === 'NORMAL'
+    ? { scopeType: 'NORMAL', scopeKey: 'NORMAL' }
+    : { scopeType: 'SERIES', scopeKey: String(seriesId || '') };
+}
+
 export function normalizeLicensePurchaseInput(value, quantity) {
   const amountMinor = Number(value?.amountMinor);
   if (!Number.isSafeInteger(amountMinor) || amountMinor < 0) {
@@ -100,13 +108,14 @@ export async function createLicensePurchaseBatch({ assignmentId, orgId, seriesId
   }
   const now = purchasedAt || nowIso();
   const batchId = id('licensepurchase');
+  const scope = await scopeOfSeries(seriesId);
   await aq(`INSERT INTO license_purchase_batches(
       id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,
-      order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?)`, [
+      order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at,scope_type,scope_key)
+    VALUES (?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?,?,?)`, [
     batchId, assignmentId, orgId, seriesId, 'PURCHASE', purchase.quantity, purchase.amountMinor,
     purchase.currency, purchase.paymentStatus, purchase.orderNo, purchase.contractNo, purchase.idempotencyKey,
-    actorId || null, now, now,
+    actorId || null, now, now, scope.scopeType, scope.scopeKey,
   ]);
   return purchaseSnapshot(await arow('SELECT * FROM license_purchase_batches WHERE id=?', [batchId]));
 }
@@ -140,11 +149,13 @@ export async function ensureOpeningBalanceBatch({ assignmentId, orgId, seriesId,
   if (gap <= 0) return null;
   const now = nowIso();
   const batchId = id('licensepurchase');
+  const scope = await scopeOfSeries(seriesId);
   await aq(`INSERT INTO license_purchase_batches(
       id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,
-      order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at)
-    VALUES (?,?,?,?,'LEGACY_OPENING_BALANCE',?,NULL,NULL,'UNKNOWN','ACTIVE',NULL,NULL,?,?,?,?)`, [
+      order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at,scope_type,scope_key)
+    VALUES (?,?,?,?,'LEGACY_OPENING_BALANCE',?,NULL,NULL,'UNKNOWN','ACTIVE',NULL,NULL,?,?,?,?,?,?)`, [
     batchId, assignmentId, orgId, seriesId, gap, `opening-balance:${assignmentId}:${covered}`, actorId, now, now,
+    scope.scopeType, scope.scopeKey,
   ]);
   console.warn(`[许可账] 授权单 ${assignmentId} 的 ${gap} 次没有批次覆盖（多半来自平台侧「调整授权次数」）—— 已补记一笔平台开通批次 ${batchId}`);
   return { id: batchId, quantity: gap, covered };
@@ -185,12 +196,13 @@ export async function appendLicenseGrantRevenue({ assignmentId, orgId, seriesId,
   const { batch, amountMinor } = await nextFifoUnit(assignmentId);
   const now = occurredAt || nowIso();
   const eventId = id('licenserevenue');
+  const scope = await scopeOfSeries(seriesId);
   await aq(`INSERT INTO license_revenue_events(
       id,assignment_id,org_id,series_id,grant_id,event_type,quantity,amount_minor,currency,reversal_of_event_id,
-      idempotency_key,actor_id,occurred_at,created_at)
-    VALUES (?,?,?,?,?,'GRANT',1,?,?,NULL,?,?,?,?)`, [
+      idempotency_key,actor_id,occurred_at,created_at,scope_type,scope_key)
+    VALUES (?,?,?,?,?,'GRANT',1,?,?,NULL,?,?,?,?,?,?)`, [
     eventId, assignmentId, orgId, seriesId, grantId, amountMinor, batch.currency,
-    key, actorId || null, now, now,
+    key, actorId || null, now, now, scope.scopeType, scope.scopeKey,
   ]);
   await aq(`INSERT INTO license_revenue_allocations(
       id,revenue_event_id,purchase_batch_id,quantity,amount_minor,currency,created_at)
@@ -217,12 +229,13 @@ export async function appendLicenseReversal({ grantId, actorId, occurredAt, idem
   const now = occurredAt || nowIso();
   const eventId = id('licenserevenue');
   const amountMinor = grantEvent.amount_minor == null ? null : -Number(grantEvent.amount_minor);
+  const scope = grantEvent.scope_key ? { scopeType: grantEvent.scope_type || 'SERIES', scopeKey: grantEvent.scope_key } : await scopeOfSeries(grantEvent.series_id);
   await aq(`INSERT INTO license_revenue_events(
       id,assignment_id,org_id,series_id,grant_id,event_type,quantity,amount_minor,currency,reversal_of_event_id,
-      idempotency_key,actor_id,occurred_at,created_at)
-    VALUES (?,?,?,?,?,'REVERSAL',-1,?,?,?,?,?,?,?)`, [
+      idempotency_key,actor_id,occurred_at,created_at,scope_type,scope_key)
+    VALUES (?,?,?,?,?,'REVERSAL',-1,?,?,?,?,?,?,?,?,?)`, [
     eventId, grantEvent.assignment_id, grantEvent.org_id, grantEvent.series_id, grantId, amountMinor,
-    grantEvent.currency, grantEvent.id, key, actorId || null, now, now,
+    grantEvent.currency, grantEvent.id, key, actorId || null, now, now, scope.scopeType, scope.scopeKey,
   ]);
   await aq(`INSERT INTO license_revenue_allocations(
       id,revenue_event_id,purchase_batch_id,quantity,amount_minor,currency,created_at)
@@ -235,6 +248,23 @@ export async function appendLicenseReversal({ grantId, actorId, occurredAt, idem
 
 export async function voidLicensePurchaseBatches(assignmentId) {
   await aq("UPDATE license_purchase_batches SET status='VOIDED' WHERE assignment_id=? AND status='ACTIVE'", [assignmentId]);
+}
+
+/** 普通课池子的采购历史：同一机构、scope_key='NORMAL' 的所有批次（含历史 S2/S3 批次）。 */
+export async function licensePurchaseHistoryByScope({ orgId, scopeKey = 'NORMAL' }) {
+  const batches = await arows(`SELECT batch.*, COALESCE(SUM(allocation.quantity),0) recognized_quantity,
+      SUM(allocation.amount_minor) recognized_amount_minor
+    FROM license_purchase_batches batch
+    LEFT JOIN license_revenue_allocations allocation ON allocation.purchase_batch_id=batch.id
+    WHERE batch.org_id=? AND batch.scope_key=?
+    GROUP BY batch.id
+    ORDER BY batch.purchased_at DESC, batch.created_at DESC, batch.id DESC`, [orgId, scopeKey]);
+  return batches.map((batch) => ({
+    ...purchaseSnapshot(batch),
+    recognizedQuantity: Number(batch.recognized_quantity || 0),
+    remainingQuantity: Math.max(0, Number(batch.quantity) - Number(batch.recognized_quantity || 0)),
+    recognizedAmountMinor: batch.recognized_amount_minor == null ? null : Number(batch.recognized_amount_minor),
+  }));
 }
 
 export async function licensePurchaseHistory(assignmentId) {

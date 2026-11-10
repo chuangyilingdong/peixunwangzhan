@@ -19,6 +19,8 @@ import { AssignmentStatusBadge, OrganizationCard } from '../components/Organizat
 /** 课包当前版本 / 课包编码：detail 的 courseAssignments 只带 seriesId + 课包名，
  *  版本与编码从「已发布课包」目录里现取（一次请求，不是每行一次）。服务端若日后在课包上补 code，自动生效。 */
 function seriesMetaOf(assignment, seriesById) {
+  // 普通课 = S1/S2/S3 一个池子，界面上不显示某个系列的版本/编码
+  if (assignment.seriesId === 'NORMAL') return { version: '', code: '普通课' };
   const series = seriesById.get(assignment.seriesId);
   return {
     version: series?.version || '',
@@ -288,7 +290,16 @@ export function OrganizationQuota({ api }) {
   const organization = detail.data?.organization || null;
   const assignments = detail.data?.courseAssignments || [];
   const seriesItems = catalog.data?.items || [];
-  const seriesById = useMemo(() => new Map(seriesItems.map((item) => [item.id, item])), [seriesItems]);
+  // 2026-11-10：普通课是 S1/S2/S3 共一个池子 —— 开通/调次数只出一个「普通课（N 节）」选项，
+  // 体验课仍然逐个列。
+  const normalOption = useMemo(() => {
+    const normalSeries = seriesItems.filter((item) => String(item.seriesType || 'NORMAL').toUpperCase() !== 'EXPERIENCE');
+    if (!normalSeries.length) return null;
+    const lessonCount = normalSeries.reduce((total, item) => total + Number(item.lessonCount || 0), 0);
+    return { id: 'NORMAL', title: `普通课（${lessonCount} 节）`, seriesType: 'NORMAL', version: null, stockTotal: 0, lessonCount };
+  }, [seriesItems]);
+  const authorizationOptions = useMemo(() => [normalOption, ...seriesItems.filter((item) => item.seriesType === 'EXPERIENCE')].filter(Boolean), [normalOption, seriesItems]);
+  const seriesById = useMemo(() => new Map(authorizationOptions.map((item) => [item.id, item])), [authorizationOptions]);
   const assignedIds = useMemo(() => new Set(assignments.map((item) => item.seriesId)), [assignments]);
   const adjustTarget = assignments.find((item) => item.seriesId === adjustSeriesId) || null;
 
@@ -333,7 +344,7 @@ export function OrganizationQuota({ api }) {
         </> : <Empty title="该机构还没有开通任何课包" body="点右上角「开通课包」为它开通第一个课包并设置初始授权次数。" />}
       </Panel>
     </>}
-    {showAddDrawer ? <AddPackageDrawer api={api} orgId={orgId} options={seriesItems} assignedIds={assignedIds}
+    {showAddDrawer ? <AddPackageDrawer api={api} orgId={orgId} options={authorizationOptions} assignedIds={assignedIds}
       onClose={() => setShowAddDrawer(false)}
       onDone={(text) => { setMessage({ tone: 'success', text }); detail.refresh(); }} /> : null}
     {adjustTarget ? <AdjustQuotaDrawer api={api} orgId={orgId} assignment={adjustTarget} assignments={assignments} seriesById={seriesById}

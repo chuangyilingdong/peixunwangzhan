@@ -13,10 +13,10 @@ import { courseComputeEstimate } from '../../services/courseEstimate.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../../services/modelCapabilities.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
 import { normalizeSubmission } from '../vibecoding.js';
-import { appendLicenseReversal, createLicensePurchaseBatch, licensePurchaseHistory, normalizeLicensePurchaseInput, voidLicensePurchaseBatches } from '../../services/licenseLedger.js';
+import { appendLicenseReversal, createLicensePurchaseBatch, licensePurchaseHistory, licensePurchaseHistoryByScope, normalizeLicensePurchaseInput, voidLicensePurchaseBatches } from '../../services/licenseLedger.js';
 import { COURSE_QUOTA_SOURCES, recordQuotaChange } from '../../services/courseQuotaLedger.js';
 // 体验课包（2026-09-24 用户口径）：类型 + 次数账（普通包行为一字不改）
-import { EXPERIENCE_SERIES_TYPE, grantUnitsOf, isExperienceSeries, lockGrantById, normalizeSeriesType } from '../../services/courseGrants.js';
+import { EXPERIENCE_SERIES_TYPE, grantUnitsOf, isExperienceSeries, lockGrantById, normalLessonCount, normalPoolSeries, normalizeSeriesType } from '../../services/courseGrants.js';
 import {
   capturePublishedContent,
   ENROLLMENT_STATUSES,
@@ -118,6 +118,39 @@ function assignmentSnapshot(assignment) {
     quotaTotal, quotaUsed, remaining: assignment.status === 'ACTIVE' ? Math.max(0, quotaTotal - quotaUsed) : 0,
     expiresAt: assignment.expires_at || null,
   };
+}
+
+/**
+ * 平台的「普通课」是一个池子：S1/S2/S3 共用一份次数。
+ * 传 `'NORMAL'` 或任意普通课系列，都解析到**最早创建的普通课系列**（池子的存储键）。
+ */
+async function resolveAuthorizationSeries(seriesId) {
+  const requested = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesId]);
+  const normal = String(seriesId).toUpperCase() === 'NORMAL'
+    || String(requested?.series_type || '').toUpperCase() === 'NORMAL';
+  if (!normal) return requested;
+  const pool = await normalPoolSeries();
+  if (!pool) throw errors.notFound('还没有普通课内容（S1/S2/S3 未发布）', 'NORMAL_POOL_EMPTY');
+  return await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [pool.id]);
+}
+
+/**
+ * 普通课的池子开给机构后，S1/S2/S3 都要有一条 **0 次数**的授权单，机构才能看到课程、
+ * 建这些课的课堂（`orgSeriesAccessSql` / `accessibleLesson` 看的是"有没有授权单"）。
+ * 已有授权单不覆盖额度，只跟合同续期。
+ */
+async function ensureNormalAccessAssignments({ orgId, actorId, now, expiresAt, skipSeriesId = null }) {
+  const list = await arows("SELECT id FROM course_series WHERE owner_type='PLATFORM' AND series_type='NORMAL'", []);
+  for (const row of list) {
+    if (row.id === skipSeriesId) continue;
+    const existing = await arow('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [row.id, orgId]);
+    if (!existing) {
+      await aq('INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,0,0)',
+        [id('assign'), row.id, orgId, 'ACTIVE', actorId, now, expiresAt]);
+    } else if (existing && expiresAt) {
+      await aq("UPDATE course_assignments SET expires_at=? WHERE id=? AND status='ACTIVE'", [expiresAt, existing.id]);
+    }
+  }
 }
 
 export async function handleCourses(ctx, part, method) {
@@ -567,7 +600,7 @@ export async function handleCourses(ctx, part, method) {
   if (match && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     requirePlatformPermission(ctx, 'ADMIN_BILLING');
-    const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [match[1]]);
+    const series = await resolveAuthorizationSeries(match[1]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const organizationId = singleAssignmentOrgId(ctx.body);
     if (!await arow('SELECT id FROM organizations WHERE id=?', [organizationId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
@@ -616,6 +649,10 @@ export async function handleCourses(ctx, part, method) {
           reason: '平台给机构开通课包', source: COURSE_QUOTA_SOURCES.ADMIN_ASSIGN,
         });
       }
+      // 普通课：池子开给机构后，S1/S2/S3 都要有 0 次数的访问授权（课程中心/建课堂用）
+      if (String(series.series_type || '').toUpperCase() === 'NORMAL') {
+        await ensureNormalAccessAssignments({ orgId: organizationId, actorId: auth.user.id, now, expiresAt, skipSeriesId: series.id });
+      }
       return { assignment: assignmentSnapshot(await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch?.replayed) };
     });
     if (!result.replayed) await audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_ASSIGNMENT', result.assignment.id, before, result.assignment, { orgId: organizationId });
@@ -632,7 +669,7 @@ export async function handleCourses(ctx, part, method) {
     if (!await arow('SELECT id FROM organizations WHERE id=?', [organizationId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     let before = null;
     const after = await atransaction(async () => {
-      const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [assignmentAppendMatch[1]]);
+      const series = await resolveAuthorizationSeries(assignmentAppendMatch[1]);
       if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
       if (series.status !== 'PUBLISHED') throw errors.conflict('仅已发布课包可授权', 'COURSE_NOT_PUBLISHED');
       const existing = await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]);
@@ -665,6 +702,9 @@ export async function handleCourses(ctx, part, method) {
           reason: '平台追加授权次数', source: COURSE_QUOTA_SOURCES.ADMIN_ASSIGN,
         });
       }
+      if (String(series.series_type || '').toUpperCase() === 'NORMAL') {
+        await ensureNormalAccessAssignments({ orgId: organizationId, actorId: auth.user.id, now, expiresAt: await contractExpiryForOrg(organizationId), skipSeriesId: series.id });
+      }
       return { assignment: assignmentSnapshot(await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch.replayed) };
     });
     if (!after.replayed) await audit(ctx, 'COURSE_ASSIGNMENT_QUOTA_APPEND', 'COURSE_ASSIGNMENT', after.assignment.id, before, { ...after.assignment, additionalQuota }, { orgId: organizationId });
@@ -676,14 +716,30 @@ export async function handleCourses(ctx, part, method) {
 
   if (part === '/authorizations' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const items = await amap((await arows("SELECT * FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' ORDER BY title")), async (series) => {
+    const allSeries = await arows("SELECT * FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' ORDER BY title");
+    const items = [];
+    // 普通课：S1/S2/S3 共一个池子，只出一行
+    const pool = await normalPoolSeries();
+    if (pool) {
+      const normalLessons = await normalLessonCount();
+      const allocations = await amap((await arows('SELECT a.*,o.name org_name FROM course_assignments a JOIN organizations o ON o.id=a.org_id WHERE a.series_id=? ORDER BY a.assigned_at DESC', [pool.id])), async (a) => ({
+        id: a.id, orgId: a.org_id, orgName: a.org_name, status: a.status,
+        quotaTotal: Number(a.quota_total), quotaUsed: Number(a.quota_used),
+        remaining: Math.max(0, a.quota_total - a.quota_used), expiresAt: a.expires_at,
+        // 普通课：采购历史按 scope 汇总（含历史 S2/S3 批次），不是只看池子这一张授权单
+        purchaseBatches: await licensePurchaseHistoryByScope({ orgId: a.org_id, scopeKey: 'NORMAL' }),
+      }));
+      const reserved = allocations.reduce((n, a) => n + (a.status === 'ACTIVE' ? a.quotaTotal : a.quotaUsed), 0);
+      items.push({
+        id: 'NORMAL', title: `普通课（${normalLessons} 节）`, seriesType: 'NORMAL',
+        stockTracked: false, stockTotal: 0, reserved, available: null, allocations,
+      });
+    }
+    for (const series of allSeries.filter((item) => String(item.series_type || '').toUpperCase() === 'EXPERIENCE')) {
       const allocations = await amap((await arows('SELECT a.*,o.name org_name FROM course_assignments a JOIN organizations o ON o.id=a.org_id WHERE a.series_id=? ORDER BY a.assigned_at DESC', [series.id])), async (a) => ({ id: a.id, orgId: a.org_id, orgName: a.org_name, status: a.status, quotaTotal: Number(a.quota_total), quotaUsed: Number(a.quota_used), remaining: Math.max(0, a.quota_total-a.quota_used), expiresAt: a.expires_at, purchaseBatches: await licensePurchaseHistory(a.id) }));
       const reserved = allocations.reduce((n,a) => n + (a.status === 'ACTIVE' ? a.quotaTotal : a.quotaUsed), 0);
-      // 2026-11-10：普通课包不再有"平台库存"概念（stockTracked=false），前端据此隐藏库存列；
-      // 体验课包保持原样。
-      const stockTracked = String(series.series_type || 'NORMAL').toUpperCase() !== 'NORMAL';
-      return { id: series.id, title: series.title, stockTracked, stockTotal: Number(series.stock_total || 0), reserved, available: stockTracked ? Math.max(0, Number(series.stock_total || 0)-reserved) : null, allocations };
-    });
+      items.push({ id: series.id, title: series.title, seriesType: 'EXPERIENCE', stockTracked: true, stockTotal: Number(series.stock_total || 0), reserved, available: Math.max(0, Number(series.stock_total || 0)-reserved), allocations });
+    }
     return { items, organizations: await arows('SELECT id,name,status FROM organizations ORDER BY name,id') };
   }
   const stockMatch = part.match(/^\/course-series\/([^/]+)\/stock$/);
