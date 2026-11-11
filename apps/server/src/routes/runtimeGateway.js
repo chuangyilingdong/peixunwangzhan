@@ -653,6 +653,11 @@ export async function handleRuntimeGateway(ctx) {
 
   // 流式：说 OpenAI 的 SSE 方言（dsh 与大多数客户端都认这一套）
   const res = ctx.res;
+  // 2026-11-11：文本流式超时放宽到 20 分钟后，客户端断线必须主动中止上游 ——
+  // 否则学生关掉客户端，上游还会继续跑最多 20 分钟并计费。与 vibecoding 那条流同一做法。
+  const abortController = new AbortController();
+  const onClientGone = () => { if (!res.writableEnded) abortController.abort(); };
+  res.on('close', onClientGone);
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache, no-transform',
@@ -680,6 +685,7 @@ export async function handleRuntimeGateway(ctx) {
       tools,
       toolChoice,
       streamOptions,
+      signal: abortController.signal,
       // 工具调用：按 OpenAI 方言原样转给客户端（dsh 就是靠这个才知道该去执行什么）。
       // ⚠️ 这条**不能**过 DSML 过滤器 —— 它要的就是结构化字段，不是正文。
       onToolCalls: (toolCallDelta, finishReason) => {
@@ -724,12 +730,17 @@ export async function handleRuntimeGateway(ctx) {
     logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, firstTokenAt, status: 'SUCCESS', cacheHit: usage?.cacheHitTokens ?? null, cacheMiss: usage?.cacheMissTokens ?? null, requestedReasoning, forwardedReasoning, usage });
   } catch (error) {
     const normalized = normalizeProviderError(error) || {};
-    await record('FAILED', { failCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });
-    sseWrite(res, { error: { message: String(error?.message || '上游调用失败'), type: 'upstream_error', code: normalized.code || 'UPSTREAM_ERROR' } });
-    sseWrite(res, '[DONE]');
-    logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, firstTokenAt, status: 'FAILED', errorCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN, requestedReasoning, forwardedReasoning });
+    const aborted = abortController.signal.aborted || normalized.code === PROVIDER_ERROR_CODES.ABORTED;
+    await record('FAILED', { failCode: aborted ? PROVIDER_ERROR_CODES.ABORTED : (normalized.code || PROVIDER_ERROR_CODES.UNKNOWN) });
+    // 客户端已经断了就不要再写 SSE；仍在线的按归一化后的文案回（不要透 `This operation was aborted`）。
+    if (!aborted) {
+      sseWrite(res, { error: { message: String(normalized.message || error?.message || '上游调用失败'), type: 'upstream_error', code: normalized.code || 'UPSTREAM_ERROR' } });
+      sseWrite(res, '[DONE]');
+    }
+    logGatewayRound({ provider: provider.name, model: effectiveModel, channelId: selection.channelId, mode: selection.provider, startedAt: roundStartedAt, firstTokenAt, status: 'FAILED', errorCode: aborted ? PROVIDER_ERROR_CODES.ABORTED : (normalized.code || PROVIDER_ERROR_CODES.UNKNOWN), requestedReasoning, forwardedReasoning });
   } finally {
     clearInterval(heartbeat);
+    res.off?.('close', onClientGone);
     if (!res.writableEnded) res.end();
   }
   return { __streamed: true };

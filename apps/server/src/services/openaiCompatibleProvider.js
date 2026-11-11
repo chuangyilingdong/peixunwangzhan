@@ -1,4 +1,4 @@
-import { AI_PROVIDER_TIMEOUT_MS, AI_PROVIDER_MAX_WAIT_MS } from '../config.js';
+import { AI_PROVIDER_TIMEOUT_MS, AI_PROVIDER_STREAM_TIMEOUT_MS, AI_PROVIDER_MAX_WAIT_MS } from '../config.js';
 import { PROVIDER_ERROR_CODES } from './providerContract.js';
 
 const MAX_TEXT_RESULT_CHARS = 50000;
@@ -582,7 +582,7 @@ async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, maxW
   return assetFromResponse({ payload, modality, title, providerName, model });
 }
 
-export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeoutMs = AI_PROVIDER_TIMEOUT_MS, maxWaitMs = AI_PROVIDER_MAX_WAIT_MS, modalityEndpoints = {}, voice = 'alloy', pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, requestTemplates = {}, modelRequestTemplates = {}, requestPaths = {}, pollPaths = {}, mediaUploadPath = defaultMediaUploadPath(endpoint), selfOrigins = [] } = {}) {
+export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeoutMs = AI_PROVIDER_TIMEOUT_MS, streamTimeoutMs = AI_PROVIDER_STREAM_TIMEOUT_MS, maxWaitMs = AI_PROVIDER_MAX_WAIT_MS, modalityEndpoints = {}, voice = 'alloy', pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, requestTemplates = {}, modelRequestTemplates = {}, requestPaths = {}, pollPaths = {}, mediaUploadPath = defaultMediaUploadPath(endpoint), selfOrigins = [] } = {}) {
   const providerName = String(name || 'openai-compatible').trim();
   const providerModel = String(model || '').trim();
   // 单次 HTTP 请求（提交、上游素材镜像上传）的超时：**封顶 5 分钟不变** —— 它管的是"一条请求挂死了多久算死"，
@@ -590,6 +590,8 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
   // 一条挂死的连接必须有人掐断；而"上游还在跑"只可能发生在**轮询**阶段（生产那 5 条 303–309 秒的
   // 「AI 服务响应超时」`task_id` 都已落库，就是证据：提交成功、死在轮询的上限上）。
   const timeout = Math.max(1000, Math.min(300000, Number(timeoutMs) || AI_PROVIDER_TIMEOUT_MS));
+  // 文本流式单独的超时（2026-11-11）：只给 generateStream，封顶 20 分钟；其他请求仍用上面的 5 分钟 timeout。
+  const streamTimeout = Math.max(1000, Math.min(1200000, Number(streamTimeoutMs) || AI_PROVIDER_STREAM_TIMEOUT_MS));
   // 「已受理的任务等多久」的兜底（默认 30 分钟，0 = 不限）：与单请求超时**分开**，见 pollForAsset 上方那段口径。
   const waitCeiling = Number.isFinite(Number(maxWaitMs)) ? Math.max(0, Number(maxWaitMs)) : Math.max(0, Number(AI_PROVIDER_MAX_WAIT_MS) || 0);
   const pollInterval = Math.max(250, Math.min(10000, Number(pollIntervalMs) || DEFAULT_POLL_INTERVAL_MS));
@@ -666,7 +668,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
         if (signal.aborted) abortFromCaller();
         else signal.addEventListener('abort', abortFromCaller, { once: true });
       }
-      const timer = setTimeout(() => controller.abort(), timeout);
+      const timer = setTimeout(() => controller.abort(), streamTimeout);
       timer.unref?.();
       try {
         let response;
@@ -748,6 +750,16 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
         }
         if (!full.trim() && !sawToolCalls) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
         return { assets: [textAsset({ text: full, title, providerName, model: providerModel, tokens: usage, cost })], usage, streamed: true };
+      } catch (error) {
+        // 2026-11-11：流建立后 `reader.read()` 被 timer abort 时，底层是 AbortError /
+        // 「This operation was aborted」，原来会原样冒泡到学生端。这里统一归一化：
+        //   · 调用方主动停止（学生点停止/断线）→ ABORTED「已停止生成」；
+        //   · 20 分钟到点 → TIMEOUT「AI 服务响应超时」。
+        if (controller.signal.aborted || error?.name === 'AbortError') {
+          if (callerAborted) throw providerError('已停止生成', PROVIDER_ERROR_CODES.ABORTED);
+          throw providerError('AI 服务响应超时', PROVIDER_ERROR_CODES.TIMEOUT);
+        }
+        throw error;
       } finally {
         clearTimeout(timer);
         if (signal) signal.removeEventListener('abort', abortFromCaller);

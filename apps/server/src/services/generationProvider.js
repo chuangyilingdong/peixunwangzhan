@@ -1,4 +1,4 @@
-import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_KEY, AI_PROVIDER_MODALITY_ENDPOINTS, AI_PROVIDER_POLL_INTERVAL_MS, AI_PROVIDER_VOICE, AI_PROVIDER_MAX_WAIT_MS, AI_PROVIDER_TIMEOUT_MS, PUBLIC_SITE_URL } from '../config.js';
+import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_KEY, AI_PROVIDER_MODALITY_ENDPOINTS, AI_PROVIDER_POLL_INTERVAL_MS, AI_PROVIDER_VOICE, AI_PROVIDER_MAX_WAIT_MS, AI_PROVIDER_TIMEOUT_MS, AI_PROVIDER_STREAM_TIMEOUT_MS, PUBLIC_SITE_URL } from '../config.js';
 import { isMockProvider, providerDefinition, unavailableProvider, validateProviderConfig } from './providerContract.js';
 import { openAiCompatibleProvider } from './openaiCompatibleProvider.js';
 import { runningHubProvider, runningHubSiteCurrency } from './runningHubProvider.js';
@@ -296,8 +296,9 @@ function rawGenerationProvider(selection = {}) {
     return openAiCompatibleProvider({
       name: config.provider, model: config.model, endpoint: selected.gateway.endpoint, apiKey: selected.gateway.apiKey,
       modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE,
+      timeoutMs: AI_PROVIDER_TIMEOUT_MS, streamTimeoutMs: AI_PROVIDER_STREAM_TIMEOUT_MS,
       requestTemplates: {}, modelRequestTemplates: {}, requestPaths: { IMAGE: '/v1/images/generations' }, pollPaths: {},
     });
   }
-  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: selected.apiKey || getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE, requestTemplates: selected.requestTemplates, modelRequestTemplates: selected.modelRequestTemplates, requestPaths: selected.requestPaths, pollPaths: selected.pollPaths, selfOrigins: SELF_MEDIA_ORIGINS });
+  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: selected.apiKey || getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE, timeoutMs: AI_PROVIDER_TIMEOUT_MS, streamTimeoutMs: AI_PROVIDER_STREAM_TIMEOUT_MS, requestTemplates: selected.requestTemplates, modelRequestTemplates: selected.modelRequestTemplates, requestPaths: selected.requestPaths, pollPaths: selected.pollPaths, selfOrigins: SELF_MEDIA_ORIGINS });
 }

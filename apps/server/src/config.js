@@ -12,6 +12,11 @@ export const AI_PROVIDER_ENDPOINT = String(process.env.AI_PROVIDER_ENDPOINT || '
 // Read only on the server; never accept this value from request payloads.
 export const AI_PROVIDER_API_KEY = String(process.env.AI_PROVIDER_API_KEY || '').trim();
 export const AI_PROVIDER_TIMEOUT_MS = Math.max(1000, Math.min(300000, Number(process.env.AI_PROVIDER_TIMEOUT_MS || 120000)));
+// 2026-11-11：课堂 VibeCoding / 文本 Agent 是**流式**请求，一次工具链可能跑十几分钟；
+// 单独给它一个超时，默认沿用全局（生产 5 分钟），生产可用 AI_PROVIDER_STREAM_TIMEOUT_MS=1200000
+// 临时放宽到 20 分钟。**只给 generateStream 用**：图片/视频/上传/轮询仍走 AI_PROVIDER_TIMEOUT_MS。
+// 封顶 20 分钟，防止误配成无限。
+export const AI_PROVIDER_STREAM_TIMEOUT_MS = Math.max(1000, Math.min(1200000, Number(process.env.AI_PROVIDER_STREAM_TIMEOUT_MS || AI_PROVIDER_TIMEOUT_MS)));
 // 「上游已经受理、我们等它出结果」的兜底上限（毫秒；**0 = 不限**）—— 2026-09-30 用户口径：
 // 「除非上游真的报错，不然应该一直等到上游出结果。每个框体都一样。」
 // ⚠️ 这不是「到点就判失败」的超时闸（那条已被删掉，见 openaiCompatibleProvider 的 pollForAsset）：

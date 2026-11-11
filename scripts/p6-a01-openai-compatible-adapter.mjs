@@ -64,6 +64,13 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify({ choices: [{ message: { content: '迟到的响应' } }] }));
     return;
   }
+  // 流式：先发一个 chunk、然后一直不结束。用来验证流式读取阶段被计时器 abort 时，
+  // 底层 AbortError 必须归一化成「AI 服务响应超时」，而不是把 This operation was aborted 透出去。
+  if (prompt === 'stream-hang') {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write('data: {"choices":[{"delta":{"content":"首字"}}]}\n\n');
+    return;
+  }
   if (req.url === '/v1/chat/completions') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ message: { content: [{ type: 'text', text: '真实接口返回的文本' }] } }] }));
@@ -145,6 +152,23 @@ try {
   const timeoutProvider = openAiCompatibleProvider({ name: 'custom', model: 'test-model', endpoint, apiKey: 'secret-test-key', timeoutMs: 1000 });
   await assert.rejects(() => timeoutProvider.generate({ modality: 'TEXT', prompt: 'timeout' }), (error) => error.code === PROVIDER_ERROR_CODES.TIMEOUT);
 
+  // 2026-11-11：流式读取阶段（reader.read）被 streamTimeout 中止 → 必须归一化成标准超时。
+  const streamTimeoutProvider = openAiCompatibleProvider({ name: 'custom', model: 'test-model', endpoint, apiKey: 'secret-test-key', timeoutMs: 5000, streamTimeoutMs: 200 });
+  await assert.rejects(
+    () => streamTimeoutProvider.generateStream({ messages: [{ role: 'user', content: 'stream-hang' }], onDelta: () => {} }),
+    (error) => error.code === PROVIDER_ERROR_CODES.TIMEOUT && /AI 服务响应超时/.test(String(error.message || '')),
+  );
+  // 调用方主动停止（学生点停止/断线）仍然要是 ABORTED，不能被当成超时。
+  const abortProvider = openAiCompatibleProvider({ name: 'custom', model: 'test-model', endpoint, apiKey: 'secret-test-key', streamTimeoutMs: 5000 });
+  const abortController = new AbortController();
+  const abortTimer = setTimeout(() => abortController.abort(), 100);
+  try {
+    await assert.rejects(
+      () => abortProvider.generateStream({ messages: [{ role: 'user', content: 'stream-hang' }], signal: abortController.signal, onDelta: () => {} }),
+      (error) => error.code === PROVIDER_ERROR_CODES.ABORTED,
+    );
+  } finally { clearTimeout(abortTimer); }
+
   // 轮询抖两下（524）也必须跑到终态：单次轮询失败是**瞬时**的，不是这条生成失败。
   // 反向自检在下面 —— 非瞬时错误（内容安全 / 格式错）仍然要立刻抛，不许被重试吃成"慢成功"。
   const flakyProvider = openAiCompatibleProvider({ name: 'custom', model: 'test-model', endpoint, apiKey: 'secret-test-key', pollIntervalMs: 10, timeoutMs: 5000 });
@@ -167,7 +191,8 @@ try {
   assert.equal(requests.filter((row) => row.url === '/v1/videos' && row.method === 'POST').length - submitsBefore, 1, '只许提交一次（不许重发）');
   assert.ok(requests.some((row) => row.url === '/v1/videos/video-recovered'), '要按 X-Task-Id 去查');
 } finally {
+  server.closeAllConnections?.();
   await new Promise((resolve) => server.close(resolve));
 }
 
-console.log(JSON.stringify({ name: 'p6-a01-openai-compatible-adapter', pass: true, checks: 29 }));
+console.log(JSON.stringify({ name: 'p6-a01-openai-compatible-adapter', pass: true, checks: 31 }));
