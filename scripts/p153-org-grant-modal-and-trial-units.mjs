@@ -199,8 +199,9 @@ try {
     /const isExperience = picked\?\.seriesType === 'EXPERIENCE';/.test(page)
     && /const useNow = units;/.test(page)
     && /<div className="row-actions">[\s\S]{0,700}units-input/.test(page));
-  check('⑥ 次数上限 = 该课包剩余人次（服务端在事务里还会再算一次）',
-    /const maxUnits = picked \? Math\.max\(1, Number\(picked\.remaining \|\| 1\)\) : 1;/.test(page));
+  check('⑥ 次数上限 = min(课包剩余人次, 学生剩余课时上限)（服务端在事务里还会再算一次）',
+    /const maxUnits = picked \? Math\.max\(1, Math\.min\(Number\(picked\.remaining \|\| 1\)/.test(page)
+    && /capRemaining/.test(page) && /COURSE_UNITS_EXCEED_LESSONS/.test(read('apps/server/src/routes/orgAdmin.js')));
   check('⑥ 提交带 units 与受限枚举 source；弹窗用的两个来源都在服务端白名单里',
     /units: useNow, source,/.test(page)
     && /source="STUDENT_CENTER"/.test(page) && /source="STUDENT_DETAIL"/.test(page)
@@ -214,6 +215,13 @@ try {
     /setReclaimTarget\(item\)/.test(page) && /<ReclaimModal/.test(page)
     && /item\.seriesType !== 'EXPERIENCE'/.test(page)
     && /export function ReclaimModal/.test(read('apps/org/src/pages/StudentGrants.jsx')));
+  // 2026-11-11：授权记录要显示授权课时次数；学生课包封面要有待上课/上课中标签。
+  check('⑥ 授权记录显示课时次数', /<th>次数<\/th>/.test(page) && /item\.units/.test(page));
+  const studentClassroom = read('packages/shared/src/classroom.jsx');
+  check('⑥ 学生课包封面有「待上课 / 上课中」标签',
+    /course-package-status/.test(studentClassroom)
+    && /participationStatus === 'ACTIVE'/.test(studentClassroom)
+    && /\.course-package-status\.is-active/.test(styles));
   check('⑥ 机构名接进外壳并会渲染（orgName → .org-name），样式在共享样式表里',
     /<AppShell product="灵动ai学院" orgName=\{session\.organization\?\.name/.test(main)
     && /orgName = ''/.test(shell) && /className="org-name"/.test(shell) && /\.org-name\{/.test(styles));

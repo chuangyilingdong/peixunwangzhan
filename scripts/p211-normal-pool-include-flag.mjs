@@ -185,6 +185,9 @@ try {
     check('⑤ 许可 series_id = 独立课程（不是池子）★', grant?.series_id === excludedId, JSON.stringify(grant));
     const list = await api(`/api/org/course-grants?seriesId=${encodeURIComponent(excludedId)}`, { token: orgAdmin });
     check('⑤ 机构许可列表按独立课程筛选得到它', list.data?.items?.some((item) => item.seriesId === excludedId), JSON.stringify(list.data).slice(0, 200));
+    // 2026-11-11：学生课时次数不能超过课包总节数。独立课程有 2 节、学生已有 1 次，再加 2 次必须被拒。
+    const over = await api('/api/org/course-grants', { method: 'POST', token: orgAdmin, body: { seriesId: excludedId, studentIds: [seeded.studentId], units: 2, idempotencyKey: 'p211-grant-over' } });
+    check('⑤ 授权次数不能超过课包总节数 ★', over.status === 409 && over.code === 'COURSE_UNITS_EXCEED_LESSONS', `${over.status} ${over.code} ${JSON.stringify(over.error || {})}`);
   }
 
   /* ⑤′ 独立课程的课堂：核销落在自己系列，不扣普通课池子的次数 */

@@ -189,19 +189,30 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const submitKeyRef = useRef({ signature: '', key: '' });
+  // 2026-11-11 用户口径：学生账号的课时次数不能超过课包总课程数（普通课 48 节）。
+  // 这里读这个学生在当前课包上已有的授权次数，用来把「本次最多还能加几次」提前算出来。
+  const studentGrants = useData(
+    () => (studentId ? api.get(`org/students/${encodeURIComponent(studentId)}/course-grants`) : Promise.resolve({ items: [] })),
+    [api, studentId],
+  );
   // 2026-11-10：普通课包也按课时次数，两种课包都允许重复分配（次数累加），
   // 所以候选课包只按「机构已开通 + 剩余次数 > 0」筛，不再排除"该学生已持有"。
   const candidates = (overview.data?.items || []).filter((item) => item.assignmentStatus === 'ACTIVE'
     && Number(item.remaining || 0) > 0);
   const picked = candidates.find((item) => item.seriesId === seriesId) || null;
   const isExperience = picked?.seriesType === 'EXPERIENCE';
-  const maxUnits = picked ? Math.max(1, Number(picked.remaining || 1)) : 1;
+  const currentGranted = Number((studentGrants.data?.items || [])
+    .find((item) => item.status === 'ACTIVE' && item.seriesId === picked?.seriesId)?.grantedUnits || 0);
+  const lessonCap = picked && !isExperience ? Number(picked.lessonCount || 0) : null;
+  const capRemaining = lessonCap == null ? null : Math.max(0, lessonCap - currentGranted);
+  const atLessonCap = capRemaining != null && capRemaining <= 0;
+  const maxUnits = picked ? Math.max(1, Math.min(Number(picked.remaining || 1), capRemaining == null ? Number(picked.remaining || 1) : Math.max(1, capRemaining))) : 1;
   const useNow = units;
   // 换人 / 换课包时把次数夹回本课包的上限，别把上一门课的数字带过去
   useEffect(() => { setUnits((value) => Math.min(Math.max(1, Number(value) || 1), maxUnits)); }, [maxUnits, seriesId]);
 
   async function submit() {
-    if (!studentId || !picked) return;
+    if (!studentId || !picked || atLessonCap || studentGrants.loading) return;
     setBusy(true); setError('');
     const signature = `${picked.seriesId}|${studentId}|${useNow}`;
     if (submitKeyRef.current.signature !== signature) {
@@ -217,7 +228,7 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
   return <Modal title="授权次数"
     onClose={onClose} busy={busy} error={error}
     footer={<>
-      <button className="primary-button" disabled={busy || !studentId || !picked} onClick={submit}>
+      <button className="primary-button" disabled={busy || !studentId || !picked || atLessonCap || studentGrants.loading} onClick={submit}>
         {busy ? '授权中…' : (isExperience && useNow > 1 ? `授权 ${useNow} 次` : '确认授权')}
       </button>
       <button className="secondary-button" type="button" onClick={onClose}>取消</button>
@@ -262,14 +273,15 @@ function AddGrantModal({ api, student = null, source = 'STUDENT_CENTER', onClose
       <div className="row-actions">
         <span className="muted">授权次数：</span>
         <span className="ta-zoom">
-          <button type="button" className="secondary-button" disabled={units <= 1} onClick={() => setUnits((value) => Math.max(1, value - 1))} aria-label="减少">−</button>
-          <input className="units-input" type="number" min="1" max={maxUnits} value={units} aria-label="授权次数"
+          <button type="button" className="secondary-button" disabled={units <= 1 || atLessonCap} onClick={() => setUnits((value) => Math.max(1, value - 1))} aria-label="减少">−</button>
+          <input className="units-input" type="number" min="1" max={maxUnits} value={units} aria-label="授权次数" disabled={atLessonCap}
             onChange={(event) => setUnits((value) => { const parsed = Math.floor(Number(event.target.value)); return Number.isFinite(parsed) && parsed >= 1 ? Math.min(parsed, maxUnits) : Math.max(1, value); })} />
-          <button type="button" className="secondary-button" disabled={units >= maxUnits} onClick={() => setUnits((value) => Math.min(maxUnits, value + 1))} aria-label="增加">＋</button>
+          <button type="button" className="secondary-button" disabled={units >= maxUnits || atLessonCap} onClick={() => setUnits((value) => Math.min(maxUnits, value + 1))} aria-label="增加">＋</button>
         </span>
-        <span className="muted">次（本课包剩余 {picked.remaining} 次，最多 {maxUnits} 次）</span>
+        <span className="muted">次（本课包剩余 {picked.remaining} 次{lessonCap == null ? '' : `；这个学生已授权 ${currentGranted} 次，上限 ${lessonCap} 节`}，最多 {maxUnits} 次）</span>
       </div>
-      <p className="muted">授权后：{picked.title} 该学生 +{useNow} 次（{isExperience ? '体验课包，同一节课可反复上' : '普通课包，上 1 节扣 1 次、上过的课不能重复上'}），本课包剩 {Math.max(0, Number(picked.remaining || 0) - useNow)} 次。</p>
+      {atLessonCap ? <Notice tone="warning">{isExperience ? '这个学生已经到上限' : `${picked.seriesId === 'NORMAL' ? '普通课' : '这个课包'}总共 ${lessonCap} 节，这个学生已授权 ${currentGranted} 次，不能再加；请先在「学生授权详情」里回收超出部分。`}</Notice> : null}
+      <p className="muted">授权后：{picked.title} 该学生 +{useNow} 次（{isExperience ? '体验课包，同一节课可反复上' : '普通课包，上 1 节扣 1 次、上过的课不能重复上'}），本课包剩 {Math.max(0, Number(picked.remaining || 0) - useNow)} 次{lessonCap == null ? '' : `；该学生累计 ${currentGranted + useNow} / ${lessonCap} 次`}。</p>
     </> : null}
   </Modal>;
 }
@@ -531,7 +543,7 @@ function GrantRecords({ api, seriesOptions, initialSearch = '' }) {
       {data.loading ? <Loading label="正在读取授权记录…" /> : data.error ? <ErrorState error={data.error} onRetry={data.refresh} /> : items.length ? <>
         <ListResultSummary total={data.data?.total} page={data.data?.page} totalPages={data.data?.totalPages} label="条记录" />
         <div className="table-wrap"><table>
-          <thead><tr><th>时间</th><th>学生</th><th>课包</th><th>操作类型</th><th>操作结果</th><th>操作账号</th><th>来源</th></tr></thead>
+          <thead><tr><th>时间</th><th>学生</th><th>课包</th><th>操作类型</th><th>次数</th><th>操作结果</th><th>操作账号</th><th>来源</th></tr></thead>
           <tbody>{items.map((item) => <tr key={item.id}>
             <td>{formatDate(item.occurredAt)}</td>
             <td><strong>{item.studentName || '—'}</strong>{item.studentLogin ? <div className="muted">{item.studentLogin}</div> : null}</td>
@@ -539,6 +551,7 @@ function GrantRecords({ api, seriesOptions, initialSearch = '' }) {
             <td>{item.operationType === 'GRANT'
               ? <span className="status success">授权</span>
               : <><span className="status warning">{item.operationLabel || '取消授权'}</span>{item.note ? <div className="muted">{item.note}</div> : null}</>}</td>
+            <td>{item.operationType === 'GRANT' ? '+' : '-'}{Number(item.units || 0)} 次</td>
             <td><span className="status success">{item.resultLabel}</span></td>
             <td>{item.actorName}{item.actorScope === 'PLATFORM' ? <div className="muted">平台侧</div> : null}</td>
             <td className="muted">{item.sourceLabel}</td>

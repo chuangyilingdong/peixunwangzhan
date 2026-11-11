@@ -1599,3 +1599,11 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .share-modal__qr svg { width: 200px; height: 200px; }
 .share-modal__hint { margin: 6px 0 0; color: #8a83a3; font-size: 13px; line-height: 1.6; }
 .share-modal__actions { display: flex; gap: 10px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
+
+/* 2026-11-11 学生「我的课程」封面状态：待上课 / 上课中（老师加进课堂后一眼能找到） */
+.course-package-status{position:absolute;top:14px;right:14px;z-index:2;display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;color:#fff;font-size:12px;font-weight:900;letter-spacing:.3px;box-shadow:0 6px 18px #1d173c4d}
+.course-package-status .dot{width:7px;height:7px;border-radius:50%;background:#fff}
+.course-package-status.is-active{background:#16a34a}
+.course-package-status.is-pending{background:#f59e0b}
+.course-package-status.is-active .dot{animation:course-status-pulse 1.4s ease-in-out infinite}
+@keyframes course-status-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.75)}}

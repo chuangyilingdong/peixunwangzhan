@@ -317,6 +317,11 @@ export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
     {courses.length ? <section className="course-package-grid" aria-label="课程包列表">
       {courses.map((course, index) => {
         const lessons = course.lessons || [];
+        // 2026-11-11 用户口径：老师把学生加进课堂后（待上课/上课中），课包封面要有明显状态标签，方便查找。
+        // 「上课中」优先于「待上课」；同一课包有多节课时，只要有一节在上/等着上就标出来。
+        const liveStatus = lessons.some((lesson) => lesson.participationStatus === 'ACTIVE')
+          ? { tone: 'active', label: '上课中' }
+          : (lessons.some((lesson) => lesson.participationStatus === 'PENDING') ? { tone: 'pending', label: '待上课' } : null);
         // ⚠️ 2026-09-18 晚用户口径：卡片上原来那两行（「已分给你 · 等老师把你加进课堂」这行状态、
         //    以及「上课形式：画布课堂 N 节」）**都删掉了** —— 所以这里不再算 openCount/completedCount/
         //    modeSummary（算了也没地方用）。
@@ -325,6 +330,7 @@ export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
             {course.coverImageUrl ? <img src={course.coverImageUrl} alt="" /> : <><span className="course-cover-orbit" /><span className="course-cover-symbol">✦</span></>}
             {/* 封面上的那行字改成**课包标题**（原来写死「AI 创作课程」，看不出是哪个课包） */}
             <span className="course-cover-label">{course.title}</span>
+            {liveStatus ? <span className={`course-package-status is-${liveStatus.tone}`}><span className="dot" />{liveStatus.label}</span> : null}
           </div>
           <div className="course-package-body">
             <div className="course-package-heading"><h2>{course.title}</h2><span>{lessons.length} 节课</span></div>

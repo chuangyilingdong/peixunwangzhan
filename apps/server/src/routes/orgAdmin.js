@@ -1572,6 +1572,7 @@ export async function handleOrg(ctx) {
     const until = nowIso();
     const experienceSeries = await arows(`SELECT series.id, series.title, series.cover_image_url, series.sort, series.version,
         series.difficulty_level, series.age_range_min, series.age_range_max, series.series_type, series.include_in_normal_pool,
+        (SELECT COUNT(*) FROM course_lessons cl WHERE cl.series_id=series.id AND cl.status='PUBLISHED') lesson_count,
         COALESCE(assignment.quota_total, 0) quota_total, COALESCE(assignment.quota_used, 0) quota_used,
         assignment.status assignment_status, assignment.assigned_at assignment_assigned_at
       FROM course_series series
@@ -1620,7 +1621,7 @@ export async function handleOrg(ctx) {
       const quotaUsed = Number(poolAssignment?.quota_used || 0);
       items.push({
         seriesId: 'NORMAL', title: `普通课（${normalLessons} 节）`, coverImageUrl: null,
-        seriesType: 'NORMAL', includeInNormalPool: true, version: null,
+        seriesType: 'NORMAL', includeInNormalPool: true, lessonCount: normalLessons, version: null,
         assignmentStatus: poolAssignment?.status || null, assignedAt: poolAssignment?.assigned_at || null,
         difficultyLevel: null, ageRangeMin: null, ageRangeMax: null,
         quotaTotal, quotaUsed, remaining: Math.max(0, quotaTotal - quotaUsed),
@@ -1642,6 +1643,7 @@ export async function handleOrg(ctx) {
         seriesId: row0.id, title: row0.title, coverImageUrl: row0.cover_image_url || null,
         seriesType: seriesTypeOf({ series_type: row0.series_type }),
         includeInNormalPool: inNormalCoursePool(row0),
+        lessonCount: Number(row0.lesson_count || 0),
         version: row0.version || null,
         assignmentStatus: row0.assignment_status || null,
         assignedAt: row0.assignment_assigned_at || null,
@@ -1741,12 +1743,24 @@ export async function handleOrg(ctx) {
         }
         if (!series || series.status !== 'PUBLISHED') throw errors.forbidden('课包未发布', 'COURSE_NOT_PUBLISHED');
         const experience = isExperienceSeries(series);
+        const pooledNormal = inNormalCoursePool(series);
         const grantSeriesId = series.id;
+        // 2026-11-11 用户口径：学生账号的课时次数不能超过课包的总课程数。
+        //   · 普通课池子：上限 = 池子当前已发布课时总数（生产 48）；
+        //   · 不计入普通课的独立课程：上限 = 该系列已发布课时数；
+        //   · 体验课可反复上同一节，不设上限。
+        const lessonCap = experience
+          ? null
+          : (pooledNormal
+            ? await normalLessonCount()
+            : Number((await arow("SELECT COUNT(*) n FROM course_lessons WHERE series_id=? AND status='PUBLISHED'", [grantSeriesId]))?.n || 0));
+        const capSeriesIds = pooledNormal ? await normalPoolSeriesIds() : [grantSeriesId];
         const assignment = await arow("SELECT * FROM course_assignments WHERE series_id=? AND org_id=? AND status='ACTIVE' AND (expires_at IS NULL OR expires_at > ?)", [grantSeriesId, currentOrgId, nowIso()]);
         if (!assignment) throw errors.forbidden('该课包未授权给当前机构', 'COURSE_NOT_AUTHORIZED');
         const placeholders = studentIds.map(() => '?').join(',');
-        const students = await arows(`SELECT id FROM users WHERE id IN (${placeholders}) AND org_id=? AND role='STUDENT' AND deleted_at IS NULL`, [...studentIds, currentOrgId]);
+        const students = await arows(`SELECT id, display_name, login FROM users WHERE id IN (${placeholders}) AND org_id=? AND role='STUDENT' AND deleted_at IS NULL`, [...studentIds, currentOrgId]);
         if (students.length !== studentIds.length) throw errors.badRequest('存在不属于本机构的学生', 'STUDENT_NOT_FOUND');
+        const studentById = new Map(students.map((item) => [item.id, item]));
         const quotaTotal = Number(assignment.quota_total || 0);
         const quotaUsed = Number(assignment.quota_used || 0);
         const needed = studentIds.length * units;
@@ -1756,6 +1770,22 @@ export async function handleOrg(ctx) {
         }
         const now = nowIso();
         for (const studentId of studentIds) {
+          if (lessonCap != null) {
+            const capPlaceholders = capSeriesIds.map(() => '?').join(',');
+            // 上限按「已占用的课时数」算：有效许可算全部 granted_units（含已核销的）；
+            // 已撤销/回收的许可只算 consumed_units —— 撤销后未用的次数已经退回，不再占学生额度。
+            const currentGranted = Number((await arow(`SELECT COALESCE(SUM(CASE WHEN revoked_at IS NULL THEN granted_units ELSE consumed_units END),0) n
+              FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id IN (${capPlaceholders})`, [currentOrgId, studentId, ...capSeriesIds]))?.n || 0);
+            if (currentGranted + units > lessonCap) {
+              const student = studentById.get(studentId);
+              const studentName = student?.display_name || student?.login || studentId;
+              const canAdd = Math.max(0, lessonCap - currentGranted);
+              throw errors.conflict(
+                `${pooledNormal ? '普通课' : '这个课包'}总共 ${lessonCap} 节：${studentName} 当前已授权 ${currentGranted} 次，本次最多还能加 ${canAdd} 次；请先回收超出部分`,
+                'COURSE_UNITS_EXCEED_LESSONS',
+              );
+            }
+          }
           const existing = await arow('SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [currentOrgId, studentId, grantSeriesId]);
           let grantId;
           let unitSeq;
@@ -2334,9 +2364,15 @@ export async function handleOrg(ctx) {
       const isGrant = log.action === 'ORG_COURSE_GRANT';
       const isReclaim = log.action === 'ORG_COURSE_GRANT_RECLAIM';
       const after = parseJson(log.after_data, {}) || {};
+      // 2026-11-11 用户口径：授权记录要显示「授权课时次数」。
+      //   授权 = after.units；机构回收 = after.reclaimedUnits；平台撤销 = after.refundedUnits。
+      const units = isGrant
+        ? Number(after.units || 1)
+        : (isReclaim ? Number(after.reclaimedUnits || 0) : Number(after.refundedUnits || 0));
       // 授权：操作账号 = 发起授权的机构账号；取消/回收：取消是平台侧账号，回收是机构侧账号
       const base = {
         occurredAt: log.created_at,
+        units,
         operationType: isGrant ? 'GRANT' : 'REVOKE',
         operationLabel: isGrant ? '授权' : (isReclaim ? '机构回收' : '取消授权'),
         // 能进审计的就只有成功的（失败的没落库）—— 这不是"全部成功"，是"只看得见成功"
