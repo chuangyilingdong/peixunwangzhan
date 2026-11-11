@@ -137,6 +137,17 @@ try {
     const batch = await arow('SELECT scope_type, scope_key FROM license_purchase_batches WHERE org_id=? AND series_id=? ORDER BY created_at DESC LIMIT 1', [seeded.orgId, pool.id]);
     check('② 池子采购批次 scope=NORMAL', batch?.scope_type === 'NORMAL' && batch?.scope_key === 'NORMAL', JSON.stringify(batch));
 
+    // 平台「调整授权次数 → 增加」走 license-purchases/append，传的是 UI 的 `NORMAL`（不是真实系列 id）。
+    const appended = await api('/api/admin/license-purchases/append', {
+      method: 'POST', token: admin,
+      body: { seriesId: 'NORMAL', orgId: seeded.orgId, additionalQuota: 1, amountMinor: 100, currency: 'CNY', paymentStatus: 'PAID', orderNo: 'P211-APPEND', contractNo: 'P211-C', idempotencyKey: 'p211-append-normal' },
+    });
+    check('② 平台「增加」传 NORMAL 能追加到池子 ★', appended.status === 200 && appended.data?.assignment?.quotaTotal === 3, JSON.stringify(appended.error || appended.data).slice(0, 300));
+    const poolAfterAppend = await arow('SELECT quota_total FROM course_assignments WHERE series_id=? AND org_id=?', [pool.id, seeded.orgId]);
+    check('② 池子授权单总次数 +1（不再报「平台课包不存在」）', Number(poolAfterAppend?.quota_total) === 3, JSON.stringify(poolAfterAppend));
+    const appendBatch = await arow('SELECT scope_type, scope_key FROM license_purchase_batches WHERE idempotency_key=?', ['p211-append-normal']);
+    check('② 追加批次也记 scope=NORMAL', appendBatch?.scope_type === 'NORMAL' && appendBatch?.scope_key === 'NORMAL', JSON.stringify(appendBatch));
+
     // 学生端：许可记在池子系列上，但「我的课程」要展开成池子里的**全部系列**（S1/S2/S3 各一张卡）。
     const dashboard = await api('/api/student/dashboard', { token: studentToken });
     const studentCourses = dashboard.data?.classroomCourses || [];

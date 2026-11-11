@@ -1,5 +1,5 @@
 import { contractExpiryForOrg, errors, id, nowIso, q, row, rows, transaction, arow, aq, arows, atransaction } from '../lib.js';
-import { inNormalCoursePool } from './courseGrants.js';
+import { inNormalCoursePool, normalPoolSeries } from './courseGrants.js';
 
 export const LICENSE_PAYMENT_STATUSES = new Set(['UNPAID', 'PARTIAL', 'PAID', 'REFUNDED']);
 
@@ -65,7 +65,16 @@ export async function appendLicensePurchase({ seriesId, orgId, additionalQuota, 
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000000) throw errors.badRequest('追加次数无效', 'VALIDATION_ERROR');
   const purchase = normalizeLicensePurchaseInput(input, quantity);
   return await atransaction(async () => {
-    const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [String(seriesId || '')]);
+    let series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [String(seriesId || '')]);
+    // 2026-11-11 修复：平台「调整授权次数 → 增加」传的是 UI 的池子标识 `NORMAL`（不是真实系列 id）。
+    // 这里和 admin/courses.js 的追加接口同一口径：'NORMAL' 或任意计入池子的普通课系列
+    // 都解析到池子键（S1）；否则前端会报「平台课包不存在」。
+    const requestedNormal = String(seriesId || '').toUpperCase() === 'NORMAL' || Boolean(series && inNormalCoursePool(series));
+    if (requestedNormal) {
+      const pool = await normalPoolSeries();
+      if (!pool) throw errors.notFound('还没有普通课内容（S1/S2/S3 未发布）', 'NORMAL_POOL_EMPTY');
+      series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [pool.id]);
+    }
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     if (series.status !== 'PUBLISHED') throw errors.conflict('仅已发布课包可购买授权', 'COURSE_NOT_PUBLISHED');
     if (!await arow('SELECT id FROM organizations WHERE id=?', [String(orgId || '')])) throw errors.notFound('机构不存在', 'ORG_NOT_FOUND');
@@ -74,8 +83,12 @@ export async function appendLicensePurchase({ seriesId, orgId, additionalQuota, 
     const now = nowIso();
     const batch = await createLicensePurchaseBatch({ assignmentId, orgId, seriesId: series.id, actorId, purchasedAt: now, ...purchase });
     if (!batch.replayed) {
-      const reserved = Number((await arow("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]))?.n || 0);
-      if (reserved + quantity > Number(series.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
+      // 普通课包（含不计入池子的独立课程）没有平台库存，直接给机构开次数（2026-11-10 口径）。
+      const stockTracked = String(series.series_type || 'NORMAL').toUpperCase() !== 'NORMAL';
+      if (stockTracked) {
+        const reserved = Number((await arow("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]))?.n || 0);
+        if (reserved + quantity > Number(series.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
+      }
       if (existing) {
         const baseQuota = Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used);
         await aq("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,quota_total=? WHERE id=?", [actorId, now, baseQuota + quantity, existing.id]);
