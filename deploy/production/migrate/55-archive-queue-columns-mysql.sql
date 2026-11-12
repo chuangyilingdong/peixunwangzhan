@@ -15,6 +15,9 @@
 --   ALTER TABLE file_assets DROP COLUMN archive_state, DROP COLUMN archive_priority,
 --     DROP COLUMN archive_attempts, DROP COLUMN archive_next_attempt_at;
 
+-- 历史空串归一化成 NULL（新占位行只写 NULL；否则 storage_key IS NULL 的取件查询会漏掉老行）。
+UPDATE file_assets SET storage_key = NULL WHERE storage_key = '';
+
 ALTER TABLE file_assets ADD COLUMN archive_state VARCHAR(16) NULL;
 ALTER TABLE file_assets ADD COLUMN archive_priority INT NOT NULL DEFAULT 0;
 ALTER TABLE file_assets ADD COLUMN archive_attempts INT NOT NULL DEFAULT 0;

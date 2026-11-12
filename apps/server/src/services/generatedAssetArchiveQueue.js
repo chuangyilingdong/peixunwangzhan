@@ -151,7 +151,7 @@ async function pickCandidates(limit) {
     ).catch(() => []);
   }
   // 兜底（迁移 55 没跑）：保留原来的 metadata 扫描。注意只查 storage_key IS NULL，
-  // 历史空串由迁移 54 归一化；这个分支只在列不存在时才会走到。
+  // 历史空串由迁移 55 归一化；这个分支只在列不存在时才会走到。
   const priority = await arows(
     "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND storage_key IS NULL AND status='ACTIVE' AND metadata LIKE '%\"priority\":true%' AND metadata LIKE '%\"state\":\"PENDING\"%' ORDER BY created_at ASC LIMIT ?",
     [limit],
