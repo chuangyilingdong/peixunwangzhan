@@ -716,11 +716,19 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
   //    生产已按运营口径把扫描关掉（`FILE_UPLOAD_SCANNER=off`）——这里仍然保留批次语义，
   //    将来重建扫描体系（clamd/worker）时不会退回"每文件一次"。
   const binaries = (collected.files || []).filter((file) => file.binary);
+  // 2026-11-12：base64 只解一次 —— 扫描与落盘共用同一份 Buffer；解完立刻清掉字符串引用
+  // （`collected` 与原始 `ctx.body` 各挂着一份），避免整份 base64 在扫描/落盘期间一直占内存。
+  const decoded = binaries.map((file) => ({ file, buffer: Buffer.from(String(file.content || ''), 'base64') }));
+  for (const item of decoded) item.file.content = '';
+  for (const item of Array.isArray(ctx.body?.files) ? ctx.body.files : []) {
+    if (item?.binary === true) item.content = '';
+  }
+  if (ctx.body?.cover && typeof ctx.body.cover === 'object') ctx.body.cover.content = '';
   const scanStartedAt = Date.now();
-  const batchScan = await scanUploadBuffers(binaries.map((file) => Buffer.from(file.content, 'base64')));
+  const batchScan = await scanUploadBuffers(decoded.map((item) => item.buffer));
   const scanMs = Date.now() - scanStartedAt;
   let storageMs = 0;
-  for (const file of binaries) {
+  for (const { file, buffer } of decoded) {
     const name = safeArtifactName(file.name);
     const mimeType = mimeForArtifact(name);
     if (!mimeType) {
@@ -731,7 +739,7 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
     try {
       const assetStartedAt = Date.now();
       const asset = await storeStudentArtifactAsset({
-        buffer: Buffer.from(file.content, 'base64'),
+        buffer,
         mimeType,
         // ⚠️ 交给存储层的只有**文件名**：底层 `cleanFileName` 明确拒收带 `/` 的名字（那是文件系统那一层的白名单，
         //    别为了支持 `assets/hero.png` 去松它）。相对路径只活在我们自己的改写映射里（key = 全路径）。
@@ -837,11 +845,11 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
   // ⭐ 2026-10-05（客户端报「按钮长期处理中」，要求补分阶段耗时）：一行看清时间花在哪。
   //    `scan` 那档现在是 `disabled`（生产 FILE_UPLOAD_SCANNER=off）或 `PASSED/…`；
   //    真出问题时光看这一行就能判断是扫描、落盘还是数据库。
-  const contentBytes = binaries.reduce((sum, file) => sum + Math.floor(String(file.content || '').length * 3 / 4), 0);
+  const contentBytes = decoded.reduce((sum, item) => sum + item.buffer.length, 0);
   const timings = {
     fileCount: binaries.length,
     contentBytes,
-    jsonBytes: Buffer.byteLength(JSON.stringify(body), 'utf8'),
+    jsonBytes: Number(ctx.jsonBytes || 0),
     scanMs, storageMs, dbMs,
     totalMs: Date.now() - submitStartedAt,
     scanStatus: batchScan.status,

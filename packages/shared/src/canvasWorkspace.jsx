@@ -37,6 +37,29 @@ const PROMPT_SLOT_ACTION = { text: '写文字', prompt: '写文字', image: '生
  */
 const WORK_PUBLISHED_LOCK_MESSAGE = '这份作品已经发布到作品广场，不能再重新提交了。想接着补充内容：请老师或平台先在作品管理里把它「下架」，下架后这里就能继续提交。';
 
+// 2026-11-12：生成轮询降载。页面在后台时不再打接口；长任务把间隔从 2s 逐步放到 5s。
+// 三个工具都要对非浏览器环境安全（SSR / 纯函数测试里没有 document）。
+function pageHidden() {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
+
+function waitForPageVisible() {
+  if (typeof document === 'undefined') return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      document.removeEventListener('visibilitychange', done);
+      resolve();
+    };
+    document.addEventListener('visibilitychange', done);
+  });
+}
+
+function generationPollDelayMs(elapsedMs) {
+  if (elapsedMs < 30_000) return 2000;
+  if (elapsedMs < 120_000) return 3000;
+  return 5000;
+}
+
 /**
  * 等一条生成任务出结果。
  *
@@ -48,24 +71,30 @@ const WORK_PUBLISHED_LOCK_MESSAGE = '这份作品已经发布到作品广场，�
  * 现在结束只有两种可能：任务 **SUCCEEDED** / **FAILED**（上游真报错时服务端把任务收成 FAILED 并带原因）。
  * 单次查询失败（网络抖一下、服务端正忙）**不算上游报错** → 忽略它、下一轮接着问；
  * 但要是**连着** 1 分钟一次都问不到，那就如实抛出去 —— 服务端整个不可用时，这个框体不该永远转圈。
+ *
+ * 2026-11-12：间隔按已等待时长 2s → 3s → 5s（30s / 2min 两档）+ 0–400ms 抖动；
+ * 页面隐藏时整轮挂起（回到前台立刻恢复），避免学生切标签页后还在空打接口。
  */
 async function waitForGenerationJob(api, jobId) {
   const path = `ai/generations/history/${encodeURIComponent(jobId)}`;
-  let missesInARow = 0;
+  const startedAt = Date.now();
+  let missSince = 0;
   for (;;) {
+    while (pageHidden()) await waitForPageVisible();
     let job = null;
     try {
       // 单次查询自己带 30 秒超时：查询挂住时掐掉这一轮再问（与"等多久"无关）。
       job = await api.get(path, { timeoutMs: 30000 });
-      missesInARow = 0;
+      missSince = 0;
     } catch (error) {
       // 任务记录都没了（换了账号 / 被清理）→ 再问也没有意义，如实抛给调用方。
       if (Number(error?.status) === 404) throw error;
-      missesInARow += 1;
-      if (missesInARow >= 30) throw error;
+      if (!missSince) missSince = Date.now();
+      if (Date.now() - missSince >= 60_000) throw error;
     }
     if (job && ['SUCCEEDED', 'FAILED'].includes(String(job.status))) return job;
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const delay = generationPollDelayMs(Date.now() - startedAt) + Math.floor(Math.random() * 400);
+    await new Promise((resolve) => setTimeout(resolve, delay));
   }
 }
 
@@ -503,10 +532,16 @@ export function CanvasWorkspace({ api, prep = null, ...props }) {
 
   // 还有任务在跑就轮询，跑完的结果会自动补到画布上。
   // 依赖只留 runningCount：useData 每次渲染返回新对象，放进 deps 会让 5 秒定时器被反复重置。
+  // 2026-11-12：页面隐藏时跳过（不再空打接口）；回到前台立刻 refresh 一次补上。
   useEffect(() => {
     if (!runningCount) return undefined;
-    const timer = setInterval(() => generations.refresh(), 5000);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => { if (!pageHidden()) generations.refresh(); }, 5000);
+    const onVisibility = () => { if (!pageHidden()) generations.refresh(); };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clearInterval(timer);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [runningCount]);
 
   // 盯着「老师还在不在上课」（用户 2026-09-21 口径：**老师一点结束课堂，学生端就该退出画布、
@@ -517,6 +552,8 @@ export function CanvasWorkspace({ api, prep = null, ...props }) {
     let stopped = false;
     let leaveTimer = null;
     async function checkSession() {
+      // 2026-11-12：隐藏页面不轮询；回前台后下一轮（≤10s）自然恢复。
+      if (pageHidden()) return;
       try {
         const state = await api.get(`student/projects/${projectId}/session-state`);
         if (stopped || state?.active !== false) return;

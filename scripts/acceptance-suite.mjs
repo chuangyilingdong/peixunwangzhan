@@ -117,6 +117,10 @@ const FAST = [
   'scripts/p215-normal-pool-archived-key.mjs',
   // 2026-11-12 加：课程详情/可访问课程/项目列表的冷读查询数（不随课时数增长）。
   'scripts/p216-cold-read-budget.mjs',
+  // 2026-11-12 加：submit-upload 只解一次 base64、jsonBytes 走 content-length（大整单内存/CPU）。
+  'scripts/p217-submit-upload-memory.mjs',
+  // 2026-11-12 加：生成轮询后台暂停/自适应退避 + 网关跳过无用 session 解析。
+  'scripts/p218-generation-poll-budget.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));

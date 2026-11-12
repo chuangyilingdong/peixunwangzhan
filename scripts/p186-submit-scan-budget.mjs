@@ -148,7 +148,7 @@ try {
       && typeof timings.totalMs === 'number' && timings.fileCount === 3 && timings.contentBytes > 0 && timings.scanStatus === 'PASSED',
     JSON.stringify(timings).slice(0, 220));
   check('⑤ 服务端日志也打一行 `[submit-upload] …`（线上定位用）',
-    /\[submit-upload\] files=3 .*scanMs=\d+ storageMs=\d+ dbMs=\d+ totalMs=\d+/.test(serverLog),
+    /\[submit-upload\] .*\bfiles=3\b .*scanMs=\d+ storageMs=\d+ dbMs=\d+ totalMs=\d+/.test(serverLog),
     serverLog.split('\n').filter((line) => line.includes('[submit-upload]')).slice(-2).join(' / ').slice(0, 220));
 
   /* ───────── ③ 同内容 → SHA256 复用，不再起扫描器 ───────── */
@@ -209,8 +209,9 @@ try {
     const runtime = fs.readFileSync(path.join(root, 'apps/server/src/routes/studentRuntime.js'), 'utf8');
     const upload = fs.readFileSync(path.join(root, 'apps/server/src/services/fileUploadSecurity.js'), 'utf8');
     check('⑥ 提交链路在**循环外**只调一次 `scanUploadBuffers(`（整单一次）',
-      /const batchScan = await scanUploadBuffers\(binaries\.map/.test(runtime)
-      && /scan: batchScan/.test(runtime));
+      /const batchScan = await scanUploadBuffers\(decoded\.map\(\(item\) => item\.buffer\)\)/.test(runtime)
+      && /scan: batchScan/.test(runtime)
+      && !/scanUploadBuffers\(binaries\.map/.test(runtime));
     check('⑥ 扫描器关闭是**显式**开关（off/none/disabled/skip），不是"忘了配"',
       /SCANNER_OFF_VALUES = new Set\(\['off', 'none', 'disabled', 'skip'\]\)/.test(upload));
     check('⑥ 结果按 SHA256 缓存（只缓存 PASSED）', /scanPassedCache/.test(upload) && /scanCacheSet\(item\.hash\)/.test(upload));

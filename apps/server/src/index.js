@@ -154,7 +154,12 @@ const server = http.createServer(async (req, res) => {
   // （`/api/org` 认 `platform_token_org`、`/api/admin` 认 `platform_token_admin`，其余认老名字）。
   // 见 lib.js 的 readToken / setAuthCookie。
   const context = requestContext(req);
-  const authResult = await resolveAuth(req, context.pathname);
+  // 2026-11-12：网关请求只认 runtime key（routes/runtimeGateway.js 从不读 ctx.auth）。
+  // 客户端把 runtime key 放在 Authorization 里时，原来每轮工具调用都会多一次必然 miss 的
+  // sessions 查询 —— 这里直接跳过 resolveAuth；其它路由行为不变。
+  const authResult = context.pathname.startsWith('/api/gateway/')
+    ? { auth: null, error: null }
+    : await resolveAuth(req, context.pathname);
   const ctx = {
     ...context,
     req,
@@ -203,6 +208,10 @@ const server = http.createServer(async (req, res) => {
           res.on('finish', release);
           res.on('close', release);
         }
+        // 2026-11-12：记录请求体字节数，供 submit-upload 的 timings 使用 ——
+        // 原来那里为了一个日志字段把整份 body（含所有 base64）再 JSON.stringify 一次。
+        const declaredBytes = Number(req.headers['content-length'] || 0);
+        ctx.jsonBytes = Number.isFinite(declaredBytes) && declaredBytes > 0 ? declaredBytes : 0;
         ctx.body = await readJson(req, limit);
       }
     }
