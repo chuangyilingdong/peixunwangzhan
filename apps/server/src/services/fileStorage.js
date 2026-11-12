@@ -12,7 +12,7 @@
  */
 import { stat } from 'node:fs/promises';
 import { parseJson } from '@platform/database';
-import { ossConfigured, storageBackend, putObject, putObjectFromFile, signedUrl, getObjectToFile, headObject, withPrefix, deleteObject, ossInfo } from './objectStorage.js';
+import { ossConfigured, storageBackend, putObject, putObjectFromFile, signedUrl, stableSignedUrl, getObjectToFile, headObject, withPrefix, deleteObject, ossInfo } from './objectStorage.js';
 
 /** 这一行的对象在哪个后端：'oss' 或 'local'（缺省即 local，老数据安全） */
 export function rowStorageBackend(file) {
@@ -27,12 +27,21 @@ export function uploadBackend() {
 }
 
 /**
+ * 上传对象的 Cache-Control。
+ *
+ * 文件资产的对象键是 UUID（内容不可变），所以给一天缓存是安全的；用 `private` 是因为
+ * 画布里既有公开课程素材也有学生私有作品，统一让浏览器缓存、不让共享代理缓存。
+ * 这和「302 稳定签名」是配套的：地址在窗口内恒定 + 对象可缓存，课堂里反复打开不再回源。
+ */
+const UPLOAD_CACHE_CONTROL = 'private, max-age=86400';
+
+/**
  * 落一次上传的字节。本地走原来的 `wx` 独占写；OSS 走 putObject（失败直接抛，绝不留半份）。
  * 注意返回的 storageKey **在 OSS 模式下是带前缀的完整键**，回滚换 bucket/前缀时不会认错。
  */
 export async function persistUploadBytes({ relativeKey, buffer, mimeType, writeLocal }) {
   if (uploadBackend() === 'oss') {
-    const result = await putObject(relativeKey, buffer, mimeType);
+    const result = await putObject(relativeKey, buffer, mimeType, { cacheControl: UPLOAD_CACHE_CONTROL });
     return { storageKey: result.key, storageBackend: 'oss', storagePath: null };
   }
   const storagePath = await writeLocal();
@@ -52,7 +61,7 @@ export async function persistUploadBytes({ relativeKey, buffer, mimeType, writeL
  */
 export async function persistUploadFile({ relativeKey, filePath, size, mimeType, moveLocal }) {
   if (uploadBackend() === 'oss') {
-    const result = await putObjectFromFile(relativeKey, filePath, mimeType, { size });
+    const result = await putObjectFromFile(relativeKey, filePath, mimeType, { size, cacheControl: UPLOAD_CACHE_CONTROL });
     return { storageKey: result.key, storageBackend: 'oss', storagePath: null };
   }
   const storagePath = await moveLocal();
@@ -72,6 +81,22 @@ export function ossRedirectUrl(file, { expires = 900, contentDisposition, imageP
   if (!ossConfigured()) return null; // 配置被人临时撤掉时退回本地路径，让它照旧报"文件不存在"而不是 500
   // 不传 contentType：阿里云不允许在 URL 上覆盖 content-type（见 objectStorage.signedUrl 的注释）
   return signedUrl(key, { expires, contentDisposition, imageProcess });
+}
+
+/**
+ * **稳定**签名地址：同一对象在同一个时间窗里返回**同一个 URL**。
+ *
+ * 为什么需要它：`signedUrl` 的 `Expires` 是 `now + expires`，同一张图隔一秒请求就是不同地址，
+ * 浏览器会当成不同资源，每次都回源重下；课件/作品图在课堂里反复打开，流量和首屏时间都被放大。
+ * 公开内容（PUBLIC_PLATFORM / PUBLIC_RELEASE）用这个：窗口内地址恒定，浏览器/CDN 能缓存。
+ * 私有内容也可以用一个**短窗口**（如 300~900 秒）来换取课堂内的重复命中，但窗口别开太长。
+ */
+export function ossStableRedirectUrl(file, { windowSeconds = 3600, contentDisposition, imageProcess } = {}) {
+  if (!file || rowStorageBackend(file) !== 'oss') return null;
+  const key = String(file.storage_key || '').replaceAll('\\', '/');
+  if (!key) return null;
+  if (!ossConfigured()) return null;
+  return stableSignedUrl(key, { windowSeconds, contentDisposition, imageProcess });
 }
 
 /**

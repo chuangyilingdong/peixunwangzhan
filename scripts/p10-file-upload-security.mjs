@@ -110,6 +110,28 @@ assert.equal(response.headers['x-content-type-options'], 'nosniff');
   assert.deepEqual(bodyGateState(), { count: 0, bytes: 0, busy: 3, waited: 1 }, '全部释放后必须归零（否则上传会永久 429）');
 }
 
+/* ── 大 JSON 作品提交的独立内存闸（2026-11-11）──────────────────────────────
+   submit-upload 走的是 readJson，不走 multipart 那条闸；138MB body 会经历
+   Buffer.concat/toString/JSON.parse/base64 解码，峰值是请求体的 3~5 倍。
+   这里钉住：它有自己的 1 份 / 200MB 名额，且不与 multipart 的闸共享状态。 */
+{
+  const { acquireJsonBodySlot, jsonBodyGateLimits, jsonBodyGateState } = await import('../apps/server/src/services/uploadBodyGate.js');
+  const gateEnv = { RUNTIME_JSON_MAX_INFLIGHT: '1', RUNTIME_JSON_MAX_INFLIGHT_BYTES: String(200 * 1024 * 1024) };
+  assert.deepEqual(jsonBodyGateLimits(gateEnv), { maxBodies: 1, maxBytes: 200 * 1024 * 1024 });
+  const tooMany = (message, code, details) => Object.assign(new Error(message), { code, details });
+  const one = await acquireJsonBodySlot(100 * 1024 * 1024, { env: gateEnv, tooMany, waitMs: 0 });
+  await assert.rejects(
+    () => acquireJsonBodySlot(100 * 1024 * 1024, { env: gateEnv, tooMany, waitMs: 0 }),
+    (error) => error.code === 'UPLOAD_BUSY',
+    '第二份大 JSON 必须挡在读 body 之前（不能两份 138MB 同时进内存）',
+  );
+  assert.equal(jsonBodyGateState().count, 1, '第一份应当占着名额');
+  one();
+  assert.deepEqual(jsonBodyGateState(), { count: 0, bytes: 0, busy: 1, waited: 0 }, '释放后必须归零');
+  const two = await acquireJsonBodySlot(100 * 1024 * 1024, { env: gateEnv, tooMany, waitMs: 0 });
+  two();
+}
+
 await rm(root, { recursive: true, force: true });
-console.log('P10 security upload checks: 9 pass / 0 fail（另加上限硬顶与内存闸 3 组断言）');
+console.log('P10 security upload checks: 9 pass / 0 fail（另加上限硬顶、multipart 内存闸、大 JSON 内存闸断言）');
 

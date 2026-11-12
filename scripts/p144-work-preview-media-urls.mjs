@@ -178,6 +178,10 @@ try {
   check('③ ★ OSS 行取图是 **302 到 OSS 签名地址**（字节不经服务器，不占那 5M 带宽）',
     ossImage.status === 302 && /oss-cn-guangzhou\.aliyuncs\.com/.test(location) && /OSSAccessKeyId=/.test(location),
     `HTTP ${ossImage.status} location=${location.slice(0, 90)}`);
+  // 2026-11-11：302 也要能缓存，否则同一张图每次打开都重新打 Node；私有素材给 5 分钟。
+  check('③ OSS 302 带短时缓存（私有素材 private, max-age=300）',
+    /private,\s*max-age=300/.test(String(ossImage.headers.get('cache-control') || '')),
+    String(ossImage.headers.get('cache-control') || '(none)'));
 } finally {
   server.kill();
 }
@@ -186,4 +190,4 @@ if (failures) {
   console.error(JSON.stringify({ name: 'p144-work-preview-media-urls', pass: false, failed: failures, serverLog: serverLog.slice(-600) }, null, 1));
   process.exit(1);
 }
-console.log(JSON.stringify({ name: 'p144-work-preview-media-urls', pass: true, checks: 11 }));
+console.log(JSON.stringify({ name: 'p144-work-preview-media-urls', pass: true, checks: 12 }));

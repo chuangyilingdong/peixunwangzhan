@@ -200,6 +200,13 @@ export async function getStudentCourses(user) {
         lesson.prompt_pack_asset_id AS lesson_prompt_pack_asset_id,
         lesson.outcome_pack_asset_id AS lesson_outcome_pack_asset_id,
         lesson.lesson_content AS lesson_lesson_content,
+        lesson.delivery_mode AS lesson_delivery_mode,
+        lesson.delivery_modes AS lesson_delivery_modes,
+        lesson.per_student_budget_fen AS lesson_per_student_budget_fen,
+        lesson.platform_budget_fen AS lesson_platform_budget_fen,
+        lesson.classroom_config AS lesson_classroom_config,
+        lesson.canvas_template_snapshot AS lesson_canvas_template_snapshot,
+        lesson.published_content AS lesson_published_content,
         lesson.created_at AS lesson_created_at, lesson.updated_at AS lesson_updated_at
      FROM course_series series
      JOIN course_lessons lesson ON lesson.series_id = series.id AND ${publishedLessonVisibilitySql('lesson')}
@@ -223,7 +230,7 @@ export async function getStudentCourses(user) {
     }
     let lesson = series.lessons.find((candidate) => candidate.id === item.lesson_id);
     if (!lesson) {
-      lesson = await normalizeLesson({ ...await arow('SELECT * FROM course_lessons WHERE id=?', [item.lesson_id]), /* 学生读已发布快照 */
+      lesson = await normalizeLesson({
         id: item.lesson_id,
         series_id: item.id,
         title: item.lesson_title,
@@ -234,6 +241,13 @@ export async function getStudentCourses(user) {
         prompt_pack_asset_id: item.lesson_prompt_pack_asset_id,
         outcome_pack_asset_id: item.lesson_outcome_pack_asset_id,
         lesson_content: item.lesson_lesson_content,
+        delivery_mode: item.lesson_delivery_mode,
+        delivery_modes: item.lesson_delivery_modes,
+        per_student_budget_fen: item.lesson_per_student_budget_fen,
+        platform_budget_fen: item.lesson_platform_budget_fen,
+        classroom_config: item.lesson_classroom_config,
+        canvas_template_snapshot: item.lesson_canvas_template_snapshot,
+        published_content: item.lesson_published_content,
         created_at: item.lesson_created_at,
         updated_at: item.lesson_updated_at,
       }, { asPublished: true });
@@ -817,9 +831,12 @@ export async function buildStudentDashboard(user) {
     };
   });
 
-  // 课程中心那份清单（学生端「课程中心」渲染的就是它）。范围＝本机构可访问的已发布课包，
-  // 所以在「我的课程」里能看到自己还没被分配的课包（标「未授权」，学生知道该找老师要什么）。
-  const classroomCourses = (await getStudentAccessibleCourses(user)).map((course) => {
+  // 课程中心那份清单（学生端「课程中心」渲染的就是它）。范围＝本机构可访问的已发布课包。
+  // ⚠️ 2026-11-11：直接复用上面 `buildStudentContext()` 已经算好的 `context.courses`，
+  //    不再调一次 `getStudentAccessibleCourses()` —— 两者对同一个学生返回的是**同一批课包**
+  //    （都按 grantedSeriesIds 过滤），但后者会把每个课包/课时的 capabilities、materialGroups、
+  //    aiProviderPolicy 全部再查一遍。Dashboard 原来等于把最重的那段 N+1 跑了两遍。
+  const classroomCourses = (context.courses || []).map((course) => {
     const courseHasGrant = Boolean(course.hasGrant);
     const lessons = (course.lessons || []).map((lesson) => {
       const progress = progressByLesson.get(lesson.id) || {

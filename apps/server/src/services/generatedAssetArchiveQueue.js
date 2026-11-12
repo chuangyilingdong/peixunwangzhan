@@ -23,8 +23,13 @@
  *    多进程/重启后都不会两个 worker 抢同一条。
  * ⚠️ 失败重试有上限（默认 3 次），超过后 state=FAILED —— 读面仍然会 302 到上游（尽力而为），
  *    但不再占队列。运营在日志里能按 `[归档]` 前缀看到全过程。
+ *
+ * 2026-11-11：取件从 `metadata LIKE '%"state":"PENDING"%'` 改成 **archive_state 列 + 索引**
+ * （`(archive_state, archive_priority, created_at)`）。metadata.archive 仍是读面/排障的真相，
+ * 列只是索引副本；迁移 55（MySQL）/ schema.js 的 ALTER（SQLite）负责建列，启动时
+ * `ensureArchiveColumns()` 把老数据回填一次。列不存在时自动退回旧的 metadata 扫描。
  */
-import { aq, arow, arows, json, parseJson } from '../lib.js';
+import { aq, arow, arows, json, parseJson, nowIso } from '../lib.js';
 import { archiveIntoExistingAsset, archiveOneGeneratedAsset } from './generatedAssetArchive.js';
 import { createPendingGeneratedAsset } from '../routes/fileAssets.js';
 
@@ -48,9 +53,40 @@ const MAX_RETRY_ROUNDS = positiveInt(process.env.AI_ARCHIVE_MAX_RETRY_ROUNDS, 24
 const BATCH = 40;
 
 const state = { active: 0, started: false, done: 0, failed: 0, lastError: '' };
+// 索引列是否可用（迁移 55 / schema.js 的 ALTER 是否已经跑过）。
+// false 时退回旧的 metadata LIKE 扫描 —— 迁移没跑也不会让归档停摆。
+let archiveColumnsReady = false;
+
+/**
+ * 老数据回填：把 file_assets.metadata.archive 里的 state/priority/attempts 写进索引列。
+ * 幂等，只处理还没写过索引列的未归档行；迁移 55 在 MySQL 侧做同一件事，这里是 SQLite /
+ * 迁移漏跑 / 回滚后的兜底。
+ */
+export async function ensureArchiveColumns() {
+  if (archiveColumnsReady) return true;
+  try {
+    const rows = await arows(
+      "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND storage_key IS NULL AND status='ACTIVE' AND archive_state IS NULL LIMIT 5000",
+    );
+    for (const row of rows) {
+      const archive = parseJson(row.metadata, {})?.archive || {};
+      const stateName = String(archive.state || '').toUpperCase();
+      if (!['PENDING', 'ARCHIVING', 'FAILED'].includes(stateName)) continue;
+      await aq(
+        'UPDATE file_assets SET archive_state=?, archive_priority=?, archive_attempts=?, archive_next_attempt_at=NULL, updated_at=? WHERE id=?',
+        [stateName, archive.priority === true ? 1 : 0, Number(archive.attempts || 0), nowIso(), row.id],
+      ).catch(() => {});
+    }
+    archiveColumnsReady = true;
+  } catch {
+    // 列不存在（迁移 55 没跑）→ 继续用 metadata 扫描。
+    archiveColumnsReady = false;
+  }
+  return archiveColumnsReady;
+}
 
 export function archiveQueueState() {
-  return { ...state, concurrency: ARCHIVE_CONCURRENCY, deadlineMs: DEADLINE_MS };
+  return { ...state, concurrency: ARCHIVE_CONCURRENCY, deadlineMs: DEADLINE_MS, indexed: archiveColumnsReady };
 }
 
 /**
@@ -107,12 +143,21 @@ export async function stageGeneratedAssets(assetPayloads, { modality, jobId, own
 
 /** 取一批候选：优先"学生已经要看"的，其次最老的（= 最早到期的）。 */
 async function pickCandidates(limit) {
+  if (await ensureArchiveColumns()) {
+    // 迁移 55 的索引列：只扫“未归档”的几行，按 priority 再按先来后到。
+    return await arows(
+      "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND archive_state='PENDING' AND status='ACTIVE' AND storage_key IS NULL AND (archive_next_attempt_at IS NULL OR archive_next_attempt_at<=?) ORDER BY archive_priority DESC, created_at ASC LIMIT ?",
+      [nowIso(), limit],
+    ).catch(() => []);
+  }
+  // 兜底（迁移 55 没跑）：保留原来的 metadata 扫描。注意只查 storage_key IS NULL，
+  // 历史空串由迁移 54 归一化；这个分支只在列不存在时才会走到。
   const priority = await arows(
-    "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND (storage_key IS NULL OR storage_key='') AND status='ACTIVE' AND metadata LIKE '%\"priority\":true%' AND metadata LIKE '%\"state\":\"PENDING\"%' ORDER BY created_at ASC LIMIT ?",
+    "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND storage_key IS NULL AND status='ACTIVE' AND metadata LIKE '%\"priority\":true%' AND metadata LIKE '%\"state\":\"PENDING\"%' ORDER BY created_at ASC LIMIT ?",
     [limit],
   ).catch(() => []);
   const rest = await arows(
-    "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND (storage_key IS NULL OR storage_key='') AND status='ACTIVE' AND metadata LIKE '%\"state\":\"PENDING\"%' ORDER BY created_at ASC LIMIT ?",
+    "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND storage_key IS NULL AND status='ACTIVE' AND metadata LIKE '%\"state\":\"PENDING\"%' ORDER BY created_at ASC LIMIT ?",
     [limit],
   ).catch(() => []);
   const seen = new Set();
@@ -134,10 +179,16 @@ async function claim(fileId, meta) {
   const archive = { ...(meta.archive || {}), state: 'ARCHIVING', startedAt: now, attempts: Number(meta.archive?.attempts || 0) + 1 };
   const next = json({ ...meta, archive });
   const claimed = await aq(
-    "UPDATE file_assets SET metadata=?, updated_at=? WHERE id=? AND (storage_key IS NULL OR storage_key='') AND metadata LIKE '%\"state\":\"PENDING\"%'",
+    "UPDATE file_assets SET metadata=?, updated_at=? WHERE id=? AND storage_key IS NULL AND metadata LIKE '%\"state\":\"PENDING\"%'",
     [next, now, fileId],
   );
-  return Number(claimed?.changes || 0) > 0 ? { ...meta, archive } : null;
+  if (!Number(claimed?.changes || 0)) return null;
+  // 索引列同步（列不存在时由 catch 兜住；metadata 仍是真相）。
+  await aq(
+    "UPDATE file_assets SET archive_state='ARCHIVING', archive_attempts=archive_attempts+1, archive_next_attempt_at=NULL WHERE id=? AND (archive_state='PENDING' OR archive_state IS NULL)",
+    [fileId],
+  ).catch(() => {});
+  return { ...meta, archive };
 }
 
 /** 把一条放回队列（失败重试）或标记 FAILED（超过重试上限）。 */
@@ -146,7 +197,12 @@ async function releaseOrFail(fileId, meta, reason) {
   const attempts = Number(archive.attempts || 0);
   const exhausted = attempts >= MAX_ATTEMPTS;
   const next = json({ ...meta, archive: { ...archive, state: exhausted ? 'FAILED' : 'PENDING', lastError: String(reason || '').slice(0, 200), lastAttemptAt: new Date().toISOString() } });
-  await aq('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [next, new Date().toISOString(), fileId]).catch(() => {});
+  const now = new Date().toISOString();
+  await aq('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [next, now, fileId]).catch(() => {});
+  await aq(
+    'UPDATE file_assets SET archive_state=?, archive_attempts=?, archive_next_attempt_at=NULL, updated_at=? WHERE id=?',
+    [exhausted ? 'FAILED' : 'PENDING', attempts, now, fileId],
+  ).catch(() => {});
   if (exhausted) state.failed += 1;
   console.warn(`[归档] ${exhausted ? '放弃' : '稍后重试'} file=${fileId}（第 ${attempts} 次）：${String(reason || '').slice(0, 160)}`);
 }
@@ -155,7 +211,13 @@ async function releaseOrFail(fileId, meta, reason) {
 async function archiveOne(fileId, meta) {
   const archive = meta.archive || {};
   const result = await archiveIntoExistingAsset({ fileId, assetUrl: archive.sourceUrl, modality: archive.modality, jobId: archive.jobId });
-  if (result.ok) { state.done += 1; return; }
+  if (result.ok) {
+    state.done += 1;
+    // replaceGeneratedAssetFromFile 会把 metadata.archive.state 改成 ARCHIVED；这里同步索引列，
+    // 让队列下一次查询立刻不再看到它（列不存在时忽略）。
+    await aq("UPDATE file_assets SET archive_state='ARCHIVED', archive_next_attempt_at=NULL WHERE id=?", [fileId]).catch(() => {});
+    return;
+  }
   await releaseOrFail(fileId, meta, result.reason);
 }
 
@@ -168,7 +230,15 @@ export async function drainArchiveQueue() {
   for (const row of candidates) {
     if (state.active >= ARCHIVE_CONCURRENCY) break;
     const meta = parseJson(row.metadata, {}) || {};
-    if (meta.archive?.state !== 'PENDING') continue;
+    if (meta.archive?.state !== 'PENDING') {
+      // 索引列与 metadata 漂移（手工改库/旧代码写入）：把列同步成 metadata 的真实状态，
+      // 否则这一行会每 2 秒被捞出来、又每 2 秒被跳过，永远占着扫描窗口。
+      const actual = String(meta.archive?.state || '').toUpperCase();
+      if (['ARCHIVING', 'FAILED', 'ARCHIVED'].includes(actual)) {
+        await aq('UPDATE file_assets SET archive_state=? WHERE id=?', [actual, row.id]).catch(() => {});
+      }
+      continue;
+    }
     // 到期提升：超过 deadline 还没归档的，日志里点名（排序已在 pickCandidates 按 created_at 兜住）
     const queuedAt = Date.parse(meta.archive?.queuedAt || '') || 0;
     if (queuedAt && Date.now() - queuedAt > DEADLINE_MS) {
@@ -196,6 +266,10 @@ const SWEEP_EVERY_MS = 10 * 60 * 1000;
 export function startGeneratedAssetArchiveWorker() {
   if (state.started) return archiveQueueState();
   state.started = true;
+  // 索引列/老数据回填是异步的；pickCandidates 自己也会 await ensureArchiveColumns()。
+  ensureArchiveColumns()
+    .then((ok) => console.log(`[归档] 取件索引列${ok ? '已就绪' : '不可用（迁移 55 没跑？）→ 退回 metadata 扫描'}`))
+    .catch(() => {});
   console.log(`[归档] 后台归档队列启动：并发 ${ARCHIVE_CONCURRENCY} 路，截止 ${Math.round(DEADLINE_MS / 3600000)} 小时`);
   const tick = () => {
     drainArchiveQueue().catch((error) => {
@@ -227,16 +301,23 @@ export function stopGeneratedAssetArchiveWorker() {
  * 而认领条件只认 PENDING —— 不收回的话它们就再也没人处理，学生一直拿上游地址。
  */
 export async function recoverStaleClaims() {
-  const rows = await arows(
-    "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND (storage_key IS NULL OR storage_key='') AND status='ACTIVE' AND metadata LIKE '%\"state\":\"ARCHIVING\"%' LIMIT 200",
-  ).catch(() => []);
+  await ensureArchiveColumns();
+  const rows = archiveColumnsReady
+    ? await arows(
+      "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND storage_key IS NULL AND status='ACTIVE' AND (archive_state='ARCHIVING' OR metadata LIKE '%\"state\":\"ARCHIVING\"%') LIMIT 200",
+    ).catch(() => [])
+    : await arows(
+      "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND storage_key IS NULL AND status='ACTIVE' AND metadata LIKE '%\"state\":\"ARCHIVING\"%' LIMIT 200",
+    ).catch(() => []);
   let recovered = 0;
   for (const row of rows) {
     const meta = parseJson(row.metadata, {}) || {};
     if (meta.archive?.state !== 'ARCHIVING') continue;
+    const now = new Date().toISOString();
     await aq('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [
-      json({ ...meta, archive: { ...meta.archive, state: 'PENDING' } }), new Date().toISOString(), row.id,
+      json({ ...meta, archive: { ...meta.archive, state: 'PENDING' } }), now, row.id,
     ]).catch(() => {});
+    await aq("UPDATE file_assets SET archive_state='PENDING', archive_next_attempt_at=NULL, updated_at=? WHERE id=?", [now, row.id]).catch(() => {});
     recovered += 1;
   }
   if (recovered) console.warn(`[归档] 收回了 ${recovered} 条上次被中断的归档任务`);
@@ -252,11 +333,17 @@ export async function recoverStaleClaims() {
  * 并把 `attempts` 归零（给新的 3 次机会），用 `retryRounds` 记住总轮数封顶，避免无限折腾。
  */
 export async function requeueStaleFailures() {
+  await ensureArchiveColumns();
   const cutoff = new Date(Date.now() - RETRY_AFTER_MS).toISOString();
-  const rows = await arows(
-    "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND (storage_key IS NULL OR storage_key='') AND status='ACTIVE' AND metadata LIKE '%\"state\":\"FAILED\"%' AND updated_at < ? LIMIT 50",
-    [cutoff],
-  ).catch(() => []);
+  const rows = archiveColumnsReady
+    ? await arows(
+      "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND storage_key IS NULL AND status='ACTIVE' AND (archive_state='FAILED' OR metadata LIKE '%\"state\":\"FAILED\"%') AND updated_at < ? LIMIT 50",
+      [cutoff],
+    ).catch(() => [])
+    : await arows(
+      "SELECT id, metadata FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND storage_key IS NULL AND status='ACTIVE' AND metadata LIKE '%\"state\":\"FAILED\"%' AND updated_at < ? LIMIT 50",
+      [cutoff],
+    ).catch(() => []);
   let requeued = 0;
   for (const row of rows) {
     const meta = parseJson(row.metadata, {}) || {};
@@ -264,10 +351,15 @@ export async function requeueStaleFailures() {
     if (archive.state !== 'FAILED') continue;
     const rounds = Number(archive.retryRounds || 0);
     if (rounds >= MAX_RETRY_ROUNDS) continue;
+    const now = new Date().toISOString();
     await aq('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [
-      json({ ...meta, archive: { ...archive, state: 'PENDING', attempts: 0, retryRounds: rounds + 1, priority: false, requeuedAt: new Date().toISOString() } }),
-      new Date().toISOString(), row.id,
+      json({ ...meta, archive: { ...archive, state: 'PENDING', attempts: 0, retryRounds: rounds + 1, priority: false, requeuedAt: now } }),
+      now, row.id,
     ]).catch(() => {});
+    await aq(
+      "UPDATE file_assets SET archive_state='PENDING', archive_priority=0, archive_attempts=0, archive_next_attempt_at=NULL, updated_at=? WHERE id=?",
+      [now, row.id],
+    ).catch(() => {});
     requeued += 1;
   }
   if (requeued) console.warn(`[归档] 把 ${requeued} 条之前失败的重新排队（第 N 轮，最多 ${MAX_RETRY_ROUNDS} 轮）`);
@@ -276,9 +368,14 @@ export async function requeueStaleFailures() {
 
 /** 诊断用：还有多少条没归档。 */
 export async function pendingArchiveCount() {
-  const row = await arow(
-    "SELECT COUNT(*) AS n FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND (storage_key IS NULL OR storage_key='') AND status='ACTIVE' AND metadata LIKE '%\"state\":\"PENDING\"%'",
-  ).catch(() => null);
+  await ensureArchiveColumns();
+  const row = archiveColumnsReady
+    ? await arow(
+      "SELECT COUNT(*) AS n FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND archive_state IN ('PENDING','ARCHIVING') AND storage_key IS NULL AND status='ACTIVE'",
+    ).catch(() => null)
+    : await arow(
+      "SELECT COUNT(*) AS n FROM file_assets WHERE storage_kind='INTERNAL_PROXY' AND storage_key IS NULL AND status='ACTIVE' AND metadata LIKE '%\"state\":\"PENDING\"%'",
+    ).catch(() => null);
   return Number(row?.n || 0);
 }
 

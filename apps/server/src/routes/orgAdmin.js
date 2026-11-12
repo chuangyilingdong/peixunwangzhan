@@ -419,7 +419,7 @@ export async function handleOrg(ctx) {
     const permissions = body.permissions === undefined ? parseJson(target.permissions, []) : validateMemberPermissions(body.permissions, target.role);
     const now = nowIso();
     await atransaction(async () => { await aq('UPDATE users SET display_name=?,phone=?,permissions=?,status=?,billing_package_id=?,updated_at=? WHERE id=? AND org_id=?', [displayName, phone, json(permissions), nextStatus, body.billingPackageId === undefined ? target.billing_package_id : body.billingPackageId, now, target.id, currentOrgId]); if (nextStatus === 'DISABLED') await aq('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
-    await audit(ctx, 'USER_UPDATE', 'USER', target.id, normalizeUser(target), { ...body, status: nextStatus }); return orgMemberRow(await arow('SELECT * FROM users WHERE id=?', [target.id]), currentOrgId);
+    await audit(ctx, 'USER_UPDATE', 'USER', target.id, normalizeUser(target), (() => { const { password: _password, ...safe } = body; return { ...safe, status: nextStatus }; })()); return orgMemberRow(await arow('SELECT * FROM users WHERE id=?', [target.id]), currentOrgId);
   }
   match = part.match(/^\/users\/([^/]+)\/(password|permissions)$/);
   if (match && method === 'PUT') {
@@ -427,7 +427,13 @@ export async function handleOrg(ctx) {
     if (match[2] === 'password') { const password = String(ctx.body?.password || ''); if (password.length < 6) throw errors.badRequest('密码至少6位'); const now = nowIso(); await atransaction(async () => { await aq('UPDATE users SET password_hash=?,updated_at=? WHERE id=? AND org_id=?', [hashPassword(password), now, target.id, currentOrgId]); await aq('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); }); }
     if (match[2] === 'permissions') { if (target.role !== 'TEACHER') throw errors.badRequest('只能设置教师权限', 'INVALID_ROLE'); await aq('UPDATE users SET permissions=?,updated_at=? WHERE id=? AND org_id=?', [json(validateMemberPermissions(ctx.body?.permissions, target.role)), nowIso(), target.id, currentOrgId]); }
     // 2026-09-13（P4 删积分）：原来还有 period-boosts（给成员加「本周期额外积分」），积分废弃后删除。
-    await audit(ctx, 'USER_' + match[2].toUpperCase(), 'USER', target.id, null, ctx.body); return normalizeUser(await arow('SELECT * FROM users WHERE id=?', [target.id]), { includeAuthMeta: true });
+    // ⚠️ 审计里**绝不能记 ctx.body**：密码重置这条的 body 就是 `{ password: '新密码' }`，
+    //    原来直接把明文写进 audit_logs.after_data，机构端/平台端审计查询会把 `after` 原样返回
+    //    （等于把新密码持久化在库里和备份里）。只记“改过密码”这个事实。
+    const auditAfter = match[2] === 'password'
+      ? { passwordChanged: true }
+      : { permissions: Array.isArray(ctx.body?.permissions) ? ctx.body.permissions : [] };
+    await audit(ctx, 'USER_' + match[2].toUpperCase(), 'USER', target.id, null, auditAfter); return normalizeUser(await arow('SELECT * FROM users WHERE id=?', [target.id]), { includeAuthMeta: true });
   }
   if (part === '/audit-logs' && method === 'GET') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看操作审计', 'ORG_ADMIN_REQUIRED');

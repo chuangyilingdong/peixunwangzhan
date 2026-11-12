@@ -17,6 +17,13 @@
  */
 const DEFAULT_MAX_INFLIGHT = 2;
 const DEFAULT_MAX_INFLIGHT_BYTES = 256 * 1024 * 1024;
+// 大 JSON（submit-upload 的 base64 作品）单独一道闸：
+//   ① 它的放大倍数比 multipart 高得多：138MB body 会经历 Buffer.concat、toString、JSON.parse、
+//      base64 解码，峰值通常是请求体的 3~5 倍；
+//   ② 它不走 multipart 那条已有的内存闸，所以必须单独有“读 body 之前”的名额。
+// 默认同时只允许 1 份、最多 200MB —— 宁可让第二个学生排队，也不要两份 138MB 同时进内存。
+const DEFAULT_JSON_MAX_INFLIGHT = 1;
+const DEFAULT_JSON_MAX_INFLIGHT_BYTES = 200 * 1024 * 1024;
 
 function positiveInt(raw, fallback) {
   const value = Number(raw || fallback);
@@ -30,11 +37,25 @@ export function bodyGateLimits(env = process.env) {
   };
 }
 
+/** 大 JSON 请求体的内存闸上限（与 multipart 分开配置，互不抢名额）。 */
+export function jsonBodyGateLimits(env = process.env) {
+  return {
+    maxBodies: positiveInt(env.RUNTIME_JSON_MAX_INFLIGHT, DEFAULT_JSON_MAX_INFLIGHT),
+    maxBytes: positiveInt(env.RUNTIME_JSON_MAX_INFLIGHT_BYTES, DEFAULT_JSON_MAX_INFLIGHT_BYTES),
+  };
+}
+
 const state = { count: 0, bytes: 0, busy: 0, waited: 0 };   // waited = 排队等到名额的次数（诊断用）
+const jsonState = { count: 0, bytes: 0, busy: 0, waited: 0 };
 
 /** 当前在飞的名额与计数（给守卫与诊断看）：count/bytes 在飞、busy 被拒次数、waited 排队成功次数。 */
 export function bodyGateState() {
   return { ...state };
+}
+
+/** 大 JSON 闸的在飞快照（与 bodyGateState 分开，诊断时能看出是谁占着内存）。 */
+export function jsonBodyGateState() {
+  return { ...jsonState };
 }
 
 /**
@@ -50,30 +71,53 @@ export function bodyGateState() {
  * @param {(message: string, code: string, details?: object) => Error} tooMany - 由调用方注入错误构造器
  */
 export async function acquireBodySlot(declaredBytes, { env = process.env, tooMany, waitMs } = {}) {
-  const { maxBodies, maxBytes } = bodyGateLimits(env);
+  return acquireSlot(state, bodyGateLimits(env), declaredBytes, {
+    tooMany,
+    waitMs,
+    defaultWaitMs: env.FILE_UPLOAD_GATE_WAIT_MS,
+    busyMessage: '同时上传的文件太多，请稍后再试',
+  });
+}
+
+/**
+ * 大 JSON 请求体（`/api/student/runtime/submit-upload`）的独立内存闸。
+ * 与 multipart 不共享名额：上传课件和交作品可以并行，但两份大 JSON 不会同时进内存。
+ */
+export async function acquireJsonBodySlot(declaredBytes, { env = process.env, tooMany, waitMs } = {}) {
+  return acquireSlot(jsonState, jsonBodyGateLimits(env), declaredBytes, {
+    tooMany,
+    waitMs,
+    // 大 JSON 的整段读取/解析比普通上传慢，排队默认给 60 秒（可用 RUNTIME_JSON_GATE_WAIT_MS 调）。
+    defaultWaitMs: env.RUNTIME_JSON_GATE_WAIT_MS ?? 60000,
+    busyMessage: '同时提交的作品太多，请稍后再试',
+  });
+}
+
+async function acquireSlot(gate, limits, declaredBytes, { tooMany, waitMs, defaultWaitMs, busyMessage }) {
+  const { maxBodies, maxBytes } = limits;
   const size = Number.isFinite(declaredBytes) && declaredBytes > 0 ? Math.floor(declaredBytes) : 0;
   const deadlineMs = Number.isFinite(Number(waitMs))
     ? Math.max(0, Number(waitMs))
-    : Math.max(0, Number(env.FILE_UPLOAD_GATE_WAIT_MS ?? 18000));
+    : Math.max(0, Number(defaultWaitMs ?? 18000));
   const startedAt = Date.now();
-  const fits = () => state.count + 1 <= maxBodies && state.bytes + size <= maxBytes;
+  const fits = () => gate.count + 1 <= maxBodies && gate.bytes + size <= maxBytes;
   while (!fits()) {
     const waited = Date.now() - startedAt;
     if (waited >= deadlineMs) {
-      state.busy += 1;
-      throw tooMany('同时上传的文件太多，请稍后再试', 'UPLOAD_BUSY', { retryAfterSeconds: 10, waitedMs: waited });
+      gate.busy += 1;
+      throw tooMany(busyMessage, 'UPLOAD_BUSY', { retryAfterSeconds: 10, waitedMs: waited });
     }
     // 50ms 一次轮询：够快（名额一空就走），也够轻（不占内存、不打满 CPU）
     await new Promise((resolve) => setTimeout(resolve, Math.min(50, deadlineMs - waited)));
   }
-  if (Date.now() - startedAt > 0) state.waited += 1;
-  state.count += 1;
-  state.bytes += size;
+  if (Date.now() - startedAt > 0) gate.waited += 1;
+  gate.count += 1;
+  gate.bytes += size;
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    state.count -= 1;
-    state.bytes -= size;
+    gate.count -= 1;
+    gate.bytes -= size;
   };
 }

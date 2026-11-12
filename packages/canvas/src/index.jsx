@@ -28,8 +28,9 @@ import { AudioPlayer } from './AudioPlayer.jsx';
 
 const CanvasActionsContext = createContext(null);
 // 受鉴权保护的素材地址（/api/**）不能直接塞进 <img>/<video>/<audio> 的 src：那些请求带不了
-// Authorization 头，必然 401、图永远出不来。宿主通过 resolveAssetUrl 把它换成能显示的地址
-// （官网学习页是「带 token 取回二进制 → blob:」，见 packages/shared/src/api.js 的 fetchBlobUrl）。
+// Authorization 头，必然 401、图永远出不来。宿主通过 resolveAssetUrl 把它换成能显示的地址：
+//   · 文件资产（/api/**/file-assets/**）：宿主先批量签名，直接返回 **OSS 直链**（2026-11-11）；
+//   · 其它受保护地址：退回「带 token 取回二进制 → blob:」，见 packages/shared/src/api.js 的 fetchBlobUrl。
 const AssetUrlContext = createContext(null);
 const EMPTY_VIEWPORT = { x: 0, y: 0, zoom: 1 };
 
@@ -774,7 +775,7 @@ function ImageNode({ id, data, selected }) {
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__art" data={data} />
       : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__art" modality="IMAGE" startedAt={data.generationStartedAt} />
       : imageUrl
-        ? <img className="learning-node__media" src={imageUrl} alt={data.caption || 'AI生成画面'} />
+        ? <img className="learning-node__media" src={imageUrl} alt={data.caption || 'AI生成画面'} loading="lazy" decoding="async" />
         : <div className="learning-node__art learning-node__art--illustration"><img src={BOX_EMPTY_ART} alt="还没生成 —— 在底部面板写画面描述，生成画面" loading="lazy" /></div>}
   </NodeFrame>;
 }
@@ -816,10 +817,10 @@ function VideoNode({ id, data, selected }) {
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__video-preview" data={data} />
       : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__video-preview" modality="VIDEO" startedAt={data.generationStartedAt} />
       : videoUrl
-        ? <video className="learning-node__media" controls playsInline src={videoUrl} />
+        ? <video className="learning-node__media" controls playsInline preload="none" src={videoUrl} />
         : sourceUrl
           // 画面本体就是卡片，按素材自身比例铺满；画面也可以直接拖着走（不再有「点图放大」）
-          ? <img className="learning-node__media" src={sourceUrl} alt="画面来源" />
+          ? <img className="learning-node__media" src={sourceUrl} alt="画面来源" loading="lazy" decoding="async" />
           : <div className="learning-node__video-preview learning-node__art--illustration"><img src={BOX_EMPTY_ART} alt="还没生成 —— 在底部面板写提示词，生成短片" loading="lazy" /></div>}
   </NodeFrame>;
 }
@@ -880,7 +881,7 @@ function AnimationNode({ id, data, selected }) {
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__animation-placeholder" data={data} />
       : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__animation-placeholder" modality="VIDEO" startedAt={data.generationStartedAt} />
       : videoUrl
-        ? <video className="learning-node__media" controls muted loop src={videoUrl} />
+        ? <video className="learning-node__media" controls muted loop preload="none" src={videoUrl} />
         : <div className="learning-node__animation-placeholder learning-node__art--illustration"><img src={BOX_EMPTY_ART} alt="还没生成 —— 在底部面板写提示词，生成动画" loading="lazy" /></div>}
   </NodeFrame>;
 }

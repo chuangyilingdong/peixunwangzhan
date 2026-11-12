@@ -18,10 +18,10 @@
  *     本机那 5 Mbps 出口不再搬课件字节（从前每看一次都要从这台机流出整份 PDF）。
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, readdir, stat } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
-import { ossConfigured, putObject, headObject } from './objectStorage.js';
+import { ossConfigured, putObjectFromFile, headObject } from './objectStorage.js';
 
 const PREVIEW_DIR = '.preview';
 const CONVERT_TIMEOUT_MS = 300000; // 300s：106MB 的课件转出来要一分多钟，120s 会把它判死
@@ -110,8 +110,30 @@ export function verifyPreviewTicket(fileId, ticket, { now = Date.now() } = {}) {
  * 把 Office 文档转成 PDF（LibreOffice headless），结果按「源文件路径 + 大小 + 修改时间」缓存。
  * - 幂等：同一个源文件只转一次，之后直接复用缓存。
  * - 并发安全：先写临时目录再 rename，避免两个请求同时转换时读到半个文件。
+ * - **single-flight**：同一个 cacheKey 的并发请求共享同一个 Promise，不再各自起一个 soffice。
+ * - **并发闸**：soffice 是内存/CPU 大户，默认同时只跑 2 个；超出的排队。
  * - 失败返回 null（调用方按「无法预览」处理，绝不给出原始文件）。
  */
+const previewJobs = new Map(); // cacheKey -> Promise<target|null>
+const MAX_CONVERT_CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.PREVIEW_CONVERT_CONCURRENCY) || 2));
+let activeConversions = 0;
+const conversionWaiters = [];
+
+function acquireConversionSlot() {
+  if (activeConversions < MAX_CONVERT_CONCURRENCY) {
+    activeConversions += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => conversionWaiters.push(resolve));
+}
+
+function releaseConversionSlot() {
+  const next = conversionWaiters.shift();
+  // 有排队者就直接把名额交出去（activeConversions 不变）；没人排队才真正归还。
+  if (next) next();
+  else activeConversions = Math.max(0, activeConversions - 1);
+}
+
 export async function ensurePreviewPdf({ sourcePath, cacheKey }) {
   const cacheDir = path.join(path.dirname(sourcePath), PREVIEW_DIR);
   const target = path.join(cacheDir, `${cacheKey}.pdf`);
@@ -119,48 +141,67 @@ export async function ensurePreviewPdf({ sourcePath, cacheKey }) {
     const [src, cached] = await Promise.all([stat(sourcePath), stat(target)]);
     if (cached.size > 0 && cached.mtimeMs >= src.mtimeMs) return target;
   } catch { /* 没缓存，继续转 */ }
-  // ⚠️ 临时工作目录必须和最终产物在**同一个文件系统**里：
-  // 服务器上 /tmp 是独立挂载的 tmpfs，而上传目录在磁盘上 —— 用 os.tmpdir() 的话
-  // 最后那步 rename 会以 EXDEV（cross-device link）失败，而且**看起来像「转换失败」**。
-  // 2026-09-15 真机验证就是这么翻车的：手工 soffice 能转，代码里一直返回 null。
-  //
-  // ⚠️ 建目录也必须包在 try 里：缓存目录归服务账号（ai-kids-prod）所有，但只要有谁以 root
-  // 在上传目录里留下过 root 所有的目录（运维手工操作、备份还原），服务就写不进去 ——
-  // 那样会抛 EACCES 冒到最外层变成 **500 内部错误**，而正确的对外表现是「这份课件暂时无法预览」。
-  const work = path.join(cacheDir, `.work-${cacheKey}-${Date.now()}`);
+  // 同一个课件被多个请求同时点开时，只让第一个真正跑 soffice；其余等它的结果。
+  const pending = previewJobs.get(cacheKey);
+  if (pending) return pending;
+  const job = convertPreviewPdf({ sourcePath, cacheKey, cacheDir, target });
+  previewJobs.set(cacheKey, job);
+  try { return await job; } finally { previewJobs.delete(cacheKey); }
+}
+
+async function convertPreviewPdf({ sourcePath, cacheKey, cacheDir, target }) {
+  await acquireConversionSlot();
   try {
-    await mkdir(cacheDir, { recursive: true });
-    await mkdir(work, { recursive: true });
-    await new Promise((resolve, reject) => {
-      execFile('soffice', [
-        '--headless', '--norestore', '--invisible',
-        // 独立 profile：默认 profile 被占用时 soffice 会静默失败（并发/重复调用都踩过）
-        `-env:UserInstallation=file://${path.join(work, 'profile')}`,
-        '--convert-to', 'pdf', '--outdir', work, sourcePath,
-      ], { timeout: CONVERT_TIMEOUT_MS }, (error) => (error ? reject(error) : resolve()));
-    });
-    const produced = (await readdir(work)).find((name) => name.toLowerCase().endsWith('.pdf'));
-    if (!produced) {
-      console.error(`[materialPreview] 转换没有产出 PDF：${path.basename(sourcePath)}`);
-      return null;
-    }
-    // rename 落在同一文件系统里就是原子的：要么完整可见，要么不存在
-    const { rename, copyFile } = await import('node:fs/promises');
+    // 排队期间可能已经有别的请求转好了：拿到名额后先复核一次缓存，避免白跑一遍 soffice。
     try {
-      await rename(path.join(work, produced), target);
+      const [src, cached] = await Promise.all([stat(sourcePath), stat(target)]);
+      if (cached.size > 0 && cached.mtimeMs >= src.mtimeMs) return target;
+    } catch { /* 继续转 */ }
+    // ⚠️ 临时工作目录必须和最终产物在**同一个文件系统**里：
+    // 服务器上 /tmp 是独立挂载的 tmpfs，而上传目录在磁盘上 —— 用 os.tmpdir() 的话
+    // 最后那步 rename 会以 EXDEV（cross-device link）失败，而且**看起来像「转换失败」**。
+    // 2026-09-15 真机验证就是这么翻车的：手工 soffice 能转，代码里一直返回 null。
+    //
+    // ⚠️ 建目录也必须包在 try 里：缓存目录归服务账号（ai-kids-prod）所有，但只要有谁以 root
+    // 在上传目录里留下过 root 所有的目录（运维手工操作、备份还原），服务就写不进去 ——
+    // 那样会抛 EACCES 冒到最外层变成 **500 内部错误**，而正确的对外表现是「这份课件暂时无法预览」。
+    const work = path.join(cacheDir, `.work-${cacheKey}-${Date.now()}`);
+    try {
+      await mkdir(cacheDir, { recursive: true });
+      await mkdir(work, { recursive: true });
+      await new Promise((resolve, reject) => {
+        execFile('soffice', [
+          '--headless', '--norestore', '--invisible',
+          // 独立 profile：默认 profile 被占用时 soffice 会静默失败（并发/重复调用都踩过）
+          `-env:UserInstallation=file://${path.join(work, 'profile')}`,
+          '--convert-to', 'pdf', '--outdir', work, sourcePath,
+        ], { timeout: CONVERT_TIMEOUT_MS }, (error) => (error ? reject(error) : resolve()));
+      });
+      const produced = (await readdir(work)).find((name) => name.toLowerCase().endsWith('.pdf'));
+      if (!produced) {
+        console.error(`[materialPreview] 转换没有产出 PDF：${path.basename(sourcePath)}`);
+        return null;
+      }
+      // rename 落在同一文件系统里就是原子的：要么完整可见，要么不存在
+      const { rename, copyFile } = await import('node:fs/promises');
+      try {
+        await rename(path.join(work, produced), target);
+      } catch (error) {
+        // 兜底：万一还是跨设备（缓存目录被换到别的挂载点），退化成复制
+        console.error(`[materialPreview] rename 失败（${error.code}），改用复制：${path.basename(target)}`);
+        await copyFile(path.join(work, produced), target);
+      }
+      return target;
     } catch (error) {
-      // 兜底：万一还是跨设备（缓存目录被换到别的挂载点），退化成复制
-      console.error(`[materialPreview] rename 失败（${error.code}），改用复制：${path.basename(target)}`);
-      await copyFile(path.join(work, produced), target);
+      // 不要静默：转换失败必须能在 journalctl 里看到原因（这个坑就是静默吞错埋的）
+      console.error(`[materialPreview] 转换失败：${path.basename(sourcePath)} — ${error.message}`);
+      return null;
+    } finally {
+      const { rm } = await import('node:fs/promises');
+      await rm(work, { recursive: true, force: true }).catch(() => {});
     }
-    return target;
-  } catch (error) {
-    // 不要静默：转换失败必须能在 journalctl 里看到原因（这个坑就是静默吞错埋的）
-    console.error(`[materialPreview] 转换失败：${path.basename(sourcePath)} — ${error.message}`);
-    return null;
   } finally {
-    const { rm } = await import('node:fs/promises');
-    await rm(work, { recursive: true, force: true }).catch(() => {});
+    releaseConversionSlot();
   }
 }
 
@@ -206,7 +247,9 @@ export async function publishPreviewPdf({ fileId, pdfPath, sourceSize }) {
     if (head.exists && Number(head.size) === info.size) return key;
     // Cache-Control 写在**对象**上（阿里云不允许在签名 URL 上覆盖它）：同一份课件反复看时
     // 浏览器直接命中缓存，连 OSS 的流量都省了。有效期与票据同量级（1 小时）。
-    await putObject(key, await readFile(pdfPath), 'application/pdf', { cacheControl: 'private, max-age=3600' });
+    // ⚠️ 用 putObjectFromFile 而不是 `putObject(await readFile(...))`：
+    //    一份 106MB 课件转出来的 PDF 也接近 100MB，整份读进 Buffer 会和其它预览叠出 OOM。
+    await putObjectFromFile(key, pdfPath, 'application/pdf', { cacheControl: 'private, max-age=3600', size: info.size });
     return key;
   } catch (error) {
     console.error(`[materialPreview] 预览 PDF 推 OSS 失败（退回本机流式发）：${fileId} — ${error.message}`);

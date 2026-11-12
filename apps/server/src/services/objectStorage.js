@@ -18,7 +18,7 @@
  *   OSS_PREFIX=<可选，对象键的统一前缀，便于与其他用途共用一个 bucket>
  */
 import { createHmac } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 const cfg = () => ({
@@ -187,11 +187,11 @@ export function signedUrl(key, { expires = 900, contentDisposition, cacheControl
  * 用在**公开内容**上（广场媒体、客户端安装包）。课件与学生素材仍走 15 分钟的短签名 ——
  * 那些不该被长期缓存。
  */
-export function stableSignedUrl(key, { windowSeconds = 604800, contentDisposition } = {}) {
+export function stableSignedUrl(key, { windowSeconds = 604800, contentDisposition, imageProcess } = {}) {
   const nowSec = Math.floor(Date.now() / 1000);
   const window = Math.max(300, Number(windowSeconds) || 604800);
   const expiry = Math.ceil(nowSec / window) * window + window; // 对齐到窗口边界，且至少还能用一整个窗口
-  return signedUrl(key, { expires: expiry - nowSec, contentDisposition });
+  return signedUrl(key, { expires: expiry - nowSec, contentDisposition, imageProcess });
 }
 
 /**
@@ -298,7 +298,20 @@ export async function getObjectToFile(key, destPath) {
     throw new Error(`OSS 下载失败：HTTP ${res.status} ${text.slice(0, 200)}`);
   }
   await mkdir(dirname(destPath), { recursive: true });
-  await writeFile(destPath, Buffer.from(await res.arrayBuffer()));
+  // ⚠️ 不能 `Buffer.from(await res.arrayBuffer())`：一份 200MB 的课件就是 200MB 内存，
+  //    而且会和其它预览/归档一起叠加。这里用流式 pipe 落到文件，峰值只跟 chunk 大小有关。
+  //    `Readable.fromWeb` 接的是 fetch 的 web ReadableStream（Node 18+ 原生支持）。
+  if (!res.body) throw new Error('OSS 下载失败：响应没有 body');
+  const { createWriteStream } = await import('node:fs');
+  const { Readable } = await import('node:stream');
+  const { pipeline } = await import('node:stream/promises');
+  try {
+    await pipeline(Readable.fromWeb(res.body), createWriteStream(destPath));
+  } catch (error) {
+    // 半份文件不能留给调用方：materializeObject / 预览转换都会把它当成完整对象。
+    await rm(destPath, { force: true }).catch(() => {});
+    throw error;
+  }
   return { path: destPath, bytes: Number(res.headers.get('content-length') || 0) };
 }
 

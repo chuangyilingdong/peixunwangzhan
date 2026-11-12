@@ -3176,6 +3176,17 @@ if (fileAssetsDdl && !fileAssetsDdl.includes("'TEACHING_ASSET'")) {
   }
 }
 
+// ── 生成产物归档队列的索引列（2026-11-11）────────────────────────────────────
+// 后台归档原来每 2 秒对 file_assets.metadata 做两次 `LIKE '%..."state":"PENDING"%'`
+// 全表扫描；改成独立列 + 索引后，队列只扫未归档的那几行。
+// 这些列是**索引/排序用的副本**，metadata.archive 仍是读面与排障的真相；
+// 老数据由 generatedAssetArchiveQueue 启动时从 metadata 回填一次。
+try { db.exec('ALTER TABLE file_assets ADD COLUMN archive_state TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE file_assets ADD COLUMN archive_priority INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec('ALTER TABLE file_assets ADD COLUMN archive_attempts INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec('ALTER TABLE file_assets ADD COLUMN archive_next_attempt_at TEXT'); } catch (_) {}
+db.exec('CREATE INDEX IF NOT EXISTS idx_file_assets_archive_pick ON file_assets(archive_state, archive_priority, created_at)');
+
 // ── VibeCoding 课堂运行时（对话式代码创作 + 受限运行 + 提交点评）────────────────
 db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_conversations (
   id TEXT PRIMARY KEY,

@@ -24,7 +24,7 @@ import { handleClientFeedback } from './routes/clientFeedback.js';
 import { handleWorksLlm } from './routes/workLlm.js';
 import { domainStateContract } from './services/domainState.js';
 import { maxUploadBytes } from './services/fileUploadSecurity.js';
-import { acquireBodySlot as acquireUploadBodySlot } from './services/uploadBodyGate.js';
+import { acquireBodySlot as acquireUploadBodySlot, acquireJsonBodySlot as acquireJsonUploadBodySlot } from './services/uploadBodyGate.js';
 
 const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -72,6 +72,16 @@ const jsonBodyLimitFor = (pathname) => {
  */
 function acquireBodySlot(declaredBytes) {
   return acquireUploadBodySlot(declaredBytes, { env: process.env, tooMany: errors.tooMany });
+}
+
+/**
+ * 大 JSON（`submit-upload`）的独立内存闸。
+ * 这条请求体是**整块读进内存**的，而且后面还要经过 Buffer.concat / toString / JSON.parse /
+ * base64 解码，峰值是请求体的 3~5 倍。不占名额就并发两份 138MB，等于把进程往 OOM 上送。
+ * 名额活到响应结束（`finish`/`close`），与 multipart 那道闸互不抢名额。
+ */
+function acquireJsonBodySlot(declaredBytes) {
+  return acquireJsonUploadBodySlot(declaredBytes, { env: process.env, tooMany: errors.tooMany });
 }
 
 function sendFileResponse(res, fileResponse, req) {
@@ -179,7 +189,22 @@ const server = http.createServer(async (req, res) => {
         res.on('finish', release);
         res.on('close', release);
         ctx.rawBody = await readBodyBuffer(req, requestLimit);
-      } else ctx.body = await readJson(req, jsonBodyLimitFor(ctx.pathname));
+      } else {
+        const limit = jsonBodyLimitFor(ctx.pathname);
+        // ⭐ 大 JSON（桌面客户端交作品）也要在 **读 body 之前** 占内存名额。
+        //    原来这条分支完全没有闸：138MB body → Buffer.concat → toString → JSON.parse →
+        //    base64 解码，峰值是请求体的 3~5 倍；班里几个人同时交作品就会把进程打穿。
+        //    网关那条（`/api/gateway/`）不加：它是长连接、每轮 24MB，加了会把 VibeCoding 串行化；
+        //    它的问题应该用更低的图片预算/客户端压缩解决，而不是全局单份闸。
+        if (ctx.pathname === '/api/student/runtime/submit-upload') {
+          const declaredLength = Number(req.headers['content-length'] || 0);
+          const gateBytes = Number.isFinite(declaredLength) && declaredLength > 0 ? declaredLength : 64 * 1024 * 1024;
+          const release = await acquireJsonBodySlot(gateBytes);
+          res.on('finish', release);
+          res.on('close', release);
+        }
+        ctx.body = await readJson(req, limit);
+      }
     }
     if (handleSeoAsset(ctx)) return;
 

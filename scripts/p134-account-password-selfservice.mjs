@@ -130,6 +130,12 @@ try {
   check('反向：未登录 → 401', anon.status === 401, JSON.stringify(anon.error));
 
   console.log('③ 界面入口（"接口有、界面没有入口"是这一轮要修的 bug，必须一起钉住）');
+  // ④ 审计口径（2026-11-11）：机构端重置密码原来把 ctx.body（{password: 明文}）整包写进
+  //    audit_logs.after_data，而机构端/平台端的审计查询会把 after 原样返回 —— 等于把新密码
+  //    持久化在库里和备份里。只允许记 passwordChanged 这个事实。
+  const orgAdminSource = readFile('apps/server/src/routes/orgAdmin.js');
+  check('④ 重置密码的审计不记 ctx.body（明文密码不能进 audit_logs）',
+    !/target\.id,\s*null,\s*ctx\.body/.test(orgAdminSource) && /passwordChanged:\s*true/.test(orgAdminSource));
   const shared = readFile('packages/shared/src/account.jsx');
   check('① 三端共用一个表单组件（packages/shared/src/account.jsx 的 PasswordChangeForm）',
     /export function PasswordChangeForm/.test(shared) && /currentPassword/.test(shared) && /newPassword/.test(shared));

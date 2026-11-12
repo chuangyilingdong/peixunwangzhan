@@ -107,6 +107,8 @@ const FAST = [
   'scripts/p192-junshi-auto-host.mjs',
   // 2026-10-26 加：文案大脑蒸馏曾引用 handler 内的解析函数，真实渠道直接 TypeError。
   'scripts/p194-junshi-module-json-parser.mjs',
+  // 2026-11-11 加：画布批量签名（一次鉴权 → OSS 直链；本地行/别人的私有素材不下发）。
+  'scripts/p203-file-asset-batch-sign.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));

@@ -25,7 +25,7 @@ import { assertTransition } from '../services/domainState.js';
 import { maxUploadBytes, parseMultipartFormData, persistSecureUpload, uploadRoot, validateMimeAndExtension, cleanFileName } from '../services/fileUploadSecurity.js';
 import { ensurePreviewPdf, needsConversion, previewKindFor, verifyPreviewTicket, previewPdfInOss, publishPreviewPdf, canRenderNatively } from '../services/materialPreview.js';
 import { reserveUpload } from '../services/uploadLimits.js';
-import { rowStorageBackend, ossRedirectUrl, materializeObject, imageProcessFor, persistUploadFile } from '../services/fileStorage.js';
+import { rowStorageBackend, ossRedirectUrl, ossStableRedirectUrl, materializeObject, imageProcessFor, persistUploadFile } from '../services/fileStorage.js';
 import { ossConfigured, signedUrl } from '../services/objectStorage.js';
 
 /** 预览 302 到 OSS 的签名有效期（1 小时，与预览票据同量级）。 */
@@ -119,6 +119,8 @@ async function kickAndWaitArchive(file) {
     // 提到队首 + 立刻踢一下队列（默认 2 秒一轮，学生就在等，别空转）
     const bumped = json({ ...meta, archive: { ...archive, priority: true } });
     await aq('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [bumped, nowIso(), file.id]).catch(() => {});
+    // 索引列同步（迁移 55 之前不存在时忽略）。
+    await aq('UPDATE file_assets SET archive_priority=1 WHERE id=?', [file.id]).catch(() => {});
     import('../services/generatedAssetArchiveQueue.js')
       .then((mod) => mod.drainArchiveQueue?.())
       .catch(() => {});
@@ -376,15 +378,22 @@ export async function prepareFileDownload(ctx, file) {
   // OSS 行：**不经过我们转发字节**，而是 302 到带签名的临时地址（见 services/fileStorage.js）。
   // 为什么必须这样：这台机的公网出口只有 5 Mbps，媒体全从它出去会拖慢所有人。
   // 授权判断在这之前已经做完了（调用方先校验 grants / 票据），签名地址只是"取件凭证"。
-  const redirectUrl = ossRedirectUrl(file, {
-    expires: 900,
-    // 不传 contentType：阿里云不允许在 URL 上覆盖 content-type（会 400），
-    // 而对象上传时已经带对了 mime，浏览器拿到的类型本来就是对的。
-    contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(String(file.file_name || 'download').replace(/[\r\n"\\/]/g, '_'))}`,
-  });
+  // ⭐ 2026-11-11：公开素材用**稳定签名**（同一时间窗地址恒定），并把 302 本身缓存住 ——
+  //    否则同一张图每次打开都是新 URL，浏览器缓存不住，课堂里反复打开就反复回源 OSS。
+  //    私有素材仍用 15 分钟签名，但允许浏览器缓存 5 分钟（窗口内重复打开不再打 Node/OSS）。
+  const downloadDisposition = `attachment; filename*=UTF-8''${encodeURIComponent(String(file.file_name || 'download').replace(/[\r\n"\\/]/g, '_'))}`;
+  const isPublicFile = file.visibility === 'PUBLIC_PLATFORM' || file.visibility === 'PUBLIC_RELEASE';
+  const redirectUrl = isPublicFile
+    ? ossStableRedirectUrl(file, { windowSeconds: 7200, contentDisposition: downloadDisposition })
+    : ossRedirectUrl(file, { expires: 900, contentDisposition: downloadDisposition });
   if (redirectUrl) {
     await audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, storageBackend: 'oss', redirected: true });
-    return { __fileResponse: true, status: 302, redirectUrl };
+    return {
+      __fileResponse: true,
+      status: 302,
+      headers: { 'cache-control': isPublicFile ? 'public, max-age=3600' : 'private, max-age=300' },
+      redirectUrl,
+    };
   }
   const root = uploadRoot();
   const storageKey = String(file.storage_key || '').replaceAll('\\', '/');
@@ -431,6 +440,39 @@ export async function prepareFileDownload(ctx, file) {
   };
 }
 
+/**
+ * 画布批量取签名地址（2026-11-11）。
+ *
+ * 为什么要有它：画布上每个素材都是 `/api/.../file-assets/<id>/download`，原来客户端对每个
+ * 素材各发一次请求 → Node 鉴权 → 302 → OSS。30 个学生 × 25 个素材就是 750 次 Node 请求；
+ * 而字节本来就要从 OSS 取，Node 只是“多转一道手的收费站”。
+ *
+ * 现在客户端在画布打开时**一次**把全部素材地址发上来，服务端逐个鉴权后返回签名直链：
+ *   · OSS 行 → 稳定签名（同一时间窗地址恒定，浏览器能缓存）；
+ *   · 本地行 / 待归档占位行 → 不下发，客户端回退原来的 `/api` 地址（流式 / 等待归档）。
+ *
+ * 安全口径与单条下载完全一致：每个 fileId 都走 `authorizeFileAccess`，没权限的直接跳过。
+ */
+const SIGN_URL_RE = /^\/api\/(?:student|org)\/file-assets\/([\w-]+)\/download(?:\?.*)?$/;
+async function signFileAssetUrls(ctx, urls) {
+  const list = Array.isArray(urls) ? urls : [];
+  const unique = [...new Set(list.map((item) => String(item || '').trim()).filter((url) => SIGN_URL_RE.test(url)))].slice(0, 300);
+  const signed = {};
+  for (const url of unique) {
+    const fileId = url.match(SIGN_URL_RE)?.[1];
+    if (!fileId) continue;
+    try {
+      const file = await authorizeFileAccess(ctx, fileId, 'READ');
+      // 2 小时窗口：一节课足够长；窗口内同一素材地址恒定，浏览器缓存得住。
+      const redirect = ossStableRedirectUrl(file, { windowSeconds: 7200 });
+      if (redirect) signed[url] = redirect;
+    } catch {
+      // 无权限 / 文件不存在 / 本地行 / PENDING：不阻断其它素材，客户端会回退原地址。
+    }
+  }
+  return { urls: signed };
+}
+
 export async function prepareWorkImage(ctx, file) {
   const mimeType = String(file?.mime_type || '').toLowerCase();
   // ⭐ 2026-10-01：svg 也走这条（它同样是"作品里的图"）—— 它的 XSS 补偿在下面的 svgLike/attachment。
@@ -472,10 +514,19 @@ export async function prepareWorkImage(ctx, file) {
   //    `<img src>` 不受影响（disposition 只作用于顶层导航），所以学生页里的 svg 照常显示。
   const svgLike = /^image\/svg\+xml/i.test(String(file.mime_type || ''));
   if (rowStorageBackend(file) === 'oss') {
-    const signed = ossRedirectUrl(file, { expires: 900, ...(svgLike ? { contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent('image.svg')}` } : {}) });
+    const isPublicFile = file.visibility === 'PUBLIC_PLATFORM' || file.visibility === 'PUBLIC_RELEASE';
+    const disposition = svgLike ? { contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent('image.svg')}` } : {};
+    const signed = isPublicFile
+      ? ossStableRedirectUrl(file, { windowSeconds: 7200, ...disposition })
+      : ossRedirectUrl(file, { expires: 900, ...disposition });
     if (!signed) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
     await audit(ctx, 'FILE_WORK_IMAGE_PROXY', 'FILE_ASSET', file.id, null, { storageBackend: 'oss', redirected: true, bytes: file.file_size == null ? null : Number(file.file_size) });
-    return { __fileResponse: true, status: 302, redirectUrl: signed };
+    return {
+      __fileResponse: true,
+      status: 302,
+      headers: { 'cache-control': isPublicFile ? 'public, max-age=3600' : 'private, max-age=300' },
+      redirectUrl: signed,
+    };
   }
   // 本地盘的行：没有 OSS 可指，照旧流式发（数量很少，且是本机文件）
   {
@@ -713,13 +764,28 @@ export async function createPendingGeneratedAsset({ sourceUrl, modality, jobId, 
   const fileId = id('file');
   const stamp = nowIso();
   const proxyRoute = `/api/student/file-assets/${fileId}/download`;
-  await aq(
-    `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [fileId, ownerUserId ? 'USER' : 'PLATFORM', ownerOrgId, ownerUserId, 'INTERNAL_PROXY', null, null, proxyRoute, null,
-      fileName, declaredMime || null, null, null, 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null,
-      json({ ...metadata, generated: true, archive: { state: 'PENDING', sourceUrl, modality, jobId, attempts: 0, priority: false, queuedAt: stamp } }),
-      ownerUserId, stamp, stamp],
-  );
+  const baseColumns = 'id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at';
+  const baseValues = [fileId, ownerUserId ? 'USER' : 'PLATFORM', ownerOrgId, ownerUserId, 'INTERNAL_PROXY', null, null, proxyRoute, null,
+    fileName, declaredMime || null, null, null, 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null];
+  const tailValues = [
+    json({ ...metadata, generated: true, archive: { state: 'PENDING', sourceUrl, modality, jobId, attempts: 0, priority: false, queuedAt: stamp } }),
+    ownerUserId, stamp, stamp,
+  ];
+  try {
+    // 迁移 55 之后：同时写索引列 archive_state（队列取件靠它，不再扫 metadata）。
+    await aq(
+      `INSERT INTO file_assets(${baseColumns},archive_state,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [...baseValues, 'PENDING', ...tailValues],
+    );
+  } catch (error) {
+    // 迁移 55 没跑的库：archive_state 列不存在。退回不带该列的插入，队列走 legacy 扫描；
+    // 不能因为一次「索引列还没建」把整条生成变成同步归档。
+    if (!/archive_state|Unknown column|no column named/i.test(String(error?.message || ''))) throw error;
+    await aq(
+      `INSERT INTO file_assets(${baseColumns},metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [...baseValues, ...tailValues],
+    );
+  }
   return { id: fileId, url: proxyRoute };
 }
 
@@ -737,6 +803,8 @@ export async function replaceGeneratedAssetFromFile({ fileId, tempPath, bytes, m
         archive: { ...(meta.archive || {}), state: 'ARCHIVED', archivedAt: stamp, bytes: size } }),
       stamp, fileId],
   );
+  // 索引列同步（迁移 55 之前不存在时忽略；metadata 仍是真相）。
+  await aq("UPDATE file_assets SET archive_state='ARCHIVED', archive_next_attempt_at=NULL WHERE id=?", [fileId]).catch(() => {});
   return { id: fileId, storageKey: persisted.storageKey, mimeType: validated.mimeType, bytes: size };
 }
 
@@ -1159,6 +1227,11 @@ export async function handleOrgFileAssets(ctx) {
     return await previewInfoFor(file.id);
   }
 
+  // 备课画布（老师端）也一次签完素材直链；URL 前缀是 /api/org/file-assets/...。
+  if (part === '/file-assets/sign' && method === 'POST') {
+    return await signFileAssetUrls(ctx, ctx.body?.urls);
+  }
+
   if (part === '/file-assets' && method === 'GET') {
     const category = String(ctx.search.get('category') || '').trim();
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 50 });
@@ -1301,6 +1374,10 @@ export async function handleStudentFileAssets(ctx) {
     // 扩展名/魔术字节/大小/频次校验复用与管理端同一套 persistSecureUpload + reserveUpload。
     return createUploadedFileAsset(ctx, { auth, ownerType: 'USER', ownerOrgId: currentOrgId, scope: 'student', defaultVisibility: 'PRIVATE' });
   }
+  // 画布打开时一次签完所有素材直链（见 signFileAssetUrls）；必须放在 `/:id` 之前，否则会被当成 fileId。
+  if (part === '/file-assets/sign' && method === 'POST') {
+    return await signFileAssetUrls(ctx, ctx.body?.urls);
+  }
   const idMatch = part.match(/^\/file-assets\/([^/]+)$/);
   if (idMatch && method === 'GET') {
     return normalizeFileAsset(await authorizeFileAccess(ctx, idMatch[1], 'READ'));
@@ -1350,7 +1427,7 @@ export async function handlePublicFileAssets(ctx) {
     const width = Number(ctx.search.get('w') || 0);
     const isImage = /^image\//.test(String(file.mime_type || ''));
     if (isImage && Number.isFinite(width) && width > 0) {
-      const url = ossRedirectUrl(file, { expires: 3600, imageProcess: imageProcessFor(width) });
+      const url = ossStableRedirectUrl(file, { windowSeconds: 7200, imageProcess: imageProcessFor(width) });
       if (url) {
         await audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageBackend: 'oss', imageProcess: imageProcessFor(width) });
         return { __fileResponse: true, status: 302, headers: { 'cache-control': 'public, max-age=3600' }, redirectUrl: url };

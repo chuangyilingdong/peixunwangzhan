@@ -252,6 +252,15 @@ try {
     const kept = await stageGeneratedAssets([{ assetUrl: 'mock://generation/x', mimeType: 'text/plain' }], { modality: 'TEXT', jobId: 'job_p196_text' });
     assert.equal(kept[0].assetUrl, 'mock://generation/x');
   });
+
+  await check('⑩ 归档取件走 archive_state 索引列（不再靠 metadata LIKE 全表扫）', async () => {
+    const queue = fs.readFileSync(new URL('../apps/server/src/services/generatedAssetArchiveQueue.js', import.meta.url), 'utf8');
+    assert.match(queue, /archive_state='PENDING'/, '取件查询没有走 archive_state 列');
+    assert.match(queue, /archive_priority DESC/, '取件没有按 priority 排序');
+    const schema = fs.readFileSync(new URL('../packages/database/src/schema.js', import.meta.url), 'utf8');
+    assert.match(schema, /ADD COLUMN archive_state/, 'schema 没有补 archive_state 列');
+    assert.match(schema, /idx_file_assets_archive_pick/, 'schema 没有归档取件索引');
+  });
 } finally {
   if (server) await new Promise((resolve) => server.close(resolve));
 }

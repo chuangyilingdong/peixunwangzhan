@@ -152,6 +152,33 @@ function mediaKindOfFile(file) {
   return '';
 }
 
+// 画布素材地址：学生画布是 `/api/student/file-assets/<id>/download`，老师备课画布是
+// `/api/org/file-assets/<id>/download`（见 CanvasPrep 的 rewriteStudentAssetUrls）。
+// 只认这两种；`/api/**/preview` 等其它受保护地址仍走原来的 blob 路径。
+const FILE_ASSET_URL_RE = /^\/api\/(?:student|org)\/file-assets\/[\w-]+\/download(?:\?.*)?$/;
+
+/**
+ * 递归收集快照/素材面板里的文件资产地址。
+ * 为什么不在服务端返回 map：画布快照是学生自己保存的 JSON，URL 可能出现在节点任意
+ * `data.assetUrl/previewUrl/referenceUrl`、素材面板 `materialGroups`、框体 `generationBoxes`
+ * 里；前端统一扫一遍最稳，也顺带覆盖老师上次保存的本机草稿。
+ */
+function collectFileAssetUrls(value, out = new Set(), depth = 0) {
+  if (value == null || depth > 12) return out;
+  if (typeof value === 'string') {
+    if (FILE_ASSET_URL_RE.test(value)) out.add(value);
+    return out;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectFileAssetUrls(item, out, depth + 1);
+    return out;
+  }
+  if (typeof value === 'object') {
+    for (const item of Object.values(value)) collectFileAssetUrls(item, out, depth + 1);
+  }
+  return out;
+}
+
 /**
  * @param prep 可选：**老师备课模式**（2026-09-30 用户口径「直接进入到画布课堂」）。
  *   传 `{ project, draftKey }` 时：
@@ -243,14 +270,58 @@ export function CanvasWorkspace({ api, prep = null, ...props }) {
   // （那两个标签发不出 Authorization 头）。同一个地址只取一次。
   // ⚠️ 必须放在所有提前 return 之前（p34 守卫盯着这条：hook 写在 return 之后会整页白屏）。
   const assetBlobCache = useRef(new Map());
-  const resolveAssetUrl = useCallback((url) => {
+  // 2026-11-11：画布素材改成「一次批量签名 → 直连 OSS」。
+  // 原链路是每个素材各打一次 Node（鉴权 + 302），再把整份字节 fetch 成 blob；
+  // 30 个学生 × 25 个素材就是 750 次 Node 请求，视频还会在点播放前就被整份下载。
+  // 现在：打开画布时把素材地址一次发给 `/file-assets/sign`，拿回签名直链；
+  // `<img>/<video>` 直接用直链（OSS Range/浏览器缓存都生效），只有本地行/待归档行
+  // 签不到时才回退原来的 blob 路径。
+  //
+  // ⚠️ 批量签名**在 resolveAssetUrl 第一次被调用时同步启动**，不放在 useEffect 里：
+  //    React 挂载时子组件的 effect 先于父组件执行，放到父 useEffect 里会让第一批素材
+  //    先各签一次（单条），批量就白做了。
+  const projectDataRef = useRef(project.data);
+  projectDataRef.current = project.data;
+  const signBatchRef = useRef({ key: null, api: null, prepMode: null, promise: Promise.resolve(new Map()) });
+  const assetSignCache = useRef(new Map());
+  const resolveAssetUrl = useCallback(async (url) => {
     const target = String(url || '');
-    if (!target.startsWith('/api/')) return Promise.resolve(target);
+    if (!target.startsWith('/api/')) return target;
+    if (FILE_ASSET_URL_RE.test(target)) {
+      const data = projectDataRef.current;
+      const key = `${data?.id || ''}:${data?.latestVersion ?? ''}`;
+      const current = signBatchRef.current;
+      if (current.key !== key || current.api !== api || current.prepMode !== prepMode) {
+        const urls = data
+          ? [...collectFileAssetUrls([data.canvasSnapshot, data.materialGroups, data.generationBoxes])].slice(0, 300)
+          : [];
+        const signPath = prepMode ? 'org/file-assets/sign' : 'student/file-assets/sign';
+        const promise = urls.length
+          ? api.post(signPath, { urls }).then((res) => new Map(Object.entries(res?.urls || {}))).catch(() => new Map())
+          : Promise.resolve(new Map());
+        signBatchRef.current = { key, api, prepMode, promise };
+      }
+      // 先等首屏那一次批量签名：命中就直接给 OSS 直链，不再走 blob。
+      const batch = await signBatchRef.current.promise.catch(() => new Map());
+      const signed = batch.get(target);
+      if (signed) return signed;
+      // 批量之后新生成的素材（批量里没有）：单独签一次，比整份字节 fetch 便宜得多。
+      const cached = assetSignCache.current.get(target);
+      if (cached) return cached;
+      const signPath = prepMode ? 'org/file-assets/sign' : 'student/file-assets/sign';
+      const task = api.post(signPath, { urls: [target] })
+        .then((res) => String(res?.urls?.[target] || ''))
+        .catch(() => '');
+      assetSignCache.current.set(target, task);
+      const one = await task;
+      if (one) return one;
+      // 本地行 / PENDING 占位行 / 无权限：签不到，走原来的 blob（它会处理 302 与等待归档）。
+    }
     if (assetBlobCache.current.has(target)) return assetBlobCache.current.get(target);
     const pending = api.fetchBlobUrl(target).catch(() => '');
     assetBlobCache.current.set(target, pending);
     return pending;
-  }, [api]);
+  }, [api, prepMode]);
   // 素材面板点「已在画布上」的框体时，让画布把对应节点选中并居中（见 CanvasEditor 的 focusRequest）
   const [focusRequest, setFocusRequest] = useState(null);
   // 只供侧栏新增使用：由画布按实时视角计算中心，绝不把入场状态写进快照。

@@ -23,7 +23,7 @@ import { AI_PROVIDER_TIMEOUT_MS } from '../config.js';
 import { PROVIDER_ERROR_CODES } from './providerContract.js';
 import { fitMediaToRatio, parseRatio } from './mediaFit.js';
 import { readFileSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { uploadRoot } from './fileUploadSecurity.js';
 import { materializeObject, rowStorageBackend } from './fileStorage.js';
@@ -37,8 +37,50 @@ const MIRROR_TIMEOUT_MS = Math.max(5000, Math.min(120000, Number(AI_PROVIDER_TIM
 const cache = new Map(); // 源 URL → { url, at }
 const inflight = new Map(); // 源 URL → 正在进行中的上传（同一张图被多处引用时只传一次）
 
+/**
+ * 镜像上传的**字节闸**（2026-11-11）。
+ *
+ * 为什么必须有：一份参考素材最大 30MB（图）/ 50MB（音视频），而生成队列现在能开到 100 路。
+ * 原来 `readFileSync` + `new Uint8Array()` + `Blob` 会把同一份素材复制 2~3 次 ——
+ * 100 路同时镜像参考视频时是 **5GB 级内存**，机器只有 8GB，OOM 是必然的。
+ *
+ * 闸按**字节**算，不按请求数：10 个 1MB 和 10 个 50MB 对内存的压力完全不同。
+ * 单份超过上限时允许它独占（否则永远拿不到名额），但同一时刻只有它一份。
+ */
+const MIRROR_MAX_INFLIGHT = Math.max(1, Math.min(32, Number(process.env.MIRROR_MAX_INFLIGHT) || 8));
+const MIRROR_MAX_INFLIGHT_BYTES = Math.max(64 * 1024 * 1024, Number(process.env.MIRROR_MAX_INFLIGHT_BYTES) || 256 * 1024 * 1024);
+const MIRROR_GATE_WAIT_MS = Math.max(0, Number(process.env.MIRROR_GATE_WAIT_MS) || 60000);
+const mirrorGate = { active: 0, bytes: 0 };
+
+async function acquireMirrorSlot(bytes) {
+  const size = Number.isFinite(bytes) && bytes > 0 ? Math.floor(bytes) : 0;
+  const startedAt = Date.now();
+  const fits = () => mirrorGate.active + 1 <= MIRROR_MAX_INFLIGHT
+    && (mirrorGate.active === 0 || mirrorGate.bytes + size <= MIRROR_MAX_INFLIGHT_BYTES);
+  while (!fits()) {
+    if (Date.now() - startedAt >= MIRROR_GATE_WAIT_MS) {
+      throw mirrorFailure(`素材上传排队超时（当前并发 ${mirrorGate.active} 份 / ${Math.round(mirrorGate.bytes / 1024 / 1024)}MB）`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  mirrorGate.active += 1;
+  mirrorGate.bytes += size;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    mirrorGate.active = Math.max(0, mirrorGate.active - 1);
+    mirrorGate.bytes = Math.max(0, mirrorGate.bytes - size);
+  };
+}
+
+/** 守卫/诊断用：当前镜像闸的状态。 */
+export function upstreamMediaMirrorGateState() {
+  return { ...mirrorGate, maxFiles: MIRROR_MAX_INFLIGHT, maxBytes: MIRROR_MAX_INFLIGHT_BYTES };
+}
+
 /** 守卫用：清缓存 / 看缓存条数。 */
-export function resetUpstreamMediaMirrorCache() { cache.clear(); inflight.clear(); }
+export function resetUpstreamMediaMirrorCache() { cache.clear(); inflight.clear(); mirrorGate.active = 0; mirrorGate.bytes = 0; }
 export function upstreamMediaMirrorCacheSize() { return cache.size; }
 
 /**
@@ -84,7 +126,7 @@ function describeSize(bytes) {
 }
 
 /**
- * 我们自己的文件资产 URL → 字节（读不到就返回 null，交给 HTTP 那条路试）。
+ * 我们自己的文件资产 URL → **本地文件路径 + 大小 + MIME**（读不到就返回 null，交给 HTTP 那条路试）。
  * 只在"文件确实在库里且 storage_kind=INTERNAL_PROXY"时才走这条路。
  *
  * 两条来源：
@@ -93,8 +135,12 @@ function describeSize(bytes) {
  *      取回来落到一个临时文件再读。这一条以前缺了 —— 于是"自站素材在 OSS 上"时这里返回 null，
  *      掉到 HTTP 兜底（私有素材要会话，401）→ 上游拿到我们的 /api 地址 →
  *      回 `images must contain public HTTP(S) URLs`（用户 2026-09-24 报的图生图 bug）。
+ *
+ * ⚠️ 这里返回**路径**而不是 `readFileSync` 的 Buffer：50MB 视频 × 100 路并发就是 5GB。
+ *    真正的读取交给 `openFileBlob`（Node 22 的 `fs.openAsBlob` 是文件背书的 Blob，喂给
+ *    FormData/fetch 时按块读，不会整份进内存）。
  */
-async function readOwnFileFromDisk(source) {
+async function locateOwnFile(source) {
   const match = String(source || '').match(/\/api\/(?:public|student|admin|org)\/file-assets\/([^/]+)\/download(?:$|[?#])/);
   if (!match) return null;
   try {
@@ -107,15 +153,29 @@ async function readOwnFileFromDisk(source) {
     const absolute = path.resolve(root, key);
     if (absolute !== root && !absolute.startsWith(root + path.sep)) return null;
     try {
-      return { bytes: readFileSync(absolute), contentType };
-    } catch {
-      // 本地没有这份字节 → OSS 后端就把它取回来（其它后端直接放弃）
-      if (rowStorageBackend(file) !== 'oss') return null;
-      const scratch = path.join(root, '.mirror-cache', `${match[1]}${path.extname(key) || '.bin'}`);
-      await mkdir(path.dirname(scratch), { recursive: true });
-      await materializeObject(file, scratch);
-      return { bytes: readFileSync(scratch), contentType };
-    }
+      const info = await stat(absolute);
+      if (info.isFile() && info.size > 0) return { path: absolute, size: info.size, contentType };
+    } catch { /* 本地没有，往下看 OSS */ }
+    // 本地没有这份字节 → OSS 后端就把它取回来（其它后端直接放弃）
+    if (rowStorageBackend(file) !== 'oss') return null;
+    const scratch = path.join(root, '.mirror-cache', `${match[1]}${path.extname(key) || '.bin'}`);
+    await mkdir(path.dirname(scratch), { recursive: true });
+    await materializeObject(file, scratch);
+    const info = await stat(scratch);
+    if (!info.isFile() || info.size <= 0) return null;
+    return { path: scratch, size: info.size, contentType };
+  } catch { return null; }
+}
+
+/**
+ * 文件 → Blob：优先 `fs.openAsBlob`（Node 19.8+，文件背书、不整份进内存）；
+ * 本地开发 Node 16 没有这个 API 时退回 Buffer。返回 null 表示调用方应该走 Buffer 兜底。
+ */
+async function openFileBlob(filePath, contentType) {
+  try {
+    const fs = await import('node:fs');
+    if (typeof fs.openAsBlob !== 'function') return null;
+    return await fs.openAsBlob(filePath, { type: contentType || 'application/octet-stream' });
   } catch { return null; }
 }
 
@@ -155,62 +215,70 @@ export async function mirrorMediaUrl(url, { uploadUrl, apiKey = '', timeoutMs = 
   // （上游限流是每令牌每分钟 10 次，一次生成里重复传同一张很浪费）。
   const pending = inflight.get(cacheKey);
   if (pending) return pending;
-  const task = uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue, selfOrigin, pickUploadedUrl });
+  const task = uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue, selfOrigin, pickUploadedUrl, cacheKey });
   inflight.set(cacheKey, task);
   try { return await task; } finally { inflight.delete(cacheKey); }
 }
 
-async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue = '', selfOrigin = '', pickUploadedUrl = null }) {
-  // ① 取源文件（我们自己的站点，取的是同机房的一次回环请求）
-  let bytes;
+async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue = '', selfOrigin = '', pickUploadedUrl = null, cacheKey = source }) {
   let contentType = '';
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  timer.unref?.();
-  // ① 取源素材。两条路：
-  //    a) 我们自己站点上的文件资产 → **直接从磁盘读**。为什么不能走 HTTP：私有素材（学生自己上传的）
-  //       在 /api/public/... 上是 **403**（那条路由只服务公开文件），而 /api/student/... 要会话；
-  //       顺带省掉一次"自己请求自己"的回环。
-  //    b) 别处（上游自己的存储、外部图床、或 a 读不到时）→ HTTP 取回来。
-  const disk = await readOwnFileFromDisk(source);
-  if (disk) {
-    contentType = disk.contentType;
-    assertWithinUpstreamLimit(disk.bytes.length, contentType);
-    bytes = new Uint8Array(disk.bytes);
-  } else {
-    try {
-      // 相对地址（/media/… 这类公开素材）要拼上自站 origin 才 fetch 得了；
-      // 私有素材在上一段已经从磁盘/OSS 拿到字节了，走不到这里。
-      const httpSource = source.startsWith('/') && selfOrigin ? new URL(source, selfOrigin).toString() : source;
-      const response = await doFetch(httpSource, { signal: controller.signal });
-      if (!response?.ok) throw new Error(`HTTP ${response?.status || 0}`);
-      contentType = String(response.headers?.get?.('content-type') || '').split(';')[0].trim();
-      // 大小闸：在**读 body 之前**按 content-length 判（上游上限只有 30/50MB，我们单文件上限是 200MB）
-      assertWithinUpstreamLimit(Number(response.headers?.get?.('content-length') || 0), contentType);
-      bytes = new Uint8Array(await response.arrayBuffer());
-    } catch (error) {
-      // 已经是给用户看的那句（大小超限）就别再套一层「读取素材失败」
-      if (/^素材上传到上游失败/.test(String(error?.message || ''))) throw error;
-      throw mirrorFailure(`读取素材失败（${String(error?.message || error).slice(0, 120)}）`);
-    } finally { clearTimeout(timer); }
-  }
-  if (!bytes?.length) throw mirrorFailure('素材是空的');
-
-  // ①b 需要时把画面裁成目标比例（关键帧 + 固定比例）：上游会**执行**固定比例，
-  //     给它一张比例不符的图，它就把图硬拉成那个比例（用户 2026-09-21 报的「扁的画面」）。
-  //     裁在自己这边、发一张已经合比例的图，它就没什么可拉的了。失败一律回退成原图（不卡生成）。
-  if (fitRatioValue) {
-    const fitted = await fitMediaToRatio(Buffer.from(bytes), fitRatioValue, { source });
-    if (fitted.changed) {
-      bytes = new Uint8Array(fitted.bytes);
-      contentType = fitted.contentType;
-    }
-  }
-
-  // ② 传给上游
+  let blob = null;
+  let releaseMirror = null;
   try {
+    // ① 取源素材。两条路：
+    //    a) 我们自己站点上的文件资产 → **直接从磁盘/OSS 取到本地文件**。为什么不能走 HTTP：
+    //       私有素材（学生自己上传的）在 /api/public/... 上是 **403**（那条路由只服务公开文件），
+    //       而 /api/student/... 要会话；顺带省掉一次"自己请求自己"的回环。
+    //    b) 别处（上游自己的存储、外部图床、或 a 读不到时）→ HTTP 取回来。
+    const disk = await locateOwnFile(source);
+    if (disk) {
+      contentType = disk.contentType;
+      assertWithinUpstreamLimit(disk.size, contentType);
+      // 先按**字节**占名额，再读文件 —— 否则 100 路同时读到 50MB 才排队，已经晚了。
+      releaseMirror = await acquireMirrorSlot(disk.size);
+      if (fitRatioValue) {
+        // 裁剪必须完整 bytes 交给 ffmpeg；这条只对图片且只对固定比例生效，图片上限 30MB。
+        let bytes = new Uint8Array(readFileSync(disk.path));
+        const fitted = await fitMediaToRatio(Buffer.from(bytes), fitRatioValue, { source });
+        if (fitted.changed) {
+          bytes = new Uint8Array(fitted.bytes);
+          contentType = fitted.contentType;
+        }
+        blob = new Blob([bytes], { type: contentType || 'application/octet-stream' });
+      } else {
+        // 文件背书的 Blob：FormData/fetch 按块读，不把整份视频读进内存。
+        blob = await openFileBlob(disk.path, contentType);
+        if (!blob) blob = new Blob([readFileSync(disk.path)], { type: contentType || 'application/octet-stream' });
+      }
+    } else {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      timer.unref?.();
+      try {
+        // 相对地址（/media/… 这类公开素材）要拼上自站 origin 才 fetch 得了；
+        // 私有素材在上一段已经定位到本地文件了，走不到这里。
+        const httpSource = source.startsWith('/') && selfOrigin ? new URL(source, selfOrigin).toString() : source;
+        const response = await doFetch(httpSource, { signal: controller.signal });
+        if (!response?.ok) throw new Error(`HTTP ${response?.status || 0}`);
+        contentType = String(response.headers?.get?.('content-type') || '').split(';')[0].trim();
+        // 大小闸：在**读 body 之前**按 content-length 判（上游上限只有 30/50MB，我们单文件上限是 200MB）
+        const declared = Number(response.headers?.get?.('content-length') || 0);
+        assertWithinUpstreamLimit(declared, contentType);
+        releaseMirror = await acquireMirrorSlot(declared || 50 * 1024 * 1024);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (!bytes.length) throw mirrorFailure('素材是空的');
+        blob = new Blob([bytes], { type: contentType || 'application/octet-stream' });
+      } catch (error) {
+        // 已经是给用户看的那句（大小超限）就别再套一层「读取素材失败」
+        if (/^素材上传到上游失败/.test(String(error?.message || ''))) throw error;
+        throw mirrorFailure(`读取素材失败（${String(error?.message || error).slice(0, 120)}）`);
+      } finally { clearTimeout(timer); }
+    }
+    if (!blob || !blob.size) throw mirrorFailure('素材是空的');
+
+    // ② 传给上游
     const form = new FormData();
-    form.append('file', new Blob([bytes], { type: contentType || 'application/octet-stream' }), mediaFileName(contentType, source));
+    form.append('file', blob, mediaFileName(contentType, source));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
@@ -231,11 +299,15 @@ async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl:
     const picked = typeof pickUploadedUrl === 'function' ? pickUploadedUrl(payload) : payload?.url;
     const mirrored = String(picked || '').trim();
     if (!/^https?:\/\//i.test(mirrored)) throw new Error(`响应里没有素材 URL（HTTP ${status}）`);
-    cache.set(source, { url: mirrored, at: Date.now() });
+    // ⚠️ 缓存键要用 `cacheKey`（带 `#fit=`），不是 source：同一张图裁成不同比例得到的上游 URL 不同。
+    cache.set(cacheKey, { url: mirrored, at: Date.now() });
     while (cache.size > MIRROR_CACHE_MAX) cache.delete(cache.keys().next().value);
     return mirrored;
   } catch (error) {
+    if (/^素材上传到上游失败/.test(String(error?.message || ''))) throw error;
     throw mirrorFailure(String(error?.message || error).slice(0, 120));
+  } finally {
+    releaseMirror?.();
   }
 }
 
