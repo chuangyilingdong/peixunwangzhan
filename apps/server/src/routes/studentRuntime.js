@@ -8,7 +8,7 @@
 //   · services/studentRuntime.js —— 门禁 → 签密钥 → 调宿主脚本（开 / 收 / 列产物 / 取产物）；
 //   · 本文件的 /submit —— 把取回来的产物按**现有作品链路**落进 vibecoding_submissions；
 //     网页里的本地图片存成私有文件资产并改写引用（见 fileAssets.js 的 storeStudentArtifactAsset）。
-import { deliveryModesOf, errors, normalizeLesson, requireRole, row, rows, arow, arows, amap } from '../lib.js';
+import { ApiError, deliveryModesOf, errors, normalizeLesson, requireRole, row, rows, arow, arows, amap, atransaction } from '../lib.js';
 import { accessibleLesson } from './adminOrg.js';
 import { collectStudentDeliverable, launchStudentRuntime, listStudentDeliverables, runtimeGatewayUrl, stopStudentRuntime, studentRuntimeAvailability } from '../services/studentRuntime.js';
 import { issueRuntimeKey } from './runtimeGateway.js';
@@ -18,8 +18,11 @@ import { globalPromptForClient } from '../services/vibecodingGlobalPrompt.js';
 import { isSubmittableArtifactKind, kindForName } from '../services/vibecodingArtifacts.js';
 import { documentMime } from '../services/ooxml/documents.js';
 import { ensureRuntimeConversation, recordRuntimeSubmission, rewriteLocalReferences, runtimeSubmissionWorkItem, textDefaultModel, textModelOptions } from './vibecoding.js';
-import { storeStudentArtifactAsset } from './fileAssets.js';
-import { parseMultipartParts, scanUploadBuffers } from '../services/fileUploadSecurity.js';
+import { registerDirectUploadedAsset, storeStudentArtifactAsset } from './fileAssets.js';
+import { parseMultipartParts, scanUploadBuffers, validateMimeAndExtension } from '../services/fileUploadSecurity.js';
+import { deleteObject, getObjectRange, headObject, presignedPutUrl, storageBackend } from '../services/objectStorage.js';
+import { createUploadTicket, directUploadKey, verifyUploadTicket } from '../services/directUpload.js';
+import { randomUUID } from 'node:crypto';
 import { classroomWorksLlmGrant } from '../services/workLlm.js';
 
 // 客户端运行时（dsh / VibeCoding）**只认"这节课声明了 VibeCoding"**。
@@ -524,6 +527,118 @@ export async function handleStudentRuntime(ctx) {
   //    而不是让学生吃一个裸 `PAYLOAD_TOO_LARGE`。⚠️ 2026-10-02 前这里写的是
   //    "maxUploadBytes() + 1MB"——那是 **multipart** 路径（index.js:149）的闸，这条 JSON 路径
   //    当时实际还是默认 24MB，100MB 的业务上限因此**从未真正生效**（客户端实测 19.6MB 视频被 413）。
+  if (part === '/submit-upload/prepare' && method === 'POST') {
+    // 2026-11-12 长期方案：客户端拿预签名 PUT URL 直传 OSS，服务端不再读大 body。
+    if (storageBackend() !== 'oss') {
+      throw new ApiError(501, 'DIRECT_UPLOAD_UNAVAILABLE', '直传通道未配置');
+    }
+    const body = ctx.body || {};
+    const autoSubmit = body.autoSubmit === true;
+    if (autoSubmit) await requireAutoSubmitClassroom(auth.user.id, body.sessionId);
+    else await requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品', '当前是画布课堂，不能提交 VibeCoding 作品');
+    const manifest = validateDirectManifest(body);
+    const uploadId = randomUUID();
+    const ticketFiles = [];
+    const files = [];
+    for (const [index, file] of manifest.files.entries()) {
+      if (!file.binary) {
+        files.push({ name: file.name, binary: false });
+        continue;
+      }
+      const key = directUploadKey({ orgId, userId: auth.user.id, uploadId, index, name: file.name });
+      ticketFiles.push({ name: file.name, binary: true, key, size: file.size, mimeType: file.mimeType, md5: file.md5 });
+      files.push({
+        name: file.name,
+        binary: true,
+        method: 'PUT',
+        url: presignedPutUrl(key, { expires: 900, contentType: file.mimeType }),
+        headers: { 'content-type': file.mimeType },
+      });
+    }
+    const ticket = createUploadTicket({ userId: auth.user.id, orgId, uploadId, files: ticketFiles });
+    return { uploadToken: ticket.token, expiresAt: ticket.expiresAt, files, maxBytes: MAX_UPLOAD_BYTES };
+  }
+
+  if (part === '/submit-upload/direct' && method === 'POST') {
+    const body = ctx.body || {};
+    const ticket = verifyUploadTicket(body.uploadToken);
+    if (ticket.userId !== auth.user.id || String(ticket.orgId) !== String(orgId)) {
+      throw errors.forbidden('上传票据不属于当前账号', 'UPLOAD_TICKET_FORBIDDEN');
+    }
+    const autoSubmit = body.autoSubmit === true;
+    const classroom = autoSubmit
+      ? await requireAutoSubmitClassroom(auth.user.id, body.sessionId)
+      : await requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品', '当前是画布课堂，不能提交 VibeCoding 作品');
+    if (!autoSubmit && ctx.body?.copyrightConfirmed !== true) {
+      throw errors.badRequest('提交前请确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+    }
+    const bodyFiles = Array.isArray(body.files) ? body.files : [];
+    const ticketByName = new Map(ticket.files.map((file) => [file.name, file]));
+    const seen = new Set();
+    for (const item of bodyFiles) {
+      const name = safeArtifactName(item?.name);
+      if (!name) throw errors.badRequest(`文件名不合法：${String(item?.name || '').slice(0, 60)}`, 'RUNTIME_UPLOAD_BAD_NAME');
+      if (seen.has(name)) throw errors.badRequest(`同一个文件名出现了两次：${name}`, 'RUNTIME_UPLOAD_DUPLICATE_NAME');
+      seen.add(name);
+      if (item?.binary === true && !ticketByName.has(name)) {
+        throw errors.badRequest(`文件未在 prepare 中声明：${name}`, 'RUNTIME_UPLOAD_TICKET_MISMATCH');
+      }
+    }
+    for (const name of ticketByName.keys()) {
+      if (!seen.has(name)) throw errors.badRequest(`缺少文件：${name}`, 'RUNTIME_UPLOAD_TICKET_MISMATCH');
+    }
+    // 先全部校验（HEAD + magic），任何一份不合格就把这批对象清掉，不登记半套资产。
+    try {
+      for (const file of ticket.files) {
+        const head = await headObject(file.key);
+        if (!head.exists) throw errors.badRequest(`文件没有上传成功：${file.name}`, 'RUNTIME_UPLOAD_OBJECT_MISSING');
+        if (Number(head.size) !== Number(file.size)) {
+          throw errors.badRequest(`文件大小与声明不一致：${file.name}`, 'RUNTIME_UPLOAD_SIZE_MISMATCH');
+        }
+        const etag = String(head.etag || '').replace(/"/g, '').toLowerCase();
+        if (file.md5 && etag && etag !== String(file.md5).toLowerCase()) {
+          throw errors.badRequest(`文件校验值不一致：${file.name}`, 'RUNTIME_UPLOAD_CHECKSUM_MISMATCH');
+        }
+        const headBytes = await getObjectRange(file.key, { bytes: 64 });
+        validateMimeAndExtension(file.name, file.mimeType, headBytes);
+      }
+    } catch (error) {
+      for (const file of ticket.files) await deleteObject(file.key).catch(() => {});
+      throw error;
+    }
+    const assets = new Map();
+    await atransaction(async () => {
+      for (const file of ticket.files) {
+        const asset = await registerDirectUploadedAsset({
+          storageKey: file.key,
+          fileName: file.name,
+          mimeType: file.mimeType,
+          size: file.size,
+          checksum: file.md5,
+          ownerUserId: auth.user.id,
+          ownerOrgId: orgId,
+          security: { signature: 'direct-upload', scanner: 'skipped', status: 'DIRECT_UPLOAD' },
+        });
+        assets.set(file.name, asset);
+      }
+    });
+    const items = bodyFiles.map((item) => {
+      const name = safeArtifactName(item?.name);
+      if (item?.binary === true) {
+        const asset = assets.get(name);
+        return { name, binary: true, fileAssetId: asset.id, fileUrl: asset.url, bytes: asset.bytes };
+      }
+      return { name, binary: false, content: String(item?.content ?? '') };
+    });
+    const entryName = safeArtifactName(String(body?.name || '').trim());
+    if (!entryName) throw errors.badRequest('请告诉平台哪一份是主产物（name）', 'RUNTIME_UPLOAD_NAME_REQUIRED');
+    const collected = buildCollectedArtifacts({ entryName, items, cover: null, warnings: [] });
+    if (body?.cover === true && collected.files.some((file) => file.name === COVER_FILE_NAME)) {
+      collected.coverName = COVER_FILE_NAME;
+    }
+    return recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, collected, autoSubmit });
+  }
+
   if (part === '/submit-upload' && method === 'POST') {
     // 2026-11-12：客户端可改用 multipart（meta + file:<index>），省掉 base64 与整包 JSON。
     // 老客户端继续发 JSON，两条入口共用同一套校验与落盘流程。
@@ -621,6 +736,7 @@ function parseMultipartMeta(fields) {
 }
 
 function collectedFileBytes(item) {
+  if (Number.isFinite(Number(item?.bytes)) && item?.bytes !== undefined && item?.bytes !== null) return Number(item.bytes);
   if (Buffer.isBuffer(item?.buffer)) return item.buffer.length;
   return item?.binary === true
     ? Buffer.byteLength(String(item?.content || ''), 'base64')
@@ -649,7 +765,11 @@ function buildCollectedArtifacts({ entryName, items, cover, warnings = [] }) {
       name,
       binary: item?.binary === true,
       bytes,
-      ...(Buffer.isBuffer(item?.buffer) ? { buffer: item.buffer } : { content: String(item?.content ?? '') }),
+      ...(item?.fileAssetId
+        ? { fileAssetId: item.fileAssetId, fileUrl: item.fileUrl || '' }
+        : Buffer.isBuffer(item?.buffer)
+          ? { buffer: item.buffer }
+          : { content: String(item?.content ?? '') }),
     });
   }
   if (!seen.has(entryName)) {
@@ -672,7 +792,11 @@ function buildCollectedArtifacts({ entryName, items, cover, warnings = [] }) {
         name: COVER_FILE_NAME,
         binary: true,
         bytes: coverBytes,
-        ...(Buffer.isBuffer(cover.buffer) ? { buffer: cover.buffer } : { content: String(cover.content || '') }),
+        ...(cover.fileAssetId
+          ? { fileAssetId: cover.fileAssetId, fileUrl: cover.fileUrl || '' }
+          : Buffer.isBuffer(cover.buffer)
+            ? { buffer: cover.buffer }
+            : { content: String(cover.content || '') }),
       });
       seen.add(COVER_FILE_NAME);
       total += coverBytes;
@@ -732,6 +856,52 @@ function collectMultipartArtifacts(ctx) {
   const coverPart = byField.get('cover');
   const cover = body?.cover === true && coverPart?.buffer?.length ? { binary: true, buffer: coverPart.buffer } : null;
   return buildCollectedArtifacts({ entryName, items, cover, warnings: [] });
+}
+
+/**
+ * prepare 的最小清单校验（2026-11-12）：只信任客户端声明的 size/md5，
+ * finalize 会用 OSS HEAD + Range 逐份复核，不把这里的数字当真相。
+ */
+function validateDirectManifest(body) {
+  const entryName = safeArtifactName(String(body?.name || '').trim());
+  if (!entryName) throw errors.badRequest('请告诉平台哪一份是主产物（name）', 'RUNTIME_UPLOAD_NAME_REQUIRED');
+  const raw = Array.isArray(body?.files) ? body.files : [];
+  if (!raw.length) throw errors.badRequest('没有收到任何作品文件', 'RUNTIME_UPLOAD_EMPTY');
+  if (raw.length > MAX_UPLOAD_FILES) {
+    throw errors.badRequest(`一次最多交 ${MAX_UPLOAD_FILES} 个文件`, 'RUNTIME_UPLOAD_TOO_MANY_FILES');
+  }
+  const files = [];
+  const seen = new Set();
+  let total = 0;
+  for (const item of raw) {
+    const name = safeArtifactName(item?.name);
+    if (!name) throw errors.badRequest(`文件名不合法：${String(item?.name || '').slice(0, 60)}`, 'RUNTIME_UPLOAD_BAD_NAME');
+    if (seen.has(name)) throw errors.badRequest(`同一个文件名出现了两次：${name}`, 'RUNTIME_UPLOAD_DUPLICATE_NAME');
+    seen.add(name);
+    const binary = item?.binary === true;
+    const size = Number(item?.size || 0);
+    if (!Number.isFinite(size) || size < 0 || size > MAX_UPLOAD_BYTES) {
+      throw errors.badRequest(`文件大小无效：${name}`, 'RUNTIME_UPLOAD_BAD_SIZE');
+    }
+    const mimeType = binary ? String(item?.mimeType || mimeForArtifact(name) || '').trim() : '';
+    if (binary && !mimeType) {
+      throw errors.badRequest(`素材 ${name} 的格式还不支持随作品提交`, 'RUNTIME_UPLOAD_UNSUPPORTED_TYPE');
+    }
+    const md5 = String(item?.md5 || '').trim().toLowerCase();
+    if (binary && !/^[a-f0-9]{32}$/.test(md5)) {
+      throw errors.badRequest(`文件校验值缺失或无效：${name}`, 'RUNTIME_UPLOAD_CHECKSUM_REQUIRED');
+    }
+    if (name === COVER_FILE_NAME && size > MAX_COVER_BYTES) {
+      throw errors.badRequest('封面图太大', 'RUNTIME_UPLOAD_COVER_TOO_LARGE');
+    }
+    total += size;
+    files.push({ name, binary, size, mimeType, md5 });
+  }
+  if (total > MAX_UPLOAD_BYTES) {
+    throw errors.badRequest(`作品太大了（上限 ${Math.floor(MAX_UPLOAD_BYTES / 1024 / 1024)}MB）`, 'RUNTIME_UPLOAD_TOO_LARGE');
+  }
+  if (!seen.has(entryName)) throw errors.badRequest('主产物不在文件清单里', 'RUNTIME_UPLOAD_ENTRY_MISSING');
+  return { entryName, files };
 }
 
 /**
@@ -795,9 +965,12 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
   //    生产已按运营口径把扫描关掉（`FILE_UPLOAD_SCANNER=off`）——这里仍然保留批次语义，
   //    将来重建扫描体系（clamd/worker）时不会退回"每文件一次"。
   const binaries = (collected.files || []).filter((file) => file.binary);
+  // 直传 OSS 的二进制已经在 file_assets 里（fileAssetId），不需要解码/扫描/落盘；
+  // 只有 JSON/multipart 入口的字节才走下面的内存路径。
+  const embeddedBinaries = binaries.filter((file) => !file.fileAssetId);
   // 2026-11-12：base64 只解一次 —— 扫描与落盘共用同一份 Buffer；解完立刻清掉字符串引用
   // （`collected` 与原始 `ctx.body` 各挂着一份），避免整份 base64 在扫描/落盘期间一直占内存。
-  const decoded = binaries.map((file) => ({
+  const decoded = embeddedBinaries.map((file) => ({
     file,
     // multipart 入口已经给的是 Buffer；JSON 入口才在这里解 base64。
     buffer: Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.from(String(file.content || ''), 'base64'),
@@ -807,11 +980,12 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
     if (item?.binary === true) item.content = '';
   }
   if (ctx.body?.cover && typeof ctx.body.cover === 'object') ctx.body.cover.content = '';
+  const bufferByFile = new Map(decoded.map((item) => [item.file, item.buffer]));
   const scanStartedAt = Date.now();
   const batchScan = await scanUploadBuffers(decoded.map((item) => item.buffer));
   const scanMs = Date.now() - scanStartedAt;
   let storageMs = 0;
-  for (const { file, buffer } of decoded) {
+  for (const file of binaries) {
     const name = safeArtifactName(file.name);
     const mimeType = mimeForArtifact(name);
     if (!mimeType) {
@@ -820,18 +994,28 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
       continue;
     }
     try {
-      const assetStartedAt = Date.now();
-      const asset = await storeStudentArtifactAsset({
-        buffer,
-        mimeType,
-        // ⚠️ 交给存储层的只有**文件名**：底层 `cleanFileName` 明确拒收带 `/` 的名字（那是文件系统那一层的白名单，
-        //    别为了支持 `assets/hero.png` 去松它）。相对路径只活在我们自己的改写映射里（key = 全路径）。
-        fileName: name.split('/').pop(),
-        ownerUserId: auth.user.id,
-        ownerOrgId: orgId,
-        scan: batchScan,
-      });
-      storageMs += Date.now() - assetStartedAt;
+      let asset;
+      if (file.fileAssetId) {
+        // 直传入口：字节已在 OSS，file_assets 行由 finalize 登记好，这里只引用。
+        asset = {
+          id: file.fileAssetId,
+          url: file.fileUrl || `/api/student/file-assets/${file.fileAssetId}/download`,
+          bytes: file.bytes,
+        };
+      } else {
+        const assetStartedAt = Date.now();
+        asset = await storeStudentArtifactAsset({
+          buffer: bufferByFile.get(file),
+          mimeType,
+          // ⚠️ 交给存储层的只有**文件名**：底层 `cleanFileName` 明确拒收带 `/` 的名字（那是文件系统那一层的白名单，
+          //    别为了支持 `assets/hero.png` 去松它）。相对路径只活在我们自己的改写映射里（key = 全路径）。
+          fileName: name.split('/').pop(),
+          ownerUserId: auth.user.id,
+          ownerOrgId: orgId,
+          scan: batchScan,
+        });
+        storageMs += Date.now() - assetStartedAt;
+      }
       // key 用**全路径**：下面回写 HTML 时按它匹配 `src="assets/hero.png"`（与 normalizeLocalReference 同一套规矩）
       assetUrls.set(name, asset.url);
       if (name === entryFile) {
@@ -928,7 +1112,9 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
   // ⭐ 2026-10-05（客户端报「按钮长期处理中」，要求补分阶段耗时）：一行看清时间花在哪。
   //    `scan` 那档现在是 `disabled`（生产 FILE_UPLOAD_SCANNER=off）或 `PASSED/…`；
   //    真出问题时光看这一行就能判断是扫描、落盘还是数据库。
-  const contentBytes = decoded.reduce((sum, item) => sum + item.buffer.length, 0);
+  const contentBytes = binaries.reduce((sum, file) => (
+    sum + (Number(file.bytes) || bufferByFile.get(file)?.length || 0)
+  ), 0);
   const timings = {
     fileCount: binaries.length,
     contentBytes,

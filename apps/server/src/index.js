@@ -63,6 +63,8 @@ const jsonBodyLimitFor = (pathname) => {
   const path = String(pathname || '');
   if (path.startsWith('/api/gateway/')) return RUNTIME_GATEWAY_BODY_LIMIT;
   if (path === '/api/student/runtime/submit-upload') return RUNTIME_UPLOAD_BODY_LIMIT;
+  // 直传 finalize 仍可能带较大的文本产物（HTML/CSS/JS），按同一业务档给额度。
+  if (path === '/api/student/runtime/submit-upload/direct') return RUNTIME_UPLOAD_BODY_LIMIT;
   return JSON_BODY_LIMIT;
 };
 
@@ -218,7 +220,8 @@ const server = http.createServer(async (req, res) => {
         //    base64 解码，峰值是请求体的 3~5 倍；班里几个人同时交作品就会把进程打穿。
         //    网关那条（`/api/gateway/`）不加：它是长连接、每轮 24MB，加了会把 VibeCoding 串行化；
         //    它的问题应该用更低的图片预算/客户端压缩解决，而不是全局单份闸。
-        if (ctx.pathname === '/api/student/runtime/submit-upload') {
+        if (ctx.pathname === '/api/student/runtime/submit-upload'
+          || ctx.pathname === '/api/student/runtime/submit-upload/direct') {
           const declaredLength = Number(req.headers['content-length'] || 0);
           const gateBytes = Number.isFinite(declaredLength) && declaredLength > 0 ? declaredLength : 64 * 1024 * 1024;
           const release = await acquireJsonBodySlot(gateBytes);

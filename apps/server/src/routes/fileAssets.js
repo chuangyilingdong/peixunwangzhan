@@ -848,6 +848,32 @@ export async function storeStudentArtifactAsset({ buffer, mimeType, fileName, ow
   };
 }
 
+/**
+ * 直传 OSS 的作品资产（2026-11-12）：字节已经在 OSS 上，这里只登记 file_assets 行。
+ * `storageKey` 是带 OSS_PREFIX 的完整键；读面按 storageBackend=oss 302 到签名地址。
+ */
+export async function registerDirectUploadedAsset({
+  storageKey, fileName, mimeType, size, checksum = null,
+  ownerUserId, ownerOrgId = null, security = null, metadata = {},
+}) {
+  const fileId = id('file');
+  const now = nowIso();
+  const bytes = Number(size) || 0;
+  await aq(
+    `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [fileId, 'USER', ownerOrgId, ownerUserId, 'INTERNAL_PROXY', null, storageKey,
+      `/api/student/file-assets/${fileId}/download`, null, fileName, mimeType, bytes, checksum,
+      'GENERAL', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null,
+      json({ ...metadata, source: 'STUDENT_RUNTIME', directUpload: true, storageBackend: 'oss', security }),
+      ownerUserId, now, now],
+  );
+  return {
+    id: fileId,
+    url: `/api/student/file-assets/${fileId}/download`,
+    fileName, mimeType, bytes,
+  };
+}
+
 export async function handleAdminFileAssets(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/admin/file-assets')) return null;

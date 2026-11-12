@@ -144,7 +144,7 @@ function serverUrl(key, subResources = {}) {
  *   contentDisposition 覆盖响应头 content-disposition（下载用 attachment; filename=…）
  *   cacheControl       覆盖响应头 cache-control
  */
-export function signedUrl(key, { expires = 900, contentDisposition, cacheControl, method = 'GET', imageProcess } = {}) {
+export function signedUrl(key, { expires = 900, contentDisposition, cacheControl, method = 'GET', imageProcess, contentType = '' } = {}) {
   if (!ossConfigured()) throw new Error('OSS 未配置，无法签发 URL');
   const c = cfg();
   const fullKey = withPrefix(key);
@@ -165,7 +165,7 @@ export function signedUrl(key, { expires = 900, contentDisposition, cacheControl
   // `image/resize,w_640/format,webp/quality,q_80` → 3.07MB 变 47KB。
   // ⚠️ 它必须进签名（子资源都要签），所以拼在 subResources 里 —— 别改成"URL 外面再挂一个参数"。
   if (imageProcess) subResources['x-oss-process'] = imageProcess;
-  const signature = signV1({ verb: method, key: fullKey, dateOrExpires: expiresAt, subResources });
+  const signature = signV1({ verb: method, key: fullKey, contentType, dateOrExpires: expiresAt, subResources });
   const params = new URLSearchParams({
     OSSAccessKeyId: c.accessKeyId,
     Expires: String(expiresAt),
@@ -173,6 +173,14 @@ export function signedUrl(key, { expires = 900, contentDisposition, cacheControl
     ...subResources,
   });
   return `https://${c.bucket}.${publicEndpoint()}/${encodeKey(fullKey)}?${params.toString()}`;
+}
+
+/**
+ * 预签名 PUT（2026-11-12）：客户端作品二进制直传 OSS 用。
+ * ⚠️ Content-Type 参与签名，客户端必须原样带上返回的 `content-type` 头，否则 OSS 判签名不匹配。
+ */
+export function presignedPutUrl(key, { expires = 900, contentType = 'application/octet-stream' } = {}) {
+  return signedUrl(key, { method: 'PUT', expires, contentType });
 }
 
 /**
@@ -262,7 +270,7 @@ export async function putObjectFromFile(key, filePath, contentType = 'applicatio
 
 /** 服务器侧探测对象是否存在（内网端点）。返回 { exists, size } —— 不抛错，探不到就当不存在。 */
 export async function headObject(key) {
-  if (!ossConfigured()) return { exists: false, size: 0 };
+  if (!ossConfigured()) return { exists: false, size: 0, etag: '', contentType: '' };
   const c = cfg();
   const fullKey = withPrefix(key);
   const date = new Date().toUTCString();
@@ -272,9 +280,36 @@ export async function headObject(key) {
       method: 'HEAD',
       headers: { Date: date, Authorization: `OSS ${c.accessKeyId}:${signature}` },
     });
-    if (!res.ok) return { exists: false, size: 0 };
-    return { exists: true, size: Number(res.headers.get('content-length') || 0) };
-  } catch { return { exists: false, size: 0 }; }
+    if (!res.ok) return { exists: false, size: 0, etag: '', contentType: '' };
+    return {
+      exists: true,
+      size: Number(res.headers.get('content-length') || 0),
+      etag: String(res.headers.get('etag') || ''),
+      contentType: String(res.headers.get('content-type') || ''),
+    };
+  } catch { return { exists: false, size: 0, etag: '', contentType: '' }; }
+}
+
+/**
+ * 只取对象开头 N 字节（内网 GET + Range）—— 直传作品的 magic 校验用。
+ * Range 不在 V1 签名的 canonical headers 里，带 Authorization 直接发即可。
+ */
+export async function getObjectRange(key, { bytes = 64 } = {}) {
+  if (!ossConfigured()) return Buffer.alloc(0);
+  const c = cfg();
+  const fullKey = withPrefix(key);
+  const date = new Date().toUTCString();
+  const signature = signV1({ verb: 'GET', key: fullKey, dateOrExpires: date });
+  const res = await fetch(serverUrl(fullKey), {
+    method: 'GET',
+    headers: {
+      Date: date,
+      Authorization: `OSS ${c.accessKeyId}:${signature}`,
+      Range: `bytes=0-${Math.max(0, Number(bytes) || 64) - 1}`,
+    },
+  });
+  if (!res.ok) throw new Error(`OSS 读取对象头部失败：HTTP ${res.status}`);
+  return Buffer.from(await res.arrayBuffer());
 }
 
 /**

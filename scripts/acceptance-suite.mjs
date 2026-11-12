@@ -125,6 +125,8 @@ const FAST = [
   'scripts/p219-submit-upload-multipart.mjs',
   // 2026-11-12 加：/__metrics 运行时指标 + 100 并发压测脚本可用性。
   'scripts/p220-runtime-metrics.mjs',
+  // 2026-11-12 加：作品二进制预签名直传 OSS（票据/URL/本地 501 回退）。
+  'scripts/p221-direct-upload.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));
