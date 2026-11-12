@@ -23,6 +23,7 @@ import { getRunningHubBalance, getRunningHubQueue } from '../../services/running
 import { getWalletBalances } from '../../services/walletAccounts.js';
 import { getWalletHistory } from '../../services/walletHistory.js';
 import { getVibecodingActiveTasks } from '../../services/vibecodingActivity.js';
+import { invalidateGenerationProviderInfo } from '../../services/generationPollCache.js';
 
 const WINDOWS = Object.freeze({ '5m': 5, '15m': 15, '60m': 60 });
 const MAX_SESSIONS = 50;
@@ -1184,6 +1185,7 @@ export async function handleMonitor(ctx, part, method) {
     const after = JSON.stringify(policy);
     const now = new Date().toISOString();
     await aq('UPDATE platform_settings SET ai_provider_policy=?, updated_at=? WHERE id=1', [after, now]);
+    invalidateGenerationProviderInfo();
     await aq(`INSERT INTO platform_config_change_logs(id,config_type,record_id,field_name,old_value,new_value,changed_by,reason,created_at)
         VALUES (?,?,?,?,?,?,?,?,?)`, [
       id('ccl'), 'AI_PROVIDER_POLICY', '1', 'imageQuality', previous, quality,
@@ -1228,6 +1230,7 @@ export async function handleMonitor(ctx, part, method) {
     const after = JSON.stringify(policy);
     const now = new Date().toISOString();
     await aq('UPDATE platform_settings SET ai_provider_policy=?, updated_at=? WHERE id=1', [after, now]);
+    invalidateGenerationProviderInfo();
     await aq(`INSERT INTO platform_config_change_logs(id,config_type,record_id,field_name,old_value,new_value,changed_by,reason,created_at)
         VALUES (?,?,?,?,?,?,?,?,?)`, [
       id('ccl'), 'AI_PROVIDER_POLICY', '1', 'aiProviderPolicy', before, after,

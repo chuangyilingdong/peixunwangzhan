@@ -1,5 +1,5 @@
 import { contractExpiryForOrg, errors, id, nowIso, q, row, rows, transaction, arow, aq, arows, atransaction } from '../lib.js';
-import { inNormalCoursePool, normalPoolSeries } from './courseGrants.js';
+import { canAuthorizeSeries, inNormalCoursePool, normalPoolSeries } from './courseGrants.js';
 
 export const LICENSE_PAYMENT_STATUSES = new Set(['UNPAID', 'PARTIAL', 'PAID', 'REFUNDED']);
 
@@ -76,7 +76,7 @@ export async function appendLicensePurchase({ seriesId, orgId, additionalQuota, 
       series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [pool.id]);
     }
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
-    if (series.status !== 'PUBLISHED') throw errors.conflict('仅已发布课包可购买授权', 'COURSE_NOT_PUBLISHED');
+    if (!await canAuthorizeSeries(series)) throw errors.conflict('仅已发布课包可购买授权', 'COURSE_NOT_PUBLISHED');
     if (!await arow('SELECT id FROM organizations WHERE id=?', [String(orgId || '')])) throw errors.notFound('机构不存在', 'ORG_NOT_FOUND');
     const existing = await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, orgId]);
     const assignmentId = existing?.id || id('assign');

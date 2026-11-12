@@ -140,7 +140,12 @@ function translateSqlite(sql) {
 /** 守卫用：把一条 SQLite 写法的 SQL 翻成 MySQL 会发出去的形状（不连库、纯函数）。 */
 export { translateSqlite };
 
+// 查询条数统计（2026-11-12）：默认关闭，只在 PLATFORM_DB_COUNT_QUERIES=1 时累加 —— 给 N+1 守卫用。
+export const dbQueryStats = { count: 0 };
+const countDbQueries = process.env.PLATFORM_DB_COUNT_QUERIES === '1';
+
 async function exec(sql, params = []) {
+  if (countDbQueries) dbQueryStats.count += 1;
   const conn = target();
   const translated = translateSqlite(sql);
   try {

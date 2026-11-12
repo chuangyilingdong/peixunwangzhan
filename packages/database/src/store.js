@@ -20,6 +20,10 @@ export { dialect, isMysql, json, parseJson, jsonText, amap, hashPassword, id, no
 
 const impl = isMysql ? await import('./mysql.js') : await import('./schema.js');
 
+// 查询条数统计（2026-11-12）：驱动各自维护，测试里开 PLATFORM_DB_COUNT_QUERIES=1 后用它断言 N+1。
+export const dbQueryStats = impl.dbQueryStats || { count: 0 };
+export function resetDbQueryStats() { dbQueryStats.count = 0; }
+
 /**
  * 下一个可用机构编码：取现有编码里最大的 `ORG<数字>` 再 +1，跳过已占用的。
  * 传入 codes 时用调用方给的快照（同一事务里连开多家机构），不传就现查库。

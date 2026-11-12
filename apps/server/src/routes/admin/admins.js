@@ -4,6 +4,7 @@ import {
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, arow, arows, aq, likeKeyword, likeEscapeClause } from '../../lib.js';
 import { hashPassword } from '@platform/database';
+import { invalidateAuthUser } from '../../services/authCache.js';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
@@ -157,6 +158,7 @@ export async function handleAdmins(ctx, part, method) {
     const login = body.login === undefined ? target.login : String(body.login).trim();
     if (!login) throw errors.badRequest('登录名不能为空', 'ADMIN_INPUT_REQUIRED');
     await aq('UPDATE users SET login=?,display_name=?,permissions=?,password_hash=?,status=?,updated_at=? WHERE id=?', [login, displayName, json([...new Set(permissions)]), passwordHash, status, nowIso(), target.id]);
+    invalidateAuthUser(target.id);
     if ((status === 'DISABLED' && target.status !== 'DISABLED') || body.password !== undefined) await aq('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [nowIso(), target.id]);
     await audit(ctx, 'PLATFORM_ADMIN_UPDATE', 'USER', target.id, { login: target.login, displayName: target.display_name, status: target.status }, { displayName, status, passwordChanged: body.password !== undefined, permissions });
     return normalizeUser(await arow('SELECT * FROM users WHERE id=?', [target.id]), { includeAuthMeta: true });

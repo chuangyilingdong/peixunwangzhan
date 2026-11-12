@@ -16,7 +16,7 @@
 // 为什么普通包以前不是"按次数扣"：旧口径是「授权即消耗一次配额」（一个学生名额可以上完
 // 48 节课），2026-11-10 用户明确改成"按课时次数"，所以现在两种类型都走这套次数账。
 
-import { errors, id, nowIso, arow, arows, aq, isMysql } from '../lib.js';
+import { errors, id, nowIso, arow, arows, aq, acount, isMysql } from '../lib.js';
 
 export const SERIES_TYPES = Object.freeze(['NORMAL', 'EXPERIENCE']);
 export const EXPERIENCE_SERIES_TYPE = 'EXPERIENCE';
@@ -31,6 +31,10 @@ export const EXPERIENCE_SERIES_TYPE = 'EXPERIENCE';
  *
  * 2026-11-10 第二次确认（48 节口径）：`include_in_normal_pool=0` 的普通课（成人/商家等）
  * **不算进池子**，也不参与节数、授权下拉与访问授权；它们各自用自己的系列做次数账。
+ *
+ * ⚠️ 键一旦确定就**不随状态漂移**：下架最早的 S1 也不会切到 S2 —— 否则 S1 上的授权单、
+ *    学生许可与核销明细会全部失去归属。授权入口要判断的是"池子里还有没有已发布内容"，
+ *    用下面的 `canAuthorizeSeries()`，不要直接看键这一行的 status。
  */
 export async function normalPoolSeries() {
   return await arow(`SELECT id, title, series_type, include_in_normal_pool FROM course_series
@@ -49,6 +53,23 @@ export async function normalPoolSeriesIds() {
 export function inNormalCoursePool(series) {
   if (seriesTypeOf(series) !== 'NORMAL') return false;
   return Number(series?.include_in_normal_pool ?? 1) !== 0;
+}
+
+/**
+ * 能不能在这个系列上**新增授权 / 追加次数 / 采购次数**。
+ *
+ * 普通课池子键是记账载体，不是内容本身：S1 下架后键仍然是 S1（见 normalPoolSeries 的注释），
+ * 只要池子里还有任意一个已发布系列，机构次数照常可以开在键上。池子全部下架才拒绝。
+ * 非池子系列（体验课、include=0 的独立普通课）仍然要求自己已发布。
+ */
+export async function canAuthorizeSeries(series) {
+  if (!series) return false;
+  if (series.status === 'PUBLISHED') return true;
+  if (!inNormalCoursePool(series)) return false;
+  const published = await acount(`SELECT COUNT(*) n FROM course_series
+    WHERE owner_type='PLATFORM' AND series_type='NORMAL'
+      AND include_in_normal_pool<>0 AND status='PUBLISHED'`);
+  return Number(published) > 0;
 }
 
 /** 这门课的授权/核销该落在哪个系列上：计入池子的普通课 → 池子系列；其余 → 自己。 */

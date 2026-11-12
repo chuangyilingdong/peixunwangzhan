@@ -109,6 +109,12 @@ const FAST = [
   'scripts/p194-junshi-module-json-parser.mjs',
   // 2026-11-11 加：画布批量签名（一次鉴权 → OSS 直链；本地行/别人的私有素材不下发）。
   'scripts/p203-file-asset-batch-sign.mjs',
+  // 2026-11-12 加：控制面鉴权缓存（机构停用/权限变更立刻生效、登出仍即时、过期断言照跑）。
+  'scripts/p212-auth-context-cache.mjs',
+  // 2026-11-12 加：Dashboard 查询数不随课时数增长（快照优先 + 请求级预取）。
+  'scripts/p214-dashboard-query-budget.mjs',
+  // 2026-11-12 加：普通课池子键下架后授权/追加/采购/核销照常（键不漂移，全下架才拒绝）。
+  'scripts/p215-normal-pool-archived-key.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));

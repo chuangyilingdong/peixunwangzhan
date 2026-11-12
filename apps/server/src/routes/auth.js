@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { invalidateAuthUser } from '../services/authCache.js';
 import {
   audit,
   clearAuthCookies,
@@ -159,6 +160,7 @@ export async function handleAuth(ctx) {
     const displayName = nonEmptyString(ctx.body?.displayName, '显示名称', { max: 60 });
     const before = { displayName: auth.user.displayName };
     await aq('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?', [displayName, nowIso(), auth.user.id]);
+    invalidateAuthUser(auth.user.id);
     await audit(ctx, 'USER_UPDATE_DISPLAY_NAME', 'USER', auth.user.id, before, { displayName });
     return normalizeUser(await arow('SELECT * FROM users WHERE id = ?', [auth.user.id]), { includeAuthMeta: true });
   }

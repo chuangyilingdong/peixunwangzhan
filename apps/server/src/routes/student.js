@@ -2,6 +2,7 @@ import { asPositiveInteger, audit, clearAuthCookies, displayAuthorized, errors, 
 import { previewWorksLlmGrant } from '../services/workLlm.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
+import { invalidateAuthUser } from '../services/authCache.js';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
 import { assertTransition } from '../services/domainState.js';
 // 画布「可提交产出」的唯一判定口径（与前端同一份文件，见 packages/shared/src/canvasOutput.js）
@@ -468,6 +469,7 @@ export async function handleStudent(ctx) {
       await aq('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND org_id = ?', [hashPassword(newPassword), now, auth.user.id, auth.user.orgId]);
       sessionsRevoked = (await aq('UPDATE sessions SET superseded_at = ? WHERE user_id = ? AND org_id = ? AND superseded_at IS NULL', [now, auth.user.id, auth.user.orgId])).changes;
     });
+    invalidateAuthUser(auth.user.id);
     await audit(ctx, 'STUDENT_PASSWORD_CHANGE', 'USER', auth.user.id, null, { sessionsRevoked });
     ctx.setCookie = clearAuthCookies();
     return { passwordChanged: true, sessionsRevoked, reloginRequired: true };
@@ -509,6 +511,7 @@ export async function handleStudent(ctx) {
     if (hasAsset) { sets.push('avatar_asset_id=?'); params.push(body.avatarAssetId); }
     params.push(nowIso(), auth.user.id);
     await aq(`UPDATE users SET ${sets.join(', ')}, updated_at=? WHERE id=?`, params);
+    invalidateAuthUser(auth.user.id);
     await audit(ctx, 'STUDENT_HOME_PROFILE_UPDATE', 'USER', auth.user.id, null,
       { avatarKey: hasKey ? body.avatarKey : undefined, avatarAssetId: hasAsset ? body.avatarAssetId : undefined });
     return await studentHomeSettings(auth, {

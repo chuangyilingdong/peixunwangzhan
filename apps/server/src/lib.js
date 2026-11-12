@@ -3,6 +3,7 @@ import { db, q, rows, row, count, json, parseJson, jsonText, transaction, aq, ar
 import { AUTH_PEPPER, CORS_ALLOWED_ORIGINS } from './config.js';
 import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, inputModeShortLabel, normalizeInputModeValue, normalizeAudioRole, audioRoleShortLabel, requiresFirstFrameFor, MUSIC_MODES, AUTO_TEXT_OMNI_MODE } from './services/modelCapabilities.js';
 import { previewKindFor, previewModeFor, canRenderNatively, signPreviewTicket } from './services/materialPreview.js';
+import { cacheAuthUser, cacheAuthOrg, getCachedAuthUser, getCachedAuthOrg, invalidateAuthUser } from './services/authCache.js';
 
 const TOKEN_TTL_DAYS = 7;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.DEPLOYMENT_MODE === 'internal-test' || process.env.NODE_ENV === 'production';
@@ -135,6 +136,7 @@ export async function ensureHomeToken(userId) {
     try {
       if (await arow('SELECT id FROM users WHERE home_token=?', [token])) continue;
       await aq('UPDATE users SET home_token=?, updated_at=? WHERE id=?', [token, nowIso(), key]);
+      invalidateAuthUser(key);
       return token;
     } catch (error) {
       // 并发下两个请求可能同时摇到同一个（极小概率）—— 被唯一索引拒了就重摇，别把 500 抛给学生。
@@ -411,8 +413,22 @@ export async function resolveAuth(req, pathname = '') {
   if (session.expires_at <= nowIso()) {
     return { auth: null, error: errors.unauthorized('登录状态已过期', 'AUTH_EXPIRED') };
   }
-  const user = await arow('SELECT * FROM users WHERE id = ?', [session.user_id]);
-  const org = user?.org_id ? await arow('SELECT * FROM organizations WHERE id = ?', [user.org_id]) : null;
+  // 2026-11-12：users / organizations 走 5 秒短缓存（sessions 仍然每请求实时查 ——
+  // 登出、撤销、改密/改角色踢下线必须立刻生效）。命中缓存也要重跑下面的断言：
+  // expires_at / 合同到期这类判断依赖"当前时间"，不能缓存结果。
+  let user = getCachedAuthUser(session.user_id);
+  if (!user) {
+    user = await arow('SELECT * FROM users WHERE id = ?', [session.user_id]);
+    if (user) cacheAuthUser(user);
+  }
+  let org = null;
+  if (user?.org_id) {
+    org = getCachedAuthOrg(user.org_id);
+    if (!org) {
+      org = await arow('SELECT * FROM organizations WHERE id = ?', [user.org_id]);
+      if (org) cacheAuthOrg(org);
+    }
+  }
   try {
     assertUserAccountAvailable(user, org);
   } catch (error) {
@@ -732,16 +748,19 @@ export function publishedLessonStatusSql(alias = 'lesson') {
  *      没有这一键，给空数组等于把学生手里的框体全没收，那是同一个 bug 的另一半。
  *    （与第二十四轮「教学素材可见性」那条判据同一个形状：逐键回退。）
  */
-async function mergedLessonCanvas(lessonRow, liveCanvas = null) {
-  const live = liveCanvas || await lessonCanvasConfig(lessonRow?.id);
+async function mergedLessonCanvas(lessonRow, liveCanvas = null, { providerPolicy = null, skipLive = false } = {}) {
   const snapshot = publishedSnapshotOf(lessonRow);
+  // liveCanvas === null 且 skipLive 时，调用方已确认快照覆盖了画布三键 —— 不再回查实时表。
+  const live = liveCanvas || (skipLive
+    ? { capabilities: [], materialGroups: [], generationBoxes: [] }
+    : await lessonCanvasConfig(lessonRow?.id, null, providerPolicy));
   // 框体的**显示名**在这一刻现算（见 modelDisplayName 的注释②）：快照里存的是技术名，
   // 运营在后台改了显示名之后，学生那边刷新就该是新名字，不需要重新发布课包。
   // 没配别名时 modelLabel === 真 ID —— 画布上显示的字与以前完全一样（不配就零变化）。
   // ⚠️ 两处都要打标签：`generationBoxes`（画布节点/参数胶囊用它）**与**
   //    `materialGroups[].materials[].snapshot.box`（左侧「课堂素材」面板那行副标题用它，
   //    见 canvasWorkspace 的 boxParamsLabel）—— 少一处就是"右边改了、左边还写着技术名"。
-  const policy = await aiProviderPolicy();
+  const policy = providerPolicy || await aiProviderPolicy();
   const labelBox = (box) => (box && box.model ? { ...box, modelLabel: modelDisplayName(policy, box.model) } : box);
   const withLabels = (boxes) => (Array.isArray(boxes) ? boxes.map(labelBox) : boxes);
   const withGroupLabels = (groups) => (Array.isArray(groups) ? groups.map((group) => ({
@@ -755,15 +774,22 @@ async function mergedLessonCanvas(lessonRow, liveCanvas = null) {
   return { capabilities: pick('capabilities'), materialGroups: withGroupLabels(pick('materialGroups')), generationBoxes: withLabels(pick('generationBoxes')) };
 }
 
-export async function normalizeLesson(value, { includeTeaching = false, asPublished = false } = {}) {
+export async function normalizeLesson(value, { includeTeaching = false, asPublished = false, providerPolicy = null } = {}) {
   if (!value) return null;
   // 平台端读实时数据（编辑用）；机构端/学生端/官网读「最近一次更新发布」定格的快照。
   // 老数据没有快照 → 回退实时数据，行为与之前一致。
   const snapshot = asPublished ? publishedSnapshotOf(value) : null;
-  const liveCanvas = await lessonCanvasConfig(value.id);
+  // 2026-11-12：发布快照已经带齐 capabilities/materialGroups/generationBoxes 三键时，
+  // 读面本来就逐键用快照覆盖 —— 实时表（能力/素材组/素材/框体）再查一遍纯属浪费。
+  // 缺任意一键（发布早于「生成框体」的老快照）仍走实时，兼容口径不变。
+  const snapshotCoversCanvas = Boolean(snapshot
+    && Array.isArray(snapshot.capabilities)
+    && Array.isArray(snapshot.materialGroups)
+    && Array.isArray(snapshot.generationBoxes));
+  const liveCanvas = snapshotCoversCanvas ? null : await lessonCanvasConfig(value.id, null, providerPolicy);
   // 这三档按「有哪档用哪档、缺的档回退实时」合并 —— 与 normalizeProject 共用同一个函数，
   // 读面与判定不会各写一遍（各写一遍正是 2026-09-21 那个 bug 的成因）。
-  const merged = snapshot ? { ...snapshot, ...await mergedLessonCanvas(value, liveCanvas) } : null;
+  const merged = snapshot ? { ...snapshot, ...await mergedLessonCanvas(value, liveCanvas, { providerPolicy, skipLive: snapshotCoversCanvas }) } : null;
   const pick = (key, fallback) => (merged && merged[key] !== undefined ? merged[key] : fallback);
   return {
     id: value.id,
@@ -801,7 +827,7 @@ const MAX_GENERATION_BOXES = 20;
 // 生成框体在素材表里的类型：框体就是一种素材，和图片/视频/提示词一起排在同一条顺序里。
 export const GENERATION_BOX_MATERIAL_TYPE = 'GENERATION_BOX';
 
-async function aiProviderPolicy() {
+export async function aiProviderPolicy() {
   return parseJson((await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1'))?.ai_provider_policy, {});
 }
 
@@ -968,11 +994,11 @@ export async function normalizeGenerationBoxes(value, { strict = false, policy =
 }
 
 // 框体在素材表里存的是 snapshot.box（模型与参数）+ snapshot.content（预填提示词）。
-export async function boxFromMaterial(material, index = 0) {
+export async function boxFromMaterial(material, index = 0, providerPolicy = null) {
   if (!material || String(material.materialType || material.material_type || '').toUpperCase() !== GENERATION_BOX_MATERIAL_TYPE) return null;
   const snapshot = material.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {};
   const raw = snapshot.box && typeof snapshot.box === 'object' ? snapshot.box : {};
-  const box = await normalizeGenerationBox(raw, { index, id: material.id });
+  const box = await normalizeGenerationBox(raw, { index, id: material.id, policy: providerPolicy });
   if (!box) return null;
   box.id = material.id;
   box.title = String(material.title || box.title).trim().slice(0, 60) || box.title;
@@ -990,13 +1016,13 @@ function publishedSnapshotOf(value) {
   return parsed && typeof parsed === 'object' ? parsed : null;
 }
 
-export async function lessonCanvasConfig(lessonId, override = null) {
+export async function lessonCanvasConfig(lessonId, override = null, providerPolicy = null) {
   if (override && Array.isArray(override.materialGroups)) {
     const groups = override.materialGroups;
     const generationBoxes = [];
     for (const group of groups) {
       for (const material of (group.materials || [])) {
-        const box = await boxFromMaterial(material, generationBoxes.length);
+        const box = await boxFromMaterial(material, generationBoxes.length, providerPolicy);
         if (box) generationBoxes.push({ ...box, groupId: group.id, groupTitle: group.title });
       };
     };
@@ -1180,7 +1206,7 @@ export async function syncAssignmentExpiryForOrg(orgId, expiresAt = null) {
  *   · 其它所有调用方（公开/机构/学生）→ 什么都不用改，自动不带这个内部成本字段。
  * 反过来做（默认带、公开侧逐个剥）漏一个调用点就是一个对外泄漏，而且加新公开端点的人不会记得剥。
  */
-export async function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true, includeTeaching = false, asPublished = false, includeEstimatedCredits = false } = {}) {
+export async function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true, includeTeaching = false, asPublished = false, includeEstimatedCredits = false, lessonCount: precomputedLessonCount = null, assignment: precomputedAssignment = undefined } = {}) {
   // 课包字段同样支持草稿隔离：机构端/学生端/官网读「更新发布」时的快照
   const seriesSnapshot = asPublished ? publishedSnapshotOf(value) : null;
   const snapPick = (key, fallback) => (seriesSnapshot && seriesSnapshot[key] !== undefined ? seriesSnapshot[key] : fallback);
@@ -1262,12 +1288,17 @@ export async function normalizeSeries(value, { includeLessons = false, orgId = n
     ageRangeMax: value.age_range_max != null ? Number(value.age_range_max) : null,
     tags,
     deliveryMode: value.delivery_mode || 'CANVAS',
-    lessonCount: await acount(`SELECT COUNT(*) AS n FROM course_lessons lesson WHERE lesson.series_id = ?${lessonFilter}`, [value.id]),
+    lessonCount: Number.isInteger(precomputedLessonCount)
+      ? precomputedLessonCount
+      : await acount(`SELECT COUNT(*) AS n FROM course_lessons lesson WHERE lesson.series_id = ?${lessonFilter}`, [value.id]),
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
   if (orgId) {
-    const assignment = await arow("SELECT status, expires_at FROM course_assignments WHERE series_id = ? AND org_id = ?", [value.id, orgId]);
+    // 调用方（getStudentCourses）主查询已经 LEFT JOIN 出授权行时直接复用，避免每课包重查一次。
+    const assignment = precomputedAssignment !== undefined
+      ? precomputedAssignment
+      : await arow("SELECT status, expires_at FROM course_assignments WHERE series_id = ? AND org_id = ?", [value.id, orgId]);
     result.assignedToCurrentOrg = assignmentIsActive(assignment);
     result.assignmentExpiresAt = assignment?.expires_at || null;
   }

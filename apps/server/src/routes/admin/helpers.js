@@ -4,6 +4,7 @@ import {
   assignmentActiveSql, orgSeriesAccessSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
   normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE, normalizeSeriesVisibility, LOGIN_PATTERN, aq, arow, arows, acount, atransaction, amap, likeKeyword, likeEscapeClause, inProgressClassroomSql, vibecodingSessionIdExpr, generateHomeToken } from '../../lib.js';
 import { hashPassword } from '@platform/database';
+import { invalidateAuthUser } from '../../services/authCache.js';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
@@ -395,6 +396,7 @@ async function expireDueEnrollments(currentOrgId) {
   for (const enrollment of due) {
     await aq("UPDATE student_enrollments SET status='EXPIRED',updated_at=? WHERE id=?", [now, enrollment.id]);
     await aq("UPDATE users SET status='DISABLED',billing_package_id=NULL,updated_at=? WHERE id=? AND org_id=? AND billing_package_id=?", [now, enrollment.student_id, currentOrgId, enrollment.package_id]);
+    invalidateAuthUser(enrollment.student_id);
     await aq('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, enrollment.student_id]);
     await appendEnrollmentEvent({ enrollmentId: enrollment.id, currentOrgId, eventType: 'EXPIRE', beforeStatus: 'ACTIVE', afterStatus: 'EXPIRED', data: { reason: '有效期届满' } });
   };
@@ -437,6 +439,7 @@ async function setStudentEnrollmentAccess(currentOrgId, enrollment, status) {
       WHERE id=? AND org_id=? AND role='STUDENT' AND billing_package_id=?`, [now, enrollment.student_id, currentOrgId, enrollment.package_id]);
     await aq('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, enrollment.student_id]);
   }
+  invalidateAuthUser(enrollment.student_id);
 }
 
 async function packageWithSeatUsage(currentOrgId, value) {
@@ -658,6 +661,7 @@ async function softDeleteStudent(ctx, user, now) {
   )).changes;
   if (!changes) throw errors.conflict('学生账号已注销，不能重复处理', 'ACCOUNT_REQUEST_STUDENT_DELETED');
   await aq('UPDATE sessions SET superseded_at=? WHERE user_id=? AND org_id=? AND superseded_at IS NULL', [now, user.id, user.org_id]);
+  invalidateAuthUser(user.id);
 }
 
 async function workInReviewScope(auth, currentOrgId, workId) {

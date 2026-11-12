@@ -9,7 +9,7 @@ import {
   rows,
   assignmentActiveSql,
   orgSeriesAccessSql,
-  publishedLessonVisibilitySql, arows, arow, amap, likeKeyword, likeEscapeClause,
+  publishedLessonVisibilitySql, arows, arow, amap, likeKeyword, likeEscapeClause, aiProviderPolicy,
 } from '../lib.js';
 import { grantSeriesIdFor, inNormalCoursePool, normalPoolSeries, normalPoolSeriesIds } from './courseGrants.js';
 // 画布还能不能编辑（DRAFT / SUBMITTED 都算开着）—— 与前端同一份口径，见 packages/shared/src/canvasOutput.js
@@ -131,10 +131,9 @@ export function getStudentMemberships() {
 }
 
 /** 学生**正在进行**的课堂（批次 C：从课堂名单取，不再经班级）。 */
-export async function getStudentActiveSessions(user) {
-  const { id: userId, orgId } = studentIdentity(user);
-  const participations = await getStudentLessonParticipations(user);
-  return participations
+export async function getStudentActiveSessions(user, participations = null) {
+  const records = participations || await getStudentLessonParticipations(user);
+  return records
     .filter((part) => part.session_status === 'ACTIVE' && part.status === 'ACTIVE')
     .map((part) => ({
       id: part.session_id,
@@ -194,6 +193,7 @@ export async function getStudentCourses(user) {
   const items = await arows(
     `SELECT
         series.*,
+        assignment.status AS assignment_status, assignment.expires_at AS assignment_expires_at,
         lesson.id AS lesson_id, lesson.title AS lesson_title,
         lesson.summary AS lesson_summary, lesson.sort AS lesson_sort,
         lesson.status AS lesson_status, lesson.duration_minutes AS lesson_duration_minutes,
@@ -211,18 +211,38 @@ export async function getStudentCourses(user) {
      FROM course_series series
      JOIN course_lessons lesson ON lesson.series_id = series.id AND ${publishedLessonVisibilitySql('lesson')}
      LEFT JOIN course_assignments assignment
-       ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
+       ON assignment.series_id = series.id AND assignment.org_id = ?
      WHERE series.status = 'PUBLISHED'
        AND ${orgCourseAccessSql()}
      ORDER BY series.sort, series.title, lesson.sort`,
     [orgId, orgId],
   );
 
+  // 2026-11-12：主查询每行就是一节可见课时，按课包数一遍就是 lessonCount；
+  // 授权行也已经 JOIN 出来 —— 不用再每课包分别 COUNT(*) / 查 course_assignments。
+  const lessonCountBySeries = new Map();
+  const assignmentBySeries = new Map();
+  for (const item of items) {
+    lessonCountBySeries.set(item.id, (lessonCountBySeries.get(item.id) || 0) + 1);
+    if (!assignmentBySeries.has(item.id)) {
+      assignmentBySeries.set(item.id, item.assignment_status
+        ? { status: item.assignment_status, expires_at: item.assignment_expires_at || null }
+        : null);
+    }
+  }
+  // 显示名/模型能力整张表只读一次，传给本次请求的每个 normalizeLesson（原来每课时/每框体各查一次）。
+  const providerPolicy = await aiProviderPolicy();
+
   const seriesById = new Map();
   for (const item of items.filter((item) => granted.has(item.id))) {
     let series = seriesById.get(item.id);
     if (!series) {
-      series = await normalizeSeries(item, { orgId, asPublished: true });
+      series = await normalizeSeries(item, {
+        orgId,
+        asPublished: true,
+        lessonCount: lessonCountBySeries.get(item.id) || 0,
+        assignment: assignmentBySeries.get(item.id) || null,
+      });
       series.lessons = [];
       series.classIds = [];
       series.hasGrant = granted.has(item.id);
@@ -250,7 +270,7 @@ export async function getStudentCourses(user) {
         published_content: item.lesson_published_content,
         created_at: item.lesson_created_at,
         updated_at: item.lesson_updated_at,
-      }, { asPublished: true });
+      }, { asPublished: true, providerPolicy });
       // 课单退场后不再有「这节课属于哪些班级」这回事；两个键都留着但恒为空，
       // 免得既有读取方（学生端卡片）拿到 undefined。真正决定能不能进的是**课堂名单**。
       lesson.classIds = [];
@@ -744,11 +764,13 @@ export async function lessonStateMap(user, context = null) {
 }
 
 export async function buildStudentDashboard(user) {
-  const context = await buildStudentContext(user);
+  // 2026-11-12：参与记录只查一次 —— context 的 activeSessions 与下面的 participationMap 共用。
+  const participations = await getStudentLessonParticipations(user);
+  const context = await buildStudentContext(user, { participations });
   const { id: userId, orgId } = studentIdentity(user);
   const progressByLesson = sortDraftsByRecency(await studentLessonProgressMap(user));
   // 批次 C：这节课对学生「是什么状态」全部由**课堂名单**决定（班级退场，没有 class 这一层了）
-  const participationByLesson = participationMapByLesson(await getStudentLessonParticipations(user));
+  const participationByLesson = participationMapByLesson(participations);
   // 「今天」只由**正在进行的课堂**决定（2026-09-11 删掉课堂任务后不再有「今天到期的任务」这个来源；
   // learning_tasks 表保留历史数据，代码不再读写）。
   const allLessonTasks = [];
@@ -982,8 +1004,11 @@ export async function resolveProjectUsageContext(user, project) {
  *   · `canUseNow` 只看「有没有正在进行的课堂」—— **不再有「在家练习免课堂」这条通道**
  *     （用户 2026-09-13 决定取消：有许可只代表能看课包与课时信息）。
  */
-export async function buildStudentContext(user) {
-  const activeSessions = await getStudentActiveSessions(user);
+export async function buildStudentContext(user, { participations = null } = {}) {
+  // 2026-11-12：参与记录一次查完，activeSessions 与 dashboard 的 participationMap 共用，
+  // 不再把 session_students 扫三遍。传进来的那份只在本次调用内使用，不进响应体。
+  const resolvedParticipations = participations || await getStudentLessonParticipations(user);
+  const activeSessions = await getStudentActiveSessions(user, resolvedParticipations);
   const classrooms = await getStudentClassrooms(user);
   const canUseNow = activeSessions.length > 0;
   return {

@@ -5,6 +5,7 @@ import {
   assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
+import { invalidateAuthUser } from '../../services/authCache.js';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
@@ -137,6 +138,7 @@ export async function handleUsers(ctx, part, method) {
       if (!target.org_id) throw errors.badRequest('该用户没有所属机构，不能调整机构内角色', 'USER_ORG_REQUIRED');
       await aq('UPDATE users SET role=?,updated_at=? WHERE id=?', [role, now, target.id]);
       await aq('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, target.id]);
+      invalidateAuthUser(target.id);
       await audit(ctx, 'PLATFORM_USER_ROLE', 'USER', target.id, { login: target.login, role: target.role }, { role }, { orgId: target.org_id || null });
       return platformUserRow(await arow(targetWithJoins, [target.id]));
     }
@@ -151,6 +153,7 @@ export async function handleUsers(ctx, part, method) {
       }
       await aq('UPDATE users SET status=?,updated_at=? WHERE id=?', [status, now, target.id]);
       if (status === 'DISABLED') await aq('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, target.id]);
+      invalidateAuthUser(target.id);
       await audit(ctx, 'PLATFORM_USER_STATUS', 'USER', target.id, { login: target.login, displayName: target.display_name, status: target.status }, { status }, { orgId: target.org_id || null });
       return platformUserRow(await arow(targetWithJoins, [target.id]));
     }
@@ -159,11 +162,13 @@ export async function handleUsers(ctx, part, method) {
       if (password.length < 6) throw errors.badRequest('密码至少6位', 'USER_PASSWORD_REQUIRED');
       await aq('UPDATE users SET password_hash=?,updated_at=? WHERE id=?', [hashPassword(password), now, target.id]);
       await aq('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, target.id]);
+      invalidateAuthUser(target.id);
       await audit(ctx, 'PLATFORM_USER_PASSWORD_RESET', 'USER', target.id, { login: target.login }, { passwordChanged: true }, { orgId: target.org_id || null });
       return { id: target.id, login: target.login, passwordReset: true };
     }
     const phone = await validateMemberPhone(body.phone === undefined ? '' : body.phone, target.id);
     await aq('UPDATE users SET phone=?,phone_verified_at=?,updated_at=? WHERE id=?', [phone, phone ? (target.phone_verified_at || now) : null, now, target.id]);
+    invalidateAuthUser(target.id);
     await audit(ctx, 'PLATFORM_USER_PHONE_UPDATE', 'USER', target.id, { phone: target.phone || null }, { phone }, { orgId: target.org_id || null });
     return platformUserRow(await arow(targetWithJoins, [target.id]));
   }

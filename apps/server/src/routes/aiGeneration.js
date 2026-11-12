@@ -15,6 +15,8 @@ import { priceFenFor, salePriceFenSuccessSql } from '../services/computePool.js'
 import { archiveGeneratedAssets } from '../services/generatedAssetArchive.js';
 // B2（2026-11-01）：结算时只建**占位行**，字节交给后台归档队列 —— 归档不再堵在"任务完成"上
 import { recoverStaleClaims, stageGeneratedAssets, startGeneratedAssetArchiveWorker } from '../services/generatedAssetArchiveQueue.js';
+// 2026-11-12：画布 5 秒轮询的汇总缓存（succeeded/failed/costFen + provider 信息）
+import { generationSummaryFor, generationProviderInfoFor, invalidateGenerationSummaryFor, invalidateGenerationSummaries } from '../services/generationPollCache.js';
 // C2（2026-11-01）：提交侧令牌桶。100 路并发不等于可以对上游同时发 100 个"新建任务"。
 import { acquireUpstreamSubmitToken } from '../services/upstreamSubmitGate.js';
 // 队列调度规则（纯函数，p195 守卫钉着）：轻模态优先、视频单独限流、视频之间先进先出
@@ -587,6 +589,8 @@ export async function syncTerminalJobAttempts({ limit = 500 } = {}) {
       [row.completed_at || nowIso(), row.job_error || 'GENERATION_FAILED', '任务已收尾（与 generation_jobs 同步）', row.id]);
     }
   }
+  // attempt 补成 SUCCESS 会改变 costFen 汇总；有改动才清，避免空转把缓存冲掉。
+  if (rows.length) invalidateGenerationSummaries();
   return rows.length;
 }
 
@@ -663,6 +667,7 @@ async function markJobFailed({ jobId, orgId, userId, project, modality, provider
       pricing: { compute: provider.compute, source: 'generation', provider: provider.name, mode: info.mode, charged: false, blocked: BLOCKED_ERROR_CODES.has(failCode) },
     });
   });
+  invalidateGenerationSummaryFor(userId);
 }
 
 /**
@@ -794,6 +799,7 @@ async function runReconcileSweep({ jobIds, limit, minAgeMs, maxAgeMs, dryRun, lo
         details: { reconciled: true, taskId: candidate.task_id },
       });
       await aq("UPDATE generation_jobs SET status='SUCCEEDED',worker_id=NULL,completed_at=?,error_code=NULL,error_message=NULL WHERE id=? AND status='FAILED'", [nowIso(), jobId]);
+      invalidateGenerationSummaryFor(candidate.user_id);
       await recordAiUsage({
         orgId: candidate.org_id, userId: candidate.user_id, projectId: candidate.project_id, generationJobId: jobId,
         modality: candidate.modality, model: scoped.model || candidate.model || '', status: 'SUCCESS',
@@ -872,6 +878,7 @@ async function settleSuccessfulJob({ auth, project, modality, provider, info, jo
     await assertTransition(auditContext(auth, requestContext), 'generationJob', currentJob?.status, 'SUCCEEDED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { modality } });
     await aq("UPDATE generation_jobs SET status='SUCCEEDED',worker_id=NULL,completed_at=? WHERE id=?", [nowIso(), jobId]);
   });
+  invalidateGenerationSummaryFor(auth.user.id);
 }
 
 export function providerSelectionForModality(policy, modality, modelOverride = '', options = {}) {
@@ -1367,7 +1374,8 @@ async function generationHistory(auth, search) {
   const projectId = String(search.get('projectId') || '').trim();
   if (projectId && projectId.length > 100) throw errors.badRequest('projectId 无效', 'PROJECT_REQUIRED');
   const filters = ['job.user_id = ?', 'job.org_id = ?'];
-  const params = [auth.user.id, (auth.session?.org_id || auth.user.orgId)];
+  const orgId = (auth.session?.org_id || auth.user.orgId);
+  const params = [auth.user.id, orgId];
   if (modality) { filters.push('job.modality = ?'); params.push(modality); }
   if (status) { filters.push('job.status = ?'); params.push(status); }
   if (projectId) { filters.push('job.project_id = ?'); params.push(projectId); }
@@ -1384,15 +1392,30 @@ async function generationHistory(auth, search) {
     assetsByJob.get(asset.job_id).push(normalizeAsset(asset));
   }
   const items = rawJobs.map((job) => normalizeJob(job, { assets: assetsByJob.get(job.id) || [] }));
+  // 2026-11-12：成功/失败/消耗三个全量聚合走 30 秒缓存（画布只读 items，这三项每次轮询都重算纯属浪费）。
+  // total 不受缓存影响：它要跟着过滤条件走，而且分页需要实时值。
+  const summaryCounts = await generationSummaryFor(auth.user.id, orgId, async () => {
+    const counts = await arow(
+      `SELECT COALESCE(SUM(CASE WHEN status = 'SUCCEEDED' THEN 1 ELSE 0 END), 0) AS succeeded,
+              COALESCE(SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END), 0) AS failed
+       FROM generation_jobs WHERE user_id = ? AND org_id = ?`,
+      [auth.user.id, orgId],
+    );
+    return {
+      succeeded: Number(counts?.succeeded || 0),
+      failed: Number(counts?.failed || 0),
+      // 对外售价口径（2026-09-15）：学生看到的「消耗」= 算力账本里成功尝试的售价快照合计。
+      // 原来读 usage_records.cost_fen —— 那一列现行代码恒为 0（平台承担成本、不扣学生），这里永远显示 0。
+      costFen: await acount(`SELECT ${salePriceFenSuccessSql()} n FROM compute_attempts WHERE user_id = ? AND org_id = ?`, [auth.user.id, orgId]),
+    };
+  });
   return {
     page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)),
     summary: {
       total,
-      succeeded: await acount("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
-      failed: await acount("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
-      // 对外售价口径（2026-09-15）：学生看到的「消耗」= 算力账本里成功尝试的售价快照合计。
-      // 原来读 usage_records.cost_fen —— 那一列现行代码恒为 0（平台承担成本、不扣学生），这里永远显示 0。
-      costFen: await acount(`SELECT ${salePriceFenSuccessSql()} n FROM compute_attempts WHERE user_id = ? AND org_id = ?`, [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+      succeeded: summaryCounts.succeeded,
+      failed: summaryCounts.failed,
+      costFen: summaryCounts.costFen,
     },
     items,
   };
@@ -1593,6 +1616,7 @@ export async function handleAiGeneration(ctx) {
     if (!['QUEUED','RUNNING'].includes(job.status)) throw errors.conflict('当前任务不能取消', 'GENERATION_NOT_CANCELABLE');
     // 2026-09-18：取消不再需要释放任何额度（课包 CU 预留那套已删；按钱的那套是准入判断、不预留）。
     await aq("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,cancelled_at=?,error_code='GENERATION_CANCELLED',error_message='用户取消生成',completed_at=? WHERE id=?", [nowIso(), nowIso(), jobId]);
+    invalidateGenerationSummaryFor(auth.user.id);
     return await jobDetail(jobId, { requireAuth: auth });
   }
   const detailMatch = pathname.match(/^\/api\/ai\/generations\/history\/([^/]+)$/);
@@ -1606,7 +1630,7 @@ export async function handleAiGeneration(ctx) {
     const projectId = String(ctx.search.get('projectId') || '').trim();
     if (!projectId) throw errors.badRequest('projectId 必填', 'PROJECT_REQUIRED');
     await ownProject(auth, projectId);
-    return { provider: generationProviderInfo(), ...await generationHistory(auth, new URLSearchParams({ projectId })) };
+    return { provider: await generationProviderInfoFor(() => generationProviderInfo()), ...await generationHistory(auth, new URLSearchParams({ projectId })) };
   }
   if (pathname !== '/api/ai/generations' || method !== 'POST') return null;
   const body = ctx.body || {};

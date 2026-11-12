@@ -16,7 +16,7 @@ import { normalizeSubmission } from '../vibecoding.js';
 import { appendLicenseReversal, createLicensePurchaseBatch, licensePurchaseHistory, licensePurchaseHistoryByScope, normalizeLicensePurchaseInput, voidLicensePurchaseBatches } from '../../services/licenseLedger.js';
 import { COURSE_QUOTA_SOURCES, recordQuotaChange } from '../../services/courseQuotaLedger.js';
 // 体验课包（2026-09-24 用户口径）：类型 + 次数账（普通包行为一字不改）
-import { EXPERIENCE_SERIES_TYPE, grantUnitsOf, inNormalCoursePool, isExperienceSeries, lockGrantById, normalLessonCount, normalPoolSeries, normalizeSeriesType } from '../../services/courseGrants.js';
+import { EXPERIENCE_SERIES_TYPE, canAuthorizeSeries, grantUnitsOf, inNormalCoursePool, isExperienceSeries, lockGrantById, normalLessonCount, normalPoolSeries, normalizeSeriesType } from '../../services/courseGrants.js';
 import {
   capturePublishedContent,
   ENROLLMENT_STATUSES,
@@ -701,7 +701,7 @@ export async function handleCourses(ctx, part, method) {
     let before = null;
     const result = await atransaction(async () => {
       const currentSeries = await arow('SELECT * FROM course_series WHERE id=?', [series.id]);
-      if (currentSeries.status !== 'PUBLISHED') throw errors.conflict('仅已发布课包可授权', 'COURSE_NOT_PUBLISHED');
+      if (!await canAuthorizeSeries(currentSeries)) throw errors.conflict('仅已发布课包可授权', 'COURSE_NOT_PUBLISHED');
       const existing = await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]);
       before = assignmentSnapshot(existing);
       // ⭐ 允许 **0 次**（2026-09-25 用户口径）：0 次 = 只把课包**开通给这个机构查阅**
@@ -761,7 +761,7 @@ export async function handleCourses(ctx, part, method) {
     const after = await atransaction(async () => {
       const series = await resolveAuthorizationSeries(assignmentAppendMatch[1]);
       if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
-      if (series.status !== 'PUBLISHED') throw errors.conflict('仅已发布课包可授权', 'COURSE_NOT_PUBLISHED');
+      if (!await canAuthorizeSeries(series)) throw errors.conflict('仅已发布课包可授权', 'COURSE_NOT_PUBLISHED');
       const existing = await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]);
       before = assignmentSnapshot(existing);
       const now = nowIso();

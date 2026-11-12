@@ -2584,19 +2584,29 @@ function queuedResult(exec, sql) {
   return pendingResult(promise, sql);
 }
 
+// 查询条数统计（2026-11-12）：默认关闭，只在 PLATFORM_DB_COUNT_QUERIES=1 时累加 —— 给 N+1 守卫用。
+export const dbQueryStats = { count: 0 };
+const countDbQueries = process.env.PLATFORM_DB_COUNT_QUERIES === '1';
+function noteDbQuery() { if (countDbQueries) dbQueryStats.count += 1; }
+
 export function aq(sql, params = []) {
+  noteDbQuery();
   return inTransaction() ? pendingResult(q(sql, params), sql) : queuedResult(() => q(sql, params), sql);
 }
 export function arows(sql, params = []) {
+  noteDbQuery();
   return inTransaction() ? pendingResult(rows(sql, params), sql) : queuedResult(() => rows(sql, params), sql);
 }
 export function arow(sql, params = []) {
+  noteDbQuery();
   return inTransaction() ? pendingResult(row(sql, params), sql) : queuedResult(() => row(sql, params), sql);
 }
 export function aone(sql, params = []) {
+  noteDbQuery();
   return inTransaction() ? pendingResult(one(sql, params), sql) : queuedResult(() => one(sql, params), sql);
 }
 export function acount(sql, params = []) {
+  noteDbQuery();
   return inTransaction() ? pendingResult(count(sql, params), sql) : queuedResult(() => count(sql, params), sql);
 }
 

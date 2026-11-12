@@ -5,6 +5,7 @@ import {
   assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arow, aq, atransaction,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
+import { invalidateAuthUser } from '../../services/authCache.js';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
@@ -99,6 +100,7 @@ export async function handleSelf(ctx, part, method) {
       sessionsRevoked = (await aq('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, me.id])).changes;
       await audit(ctx, 'PLATFORM_SELF_PASSWORD_UPDATE', 'USER', me.id, { login: me.login }, { passwordChanged: true, sessionsRevoked }, { orgId: me.org_id || null });
     });
+    invalidateAuthUser(me.id);
     // ⚠️ `sessionsRevoked` 是 2026-09-23 加的**加法**改动：机构端与学生端的自助改密都回这个计数，
     //    三端界面共用同一个组件，靠它显示「已退出 N 处登录（含当前这一处）」。
     //    `reauthRequired` 保持不动 —— p19 钉着它，不能为了对齐名字把它换掉。

@@ -22,6 +22,7 @@ import {
 import { AI_PROVIDER_API_KEY, AI_PROVIDER_TIMEOUT_MS } from '../config.js';
 import { runningHubFamilyModality, runningHubModelCatalog } from '../services/runningHubProvider.js';
 import { getProviderApiKey, hasProviderApiKey, setProviderApiKey } from '../services/providerSecret.js';
+import { invalidateGenerationProviderInfo } from '../services/generationPollCache.js';
 import { normalizeModelUnitPrices, normalizeUpstreamUnitPrices, validateModelUnitPrices, validateUpstreamUnitPrices } from '../services/upstreamCost.js';
 
 const VALID_MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'CANVAS']);
@@ -689,6 +690,8 @@ export async function handleAdminBillingConfig(ctx) {
     };
     const changed = JSON.stringify(before) !== JSON.stringify({ ...after, updatedAt: before.updatedAt });
     await aq('UPDATE platform_settings SET ai_provider_policy=?,updated_at=? WHERE id=1', [JSON.stringify(after), nowIso()]);
+    // 列表轮询里的 provider 信息缓存 30 秒 —— 改完渠道/密钥立刻失效，别让「改了没生效」出现。
+    invalidateGenerationProviderInfo();
     if (changed) {
       await logChange('AI_PROVIDER_POLICY', '1', 'aiProviderPolicy', JSON.stringify({ ...before, updatedAt: undefined }), JSON.stringify(after), auth.user.id, String(body.reason || '').slice(0, 500));
       await audit(ctx, 'BILLING_CONFIG_AI_PROVIDER_UPDATE', 'PLATFORM_SETTINGS', '1', { before: { ...before, updatedAt: undefined }, after }, { reason: body.reason || '' });

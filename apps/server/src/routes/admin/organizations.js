@@ -5,6 +5,7 @@ import {
   assignmentActiveSql, pageParams, pageResult, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, arow, arows, aq, atransaction, amap } from '../../lib.js';
 import { syncAssignmentExpiryForOrg } from '../../lib.js';
 import { hashPassword, nextOrgCode } from '@platform/database';
+import { invalidateAuthOrg, invalidateAuthUser } from '../../services/authCache.js';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
@@ -200,6 +201,7 @@ export async function handleOrganizations(ctx, part, method) {
       // 续签之后机构不该还因为「原来那条授权到期了」而看不到课包。
       if (contractExpiresAt !== organization.contract_expires_at) await syncAssignmentExpiryForOrg(organization.id, contractExpiresAt);
     });
+    invalidateAuthOrg(organization.id);
     const after = await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [organization.id]));
     await audit(ctx, 'ORG_UPDATE', 'ORG', organization.id, before, { name: after.name, shortName: after.shortName, region: after.region, contractStartAt, contractExpiresAt, baseTeacherSeats, purchasedTeacherSeats, contact }, { orgId: organization.id });
     return after;
@@ -269,6 +271,7 @@ export async function handleOrganizations(ctx, part, method) {
     }
     await aq('UPDATE users SET display_name=?,password_hash=?,status=?,updated_at=? WHERE id=?', [displayName, passwordHash, status, nowIso(), target.id]);
     if (status === 'DISABLED' && target.status !== 'DISABLED') await aq('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [nowIso(), target.id]);
+    invalidateAuthUser(target.id);
     await audit(ctx, 'ORG_ADMIN_UPDATE', 'USER', target.id, { login: target.login, displayName: target.display_name, status: target.status }, { displayName, status, passwordChanged: body.password !== undefined }, { orgId: organization.id });
     return normalizeUser(await arow('SELECT * FROM users WHERE id=?', [target.id]));
   }
@@ -302,6 +305,7 @@ export async function handleOrganizations(ctx, part, method) {
     if (reason.length > 500) reason = reason.slice(0, 500);
     const before = await normalizeOrg(organization);
     await aq('UPDATE organizations SET status=?,is_trial=?,updated_at=? WHERE id=?', [transition.to, transition.to === 'ACTIVE' ? 0 : organization.is_trial, nowIso(), organization.id]);
+    invalidateAuthOrg(organization.id);
     const after = await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [organization.id]));
     // reason 落进审计（原来只有 {action,status,actor}）——「为什么禁用它」是这条审计的全部价值。
     await audit(ctx, transition.auditAction, 'ORG', organization.id, before, { action, status: after.status, actor: auth.user.login, reason: reason || null }, { orgId: organization.id });
