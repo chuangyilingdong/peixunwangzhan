@@ -859,10 +859,13 @@ export async function registerDirectUploadedAsset({
   const fileId = id('file');
   const now = nowIso();
   const bytes = Number(size) || 0;
+  // 与 storeStudentArtifactAsset 同一口径：file_assets.file_name 只存 basename；
+  // 相对路径只用于作品快照里的引用改写，不落进文件资产表。
+  const storedName = String(fileName || '').split('/').pop() || String(fileName || '');
   await aq(
     `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [fileId, 'USER', ownerOrgId, ownerUserId, 'INTERNAL_PROXY', null, storageKey,
-      `/api/student/file-assets/${fileId}/download`, null, fileName, mimeType, bytes, checksum,
+      `/api/student/file-assets/${fileId}/download`, null, storedName, mimeType, bytes, checksum,
       'GENERAL', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null,
       json({ ...metadata, source: 'STUDENT_RUNTIME', directUpload: true, storageBackend: 'oss', security }),
       ownerUserId, now, now],
@@ -870,7 +873,7 @@ export async function registerDirectUploadedAsset({
   return {
     id: fileId,
     url: `/api/student/file-assets/${fileId}/download`,
-    fileName, mimeType, bytes,
+    fileName: storedName, mimeType, bytes,
   };
 }
 
