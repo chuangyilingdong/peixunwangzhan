@@ -93,7 +93,7 @@ check('② 「学生学习结果与作品」：画布/VibeCoding 都走同一个
   && !/workImageData/.test(orgMain)
   && !/<WorkMediaGallery/.test(orgMain));
 check('② 沙箱文档那条（VibeCoding HTML 在 opaque origin 里跑）仍保留 data: 内联（它拿不到 cookie）',
-  /api\.fetchDataUrl\(path\)/.test(classroom) && /buildPreviewDocument\(files, entry\)/.test(classroom));
+  /api\.fetchDataUrl\(path\)/.test(classroom) && /buildPreviewDocument\(files, entry(?:, [^)]*)?\)/.test(classroom));
 
 console.log('③ 真服务：同源代理地址带 cookie 能取到图（<img> 的取法）；学生域地址取不到');
 await run(['packages/database/src/db.js', '--init']);
