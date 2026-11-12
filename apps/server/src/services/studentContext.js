@@ -315,15 +315,55 @@ export async function getStudentAccessibleCourses(user, filters = {}) {
     params.push(like, like);
   }
   const items = await arows(
-    `SELECT series.* FROM course_series series
+    `SELECT series.*,
+            assignment.status AS assignment_status, assignment.expires_at AS assignment_expires_at
+     FROM course_series series
      LEFT JOIN course_assignments assignment
-       ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
+       ON assignment.series_id = series.id AND assignment.org_id = ?
      WHERE ${wheres.join(' AND ')}
      ORDER BY series.sort, series.title`,
     params,
   );
-  return await amap(items.filter((item) => granted.has(item.id)), async (item) => {
-    const series = await normalizeSeries(item, { orgId, includeLessons: true, asPublished: true });
+  const accessible = items.filter((item) => granted.has(item.id));
+  const assignmentBySeries = new Map();
+  for (const item of accessible) {
+    if (!assignmentBySeries.has(item.id)) {
+      assignmentBySeries.set(item.id, item.assignment_status
+        ? { status: item.assignment_status, expires_at: item.assignment_expires_at || null }
+        : null);
+    }
+  }
+  // 2026-11-12：课时一次批量取回（>400 个系列分片，避开占位符上限），
+  // 不再每个系列查一次 COUNT(*)/授权行、每个课时各查一次 ai_provider_policy。
+  const lessonsBySeries = new Map();
+  const seriesIds = accessible.map((item) => item.id);
+  for (let offset = 0; offset < seriesIds.length; offset += 400) {
+    const chunk = seriesIds.slice(offset, offset + 400);
+    const lessonRows = await arows(
+      `SELECT * FROM course_lessons lesson
+        WHERE lesson.series_id IN (${chunk.map(() => '?').join(',')})
+          AND ${publishedLessonVisibilitySql('lesson')}
+        ORDER BY lesson.sort, lesson.created_at`,
+      chunk,
+    );
+    for (const row of lessonRows) {
+      const group = lessonsBySeries.get(row.series_id) || [];
+      group.push(row);
+      lessonsBySeries.set(row.series_id, group);
+    }
+  }
+  const providerPolicy = accessible.length ? await aiProviderPolicy() : null;
+  return await amap(accessible, async (item) => {
+    const lessonRows = lessonsBySeries.get(item.id) || [];
+    const series = await normalizeSeries(item, {
+      orgId,
+      includeLessons: true,
+      asPublished: true,
+      lessons: lessonRows,
+      lessonCount: lessonRows.length,
+      assignment: assignmentBySeries.get(item.id) || null,
+      providerPolicy,
+    });
     series.hasGrant = granted.has(item.id);
     return series;
   });
@@ -345,7 +385,8 @@ export async function getStudentCourseDetail(user, seriesId) {
   // 普通课的次数在「普通课池子」那一行（S1/S2/S3 共用），不是在课时所属的系列上
   const grantSeriesId = await grantSeriesIdFor({ seriesId, seriesType: series?.series_type });
   if (!series || !await studentHasGrant(studentIdentity(user).id, orgId, grantSeriesId)) throw errors.notFound('课包不存在或不可访问', 'COURSE_SERIES_NOT_FOUND');
-  const detail = await normalizeSeries(series, { orgId, includeLessons: true, asPublished: true });
+  const providerPolicy = await aiProviderPolicy();
+  const detail = await normalizeSeries(series, { orgId, includeLessons: true, asPublished: true, providerPolicy });
   detail.lessons = (detail.lessons || []).filter((lesson) => lesson.status === 'PUBLISHED');
   return detail;
 }
@@ -749,9 +790,9 @@ export function lessonAvailability({ lesson, hasGrant, participation }) {
  * @param user    学生用户
  * @param context 可选，已经算好的 `buildStudentContext(user)`，传进来就不重复查库
  */
-export async function lessonStateMap(user, context = null) {
+export async function lessonStateMap(user, context = null, { participations = null } = {}) {
   const resolved = context || await buildStudentContext(user);
-  const participationByLesson = participationMapByLesson(await getStudentLessonParticipations(user));
+  const participationByLesson = participationMapByLesson(participations || await getStudentLessonParticipations(user));
   const map = new Map();
   for (const course of resolved.courses || []) {
     const hasGrant = Boolean(course.hasGrant);
@@ -759,6 +800,20 @@ export async function lessonStateMap(user, context = null) {
       if (map.has(lesson.id)) continue;
       map.set(lesson.id, lessonAvailability({ lesson, hasGrant, participation: participationByLesson.get(lesson.id) }));
     }
+  }
+  return map;
+}
+
+/**
+ * 单课包详情用：只给这一批课时算「能不能进」，不重建整份学生上下文（2026-11-12）。
+ * 详情路由已经做过 studentHasGrant 校验，所以 hasGrant 固定 true。
+ */
+export async function lessonStateMapForLessons(user, lessons, { hasGrant = true, participations = null } = {}) {
+  const participationByLesson = participationMapByLesson(participations || await getStudentLessonParticipations(user));
+  const map = new Map();
+  for (const lesson of lessons || []) {
+    if (map.has(lesson.id)) continue;
+    map.set(lesson.id, lessonAvailability({ lesson, hasGrant, participation: participationByLesson.get(lesson.id) }));
   }
   return map;
 }

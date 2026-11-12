@@ -1206,7 +1206,7 @@ export async function syncAssignmentExpiryForOrg(orgId, expiresAt = null) {
  *   · 其它所有调用方（公开/机构/学生）→ 什么都不用改，自动不带这个内部成本字段。
  * 反过来做（默认带、公开侧逐个剥）漏一个调用点就是一个对外泄漏，而且加新公开端点的人不会记得剥。
  */
-export async function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true, includeTeaching = false, asPublished = false, includeEstimatedCredits = false, lessonCount: precomputedLessonCount = null, assignment: precomputedAssignment = undefined } = {}) {
+export async function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true, includeTeaching = false, asPublished = false, includeEstimatedCredits = false, lessonCount: precomputedLessonCount = null, assignment: precomputedAssignment = undefined, lessons: preloadedLessons = null, providerPolicy = null } = {}) {
   // 课包字段同样支持草稿隔离：机构端/学生端/官网读「更新发布」时的快照
   const seriesSnapshot = asPublished ? publishedSnapshotOf(value) : null;
   const snapPick = (key, fallback) => (seriesSnapshot && seriesSnapshot[key] !== undefined ? seriesSnapshot[key] : fallback);
@@ -1303,7 +1303,12 @@ export async function normalizeSeries(value, { includeLessons = false, orgId = n
     result.assignmentExpiresAt = assignment?.expires_at || null;
   }
   if (includeLessons) {
-    result.lessons = await amap((await arows(`SELECT * FROM course_lessons lesson WHERE lesson.series_id = ?${lessonFilter} ORDER BY lesson.sort, lesson.created_at`, [value.id])), async (lesson) => await normalizeLesson(lesson, { includeTeaching, asPublished }));
+    // 2026-11-12：调用方（可访问课程列表）一次批量取好课时行时直接用，
+    // 不再每个系列各查一次；providerPolicy 也由调用方每请求只取一次。
+    const lessonRows = Array.isArray(preloadedLessons)
+      ? preloadedLessons
+      : await arows(`SELECT * FROM course_lessons lesson WHERE lesson.series_id = ?${lessonFilter} ORDER BY lesson.sort, lesson.created_at`, [value.id]);
+    result.lessons = await amap(lessonRows, async (lesson) => await normalizeLesson(lesson, { includeTeaching, asPublished, providerPolicy }));
   }
   return result;
 }
@@ -1359,8 +1364,14 @@ export function normalizeSession(value) {
   };
 }
 
-export async function normalizeProject(value, { includeSnapshot = false } = {}) {
+export async function normalizeProject(value, { includeSnapshot = false, providerPolicy = null } = {}) {
   if (!value) return null;
+  // 与 normalizeLesson 同一口径：发布快照带齐画布三键时，不再回查实时能力/素材/框体表。
+  const lessonSnapshot = parseJson(value.lesson_published_content, null);
+  const snapshotCoversCanvas = Boolean(lessonSnapshot
+    && Array.isArray(lessonSnapshot.capabilities)
+    && Array.isArray(lessonSnapshot.materialGroups)
+    && Array.isArray(lessonSnapshot.generationBoxes));
   const result = {
     id: value.id,
     studentId: value.student_id,
@@ -1389,7 +1400,7 @@ export async function normalizeProject(value, { includeSnapshot = false } = {}) 
     // 学生画布上画的框体与课堂素材：与生成接口**同一份**（快照有哪档用哪档、缺的回退实时）。
     // ⚠️ 这里以前是 lessonCanvasConfig()（纯实时），于是「画布看得见新框体、点生成说没有」——
     //    查询里必须带上 lesson.published_content（映射成 lesson_published_content），否则等于又退回实时。
-    ...await mergedLessonCanvas({ id: value.course_lesson_id, published_content: value.lesson_published_content }),
+    ...await mergedLessonCanvas({ id: value.course_lesson_id, published_content: value.lesson_published_content }, null, { providerPolicy, skipLive: snapshotCoversCanvas }),
   };
   if (includeSnapshot) result.canvasSnapshot = parseJson(value.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
   return result;

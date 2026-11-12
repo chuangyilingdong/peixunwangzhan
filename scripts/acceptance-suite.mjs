@@ -115,6 +115,8 @@ const FAST = [
   'scripts/p214-dashboard-query-budget.mjs',
   // 2026-11-12 加：普通课池子键下架后授权/追加/采购/核销照常（键不漂移，全下架才拒绝）。
   'scripts/p215-normal-pool-archived-key.mjs',
+  // 2026-11-12 加：课程详情/可访问课程/项目列表的冷读查询数（不随课时数增长）。
+  'scripts/p216-cold-read-budget.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));

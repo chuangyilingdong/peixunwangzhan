@@ -1,9 +1,9 @@
-import { asPositiveInteger, audit, clearAuthCookies, displayAuthorized, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, workCoverFromSnapshot, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, likeKeyword, likeEscapeClause, ensureHomeToken, avatarUrlOf } from '../lib.js';
+import { asPositiveInteger, audit, clearAuthCookies, displayAuthorized, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, workCoverFromSnapshot, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap, likeKeyword, likeEscapeClause, ensureHomeToken, avatarUrlOf, aiProviderPolicy } from '../lib.js';
 import { previewWorksLlmGrant } from '../services/workLlm.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import { invalidateAuthUser } from '../services/authCache.js';
-import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
+import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, getStudentLessonParticipations, lessonStateMap, lessonStateMapForLessons, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
 import { assertTransition } from '../services/domainState.js';
 // 画布「可提交产出」的唯一判定口径（与前端同一份文件，见 packages/shared/src/canvasOutput.js）
 import { canvasOutputSignature, hasUnsubmittedOutput, isCanvasEditableProjectStatus, newCanvasOutputKeys } from '../../../../packages/shared/src/canvasOutput.js';
@@ -220,11 +220,13 @@ const USAGE_STATUSES = new Set(['SUCCESS', 'FAILED', 'BLOCKED']);
 const WORK_STATUS_RANK = { PUBLISHED: 4, APPROVED: 3, UNPUBLISHED: 2.5, REJECTED: 2, PENDING: 1 };
 
 async function studentCourseOverview(ctx) {
-  const context = await buildStudentContext(ctx.auth.rawUser);
+  // 2026-11-12：参与记录一次查完，context 与 lessonStateMap 共用（原来同一份扫两遍）。
+  const participations = await getStudentLessonParticipations(ctx.auth.rawUser);
+  const context = await buildStudentContext(ctx.auth.rawUser, { participations });
   // 每节课的课堂状态（许可 / 名单 / 课堂是否开始 / 入口类型）走同一个权威算法，
   // 免得「我的课程」自己瞎猜：以前这里没有参与状态，页面就只好拿作品状态顶上，
   // 于是正在上课的课时也显示成「未开课」。
-  const stateByLesson = await lessonStateMap(ctx.auth.rawUser, context);
+  const stateByLesson = await lessonStateMap(ctx.auth.rawUser, context, { participations });
   const projects = await arows(`SELECT id, course_lesson_id, class_id, title, status, updated_at FROM student_projects WHERE student_id = ? AND org_id = ? AND status != 'ARCHIVED'`, [ctx.auth.user.id, ctx.auth.user.orgId]);
   const works = await arows('SELECT id, project_id, course_lesson_id, class_id, title, status, submitted_at FROM works WHERE student_id = ? AND org_id = ?', [ctx.auth.user.id, ctx.auth.user.orgId]);
   const classById = new Map(context.classes.map((item) => [item.id, item]));
@@ -430,7 +432,8 @@ export async function handleStudent(ctx) {
     requireRole(ctx, ['STUDENT']);
     const detail = await getStudentCourseDetail(ctx.auth.rawUser, courseDetailMatch[1]);
     // 课包详情里的课时也要带课堂状态，口径与「我的课程」完全一致（同一张 map）。
-    const stateByLesson = await lessonStateMap(ctx.auth.rawUser);
+    // 2026-11-12：只算这一门课的课时，不再重建整份 buildStudentContext。
+    const stateByLesson = await lessonStateMapForLessons(ctx.auth.rawUser, detail.lessons);
     const lessons = (detail.lessons || []).map((lesson) => {
       const state = stateByLesson.get(lesson.id) || null;
       const classroomMode = state?.sessionMode || state?.lessonMode || lesson.deliveryMode || 'CANVAS';
@@ -578,6 +581,8 @@ export async function handleStudent(ctx) {
        LEFT JOIN works work ON work.project_id = project.id
        WHERE ${where}`;
     const total = Number((await arow(`SELECT COUNT(DISTINCT project.id) n ${fromWhere}`, params))?.n || 0);
+    // 2026-11-12：本页只读一次 AI 策略，传给每个项目；快照齐全时 normalizeProject 不再查实时画布。
+    const providerPolicy = await aiProviderPolicy();
     const items = await amap((await arows(
       `SELECT project.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
               lesson.published_content AS lesson_published_content,
@@ -587,7 +592,7 @@ export async function handleStudent(ctx) {
        ${fromWhere}
        ORDER BY project.updated_at DESC LIMIT ? OFFSET ?`,
       [...params, limit, offset],
-    )), async (project) => await normalizeProject(project));
+    )), async (project) => await normalizeProject(project, { providerPolicy }));
     return { ...pageResult(items, { page, limit, total }), view };
   }
   if (part === '/projects' && method === 'POST') {

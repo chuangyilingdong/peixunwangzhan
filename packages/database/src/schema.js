@@ -2391,6 +2391,10 @@ try { db.exec('ALTER TABLE generation_jobs ADD COLUMN retry_of_job_id TEXT'); }
 catch (error) { if (String(error?.message || '').includes('duplicate column name')) { /* column already exists */ } else throw error; }
 db.exec('CREATE INDEX IF NOT EXISTS idx_generation_jobs_retry_of ON generation_jobs(retry_of_job_id)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_generation_jobs_user_created ON generation_jobs(user_id, org_id, created_at DESC)');
+// 2026-11-12：生成/算力汇总的冷读索引（与控制面缓存配套）—— 缓存未命中时按 user+org+status 取，
+// 不再沿 user_created 索引扫完该用户全部任务再过滤。生产迁移见 deploy/production/migrate/57-*.sql。
+db.exec('CREATE INDEX IF NOT EXISTS idx_generation_jobs_user_status ON generation_jobs(user_id, org_id, status)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_compute_attempts_user_status ON compute_attempts(user_id, org_id, status, sale_price_fen)');
 
 // Lightweight forward-compatible migration for the class scheduling domain. Existing
 // local databases may have been created before makeup sessions were introduced.
