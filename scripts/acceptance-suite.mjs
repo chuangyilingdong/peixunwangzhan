@@ -121,6 +121,8 @@ const FAST = [
   'scripts/p217-submit-upload-memory.mjs',
   // 2026-11-12 加：生成轮询后台暂停/自适应退避 + 网关跳过无用 session 解析。
   'scripts/p218-generation-poll-budget.mjs',
+  // 2026-11-12 加：submit-upload 兼容 multipart 入口（meta + file:<i> + cover）。
+  'scripts/p219-submit-upload-multipart.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));

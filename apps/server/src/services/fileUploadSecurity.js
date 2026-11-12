@@ -153,12 +153,19 @@ function parseDisposition(value) {
   return { name, fileName: raw === undefined ? undefined : decodeHeaderText(raw) };
 }
 
-export function parseMultipartFormData(body, contentType) {
+/**
+ * 解析 multipart 的所有分段（字段 + 多文件）。
+ *
+ * 2026-11-12：为 submit-upload 的 multipart 入口加的多文件版本。现有单文件调用方
+ * （学生素材上传、junshi 工作台）继续用下面的 `parseMultipartFormData`，行为不变。
+ * ⚠️ 仍是"整包 Buffer + subarray 视图"：不再复制字节，但 body 本身要先进内存。
+ */
+export function parseMultipartParts(body, contentType, { maxParts = 100, maxFiles = 60 } = {}) {
   const boundaryMatch = String(contentType || '').match(/boundary=(?:"([^"]+)"|([^;\s]+))/i);
   const boundary = boundaryMatch?.[1] || boundaryMatch?.[2];
   if (!boundary || boundary.length > 200 || /[\0-\x20\x7f]/.test(boundary)) throw errors.badRequest('multipart boundary 无效', 'INVALID_MULTIPART');
   const marker = Buffer.from(`--${boundary}`);
-  const result = { fields: {}, file: null };
+  const result = { fields: {}, files: [] };
   let cursor = 0; let parts = 0;
   while (cursor < body.length) {
     const start = body.indexOf(marker, cursor);
@@ -179,18 +186,30 @@ export function parseMultipartFormData(body, contentType) {
     if (!name) throw errors.badRequest('multipart 字段名缺失', 'INVALID_MULTIPART');
     const value = body.subarray(bodyStart, Math.max(bodyStart, partBodyEnd));
     parts += 1;
-    if (parts > 20) throw errors.badRequest('multipart 字段过多', 'TOO_MANY_UPLOAD_PARTS');
+    if (parts > maxParts) throw errors.badRequest('multipart 字段过多', 'TOO_MANY_UPLOAD_PARTS');
     if (fileName !== undefined) {
-      if (result.file) throw errors.badRequest('一次只能上传一个文件', 'TOO_MANY_FILES');
+      if (result.files.length >= maxFiles) {
+        throw errors.badRequest(
+          maxFiles === 1 ? '一次只能上传一个文件' : `一次最多上传 ${maxFiles} 个文件`,
+          'TOO_MANY_FILES',
+        );
+      }
       const partMime = headers.match(/^content-type:\s*([^\r\n]+)/im)?.[1]?.trim() || '';
-      result.file = { fieldName: name, fileName, mimeType: partMime, buffer: value };
+      result.files.push({ fieldName: name, fileName, mimeType: partMime, buffer: value });
     } else {
       result.fields[name] = value.toString('utf8').trim();
     }
     cursor = next;
   }
-  if (!result.file || !result.file.buffer.length) throw errors.badRequest('必须选择文件', 'FILE_REQUIRED');
   return result;
+}
+
+export function parseMultipartFormData(body, contentType) {
+  // 单文件调用方的兼容壳：解析逻辑与多文件版共用，只额外要求"恰好一个文件"。
+  const parsed = parseMultipartParts(body, contentType, { maxParts: 20, maxFiles: 1 });
+  const file = parsed.files[0] || null;
+  if (!file || !file.buffer.length) throw errors.badRequest('必须选择文件', 'FILE_REQUIRED');
+  return { fields: parsed.fields, file };
 }
 
 function scannerRequired() {

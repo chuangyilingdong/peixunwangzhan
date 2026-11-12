@@ -19,7 +19,7 @@ import { isSubmittableArtifactKind, kindForName } from '../services/vibecodingAr
 import { documentMime } from '../services/ooxml/documents.js';
 import { ensureRuntimeConversation, recordRuntimeSubmission, rewriteLocalReferences, runtimeSubmissionWorkItem, textDefaultModel, textModelOptions } from './vibecoding.js';
 import { storeStudentArtifactAsset } from './fileAssets.js';
-import { scanUploadBuffers } from '../services/fileUploadSecurity.js';
+import { parseMultipartParts, scanUploadBuffers } from '../services/fileUploadSecurity.js';
 import { classroomWorksLlmGrant } from '../services/workLlm.js';
 
 // 客户端运行时（dsh / VibeCoding）**只认"这节课声明了 VibeCoding"**。
@@ -525,6 +525,17 @@ export async function handleStudentRuntime(ctx) {
   //    "maxUploadBytes() + 1MB"——那是 **multipart** 路径（index.js:149）的闸，这条 JSON 路径
   //    当时实际还是默认 24MB，100MB 的业务上限因此**从未真正生效**（客户端实测 19.6MB 视频被 413）。
   if (part === '/submit-upload' && method === 'POST') {
+    // 2026-11-12：客户端可改用 multipart（meta + file:<index>），省掉 base64 与整包 JSON。
+    // 老客户端继续发 JSON，两条入口共用同一套校验与落盘流程。
+    const contentType = String(ctx.req?.headers?.['content-type'] || '').toLowerCase();
+    const multipart = contentType.startsWith('multipart/form-data');
+    if (multipart) {
+      ctx.multipartParts = parseMultipartParts(ctx.rawBody || Buffer.alloc(0), contentType, {
+        maxParts: MAX_UPLOAD_FILES + 10,
+        maxFiles: MAX_UPLOAD_FILES,
+      });
+      ctx.body = parseMultipartMeta(ctx.multipartParts.fields);
+    }
     // 2026-11-03：课堂结束后的自动补交（客户端带 sessionId + autoSubmit）。
     // 自动补交允许 copyrightConfirmed=false（学生没点确认），只标记 auto_submitted；
     // 手动提交仍然必须确认版权。
@@ -537,7 +548,7 @@ export async function handleStudentRuntime(ctx) {
     }
     return recordSubmissionFromArtifacts({
       ctx, auth, orgId, classroom,
-      collected: collectUploadedArtifacts(ctx.body),
+      collected: multipart ? collectMultipartArtifacts(ctx) : collectUploadedArtifacts(ctx.body),
       autoSubmit,
     });
   }
@@ -594,65 +605,129 @@ const MAX_COVER_BYTES = Math.floor(1.5 * 1024 * 1024);
  * 形状不对一律 400 并说清是哪一条，别让学生对着一个 500 猜。
  * @param body - `{ name, files: [{ name, content, binary }], cover?: { content } }`；`binary` 为真时 `content` 是 base64。
  */
-function collectUploadedArtifacts(body) {
-  const rawName = String(body?.name || '').trim();
-  if (!rawName) throw errors.badRequest('请告诉平台哪一份是主产物（name）', 'RUNTIME_UPLOAD_NAME_REQUIRED');
-  const entryName = safeArtifactName(rawName);
-  const raw = Array.isArray(body?.files) ? body.files : [];
-  if (!entryName) throw errors.badRequest('请告诉平台哪一份是主产物（name）', 'RUNTIME_UPLOAD_NAME_REQUIRED');
-  if (!raw.length) throw errors.badRequest('没有收到任何作品文件', 'RUNTIME_UPLOAD_EMPTY');
-  if (raw.length > MAX_UPLOAD_FILES) {
-    throw errors.badRequest(`一次最多交 ${MAX_UPLOAD_FILES} 个文件`, 'RUNTIME_UPLOAD_TOO_MANY_FILES');
+/**
+ * multipart 的 `meta` 字段：JSON 字符串，形状与 JSON 入口的 body 相同（`files` 不带 content）。
+ * 缺 / 坏一律 400，别让学生对着 500 猜。
+ */
+function parseMultipartMeta(fields) {
+  const raw = fields?.meta;
+  if (!raw) throw errors.badRequest('multipart 提交缺少 meta 字段', 'RUNTIME_UPLOAD_META_REQUIRED');
+  let meta = null;
+  try { meta = JSON.parse(raw); } catch { throw errors.badRequest('multipart 的 meta 不是合法 JSON', 'RUNTIME_UPLOAD_META_INVALID'); }
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+    throw errors.badRequest('multipart 的 meta 必须是 JSON 对象', 'RUNTIME_UPLOAD_META_INVALID');
   }
+  return meta;
+}
 
+function collectedFileBytes(item) {
+  if (Buffer.isBuffer(item?.buffer)) return item.buffer.length;
+  return item?.binary === true
+    ? Buffer.byteLength(String(item?.content || ''), 'base64')
+    : Buffer.byteLength(String(item?.content || ''), 'utf8');
+}
+
+/**
+ * JSON 与 multipart 两条入口共用的产物校验 + 组装。
+ * `items` 里二进制可以是 `buffer`（multipart）或 base64 `content`（JSON），后续落盘统一处理。
+ */
+function buildCollectedArtifacts({ entryName, items, cover, warnings = [] }) {
   const files = [];
-  const warnings = [];
   const seen = new Set();
   let total = 0;
-  for (const item of raw) {
+  for (const item of items) {
     const name = safeArtifactName(item?.name);
     if (!name) throw errors.badRequest(`文件名不合法：${String(item?.name || '').slice(0, 60)}`, 'RUNTIME_UPLOAD_BAD_NAME');
     if (seen.has(name)) throw errors.badRequest(`同一个文件名出现了两次：${name}`, 'RUNTIME_UPLOAD_DUPLICATE_NAME');
     seen.add(name);
-    const binary = item?.binary === true;
-    const content = String(item?.content ?? '');
-    const bytes = binary ? Buffer.byteLength(content, 'base64') : Buffer.byteLength(content, 'utf8');
+    const bytes = collectedFileBytes(item);
     total += bytes;
     if (total > MAX_UPLOAD_BYTES) {
       throw errors.badRequest(`作品太大了（上限 ${Math.floor(MAX_UPLOAD_BYTES / 1024 / 1024)}MB）`, 'RUNTIME_UPLOAD_TOO_LARGE');
     }
-    files.push({ name, content, binary, bytes });
+    files.push({
+      name,
+      binary: item?.binary === true,
+      bytes,
+      ...(Buffer.isBuffer(item?.buffer) ? { buffer: item.buffer } : { content: String(item?.content ?? '') }),
+    });
   }
   if (!seen.has(entryName)) {
     throw errors.badRequest('主产物不在文件清单里', 'RUNTIME_UPLOAD_ENTRY_MISSING');
   }
   // ⭐ **可选封面**（2026-09-27 加，用户口径：「纯代码的小作品也得有真封面」）：
-  //    客户端在提交时截一张图（浏览器里跑出来的那一屏）随同上传，广场/我的作品就有一张**真封面**，
-  //    而不是那张按类型画的占位插图。形状与 files 里的一项一致（base64），名字**固定** `cover.png`
-  //    —— 服务端靠这个名字认封面（存好后在快照里标 `coverFileId`，各端取封面时优先用它）。
-  //    ⚠️ 三条纪律：① **不拦提交**（封面是锦上添花，坏了只记一条 warning，别让学生交不上作品）；
-  //    ② 名字撞主产物/已有文件就忽略封面；③ 大小计入总上限，另有自己的上限（MAX_COVER_BYTES）。
+  //    客户端在提交时截一张图随同上传；三条纪律不变：
+  //    ① 不拦提交；② 名字撞已有文件就忽略；③ 大小计入总上限，另有自己的上限。
   let coverName = null;
-  const coverContent = String(body?.cover && typeof body.cover === 'object' ? (body.cover.content || '') : '');
-  if (coverContent) {
+  const coverBytes = cover ? collectedFileBytes(cover) : 0;
+  if (coverBytes) {
     if (seen.has(COVER_FILE_NAME)) {
       warnings.push(`封面文件名 ${COVER_FILE_NAME} 与作品里的文件重名，这次没带上封面`);
+    } else if (coverBytes > MAX_COVER_BYTES) {
+      warnings.push(`封面图太大（${Math.round(coverBytes / 1024)}KB，上限 ${Math.floor(MAX_COVER_BYTES / 1024)}KB），这次没带上封面`);
+    } else if (total + coverBytes > MAX_UPLOAD_BYTES) {
+      warnings.push('加上封面会超过整包上限，这次没带上封面');
     } else {
-      const coverBytes = Buffer.byteLength(coverContent, 'base64');
-      if (coverBytes > MAX_COVER_BYTES) {
-        warnings.push(`封面图太大（${Math.round(coverBytes / 1024)}KB，上限 ${Math.floor(MAX_COVER_BYTES / 1024)}KB），这次没带上封面`);
-      } else if (total + coverBytes > MAX_UPLOAD_BYTES) {
-        warnings.push('加上封面会超过整包上限，这次没带上封面');
-      } else {
-        files.push({ name: COVER_FILE_NAME, content: coverContent, binary: true, bytes: coverBytes });
-        seen.add(COVER_FILE_NAME);
-        total += coverBytes;
-        coverName = COVER_FILE_NAME;
-      }
+      files.push({
+        name: COVER_FILE_NAME,
+        binary: true,
+        bytes: coverBytes,
+        ...(Buffer.isBuffer(cover.buffer) ? { buffer: cover.buffer } : { content: String(cover.content || '') }),
+      });
+      seen.add(COVER_FILE_NAME);
+      total += coverBytes;
+      coverName = COVER_FILE_NAME;
     }
   }
-  // `missing` 与服务器取产物那条路同义：这里由客户端自己保证，平台侧没有"没取到"的概念
   return { name: entryName, files, coverName, missing: [], warnings };
+}
+
+function collectUploadedArtifacts(body) {
+  const rawName = String(body?.name || '').trim();
+  if (!rawName) throw errors.badRequest('请告诉平台哪一份是主产物（name）', 'RUNTIME_UPLOAD_NAME_REQUIRED');
+  const entryName = safeArtifactName(rawName);
+  if (!entryName) throw errors.badRequest('请告诉平台哪一份是主产物（name）', 'RUNTIME_UPLOAD_NAME_REQUIRED');
+  const raw = Array.isArray(body?.files) ? body.files : [];
+  if (!raw.length) throw errors.badRequest('没有收到任何作品文件', 'RUNTIME_UPLOAD_EMPTY');
+  if (raw.length > MAX_UPLOAD_FILES) {
+    throw errors.badRequest(`一次最多交 ${MAX_UPLOAD_FILES} 个文件`, 'RUNTIME_UPLOAD_TOO_MANY_FILES');
+  }
+  const items = raw.map((item) => ({
+    name: item?.name,
+    binary: item?.binary === true,
+    content: String(item?.content ?? ''),
+  }));
+  const coverContent = String(body?.cover && typeof body.cover === 'object' ? (body.cover.content || '') : '');
+  return buildCollectedArtifacts({
+    entryName,
+    items,
+    cover: coverContent ? { binary: true, content: coverContent } : null,
+    warnings: [],
+  });
+}
+
+/**
+ * multipart 入口：`meta` 里的 files[i] 对应字段名 `file:i` 的文件 part；封面字段名 `cover`。
+ * 二进制 part 直接保留 Buffer 视图（不再 base64 编解码）。
+ */
+function collectMultipartArtifacts(ctx) {
+  const body = ctx.body || {};
+  const entryName = safeArtifactName(String(body?.name || '').trim());
+  if (!entryName) throw errors.badRequest('请告诉平台哪一份是主产物（name）', 'RUNTIME_UPLOAD_NAME_REQUIRED');
+  const metaFiles = Array.isArray(body?.files) ? body.files : [];
+  if (!metaFiles.length) throw errors.badRequest('没有收到任何作品文件', 'RUNTIME_UPLOAD_EMPTY');
+  if (metaFiles.length > MAX_UPLOAD_FILES) {
+    throw errors.badRequest(`一次最多交 ${MAX_UPLOAD_FILES} 个文件`, 'RUNTIME_UPLOAD_TOO_MANY_FILES');
+  }
+  const byField = new Map((ctx.multipartParts?.files || []).map((part) => [part.fieldName, part]));
+  const items = metaFiles.map((item, index) => {
+    const part = byField.get(`file:${index}`);
+    if (!part) throw errors.badRequest(`缺少文件分段：${String(item?.name || index)}`, 'RUNTIME_UPLOAD_PART_MISSING');
+    return { name: item?.name, binary: item?.binary === true, buffer: part.buffer };
+  });
+  const coverPart = byField.get('cover');
+  const cover = body?.cover === true && coverPart?.buffer?.length ? { binary: true, buffer: coverPart.buffer } : null;
+  return buildCollectedArtifacts({ entryName, items, cover, warnings: [] });
 }
 
 /**
@@ -718,7 +793,11 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
   const binaries = (collected.files || []).filter((file) => file.binary);
   // 2026-11-12：base64 只解一次 —— 扫描与落盘共用同一份 Buffer；解完立刻清掉字符串引用
   // （`collected` 与原始 `ctx.body` 各挂着一份），避免整份 base64 在扫描/落盘期间一直占内存。
-  const decoded = binaries.map((file) => ({ file, buffer: Buffer.from(String(file.content || ''), 'base64') }));
+  const decoded = binaries.map((file) => ({
+    file,
+    // multipart 入口已经给的是 Buffer；JSON 入口才在这里解 base64。
+    buffer: Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.from(String(file.content || ''), 'base64'),
+  }));
   for (const item of decoded) item.file.content = '';
   for (const item of Array.isArray(ctx.body?.files) ? ctx.body.files : []) {
     if (item?.binary === true) item.content = '';

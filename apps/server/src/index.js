@@ -180,20 +180,22 @@ const server = http.createServer(async (req, res) => {
       const contentType = String(req.headers['content-type'] || '').toLowerCase();
       if (contentType.startsWith('multipart/form-data')) {
         const declaredLength = Number(req.headers['content-length'] || 0);
-        // 允许 multipart 边界和字段占用少量额外空间，但不接受明显超限请求。
-        const requestLimit = maxUploadBytes() + 1024 * 1024;
+        const isSubmitUpload = ctx.pathname === '/api/student/runtime/submit-upload';
+        // 2026-11-12：submit-upload 的 multipart 按**业务档**算（RUNTIME_UPLOAD_MAX_BYTES），
+        // 其它 multipart 仍是单文件上传的 200MB + 1MB 档。
+        const requestLimit = isSubmitUpload
+          ? runtimeUploadMaxBytes + 8 * 1024 * 1024
+          : maxUploadBytes() + 1024 * 1024;
         if (Number.isFinite(declaredLength) && declaredLength > requestLimit) throw errors.badRequest('请求体过大', 'PAYLOAD_TOO_LARGE');
-        // ⭐ 内存闸：**在读 body 之前**先要一个名额（本次请求结束时归还）。
-        // 为什么：请求体是一次性读进内存的（readBodyBuffer 拿到的是整块 Buffer，后面 multipart
-        // 解析用 subarray 做视图、不再复制 —— 峰值就是这一块）；而紧随其后的病毒扫描更狠：
-        // 每次上传都 spawn 一个 `clamscan`，它要重新加载病毒库（实测扫 150MB 峰值 RSS ≈990MB）。
-        // 上限提到 200MB 之后，两份这样的大请求叠在一起就能把 1.6G 的机器打穿（会 OOM 杀进程，
-        // 连带把学生环境一起带走 —— 这台机器上出过）。所以大请求**并发上限默认 2 份 / 合计 256MB**，
-        // 超了先给一句中文，别让它走到分配内存那一步。
-        const release = await acquireBodySlot(Number.isFinite(declaredLength) ? declaredLength : 0);
+        // submit-upload 与 base64 JSON 共用同一道大请求内存闸（默认 1 份 / 200MB）——
+        // 否则班里几条 100MB 同时进来仍会把进程打穿。
+        const release = isSubmitUpload
+          ? await acquireJsonBodySlot(Number.isFinite(declaredLength) && declaredLength > 0 ? declaredLength : 64 * 1024 * 1024)
+          : await acquireBodySlot(Number.isFinite(declaredLength) ? declaredLength : 0);
         res.on('finish', release);
         res.on('close', release);
         ctx.rawBody = await readBodyBuffer(req, requestLimit);
+        ctx.jsonBytes = ctx.rawBody.length;
       } else {
         const limit = jsonBodyLimitFor(ctx.pathname);
         // ⭐ 大 JSON（桌面客户端交作品）也要在 **读 body 之前** 占内存名额。
