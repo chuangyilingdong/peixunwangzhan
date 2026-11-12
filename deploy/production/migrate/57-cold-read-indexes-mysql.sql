@@ -17,6 +17,8 @@
 CREATE INDEX idx_generation_jobs_user_status
   ON generation_jobs (user_id, org_id, status);
 
--- 带上 sale_price_fen，让 costFen 的 SUM 可以走覆盖索引、不回表。
+-- ⚠️ compute_attempts.user_id / status 在老库里是 MEDIUMTEXT，MySQL 不允许直接进索引键，
+--    所以用前缀：user_id(64)（我们自己的 id 都在 64 字符内）、status(16)（SUCCESS/FAILED/…）。
+--    不做成覆盖索引也没关系 —— 这个索引的用途是先把 user+org 的行收窄，SUM 再回表。
 CREATE INDEX idx_compute_attempts_user_status
-  ON compute_attempts (user_id, org_id, status, sale_price_fen);
+  ON compute_attempts (org_id, user_id(64), status(16), sale_price_fen);
