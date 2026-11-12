@@ -600,7 +600,9 @@ export async function handleStudentRuntime(ctx) {
           throw errors.badRequest(`文件校验值不一致：${file.name}`, 'RUNTIME_UPLOAD_CHECKSUM_MISMATCH');
         }
         const headBytes = await getObjectRange(file.key, { bytes: 64 });
-        validateMimeAndExtension(file.name, file.mimeType, headBytes);
+        // magic 校验只认文件名本身（底层 cleanFileName 拒收 assets/x.png 这种路径名）；
+        // 资源名/相对路径的合法性已由 manifest 的 safeArtifactName 校验。
+        validateMimeAndExtension(file.name.split('/').pop(), file.mimeType, headBytes);
       }
     } catch (error) {
       for (const file of ticket.files) await deleteObject(file.key).catch(() => {});
