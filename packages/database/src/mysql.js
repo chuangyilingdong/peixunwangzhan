@@ -144,13 +144,21 @@ export { translateSqlite };
 export const dbQueryStats = { count: 0 };
 const countDbQueries = process.env.PLATFORM_DB_COUNT_QUERIES === '1';
 
-async function exec(sql, params = []) {
-  if (countDbQueries) dbQueryStats.count += 1;
-  const conn = target();
-  const translated = translateSqlite(sql);
+// 连接池容量统计（2026-11-12）：给 /__metrics 与 100 并发压测看排队情况。
+// waitMs* 只在**连接池路径**统计；事务连接（txContext）不排队，只记执行耗时。
+export const dbPoolStats = {
+  queries: 0,
+  slowQueries: 0,
+  totalMs: 0,
+  waitMsTotal: 0,
+  waitMsMax: 0,
+  active: 0,
+  waiting: 0,
+  connectionLimit: poolOptions.connectionLimit,
+};
+
+async function executeOn(conn, translated, sql, params) {
   try {
-    // execute() = 预处理语句（二进制协议）：与 node:sqlite 的 prepare().run/all/get 语义最接近，
-    // 参数按类型发送（不会把数字当字符串比）。⚠️ 不能用它跑多语句。
     const [result] = await conn.execute(translated, params);
     return result;
   } catch (error) {
@@ -162,6 +170,39 @@ async function exec(sql, params = []) {
       } catch (retryError) { throw wrapError(retryError, sql, params); }
     }
     throw wrapError(error, sql, params);
+  }
+}
+
+async function exec(sql, params = []) {
+  if (countDbQueries) dbQueryStats.count += 1;
+  const translated = translateSqlite(sql);
+  const startedAt = Date.now();
+  const targetConn = target();
+  let lease = null;
+  if (targetConn === pool) {
+    // 显式取连接才能量到"排队等了多久"（pool.execute 内部取连接不可观测）。
+    dbPoolStats.waiting += 1;
+    try {
+      lease = await pool.getConnection();
+    } finally {
+      dbPoolStats.waiting -= 1;
+    }
+    const waitMs = Date.now() - startedAt;
+    dbPoolStats.waitMsTotal += waitMs;
+    if (waitMs > dbPoolStats.waitMsMax) dbPoolStats.waitMsMax = waitMs;
+  }
+  const conn = lease || targetConn;
+  const execStartedAt = Date.now();
+  dbPoolStats.active += 1;
+  try {
+    return await executeOn(conn, translated, sql, params);
+  } finally {
+    const ms = Date.now() - execStartedAt;
+    dbPoolStats.active -= 1;
+    dbPoolStats.queries += 1;
+    dbPoolStats.totalMs += ms;
+    if (ms > 200) dbPoolStats.slowQueries += 1;
+    if (lease) lease.release();
   }
 }
 

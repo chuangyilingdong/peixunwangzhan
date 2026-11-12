@@ -123,6 +123,8 @@ const FAST = [
   'scripts/p218-generation-poll-budget.mjs',
   // 2026-11-12 加：submit-upload 兼容 multipart 入口（meta + file:<i> + cover）。
   'scripts/p219-submit-upload-multipart.mjs',
+  // 2026-11-12 加：/__metrics 运行时指标 + 100 并发压测脚本可用性。
+  'scripts/p220-runtime-metrics.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));

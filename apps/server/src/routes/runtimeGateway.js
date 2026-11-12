@@ -18,6 +18,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { errors, id, json, nowIso, q, row, arow } from '../lib.js';
 import { AI_PROVIDER_API_KEY } from '../config.js';
+import { sseClose, sseOpen } from '../services/runtimeMetrics.js';
 import { getAiProviderPolicy } from './billingConfig.js';
 import { providerSelectionForModality } from './aiGeneration.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
@@ -657,7 +658,12 @@ export async function handleRuntimeGateway(ctx) {
   // 否则学生关掉客户端，上游还会继续跑最多 20 分钟并计费。与 vibecoding 那条流同一做法。
   const abortController = new AbortController();
   const onClientGone = () => { if (!res.writableEnded) abortController.abort(); };
-  res.on('close', onClientGone);
+  // 2026-11-12：SSE 活跃数（容量观测）；close 只触发一次。
+  sseOpen();
+  res.once('close', () => {
+    sseClose();
+    onClientGone();
+  });
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache, no-transform',

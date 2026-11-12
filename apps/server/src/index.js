@@ -25,6 +25,7 @@ import { handleWorksLlm } from './routes/workLlm.js';
 import { domainStateContract } from './services/domainState.js';
 import { maxUploadBytes } from './services/fileUploadSecurity.js';
 import { acquireBodySlot as acquireUploadBodySlot, acquireJsonBodySlot as acquireJsonUploadBodySlot } from './services/uploadBodyGate.js';
+import { isLoopbackRequest, metricsSnapshot, recordHttp, routeKey } from './services/runtimeMetrics.js';
 
 const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -135,6 +136,7 @@ function handleSeoAsset(ctx) {
 }
 
 const server = http.createServer(async (req, res) => {
+  const requestStartedAt = Date.now();
   if (req.method === 'OPTIONS') {
     // 学生作品里的 LLM 桥从 opaque origin（Origin: null）发 preflight：只给作品模型这一条放行。
     if (String(req.url || '').split('?')[0] === '/api/works-llm/chat') {
@@ -154,6 +156,19 @@ const server = http.createServer(async (req, res) => {
   // （`/api/org` 认 `platform_token_org`、`/api/admin` 认 `platform_token_admin`，其余认老名字）。
   // 见 lib.js 的 readToken / setAuthCookie。
   const context = requestContext(req);
+  // 2026-11-12：容量观测。只接受 loopback（nginx 只代理 /api/，这个路径不会对外）；
+  // 内部指标含 DB 排队/进程内存/网卡速率，不能公开。
+  if (context.pathname === '/__metrics' && isLoopbackRequest(req)) {
+    try {
+      sendJson(res, 200, await metricsSnapshot(), req);
+    } catch (error) {
+      sendJson(res, 500, { error: String(error?.message || error) }, req);
+    }
+    return;
+  }
+  res.once('finish', () => {
+    recordHttp(routeKey(req.method, context.pathname), res.statusCode, Date.now() - requestStartedAt);
+  });
   // 2026-11-12：网关请求只认 runtime key（routes/runtimeGateway.js 从不读 ctx.auth）。
   // 客户端把 runtime key 放在 Authorization 里时，原来每轮工具调用都会多一次必然 miss 的
   // sessions 查询 —— 这里直接跳过 resolveAuth；其它路由行为不变。

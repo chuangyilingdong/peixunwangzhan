@@ -24,6 +24,12 @@ const impl = isMysql ? await import('./mysql.js') : await import('./schema.js');
 export const dbQueryStats = impl.dbQueryStats || { count: 0 };
 export function resetDbQueryStats() { dbQueryStats.count = 0; }
 
+// 连接池容量统计（2026-11-12）：MySQL 驱动有真实数值；SQLite 走全局锁，这里给零值兜底。
+export const dbPoolStats = impl.dbPoolStats || {
+  queries: 0, slowQueries: 0, totalMs: 0, waitMsTotal: 0, waitMsMax: 0,
+  active: 0, waiting: 0, connectionLimit: 0,
+};
+
 /**
  * 下一个可用机构编码：取现有编码里最大的 `ORG<数字>` 再 +1，跳过已占用的。
  * 传入 codes 时用调用方给的快照（同一事务里连开多家机构），不传就现查库。
