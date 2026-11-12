@@ -99,7 +99,7 @@ try {
   const PNG_HEADER = Buffer.from('89504e470d0a1a0a', 'hex');
   const BIG = Buffer.concat([PNG_HEADER, Buffer.alloc(2 * 1024 * 1024 - PNG_HEADER.length, 0x22)]);
   const COVER = Buffer.concat([PNG_HEADER, Buffer.alloc(4096 - PNG_HEADER.length, 0x33)]);
-  const ENTRY = '<!doctype html><html><head><meta charset="utf-8"><title>P219</title></head><body><h1>P219</h1></body></html>';
+  const ENTRY = '<!doctype html><html><head><meta charset="utf-8"><title>P219</title></head><body><h1>小气泡 · 中文正文</h1></body></html>';
 
   const buildForm = ({ withMeta = true, withCover = true } = {}) => {
     const form = new FormData();
@@ -125,6 +125,10 @@ try {
   check('② contentBytes = 二进制 part 的真实字节（大图 + 封面）',
     timings.contentBytes === BIG.length + COVER.length, `${timings.contentBytes} vs ${BIG.length + COVER.length}`);
   check('③ 返回 works 回显', Array.isArray(first.data?.works) && first.data.works.length === 1);
+  // 2026-11-12 生产实测踩过：multipart 的文本 part 只塞 buffer 不转字符串 → 作品正文落库成空串。
+  const storedSubmission = await arow('SELECT files FROM vibecoding_submissions ORDER BY submitted_at DESC LIMIT 1');
+  const storedFiles = storedSubmission ? JSON.parse(storedSubmission.files || '{}') : {};
+  check('⑧ multipart 文本正文完整落库（UTF-8，不是空串）', storedFiles['index.html'] === ENTRY, JSON.stringify(storedFiles['index.html'] || '').slice(0, 120));
 
   const noMeta = await upload(token, buildForm({ withMeta: false }));
   check('④ 缺 meta → 400 RUNTIME_UPLOAD_META_REQUIRED',

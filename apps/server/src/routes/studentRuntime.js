@@ -723,7 +723,11 @@ function collectMultipartArtifacts(ctx) {
   const items = metaFiles.map((item, index) => {
     const part = byField.get(`file:${index}`);
     if (!part) throw errors.badRequest(`缺少文件分段：${String(item?.name || index)}`, 'RUNTIME_UPLOAD_PART_MISSING');
-    return { name: item?.name, binary: item?.binary === true, buffer: part.buffer };
+    // ⚠️ 文本产物必须转成字符串：落库那段（recordSubmissionFromArtifacts 的 files 循环）
+    //    只读 `file.content`；把文本也塞进 buffer 会让作品正文变成空串（2026-11-12 实测踩到）。
+    return item?.binary === true
+      ? { name: item?.name, binary: true, buffer: part.buffer }
+      : { name: item?.name, binary: false, content: part.buffer.toString('utf8') };
   });
   const coverPart = byField.get('cover');
   const cover = body?.cover === true && coverPart?.buffer?.length ? { binary: true, buffer: coverPart.buffer } : null;
