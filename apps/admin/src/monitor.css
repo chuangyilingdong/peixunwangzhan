@@ -111,6 +111,11 @@
 .monitor-severity.is-warning { color: #f0c674; background: #2a2110; }
 .monitor-code { color: #ffd7a8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
 .monitor-message { color: var(--m-muted); font-size: 11px; max-width: 520px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.monitor-link-btn {
+  margin-top: 3px; padding: 0; background: none; border: none;
+  color: #58a6ff; font-size: 10.5px; cursor: pointer;
+}
+.monitor-link-btn:hover { color: #7ee787; text-decoration: underline; }
 
 .monitor-top { display: flex; flex-direction: column; gap: 6px; }
 .monitor-top-row { display: grid; grid-template-columns: 10px 1fr auto auto; gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid #18222e; border-radius: 8px; }
@@ -175,6 +180,29 @@
 }
 .monitor-drawer header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 8px; }
 .monitor-drawer .top-gap { margin-top: 14px; }
+
+/* 错误详情：表格里单行截断，点行/“查看详情”打开完整信息并复制 */
+.monitor-modal-backdrop { position: fixed; inset: 0; background: rgba(3, 7, 12, .72); z-index: 80; }
+.monitor-modal {
+  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 81;
+  width: min(780px, 94vw); max-height: 86vh; overflow: auto;
+  background: #0b1118; color: var(--m-text); border: 1px solid var(--m-border);
+  border-radius: 12px; padding: 18px 20px 20px; box-shadow: 0 30px 80px rgba(0, 0, 0, .55);
+}
+.monitor-modal header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
+.monitor-modal header h2 { margin: 0; font-size: 18px; }
+.monitor-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 18px; font-size: 12px; }
+.monitor-detail-grid > div { min-width: 0; }
+.monitor-detail-label { color: var(--m-muted); font-size: 10.5px; margin-bottom: 2px; }
+.monitor-detail-value { color: var(--m-text); word-break: break-all; }
+.monitor-detail-pre {
+  margin: 6px 0 0; padding: 10px 12px; max-height: 42vh; overflow: auto;
+  background: #0d141d; border: 1px solid #1b2632; border-radius: 8px;
+  color: var(--m-text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; user-select: text;
+}
+.monitor-detail-actions { display: flex; gap: 8px; margin-top: 14px; }
+.monitor-detail-actions .monitor-btn { padding: 6px 12px; }
 
 /* 总余额 KPI：下面列各供应商的人民币余额 */
 .monitor-wallet-lines { margin-top: 6px; display: grid; gap: 2px; }

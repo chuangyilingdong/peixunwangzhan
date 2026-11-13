@@ -9,11 +9,20 @@ const LOW_BALANCE_YUAN = 50;
 const WALLET_LABELS = { 'runninghub-global': 'RH 全球站', 'runninghub-cn': 'RH 国内站', xkwuai: 'xkwuai' };
 
 const TZ = 'Asia/Shanghai';
+const SOURCE_LABELS = { ATTEMPT: '上游', USAGE: '应用', JOB: '画布任务', VIBE: 'VibeCoding' };
+const sourceLabel = (source) => SOURCE_LABELS[source] || source || '—';
+const severityLabel = (severity) => severity === 'critical' ? '严重' : severity === 'warning' ? '警告' : '错误';
 const fmtTime = (value) => {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value).slice(11, 19) || '—';
   return date.toLocaleTimeString('zh-CN', { timeZone: TZ, hour12: false });
+};
+const fmtDateTime = (value) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('zh-CN', { timeZone: TZ, hour12: false });
 };
 // 后端分钟桶是 UTC ISO；图上统一显示北京时间。
 const fmtMinute = (value) => {
@@ -118,7 +127,33 @@ function HealthDot({ level, title }) {
   return <span className={`monitor-dot is-${level}`} title={title || level} />;
 }
 
-function ErrorTable({ items, empty = '窗口内没有错误' }) {
+function Detail({ label, value }) {
+  return <div>
+    <div className="monitor-detail-label">{label}</div>
+    <div className="monitor-detail-value">{value || '—'}</div>
+  </div>;
+}
+
+function errorDetailText(item) {
+  return [
+    `时间：${fmtDateTime(item.at)}${item.at ? `（${item.at}）` : ''}`,
+    `级别：${severityLabel(item.severity)}`,
+    `来源：${sourceLabel(item.source)}${item.failover ? ' · 备用' : ''}${item.recovered ? ' · 已恢复' : ''}`,
+    `机构：${item.orgName || '—'}`,
+    `课堂：${item.sessionTitle || '—'}`,
+    `学生：${item.userName || '—'}${item.userId ? `（${item.userId}）` : ''}`,
+    `错误码：${item.errorCode || 'UNKNOWN'}`,
+    `模态 / 模型：${[item.modality, item.model].filter(Boolean).join(' / ') || '—'}`,
+    `任务 ID：${item.jobId || '—'}`,
+    `上游任务 ID：${item.taskId || '—'}`,
+    `记录 ID：${item.id || '—'}`,
+    '',
+    '错误详情：',
+    item.message || '（没有附带错误信息）',
+  ].join('\n');
+}
+
+function ErrorTable({ items, empty = '窗口内没有错误', onSelect }) {
   if (!items?.length) return <div className="monitor-empty">{empty}</div>;
   return (
     <div className="monitor-table-wrap monitor-errors">
@@ -126,17 +161,21 @@ function ErrorTable({ items, empty = '窗口内没有错误' }) {
         <thead><tr><th>时间</th><th>级别</th><th>机构 / 课堂 / 学生</th><th>来源</th><th>错误</th></tr></thead>
         <tbody>
           {items.map((item) => (
-            <tr key={`${item.source}:${item.id}:${item.at}`} className={`severity-${item.severity}`}>
+            <tr key={`${item.source}:${item.id}:${item.at}`} className={`severity-${item.severity}`}
+              onClick={onSelect ? () => onSelect(item) : undefined}
+              title={onSelect ? '点击查看并复制详情' : undefined}>
               <td className="monitor-nowrap">{fmtTime(item.at)}</td>
-              <td><span className={`monitor-severity is-${item.severity}`}>{item.severity === 'critical' ? '严重' : item.severity === 'warning' ? '警告' : '错误'}</span></td>
+              <td><span className={`monitor-severity is-${item.severity}`}>{severityLabel(item.severity)}</span></td>
               <td>
                 <div>{item.orgName || '—'}</div>
                 <div className="monitor-muted">{item.sessionTitle || '—'} · {item.userName || '—'}</div>
               </td>
-              <td className="monitor-nowrap">{item.source === 'ATTEMPT' ? '上游' : item.source === 'USAGE' ? '应用' : item.source === 'JOB' ? '画布任务' : 'VibeCoding'}{item.failover ? ' · 备用' : ''}{item.recovered ? ' · 已恢复' : ''}</td>
+              <td className="monitor-nowrap">{sourceLabel(item.source)}{item.failover ? ' · 备用' : ''}{item.recovered ? ' · 已恢复' : ''}</td>
               <td>
                 <div className="monitor-code">{item.errorCode || 'UNKNOWN'}</div>
                 {item.message ? <div className="monitor-message" title={item.message}>{item.message}</div> : null}
+                {onSelect ? <button type="button" className="monitor-link-btn"
+                  onClick={(event) => { event.stopPropagation(); onSelect(item); }}>查看 / 复制详情</button> : null}
               </td>
             </tr>
           ))}
@@ -171,6 +210,9 @@ export function Monitor({ api, user }) {
   const [selectedSessionId, setSelectedSessionId] = useState('');
   const [classroom, setClassroom] = useState(null);
   const [classroomError, setClassroomError] = useState(null);
+  const [selectedError, setSelectedError] = useState(null);
+  const [errorCopied, setErrorCopied] = useState('');
+  const copyTimer = useRef(null);
 
   usePolling(async (signal) => {
     const params = new URLSearchParams({ window: windowKey });
@@ -223,6 +265,42 @@ export function Monitor({ api, user }) {
   useEffect(() => {
     if (!selectedSessionId) { setClassroom(null); setClassroomError(null); }
   }, [selectedSessionId]);
+
+  const openErrorDetail = (item) => { setSelectedError(item); setErrorCopied(''); };
+  const closeErrorDetail = () => { setSelectedError(null); setErrorCopied(''); };
+
+  useEffect(() => {
+    if (!selectedError) return undefined;
+    const onKeyDown = (event) => { if (event.key === 'Escape') closeErrorDetail(); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedError]);
+
+  useEffect(() => () => { if (copyTimer.current) window.clearTimeout(copyTimer.current); }, []);
+
+  const copyText = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand('copy');
+      document.body.removeChild(area);
+    }
+  };
+
+  const copySelectedError = async (asJson) => {
+    if (!selectedError) return;
+    await copyText(asJson ? JSON.stringify(selectedError, null, 2) : errorDetailText(selectedError));
+    setErrorCopied(asJson ? 'json' : 'text');
+    if (copyTimer.current) window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setErrorCopied(''), 1800);
+  };
 
   const live = snapshot?.live || {};
   const usage = snapshot?.usage || {};
@@ -707,7 +785,7 @@ export function Monitor({ api, user }) {
       <div className="monitor-grid monitor-grid-errors">
         <section className="monitor-card">
           <div className="monitor-card-title">错误流 <span>最近 {windowKey} · 四源合并</span></div>
-          <ErrorTable items={errors} />
+          <ErrorTable items={errors} onSelect={openErrorDetail} />
         </section>
         <section className="monitor-card">
           <div className="monitor-card-title">错误 Top <span>按错误码</span></div>
@@ -771,9 +849,42 @@ export function Monitor({ api, user }) {
               </table>
             </div>
             <div className="monitor-card-title top-gap">这堂课最近的错误</div>
-            <ErrorTable items={classroom.errors} empty="这堂课没有错误" />
+            <ErrorTable items={classroom.errors} empty="这堂课没有错误" onSelect={openErrorDetail} />
           </> : null}
         </aside>
+      </> : null}
+      {selectedError ? <>
+        <div className="monitor-modal-backdrop" onClick={closeErrorDetail} />
+        <div className="monitor-modal" role="dialog" aria-modal="true" aria-label="错误详情">
+          <header>
+            <div>
+              <div className="monitor-eyebrow">错误详情</div>
+              <h2>{selectedError.errorCode || 'UNKNOWN'}</h2>
+              <div className="monitor-sub">{fmtDateTime(selectedError.at)} · {sourceLabel(selectedError.source)}</div>
+            </div>
+            <button type="button" className="monitor-btn" onClick={closeErrorDetail}>关闭</button>
+          </header>
+          <div className="monitor-detail-grid">
+            <Detail label="时间" value={fmtDateTime(selectedError.at)} />
+            <Detail label="级别" value={severityLabel(selectedError.severity)} />
+            <Detail label="来源" value={`${sourceLabel(selectedError.source)}${selectedError.failover ? ' · 备用' : ''}${selectedError.recovered ? ' · 已恢复' : ''}`} />
+            <Detail label="机构" value={selectedError.orgName} />
+            <Detail label="课堂" value={selectedError.sessionTitle} />
+            <Detail label="学生" value={selectedError.userName} />
+            <Detail label="错误码" value={selectedError.errorCode || 'UNKNOWN'} />
+            <Detail label="模态 / 模型" value={[selectedError.modality, selectedError.model].filter(Boolean).join(' / ')} />
+            <Detail label="任务 ID" value={selectedError.jobId} />
+            <Detail label="上游任务 ID" value={selectedError.taskId} />
+            <Detail label="尝试" value={`第 ${selectedError.attempt || 1} 次${selectedError.jobStatus ? ` · 任务状态 ${selectedError.jobStatus}` : ''}`} />
+            <Detail label="记录 ID" value={selectedError.id} />
+          </div>
+          <div className="monitor-card-title top-gap">完整错误信息 <span>可选中复制，或点下方按钮</span></div>
+          <pre className="monitor-detail-pre">{selectedError.message || '（没有附带错误信息）'}</pre>
+          <div className="monitor-detail-actions">
+            <button type="button" className="monitor-btn" onClick={() => copySelectedError(false)}>{errorCopied === 'text' ? '已复制' : '复制详情'}</button>
+            <button type="button" className="monitor-btn" onClick={() => copySelectedError(true)}>{errorCopied === 'json' ? '已复制 JSON' : '复制 JSON'}</button>
+          </div>
+        </div>
       </> : null}
       </>}
     </div>
