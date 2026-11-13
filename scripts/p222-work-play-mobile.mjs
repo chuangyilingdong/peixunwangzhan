@@ -3,7 +3,7 @@
 // 钉住：
 //   ① 手机/触屏打开 /s/<code>：网页作品不再内嵌运行，出现“海报卡 + 开始体验”；
 //   ② 点海报进入 /s/<code>/play?piece=… 独立全屏页，body 锁滚动、overscroll 关闭；
-//   ③ 全屏页有顶部工具栏、默认手势锁开启且可切换；
+//   ③ 全屏页有顶部工具栏；默认不锁手势（可滚动），点“锁手势”才阻止页面滚动；
 //   ④ 桌面仍保留内嵌可玩，并多一个“全屏体验”入口。
 //
 // 跑法：node scripts/p222-work-play-mobile.mjs（会先构建 apps/website）
@@ -51,7 +51,7 @@ const fixture = {
     openUrl: null,
     document: {
       files: {
-        'index.html': '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;height:100%;background:#12121c;color:#fff;display:grid;place-items:center;font-family:sans-serif}canvas{width:100%;height:100%;touch-action:none}</style></head><body><canvas id="c" width="400" height="800"></canvas><script>const c=document.getElementById("c");const x=c.getContext("2d");let n=0;function draw(){x.fillStyle=`hsl(${n},70%,35%)`;x.fillRect(0,0,c.width,c.height);x.fillStyle="#fff";x.font="24px sans-serif";x.fillText("swipe me "+n,80,400)}draw();c.addEventListener("touchstart",e=>{e.preventDefault();n=(n+60)%360;draw()},{passive:false});</script></body></html>',
+        'index.html': '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;background:#12121c;color:#fff;font-family:sans-serif}body{padding:24px}</style></head><body><h1>scroll test</h1><div style="height:1800px;background:linear-gradient(#3b1d5e,#123456)">tall content</div></body></html>',
       },
       entry: 'index.html',
       worksLlm: null,
@@ -120,10 +120,32 @@ const bodyStyle = await page.evaluate(() => ({
 }));
 check('全屏页锁住 body 滚动', bodyStyle.overflow === 'hidden', JSON.stringify(bodyStyle));
 check('全屏页禁止 overscroll', bodyStyle.overscroll === 'none', bodyStyle.overscroll);
-check('默认手势锁开启', (await page.locator('.share-play__btn[aria-pressed="true"]').count()) >= 1);
-await page.locator('.share-play__btn', { hasText: '锁定' }).click();
-await page.waitForTimeout(300);
-check('手势锁可切换为解锁', (await page.locator('.share-play__bar').innerText()).includes('解锁'));
+const innerFrame = () => page.frames().find((frame) => frame.url() === 'about:srcdoc');
+const scrollState = async () => {
+  const frame = innerFrame();
+  return frame ? frame.evaluate(() => ({
+    touchAction: getComputedStyle(document.body).touchAction,
+    scrollHeight: document.documentElement.scrollHeight,
+    innerHeight: window.innerHeight,
+    scrollY: window.scrollY,
+  })) : null;
+};
+await page.waitForTimeout(1000);
+const initial = await scrollState();
+check('默认不锁手势（作品可滚动）', Boolean(initial) && initial.touchAction !== 'none', JSON.stringify(initial));
+check('作品内容超过视口', Boolean(initial) && initial.scrollHeight > initial.innerHeight, JSON.stringify(initial));
+await innerFrame()?.evaluate(() => window.scrollTo(0, 400));
+check('作品可向下滚动', ((await scrollState())?.scrollY || 0) > 0);
+check('默认按钮为“锁手势”', (await page.locator('.share-play__bar').innerText()).includes('锁手势'));
+await page.locator('.share-play__btn', { hasText: '锁手势' }).click();
+await page.waitForTimeout(1000);
+const locked = await scrollState();
+check('点“锁手势”后 touch-action:none', locked?.touchAction === 'none', JSON.stringify(locked));
+check('按钮变为“已锁定”', (await page.locator('.share-play__bar').innerText()).includes('已锁定'));
+await page.locator('.share-play__btn', { hasText: '已锁定' }).click();
+await page.waitForTimeout(1000);
+const unlocked = await scrollState();
+check('再点恢复页面滚动', Boolean(unlocked) && unlocked.touchAction !== 'none', JSON.stringify(unlocked));
 if (await page.locator('.share-play__handle').count()) await page.locator('.share-play__handle').click();
 await page.locator('.share-play__bar .share-play__btn', { hasText: '横屏说明' }).click();
 await page.waitForSelector('.share-play__rotate', { timeout: 5000 });

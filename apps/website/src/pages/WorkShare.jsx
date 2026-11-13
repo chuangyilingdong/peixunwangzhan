@@ -85,7 +85,7 @@ export function WorkPlayPage() {
   const [state, setState] = useState({ loading: true, data: null, error: '' });
   const [chromeVisible, setChromeVisible] = useState(true);
   const [chromeTick, setChromeTick] = useState(0);
-  const [gestureLock, setGestureLock] = useState(true);
+  const [gestureLock, setGestureLock] = useState(false);
   const [orientationHint, setOrientationHint] = useState(false);
   const [orientationHintNote, setOrientationHintNote] = useState('');
   const [autoRotateSupported, setAutoRotateSupported] = useState(true);
@@ -257,8 +257,8 @@ export function WorkPlayPage() {
         onClick={toggleFullscreen}>{isFullscreen ? '退出' : '全屏'}</button> : null}
       <button type="button" className={`share-play__btn${gestureLock ? ' is-on' : ''}`}
         onClick={() => { setGestureLock((value) => !value); showChrome(); }}
-        title={gestureLock ? '当前锁定页面手势（滑动只给作品）；点一下放开' : '当前放开页面手势；点一下锁定'}
-        aria-pressed={gestureLock}>{gestureLock ? '锁定' : '解锁'}</button>
+        title={gestureLock ? '当前已锁定手势（滑动只给作品）；点一下恢复页面滚动' : '当前页面可正常滚动；点一下锁定手势（适合游戏）'}
+        aria-pressed={gestureLock}>{gestureLock ? '已锁定' : '锁手势'}</button>
     </div> : <button type="button" className="share-play__handle" onClick={showChrome} aria-label="显示工具栏" />}
     {orientationHint ? <div className="share-play__rotate" role="dialog" aria-modal="true" aria-label="横屏提示">
       <div className="share-play__rotate-icon" aria-hidden="true">⟳</div>
