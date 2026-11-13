@@ -9,11 +9,32 @@
 //
 // 微信分享：**目前没有公众号**（用户 2026-09-30 确认）→ 不做 JS-SDK，页面里给"点右上角 ···"的引导
 // + 复制链接兜底（有公众号之后再接 `wx.config` + `updateAppMessageShareData` 即可，结构不用改）。
-import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { avatarGlyph, BrandLogo, buildPreviewDocument, createApiClient, Icon, Notice, ReplayPreview } from '@platform/shared';
 
 const api = createApiClient();
+
+/**
+ * 手机/触屏判定：`(pointer: coarse)` 命中时，分享页不内嵌运行网页作品，改为“海报 + 点击开始”。
+ * 为什么必须区分：内嵌 iframe 在触屏上会和页面抢手势（游戏没吃掉的滑动会滚外层页面），
+ * 手机端唯一的可靠解法是让作品在**独立全屏页**里运行（/s/<code>/play）。
+ */
+function useCoarsePointer() {
+  const [coarse, setCoarse] = useState(() => (
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(pointer: coarse)').matches
+      : false
+  ));
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const query = window.matchMedia('(pointer: coarse)');
+    const onChange = () => setCoarse(query.matches);
+    query.addEventListener?.('change', onChange);
+    return () => query.removeEventListener?.('change', onChange);
+  }, []);
+  return coarse;
+}
 
 /**
  * 「分享作品」：**不再调系统分享**（2026-10-03 用户实测：微信里那条链路走不通 ——
@@ -54,13 +75,23 @@ function mediaFileName(piece, mimeType) {
 }
 
 /**
- * 扫码直接播放（2026-11-05 用户口径：特定场景专用，不影响正常分享页）。
+ * 全屏播放页（2026-11-05 建立；2026-11-13 起是手机分享页的默认入口）。
  * 路由 `/s/:code/play`：同一枚分享码，直接全屏运行网页作品，不渲染学生/机构卡片。
  * 找不到可直接播放的 HTML 件时，给一个回分享页的出口。
  */
 export function WorkPlayPage() {
   const { code } = useParams();
+  const [searchParams] = useSearchParams();
   const [state, setState] = useState({ loading: true, data: null, error: '' });
+  const [chromeVisible, setChromeVisible] = useState(true);
+  const [chromeTick, setChromeTick] = useState(0);
+  const [gestureLock, setGestureLock] = useState(true);
+  const [orientationHint, setOrientationHint] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenAvailable, setFullscreenAvailable] = useState(false);
+  const rootRef = useRef(null);
+  const requestedKey = String(searchParams.get('piece') || '').trim();
+
   useEffect(() => {
     let live = true;
     setState({ loading: true, data: null, error: '' });
@@ -69,6 +100,60 @@ export function WorkPlayPage() {
       .catch((error) => { if (live) setState({ loading: false, data: null, error: error?.message || '分享链接不存在' }); });
     return () => { live = false; };
   }, [code]);
+
+  // 全屏播放页自己就是一层 fixed 容器：锁住 body 滚动，避免游戏手势/页面滚动互相打架。
+  useEffect(() => {
+    const body = document.body;
+    const html = document.documentElement;
+    const previous = {
+      overflow: body.style.overflow,
+      overscrollBehavior: body.style.overscrollBehavior,
+      background: body.style.background,
+      htmlOverscroll: html.style.overscrollBehavior,
+    };
+    body.style.overflow = 'hidden';
+    body.style.overscrollBehavior = 'none';
+    body.style.background = '#0b0b12';
+    html.style.overscrollBehavior = 'none';
+    return () => {
+      body.style.overflow = previous.overflow;
+      body.style.overscrollBehavior = previous.overscrollBehavior;
+      body.style.background = previous.background;
+      html.style.overscrollBehavior = previous.htmlOverscroll;
+    };
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    setFullscreenAvailable(Boolean(root.requestFullscreen || root.webkitRequestFullscreen));
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement || document.webkitFullscreenElement));
+    document.addEventListener('fullscreenchange', onChange);
+    document.addEventListener('webkitfullscreenchange', onChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange);
+      document.removeEventListener('webkitfullscreenchange', onChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const landscape = window.matchMedia('(orientation: landscape)');
+    const onChange = () => { if (landscape.matches) setOrientationHint(false); };
+    landscape.addEventListener?.('change', onChange);
+    window.addEventListener('orientationchange', onChange);
+    return () => {
+      landscape.removeEventListener?.('change', onChange);
+      window.removeEventListener('orientationchange', onChange);
+    };
+  }, []);
+
+  // 顶部工具条 5 秒后自动收起；点顶部的小把手再出来。
+  useEffect(() => {
+    if (!chromeVisible) return undefined;
+    const timer = window.setTimeout(() => setChromeVisible(false), 5000);
+    return () => window.clearTimeout(timer);
+  }, [chromeVisible, chromeTick]);
+
   if (state.loading) return <div className="share-play share-play--state">正在打开作品…</div>;
   if (state.error || !state.data) return <div className="share-play share-play--state">
     {state.error || '分享链接不存在'}
@@ -77,23 +162,96 @@ export function WorkPlayPage() {
   const pieces = Array.isArray(state.data.pieces) && state.data.pieces.length
     ? state.data.pieces
     : (state.data.piece ? [state.data.piece] : []);
-  const playable = pieces.find((item) => item.render === 'HTML' && item.document) || null;
+  const htmlPieces = pieces.filter((item) => item.render === 'HTML' && item.document);
+  const playable = requestedKey
+    ? htmlPieces.find((item) => item.key === requestedKey)
+    : htmlPieces[0];
   if (!playable) return <div className="share-play share-play--state">
     这个分享里没有可直接播放的网页作品。
     <Link to={`/s/${code}`}>打开分享页</Link>
   </div>;
-  return <div className="share-play">
+  const title = state.data.work?.title || playable.caption || playable.name || '作品';
+
+  const showChrome = () => {
+    setChromeVisible(true);
+    setChromeTick((value) => value + 1);
+  };
+
+  const requestLandscape = async () => {
+    showChrome();
+    if (typeof window !== 'undefined' && window.matchMedia?.('(orientation: landscape)').matches) {
+      setOrientationHint(false);
+      return;
+    }
+    try {
+      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        const target = rootRef.current;
+        const request = target?.requestFullscreen || target?.webkitRequestFullscreen;
+        if (request) await request.call(target);
+      }
+      if (screen.orientation?.lock) {
+        await screen.orientation.lock('landscape');
+        setOrientationHint(false);
+        return;
+      }
+    } catch {
+      // 浏览器不支持/用户拒绝全屏：落到“请横屏”的提示层
+    }
+    setOrientationHint(true);
+  };
+
+  const toggleFullscreen = async () => {
+    showChrome();
+    try {
+      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        const target = rootRef.current;
+        const request = target?.requestFullscreen || target?.webkitRequestFullscreen;
+        if (request) await request.call(target);
+      } else {
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        if (exit) await exit.call(document);
+      }
+    } catch {
+      // 用户取消/浏览器不支持：保持当前状态
+    }
+  };
+
+  return <div className="share-play" ref={rootRef}>
     <ReplayPreview
-      html={buildPreviewDocument(playable.document.files, playable.document.entry, { worksLlm: playable.document.worksLlm })}
-      title={playable.name || '作品'}
+      html={buildPreviewDocument(playable.document.files, playable.document.entry, {
+        worksLlm: playable.document.worksLlm,
+        gestureLock,
+      })}
+      title={title}
       chrome={false}
       fill
     />
+    {chromeVisible ? <div className="share-play__bar">
+      <Link className="share-play__btn" to={`/s/${code}`} aria-label="返回分享页">返回</Link>
+      <div className="share-play__title">{title}</div>
+      <button type="button" className="share-play__btn" onClick={requestLandscape}>横屏</button>
+      {fullscreenAvailable ? <button type="button" className={`share-play__btn${isFullscreen ? ' is-on' : ''}`}
+        onClick={toggleFullscreen}>{isFullscreen ? '退出' : '全屏'}</button> : null}
+      <button type="button" className={`share-play__btn${gestureLock ? ' is-on' : ''}`}
+        onClick={() => { setGestureLock((value) => !value); showChrome(); }}
+        title={gestureLock ? '当前锁定页面手势（滑动只给作品）；点一下放开' : '当前放开页面手势；点一下锁定'}
+        aria-pressed={gestureLock}>{gestureLock ? '锁定' : '解锁'}</button>
+    </div> : <button type="button" className="share-play__handle" onClick={showChrome} aria-label="显示工具栏" />}
+    {orientationHint ? <div className="share-play__rotate" role="dialog" aria-modal="true" aria-label="横屏提示">
+      <div className="share-play__rotate-icon" aria-hidden="true">⟳</div>
+      <strong>横过来玩更舒服</strong>
+      <p>这个作品横屏体验更好。把手机横过来，或点「继续竖屏」。</p>
+      <div className="share-play__rotate-actions">
+        <button type="button" className="share-play__btn" onClick={requestLandscape}>再试一次</button>
+        <button type="button" className="share-play__btn" onClick={() => setOrientationHint(false)}>继续竖屏</button>
+      </div>
+    </div> : null}
   </div>;
 }
 
 export function WorkSharePage() {
   const { code } = useParams();
+  const mobile = useCoarsePointer();
   const [state, setState] = useState({ loading: true, data: null, error: '' });
   const [notice, setNotice] = useState('');
   // 2026-10-25：图片/视频的“全屏看 + 保存”（手机端长按保存经常被浏览器/微信吃掉，
@@ -202,6 +360,8 @@ export function WorkSharePage() {
     : (state.data.piece ? [state.data.piece] : []);
   const showAll = Boolean(allPieces) && pieces.length > 1;
   const piece = pieces[0] || null;
+  // 每件网页作品都走自己的全屏播放地址（带 piece key，多件分享不会打开错的那一件）。
+  const playUrlFor = (item) => `/s/${encodeURIComponent(code)}/play${item?.key ? `?piece=${encodeURIComponent(item.key)}` : ''}`;
   const missingAssets = Array.isArray(state.data.missingAssets) ? state.data.missingAssets : [];
   const glyph = avatarGlyph(student?.avatarKey);
   const initial = String(student?.name || '同学').slice(0, 1);
@@ -240,7 +400,7 @@ export function WorkSharePage() {
               {item.caption || item.name || `第 ${index + 1} 件`}
             </h2>
             <div className="share-card__piece">
-              <PieceView piece={item} document={item.document} onOpen={openMedia} onSave={saveMedia} saving={savingKey === String(item.key || item.mediaUrl)} />
+              <PieceView piece={item} document={item.document} onOpen={openMedia} onSave={saveMedia} saving={savingKey === String(item.key || item.mediaUrl)} mobile={mobile} playUrl={playUrlFor(item)} />
               {itemMissing.length ? <Notice tone="warning">
                 这件作品里有 {itemMissing.length} 个本地素材（{itemMissing.slice(0, 3).join('、')}{itemMissing.length > 3 ? ' 等' : ''}）
                 没有随作品一起提交上来 —— 让 ta 用最新版客户端重新提交一次，这里就能看到图和视频了。
@@ -249,7 +409,7 @@ export function WorkSharePage() {
           </section>;
         })}
       </div> : <div className="share-card__piece">
-        <PieceView piece={piece} document={state.data.document || piece?.document || null} onOpen={openMedia} onSave={saveMedia} saving={savingKey === String(piece?.key || piece?.mediaUrl)} />
+        <PieceView piece={piece} document={state.data.document || piece?.document || null} onOpen={openMedia} onSave={saveMedia} saving={savingKey === String(piece?.key || piece?.mediaUrl)} mobile={mobile} playUrl={playUrlFor(piece)} />
         {missingAssets.length ? <Notice tone="warning">
           这件作品里有 {missingAssets.length} 个本地素材（{missingAssets.slice(0, 3).join('、')}{missingAssets.length > 3 ? ' 等' : ''}）
           没有随作品一起提交上来 —— 让 ta 用最新版客户端重新提交一次，这里就能看到图和视频了。
@@ -316,9 +476,10 @@ export function WorkSharePage() {
  *    所以网页这一件不再只给一个「打开体验」的跳转按钮 —— 服务端把**这一份产物文档**一起给过来
  *    （`document.files` / `document.entry`，里面的私有素材已换成这一枚码专属的免登录代理），
  *    这里直接跑起来：扫码看到的就是作品本身，随手就能点着玩（沙箱里 localStorage 有替身、脚本能跑）。
- *    扫码页只保留就地体验，不再提供「在完整页面里打开」——手机链路里它会造成二次跳转和视觉重复。
+ *    ⚠️ 2026-11-13 修正：手机端内嵌 iframe 会和页面抢手势（游戏没吃掉的滑动会滚外层页面），
+ *    所以 `mobile` 时改渲染海报卡，点进 `/s/<code>/play` 独立全屏跑；桌面仍保留就地可玩。
  */
-function PieceView({ piece, document: doc, onOpen, onSave, saving = false }) {
+function PieceView({ piece, document: doc, onOpen, onSave, saving = false, mobile = false, playUrl = '' }) {
   if (!piece) return <p className="muted">这一件已经不在最新版本里了。</p>;
   // 全部分享时每一件自带 `document`（各自的入口文件）；单件仍可用顶层那份（老响应）。
   const documentData = piece.document || doc;
@@ -349,11 +510,27 @@ function PieceView({ piece, document: doc, onOpen, onSave, saving = false }) {
   </>;
   if (render === 'HTML') {
     const playable = documentData?.files && documentData?.entry && Object.hasOwn(documentData.files, documentData.entry);
+    // 手机/触屏：分享页不再内嵌运行网页作品（内嵌 iframe 会和页面抢手势）。
+    // 改成一张海报卡，点进独立的 /s/<code>/play 全屏页；桌面仍保留就地可玩 + 右上角全屏入口。
+    if (mobile && playable && playUrl) {
+      return <Link className="share-piece__playcard" to={playUrl} data-testid="share-playcard"
+        aria-label={`全屏体验：${name || '网页作品'}`}>
+        {coverUrl ? <img className="share-piece__playcard-cover" src={coverUrl} alt="" /> : null}
+        <span className={`share-piece__playcard-body${coverUrl ? ' has-cover' : ''}`}>
+          <span className="share-piece__playicon" aria-hidden="true">▶</span>
+          <strong>开始体验</strong>
+          <small>全屏运行 · 支持横屏</small>
+        </span>
+      </Link>;
+    }
     return <>
       {playable
         // ⭐ 与作品页同一个口径（2026-09-30 用户口径「不要固定的小框、要自适应」）：
         //    无面板 + 按容器宽度自适应 —— 手机上就是学生页自己的窄屏版式，电脑上就是宽屏版式。
-        ? <div className="share-piece__stage"><ReplayPreview html={buildPreviewDocument(documentData.files, documentData.entry, { worksLlm: documentData.worksLlm })} title={name || '作品'} chrome={false} responsive /></div>
+        ? <div className="share-piece__stage is-playable">
+          <ReplayPreview html={buildPreviewDocument(documentData.files, documentData.entry, { worksLlm: documentData.worksLlm })} title={name || '作品'} chrome={false} responsive />
+          {playUrl ? <Link className="share-piece__fullscreen" to={playUrl} data-testid="share-fullscreen-play">全屏体验</Link> : null}
+        </div>
         : (coverUrl ? <img className="share-piece__media" src={coverUrl} alt={name || '网页作品'} /> : null)}
       {playable ? null : (openUrl
         ? <p className="share-piece__play"><Link className="button" to={openUrl}>打开体验 · 直接玩 <b>↗</b></Link></p>

@@ -1380,7 +1380,17 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 .share-piece__media{width:100%;display:block;border-radius:12px;background:#f6f4ff}
 .share-piece__audio{width:100%}
 .share-piece__play{display:flex;gap:10px;flex-wrap:wrap}
-.share-piece__stage{border-radius:12px;overflow:hidden;background:#111;min-height:240px}
+.share-piece__stage{position:relative;border-radius:12px;overflow:hidden;background:#111;min-height:240px}
+/* 手机端网页作品：海报卡 → 点进 /s/<code>/play 独立全屏页（不在分享页里内嵌跑，避免手势打架）。 */
+.share-piece__playcard{position:relative;display:block;width:100%;aspect-ratio:16/10;border-radius:12px;overflow:hidden;background:#0f1018;color:#fff;text-decoration:none;isolation:isolate}
+.share-piece__playcard-cover{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.share-piece__playcard-body{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:18px;text-align:center;background:radial-gradient(120% 120% at 50% 0%,rgba(92,66,190,.45),rgba(9,9,16,.9) 62%)}
+.share-piece__playcard-body.has-cover{background:linear-gradient(180deg,rgba(0,0,0,.1),rgba(0,0,0,.72))}
+.share-piece__playicon{display:grid;place-items:center;width:56px;height:56px;border-radius:50%;background:#fff;color:#1a1430;font-size:20px;line-height:1;padding-left:3px;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.share-piece__playcard-body strong{font-size:17px;line-height:1.3;font-weight:700}
+.share-piece__playcard-body small{font-size:12px;line-height:1.4;color:rgba(255,255,255,.78)}
+.share-piece__playcard:active{transform:scale(.995)}
+.share-piece__fullscreen{position:absolute;top:10px;right:10px;z-index:2;display:inline-flex;align-items:center;min-height:34px;padding:6px 12px;border-radius:999px;background:rgba(17,17,17,.74);color:#fff;font-size:12px;line-height:1.2;text-decoration:none;backdrop-filter:blur(6px)}
 .share-card__label{margin:0 0 6px;font-size:14px;border-left:3px solid #7c5cff;padding-left:8px;color:#50466b}
 .share-card__desc{margin:0 0 14px;background:#f8f7fc;border-radius:10px;padding:11px 12px;line-height:1.6;color:#3c3557;font-size:14px}
 .share-page__actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}
@@ -1537,7 +1547,20 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 .canvas-work__canvas{flex:1;min-height:0;margin:0;position:relative;overflow:hidden}
 
 /* 扫码直接播放（/s/<code>/play）：全屏运行网页作品，不显示分享卡片 */
-.share-play{position:fixed;inset:0;z-index:9999;background:#0b0b12}
+.share-play{position:fixed;inset:0;z-index:9999;height:100dvh;overflow:hidden;overscroll-behavior:none;background:#0b0b12}
 .share-play .c-replay__stage,.share-play .c-replay__stage--fill,.share-play iframe{width:100%;height:100%;border:0}
 .share-play--state{display:flex;align-items:center;justify-content:center;gap:8px;color:#fff;font-size:14px}
 .share-play--state a{color:#b9a7ff;text-decoration:underline}
+/* 全屏播放器顶部浮层：5 秒自动收起，点顶部小把手再出来；不挡住作品的操作区。 */
+.share-play__bar{position:absolute;top:0;left:0;right:0;z-index:3;display:flex;align-items:center;gap:6px;padding:calc(8px + env(safe-area-inset-top)) 10px 8px;background:linear-gradient(180deg,rgba(0,0,0,.8),rgba(0,0,0,0));color:#fff}
+.share-play__title{flex:1;min-width:0;font-size:13px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 4px rgba(0,0,0,.6)}
+.share-play__btn{flex:none;min-width:44px;min-height:40px;display:inline-flex;align-items:center;justify-content:center;padding:0 10px;border:1px solid rgba(255,255,255,.18);border-radius:10px;background:rgba(20,20,32,.62);color:#fff;font:inherit;font-size:12px;line-height:1;text-decoration:none;cursor:pointer;backdrop-filter:blur(8px)}
+.share-play__btn.is-on{border-color:#7c5cff;background:rgba(124,92,255,.4)}
+.share-play__handle{position:absolute;top:calc(6px + env(safe-area-inset-top));left:50%;z-index:3;width:64px;height:22px;transform:translateX(-50%);border:0;border-radius:999px;background:rgba(255,255,255,.18);cursor:pointer;backdrop-filter:blur(6px)}
+.share-play__handle::after{content:"";display:block;width:28px;height:4px;margin:0 auto;border-radius:999px;background:rgba(255,255,255,.68)}
+.share-play__rotate{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:28px;background:rgba(6,6,12,.88);color:#fff;text-align:center;backdrop-filter:blur(4px)}
+.share-play__rotate-icon{font-size:46px;line-height:1;animation:share-rotate-hint 1.8s ease-in-out infinite}
+.share-play__rotate strong{font-size:17px;line-height:1.4}
+.share-play__rotate p{margin:0;max-width:300px;font-size:13px;line-height:1.65;color:rgba(255,255,255,.8)}
+.share-play__rotate-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:4px}
+@keyframes share-rotate-hint{0%,100%{transform:rotate(0)}50%{transform:rotate(90deg)}}

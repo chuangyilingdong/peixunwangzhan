@@ -622,7 +622,7 @@ function worksLlmContextScript(worksLlm) {
   return `<script>window.__PLATFORM_WORK_LLM__=${payload};</script>`;
 }
 
-export function buildPreviewDocument(files, entryFile, { worksLlm } = {}) {
+export function buildPreviewDocument(files, entryFile, { worksLlm, gestureLock = false } = {}) {
   const entry = files?.[entryFile];
   if (entry === undefined) return '<!doctype html><html><body style="font-family:sans-serif;padding:16px">入口文件不存在</body></html>';
   if (!/\.html?$/i.test(entryFile)) return `<!doctype html><html><body><pre style="font-family:monospace;padding:12px">${escapeHtml(entry)}</pre></body></html>`;
@@ -648,7 +648,12 @@ export function buildPreviewDocument(files, entryFile, { worksLlm } = {}) {
   // 顺序：存储替身 → 控制台桥 → 高度上报 → 素材 fetch 桥 → 作品模型授权 → 大模型桥 → PDF 桥
   // （PDF 桥仍排最后，见它自己的注释）。作品模型授权必须在 LLM 桥之前：桥要在第一次 fetch 时就读到它。
   // ⚠️ 两座 fetch 桥的先后无所谓（各自只认自己那几个地址、其余原样往下传），但都要在 PDF 桥之前。
-  const preamble = `${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}${PREVIEW_HEIGHT_BRIDGE}${ASSET_FETCH_BRIDGE}${worksLlmContextScript(worksLlm)}${LLM_BRIDGE}${PDF_BRIDGE}`;
+  // 全屏播放页的“手势锁”：把页面级 touch-action 关掉，滑动只给作品，不触发浏览器滚动/下拉刷新/缩放。
+  // 只在独立播放页默认开启；分享页的内嵌预览和可滚动的作品仍保持浏览器默认行为。
+  const gestureStyle = gestureLock
+    ? '<style id="vibe-preview-gesture-lock">html,body{touch-action:none!important;overscroll-behavior:none!important;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}</style>'
+    : '';
+  const preamble = `${gestureStyle}${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}${PREVIEW_HEIGHT_BRIDGE}${ASSET_FETCH_BRIDGE}${worksLlmContextScript(worksLlm)}${LLM_BRIDGE}${PDF_BRIDGE}`;
   if (/<head[^>]*>/i.test(normalizedMedia)) return normalizedMedia.replace(/<head[^>]*>/i, (match) => `${match}${preamble}`);
   if (/<body[^>]*>/i.test(normalizedMedia)) return normalizedMedia.replace(/<body[^>]*>/i, (match) => `${match}${preamble}`);
   return preamble + normalizedMedia;
