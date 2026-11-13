@@ -87,6 +87,8 @@ export function WorkPlayPage() {
   const [chromeTick, setChromeTick] = useState(0);
   const [gestureLock, setGestureLock] = useState(true);
   const [orientationHint, setOrientationHint] = useState(false);
+  const [orientationHintNote, setOrientationHintNote] = useState('');
+  const [autoRotateSupported, setAutoRotateSupported] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenAvailable, setFullscreenAvailable] = useState(false);
   const rootRef = useRef(null);
@@ -126,6 +128,7 @@ export function WorkPlayPage() {
   useEffect(() => {
     const root = document.documentElement;
     setFullscreenAvailable(Boolean(root.requestFullscreen || root.webkitRequestFullscreen));
+    setAutoRotateSupported(Boolean(typeof screen !== 'undefined' && screen.orientation?.lock));
     const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement || document.webkitFullscreenElement));
     document.addEventListener('fullscreenchange', onChange);
     document.addEventListener('webkitfullscreenchange', onChange);
@@ -138,7 +141,12 @@ export function WorkPlayPage() {
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
     const landscape = window.matchMedia('(orientation: landscape)');
-    const onChange = () => { if (landscape.matches) setOrientationHint(false); };
+    const onChange = () => {
+      if (landscape.matches) {
+        setOrientationHint(false);
+        setOrientationHintNote('');
+      }
+    };
     landscape.addEventListener?.('change', onChange);
     window.addEventListener('orientationchange', onChange);
     return () => {
@@ -179,25 +187,39 @@ export function WorkPlayPage() {
 
   const requestLandscape = async () => {
     showChrome();
+    setOrientationHintNote('');
     if (typeof window !== 'undefined' && window.matchMedia?.('(orientation: landscape)').matches) {
       setOrientationHint(false);
       return;
     }
-    try {
-      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-        const target = rootRef.current;
-        const request = target?.requestFullscreen || target?.webkitRequestFullscreen;
-        if (request) await request.call(target);
+    // iOS Safari / 微信 WKWebView 没有 screen.orientation.lock，网页无法自动转屏。
+    // 这种情况下不再假装能转，直接把“怎么横屏”说清楚。
+    if (autoRotateSupported) {
+      try {
+        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+          const target = rootRef.current;
+          const request = target?.requestFullscreen || target?.webkitRequestFullscreen;
+          if (request) await request.call(target);
+        }
+        if (screen.orientation?.lock) {
+          await screen.orientation.lock('landscape');
+          setOrientationHint(false);
+          return;
+        }
+      } catch {
+        // 浏览器不支持/用户拒绝全屏：落到“请横屏”的提示层
       }
-      if (screen.orientation?.lock) {
-        await screen.orientation.lock('landscape');
-        setOrientationHint(false);
-        return;
-      }
-    } catch {
-      // 浏览器不支持/用户拒绝全屏：落到“请横屏”的提示层
     }
     setOrientationHint(true);
+  };
+
+  const confirmLandscape = () => {
+    if (typeof window !== 'undefined' && window.matchMedia?.('(orientation: landscape)').matches) {
+      setOrientationHint(false);
+      setOrientationHintNote('');
+      return;
+    }
+    setOrientationHintNote('还没检测到横屏：请检查手机的竖屏锁定是否关闭。');
   };
 
   const toggleFullscreen = async () => {
@@ -229,7 +251,8 @@ export function WorkPlayPage() {
     {chromeVisible ? <div className="share-play__bar">
       <Link className="share-play__btn" to={`/s/${code}`} aria-label="返回分享页">返回</Link>
       <div className="share-play__title">{title}</div>
-      <button type="button" className="share-play__btn" onClick={requestLandscape}>横屏</button>
+      <button type="button" className="share-play__btn" onClick={requestLandscape}
+        title={autoRotateSupported ? '自动横屏' : '查看横屏方法'}>{autoRotateSupported ? '横屏' : '横屏说明'}</button>
       {fullscreenAvailable ? <button type="button" className={`share-play__btn${isFullscreen ? ' is-on' : ''}`}
         onClick={toggleFullscreen}>{isFullscreen ? '退出' : '全屏'}</button> : null}
       <button type="button" className={`share-play__btn${gestureLock ? ' is-on' : ''}`}
@@ -239,11 +262,17 @@ export function WorkPlayPage() {
     </div> : <button type="button" className="share-play__handle" onClick={showChrome} aria-label="显示工具栏" />}
     {orientationHint ? <div className="share-play__rotate" role="dialog" aria-modal="true" aria-label="横屏提示">
       <div className="share-play__rotate-icon" aria-hidden="true">⟳</div>
-      <strong>横过来玩更舒服</strong>
-      <p>这个作品横屏体验更好。把手机横过来，或点「继续竖屏」。</p>
+      <strong>请把手机横过来</strong>
+      <p>{autoRotateSupported
+        ? '如果浏览器没有自动旋转，请关闭手机的竖屏锁定，然后把手机横过来。'
+        : 'iPhone / 微信不支持网页自动横屏。请关闭手机的竖屏锁定（控制中心），然后把手机横过来。'}</p>
+      {orientationHintNote ? <p className="share-play__rotate-note">{orientationHintNote}</p> : null}
       <div className="share-play__rotate-actions">
-        <button type="button" className="share-play__btn" onClick={requestLandscape}>再试一次</button>
-        <button type="button" className="share-play__btn" onClick={() => setOrientationHint(false)}>继续竖屏</button>
+        {autoRotateSupported
+          ? <button type="button" className="share-play__btn" onClick={requestLandscape}>再试一次</button>
+          : <button type="button" className="share-play__btn" onClick={confirmLandscape}>我已横过来</button>}
+        <button type="button" className="share-play__btn"
+          onClick={() => { setOrientationHint(false); setOrientationHintNote(''); }}>继续竖屏</button>
       </div>
     </div> : null}
   </div>;

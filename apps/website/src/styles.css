@@ -1562,5 +1562,6 @@ button.sw-avatar:focus-visible{outline:3px solid var(--purple);outline-offset:2p
 .share-play__rotate-icon{font-size:46px;line-height:1;animation:share-rotate-hint 1.8s ease-in-out infinite}
 .share-play__rotate strong{font-size:17px;line-height:1.4}
 .share-play__rotate p{margin:0;max-width:300px;font-size:13px;line-height:1.65;color:rgba(255,255,255,.8)}
+.share-play__rotate-note{margin:0;max-width:300px;font-size:12px;line-height:1.6;color:#ffd479}
 .share-play__rotate-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:4px}
 @keyframes share-rotate-hint{0%,100%{transform:rotate(0)}50%{transform:rotate(90deg)}}

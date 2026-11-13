@@ -94,6 +94,10 @@ const mobile = await browser.newContext({
   userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
 });
 await mobile.route('**/api/**', mockApi);
+// 模拟 iOS/微信：没有 screen.orientation.lock，网页无法自动横屏。
+await mobile.addInitScript(() => {
+  try { Object.defineProperty(screen, 'orientation', { configurable: true, get: () => ({ lock: undefined }) }); } catch { /* 已经是只读就不改 */ }
+});
 const page = await mobile.newPage();
 const errors = [];
 page.on('pageerror', (error) => errors.push(String(error)));
@@ -120,6 +124,14 @@ check('默认手势锁开启', (await page.locator('.share-play__btn[aria-presse
 await page.locator('.share-play__btn', { hasText: '锁定' }).click();
 await page.waitForTimeout(300);
 check('手势锁可切换为解锁', (await page.locator('.share-play__bar').innerText()).includes('解锁'));
+if (await page.locator('.share-play__handle').count()) await page.locator('.share-play__handle').click();
+await page.locator('.share-play__bar .share-play__btn', { hasText: '横屏说明' }).click();
+await page.waitForSelector('.share-play__rotate', { timeout: 5000 });
+check('iOS/微信提示无法自动横屏', (await page.locator('.share-play__rotate').innerText()).includes('不支持网页自动横屏'));
+await page.locator('.share-play__rotate .share-play__btn', { hasText: '我已横过来' }).click();
+check('竖屏点“我已横过来”提示竖屏锁定', (await page.locator('.share-play__rotate').innerText()).includes('还没检测到横屏'));
+await page.locator('.share-play__rotate .share-play__btn', { hasText: '继续竖屏' }).click();
+check('横屏提示可关闭', await page.locator('.share-play__rotate').count() === 0);
 await page.screenshot({ path: path.join('C:/Users/Administrator/AppData/Local/Temp', 'share-mobile-play.png') });
 check('手机端无 pageerror', errors.length === 0, errors.join(' | ').slice(0, 200));
 await mobile.close();
